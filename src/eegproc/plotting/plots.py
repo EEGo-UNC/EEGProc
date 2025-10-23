@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 
-def plot_per_channel(
+def plot_eeg_features(
     input_data: pd.DataFrame,
     title: str = "Entropy Plot",
     xlabel: str = "Time",

@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless backend for CI
 import matplotlib.pyplot as plt
 
-from eegproc.plotting.plots import plot_per_channel
+from eegproc.plotting.plots import plot_eeg_features
 
 
 def make_df():
@@ -30,9 +30,9 @@ def test_plot_raises_on_empty_and_invalid_slice(tmp_path):
     df = make_df()
     # Empty input
     with pytest.raises(ValueError, match="input_data is empty"):
-        plot_per_channel(pd.DataFrame(), save_path=tmp_path / "out.png")
+        plot_eeg_features(pd.DataFrame(), save_path=tmp_path / "out.png")
     with pytest.raises(ValueError, match="Empty window"):
-        plot_per_channel(df, start_row=5, end_row=5, save_path=tmp_path / "out.png")
+        plot_eeg_features(df, start_row=5, end_row=5, save_path=tmp_path / "out.png")
 
 
 def test_plot_filters_channels_and_bands_and_saves(tmp_path, monkeypatch):
@@ -57,7 +57,7 @@ def test_plot_filters_channels_and_bands_and_saves(tmp_path, monkeypatch):
     )  # This checks on subplot attributes
 
     out_path = tmp_path / "filtered.png"
-    plot_per_channel(
+    plot_eeg_features(
         df,
         title="Test",
         seconds=4.0,

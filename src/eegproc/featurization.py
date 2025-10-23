@@ -377,6 +377,28 @@ def hjorth_params(
 # WAVELET FEATURES
 # ----------------
 def choose_dwt_level(n_samples: int, fs: float, wavelet: str, min_freq: float) -> int:
+    """Choose a discrete wavelet transform (DWT) level given data length and a target minimum frequency.
+
+    The selected level is bounded by PyWavelets' maximum permissible level for the
+    given signal length and wavelet filter length, and ensures that the *detail*
+    subband captures energy at or above ``min_freq``.
+
+    Args:
+        n_samples (int): Number of time-domain samples in the signal.
+        fs (float): Sampling rate in Hz. Must be positive.
+        wavelet (str): Name of a PyWavelets wavelet (e.g., ``"db4"``, ``"sym5"``).
+        min_freq (float): Target minimum frequency (Hz) you still wish to capture
+            in a detail subband. If non-positive, a tiny floor (``1e-6``) is used
+            to avoid taking ``log2(0)`` and to return a conservative level.
+
+    Returns:
+        int: The chosen DWT level (>= 1) that balances the maximum allowable level
+        with the goal of preserving content at or above ``min_freq``.
+
+    See Also:
+        pywt.dwt_max_level: Maximum level allowed by signal and filter length.
+        pywt.Wavelet: Wavelet objects carrying filter lengths and properties.
+    """
     max_lvl = pywt.dwt_max_level(n_samples, pywt.Wavelet(wavelet).dec_len)
     target = max(1, floor(log2(fs / max(min_freq, 1e-6)) - 1))
     return max(1, min(max_lvl, target))
@@ -810,18 +832,43 @@ def imf_entropy(
     return pd.DataFrame(rows, columns=out_cols)
 
 
+def generate_all_features(
+    raw_eeg_df: pd.DataFrame,
+    fs: int,
+    bands: list[str] | None = None,
+    channels: list[str] | None = None,
+    index: bool = True,
+):
+    
+    if bands is None:
+        bands = FREQUENCY_BANDS
+    if channels is not None:
+        keep_columns = [ch for ch in channels if ch in raw_eeg_df.columns]
+
+    clean = bandpass_filter(
+        eeg_df, fs, bands=bands, low=0.5, high=45.0, notch_hz=60
+    )
+    psd = psd_bandpowers(clean, fs, bands=bands)
+    shannons = shannons_entropy(clean, fs, bands=bands)
+    hj = hjorth_params(clean, fs)
+    wt_energy = wavelet_band_energy(raw_eeg_df, fs, bands=bands)
+    wt_entropy = wavelet_entropy(wt_energy, bands=bands)
+    imf_energy = imf_band_energy(raw_eeg_df, fs)
+    imf_entr = imf_entropy(imf_energy)
+
+    res_df = pd.concat(
+        [psd, shannons, hj, wt_energy, wt_entropy, imf_energy, imf_entr],
+        axis=1,
+        index=index,
+    )
+
+    return res_df
+
+
 if __name__ == "__main__":
     FS = 128
     csv_path = "DREAMER.csv"
-    chunk_iter = pd.read_csv(csv_path, chunksize=1)
-    first_chunk = next(chunk_iter)
-
-    dreamer_df = []
-
-    for chunk in pd.read_csv(csv_path, chunksize=10000):
-        dreamer_df.append(chunk)
-
-    dreamer_df = pd.concat(dreamer_df, ignore_index=True)
+    dreamer_df = pd.read_csv(csv_path)
 
     for patient_id in dreamer_df["patient_index"].unique():
         for video_id in dreamer_df["video_index"].unique():

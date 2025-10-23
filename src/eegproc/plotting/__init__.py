@@ -1,5 +1,5 @@
-from .plots import plot_per_channel
+from .plots import plot_eeg_features
 
 __all__ = [
-    "plot_per_channel",
+    "plot_eeg_features",
 ]

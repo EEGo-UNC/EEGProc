@@ -3,10 +3,9 @@ import pandas as pd
 import pytest
 from eegproc.preprocessing import (
     apply_detrend,
-    detrend_df,
-    _numeric_interp,
-    _sosfiltfilt_safe,
-    _apply_notch_once,
+    numeric_interp,
+    sosfiltfilt_safe,
+    apply_notch_once,
     bandpass_filter,
     FREQUENCY_BANDS,
 )
@@ -38,7 +37,7 @@ def test_apply_detrend_constant_and_linear_paths():
 
 def test_numeric_interp_only_numeric_and_interpolates():
     df = pd.DataFrame({"A": [1.0, np.nan, 3.0], "C": ["x", "y", "z"]})
-    out = _numeric_interp(df)
+    out = numeric_interp(df)
     assert list(out.columns) == ["A"]
     assert np.allclose(out["A"].to_numpy(), [1.0, 2.0, 3.0])
 
@@ -46,7 +45,7 @@ def test_numeric_interp_only_numeric_and_interpolates():
 def test_sosfiltfilt_safe_interpolates_interior_nans():
     y = np.array([0.0, np.nan, 1.0, np.nan, 2.0, 3.0] + [0.0] * 10, dtype=float)
     sos = np.array([[1, 0, 0, 1, 0, 0]])
-    out = _sosfiltfilt_safe(sos, y)
+    out = sosfiltfilt_safe(sos, y)
     assert np.isfinite(out).all()
 
 
@@ -58,7 +57,7 @@ def test_apply_notch_once():
         + 0.5 * np.sin(2 * np.pi * 25 * t)
     )
     df = pd.DataFrame({"A1": x})
-    out = _apply_notch_once(df, notch_hz=[25, 50], notch_q=30.0, nyq=FS / 2.0)
+    out = apply_notch_once(df, notch_hz=[25, 50], notch_q=30.0, nyq=FS / 2.0)
     out = trim_edges(out, FS, seconds=0.5)
 
     # Values in out should be close to 0

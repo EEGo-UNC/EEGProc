@@ -14,35 +14,114 @@ FREQUENCY_BANDS = {
 }
 
 
+import numpy as np
+import pandas as pd
+from scipy.signal import detrend as scipy_detrend
+
+
 def apply_detrend(detrend: str | None, df: pd.DataFrame) -> pd.DataFrame:
+    """Apply interpolation and (optionally) remove a trend from each numeric column.
+
+    This is a small convenience wrapper that first ensures numeric columns are
+    float and linearly interpolated (forward/backward) via :func:`numeric_interp`,
+    then, depending on ``detrend``, optionally removes a trend from each column
+    using :func:`detrend_df`.
+
+    Args:
+        detrend: Which trend to remove. Accepted values are:
+            - ``"constant"``: remove the mean from each series (demean).
+            - ``"linear"``: remove a best-fit linear trend from each series.
+            - ``None``: do not detrend; only interpolate numeric columns.
+        df: Input dataframe. Non-numeric columns are ignored for interpolation
+            and detrending (they are effectively dropped by the pipeline).
+
+    Returns:
+        pd.DataFrame: A dataframe with only numeric columns, interpolated, and
+        optionally detrended according to ``detrend``. Index and column names
+        are preserved for the remaining numeric columns.
+
+    Raises:
+        ValueError: If ``detrend`` is not one of ``{"constant", "linear", None}``.
+
+    See Also:
+        numeric_interp: Coerces numeric columns to float and bi-directionally interpolates.
+        detrend_df: Applies SciPy detrending (constant or linear) column-wise.
+
+    Examples:
+        >>> import pandas as pd, numpy as np
+        >>> df = pd.DataFrame({"a": [1.0, np.nan, 3.0], "b": [10.0, 11.0, np.nan], "c": ["x", "y", "z"]})
+        >>> apply_detrend("constant", df)  # demean numeric columns after interpolation
+                 a     b
+        0 -1.000000 -0.5
+        1  0.000000  0.5
+        2  1.000000  0.0
+
+        >>> apply_detrend(None, df)  # only numeric interpolation
+             a     b
+        0  1.0  10.0
+        1  2.0  11.0
+        2  3.0  11.0
+    """
     if detrend in {"constant", "linear"}:
-        df = detrend_df(df, kind=detrend)
+        df = _detrend_df(df, kind=detrend)
     elif detrend is None:
-        df = _numeric_interp(df)
+        df = numeric_interp(df)
     else:
         raise ValueError("detrend must be 'constant', 'linear', or None")
-
     return df
 
 
-def _numeric_interp(df: pd.DataFrame) -> pd.DataFrame:
+def numeric_interp(df: pd.DataFrame) -> pd.DataFrame:
+    """Select numeric columns, cast to float, and interpolate missing values.
+
+    The function:
+      1) keeps only numeric dtypes,
+      2) casts them to ``float`` (to allow NaNs and interpolation),
+      3) fills missing values with linear interpolation along the index,
+         using ``limit_direction='both'`` to also fill leading/trailing gaps.
+
+    Non-numeric columns are dropped.
+
+    Args:
+        df: Input dataframe containing numeric and/or non-numeric columns.
+
+    Returns:
+        pd.DataFrame: A *copy* containing only the numeric columns as floats,
+        with missing values linearly interpolated forward and backward.
+
+    Notes:
+        - Interpolation is performed independently per column.
+        - If a column is entirely NaN, it will remain NaN.
+
+    Examples:
+        >>> import pandas as pd, numpy as np
+        >>> df = pd.DataFrame({"x": [1.0, np.nan, 3.0], "y": ["a", "b", "c"]})
+        >>> numeric_interp(df)
+             x
+        0  1.0
+        1  2.0
+        2  3.0
+    """
     df = df.select_dtypes(include=[np.number]).astype(float).copy()
     return df.apply(lambda s: s.interpolate(limit_direction="both"))
 
 
-def detrend_df(df: pd.DataFrame, kind: str = "linear") -> pd.DataFrame:
-    df = _numeric_interp(df)
+def _detrend_df(df: pd.DataFrame, kind: str = "linear") -> pd.DataFrame:
+    if kind not in {"linear", "constant"}:
+        raise ValueError("kind must be 'linear' or 'constant'")
+
+    df = numeric_interp(df)
     arr = df.to_numpy(copy=False)
     arr = scipy_detrend(arr, type=kind, axis=0)
     return pd.DataFrame(arr, index=df.index, columns=df.columns)
 
 
-def _sosfiltfilt_safe(sos, y):
-    """Zero-phase Second-order Section (SOS) filter, 
+def sosfiltfilt_safe(sos, y):
+    """Zero-phase Second-order Section (SOS) filter,
     handles NaNs and short signals.
 
     Applies ``scipy.signal.sosfiltfilt`` to a 1-D array.
-    Linearly interpolates internal NaNs (or fills with 0.0 if 
+    Linearly interpolates internal NaNs (or fills with 0.0 if
     too few finite samples to interpolate).
 
     Parameters
@@ -81,7 +160,7 @@ def _sosfiltfilt_safe(sos, y):
     return sosfiltfilt(sos, y)
 
 
-def _apply_notch_once(
+def apply_notch_once(
     dfin: pd.DataFrame,
     notch_hz: float | int | list | tuple | None,
     notch_q: float,
@@ -89,7 +168,7 @@ def _apply_notch_once(
 ) -> pd.DataFrame:
     """Apply single-pass IIR notch filtering (and optional 2x harmonic) to each column
     to remove narrow amplitude readings over selected frequencies.
-    
+
     Builds one or more IIR notch filters at the requested fundamental frequencies,
     optionally adding a 2x harmonic notch when it is safely below Nyquist, and applies
     zero-phase filtering (``scipy.signal.filtfilt``, ``method="gust"``) column-wise.
@@ -174,7 +253,7 @@ def bandpass_filter(
     ----------
     df : pandas.DataFrame
         Raw data EEG dataframe. Numeric columns; NaNs are
-        interpolated internally by ``_numeric_interp`` before filtering.
+        interpolated internally by ``numeric_interp`` before filtering.
     fs : float
         Sampling rate in Hz.
     bands : dict[str, tuple[float, float]] or None, default=FREQUENCY_BANDS
@@ -223,8 +302,8 @@ def bandpass_filter(
     - Constant detrend uses ``scipy.signal.detrend(..., type="constant")``.
     - For stability, very short columns may be skipped inside helper routines.
     """
-        
-    df = _numeric_interp(df).apply(pd.to_numeric, errors="coerce")
+
+    df = numeric_interp(df).apply(pd.to_numeric, errors="coerce")
     df = df.astype("float64")
     nyq = fs / 2.0
     cols = list(df.columns)
@@ -239,7 +318,7 @@ def bandpass_filter(
             RuntimeWarning,
         )
 
-    df = _apply_notch_once(df, notch_hz, notch_q, nyq)
+    df = apply_notch_once(df, notch_hz, notch_q, nyq)
 
     if bands is None:
         if low is None or high is None:
@@ -249,7 +328,7 @@ def bandpass_filter(
         sos = butter(order, [low / nyq, high / nyq], btype="bandpass", output="sos")
         Y = pd.DataFrame(index=df.index)
         for c in cols:
-            Y[c] = _sosfiltfilt_safe(sos, df[c].to_numpy())
+            Y[c] = sosfiltfilt_safe(sos, df[c].to_numpy())
         if detrend:
             for c in cols:
                 Y[c] = scipy_detrend(Y[c].to_numpy(), type="constant")
@@ -267,7 +346,7 @@ def bandpass_filter(
     for c in cols:
         y0 = df[c].to_numpy()
         for name, sos in band_sos.items():
-            yb = _sosfiltfilt_safe(sos, y0)
+            yb = sosfiltfilt_safe(sos, y0)
             if detrend:
                 yb = scipy_detrend(yb, type="constant")
             out[f"{c}_{name}"] = yb
