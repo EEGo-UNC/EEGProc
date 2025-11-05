@@ -4,6 +4,7 @@ import warnings
 from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt
 from scipy.signal import detrend as scipy_detrend
 
+
 FREQUENCY_BANDS = {
     "delta": (0.5, 4.0),
     "theta": (4.0, 8.0),
@@ -14,9 +15,6 @@ FREQUENCY_BANDS = {
 }
 
 
-import numpy as np
-import pandas as pd
-from scipy.signal import detrend as scipy_detrend
 
 
 def apply_detrend(detrend: str | None, df: pd.DataFrame) -> pd.DataFrame:

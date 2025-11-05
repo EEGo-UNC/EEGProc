@@ -5,6 +5,7 @@ from math import log2, floor
 from scipy.signal import welch
 from .preprocessing import bandpass_filter, apply_detrend, FREQUENCY_BANDS
 from PyEMD import EMD
+from typing import Callable
 
 
 # ---------------------------
@@ -148,19 +149,16 @@ def psd_bandpowers(
 
 
 def shannons_entropy(
-    df: pd.DataFrame,
-    fs: float,
+    psd_df: pd.DataFrame,
     bands: dict[str, tuple[float, float]] = FREQUENCY_BANDS,
-    window_sec: float = 4.0,
-    overlap: float = 0.5,
     eps: float = 1e-300,
-    detrend: str | None = "constant",
+    assume_log: bool | None = False,
 ) -> pd.DataFrame:
     """Compute normalized Shannon spectral entropy per channel-band over windows.
 
     Expects columns named ``{channel}_{band}`` where each ``band`` is a key in ``bands``
     (bandpass_filter) may be used to achieve the expected table.
-    For each ``{channel}_{band}`` column, computes a Welch PSD in the band's frequency range,
+    A PSD dataframe is expected as input, then
     then it converts each windowed row (bin) of energy to probability.
     Returns ``-Σplog2p/log2(#bins)`` in ``[0, 1]`` (NaN if insufficient bins or invalid totals).
 
@@ -169,18 +167,10 @@ def shannons_entropy(
     df : pandas.DataFrame
         Bandpass Filtered EEG dataframe. Numeric columns must be named like
         ``{channel}_{band}`` (e.g., ``AF3_alpha``).
-    fs : float
-        Sampling rate in Hz.
     bands : dict[str, tuple[float, float]], default=FREQUENCY_BANDS
         Mapping from band name to inclusive frequency bounds (Hz).
-    window_sec : float, default=4.0
-        Window length in seconds for Welch.
-    overlap : float, default=0.5
-        Fractional overlap in ``[0, 1)`` between windows.
     eps : float, default=1e-300
         Numerical guard to avoid log(0) and zero division.
-    detrend : {"constant", "linear", None}, default="constant"
-        Detrending applied before PSD and Shannon.
 
     Returns
     -------
@@ -195,85 +185,49 @@ def shannons_entropy(
     Notes
     -----
     - Entropy is normalized by ``log2(count_of_band_bins)`` to yield values in ``[0, 1]``.
-    - Outputs NaN when a band's PSD has < 2 valid bins in a window.
     """
+    band_names = set(bands.keys())
+    ch_to_cols: dict[str, list[str]] = {}
 
-    df = apply_detrend(detrend, df)
-    band_keys = set(bands.keys())
-    col_band = {}
-    for col in df.columns:
-        parts = col.rsplit("_", 1)
-        if len(parts) == 2 and parts[1] in band_keys:
-            col_band[col] = parts[1]
-    if not col_band:
-        raise ValueError(
-            "No columns named like '{channel}_{band}' with band in FREQUENCY_BANDS."
-        )
-    df = df[list(col_band.keys())]
+    for col in psd_df.columns:
+        if "_" not in col:
+            continue
+        ch, b = col.rsplit("_", 1)
+        if b in band_names:
+            ch_to_cols.setdefault(ch, []).append(col)
 
-    data = df.to_numpy(dtype=float, copy=False)
-    n_samples, n_cols = data.shape
-    nperseg = int(round(window_sec * fs))
-    if nperseg <= 8:
-        raise ValueError("window_sec too small for given fs; increase window_sec.")
-    if not (0.0 <= overlap < 1.0):
-        raise ValueError("overlap must be in [0.0, 1.0).")
-    hop = int(round(nperseg * (1.0 - overlap)))
-    if hop <= 0:
-        raise ValueError("overlap too large; hop size must be >= 1 sample.")
-    if nperseg > n_samples:
-        return pd.DataFrame(columns=[f"{c}_entropy" for c in df.columns])
+    out = pd.DataFrame(index=psd_df.index)
 
-    band_to_idx = {}
-    for i, col in enumerate(df.columns):
-        band_to_idx.setdefault(col_band[col], []).append(i)
+    for ch, cols_found in ch_to_cols.items():
+        cols = [f"{ch}_{b}" for b in bands.keys() if f"{ch}_{b}" in cols_found]
+        if len(cols) < 2:
+            out[f"{ch}_entropy"] = np.nan
+            continue
 
-    rows = []
-    for start in range(0, n_samples - nperseg + 1, hop):
-        seg = data[start : start + nperseg, :]
+        X = psd_df[cols].to_numpy(dtype=float)
 
-        f, psd = welch(
-            seg,
-            fs=fs,
-            window="hann",
-            nperseg=nperseg,
-            noverlap=0,
-            detrend=False,
-            scaling="density",
-            return_onesided=True,
-            axis=0,
-        )
+        if assume_log is None:
+            neg_ratio = np.mean(X < 0.0)
+            use_log = neg_ratio > 0.2
+        else:
+            use_log = assume_log
 
-        row = {}
-        for band, idxs in band_to_idx.items():
-            lo, hi = bands[band]
-            m = (f >= lo) & (f <= hi)
-            count = int(np.count_nonzero(m))
-            if count < 2:
-                for j in idxs:
-                    row[f"{df.columns[j]}_entropy"] = np.nan
-                continue
+        if use_log:
+            row_max = np.nanmax(X, axis=1, keepdims=True)
+            X = np.exp(X - row_max)
+        else:
+            X = np.clip(X, 0.0, np.inf)
 
-            band_power = psd[m][:, idxs]
-            totals = np.sum(band_power, axis=0)
-            valid = np.isfinite(totals) & (totals > 0)
+        totals = np.nansum(X, axis=1, keepdims=True)
+        valid = np.isfinite(totals) & (totals > 0)
 
-            p = np.empty_like(band_power)
-            p[:, valid] = band_power[:, valid] / totals[valid]
-            p[:, ~valid] = np.nan
-            p = np.clip(p, eps, 1.0)
+        P = np.divide(X, totals, out=np.full_like(X, np.nan, dtype=float), where=valid)
+        P = np.clip(P, eps, 1.0)
+        H = -np.nansum(P * np.log2(P), axis=1) / np.log2(X.shape[1])
 
-            H = -np.nansum(p * np.log2(p), axis=0)
-            H /= np.log2(count)
+        out[f"{ch}_entropy"] = H
 
-            for k, j in enumerate(idxs):
-                row[f"{df.columns[j]}_entropy"] = (
-                    float(H[k]) if np.isfinite(H[k]) else np.nan
-                )
-
-        rows.append(row)
-
-    return pd.DataFrame(rows, columns=[f"{c}_entropy" for c in df.columns])
+    return out
 
 
 # ----------------------
@@ -835,34 +789,208 @@ def imf_entropy(
 def generate_all_features(
     raw_eeg_df: pd.DataFrame,
     fs: int,
-    bands: list[str] | None = None,
+    bands: list[str] | None = FREQUENCY_BANDS,
     channels: list[str] | None = None,
-    index: bool = True,
+    group_by_metadata_columns: list[str] | None = None,
 ):
-    
-    if bands is None:
-        bands = FREQUENCY_BANDS
+    """
+    Compute a full feature set (PSD bandpowers, Shannon entropy, Hjorth parameters,
+    wavelet band energy/entropy, and IMF energy/entropy) for an EEG dataframe,
+    optionally grouped by metadata (e.g., ``patient_index``, ``video_index``).
+
+    Processing pipeline (per group)
+    -------------------------------
+    1) **Band-pass with notch clean**: Applies ``bandpass_filter`` to the group's EEG block:
+       0.5-45 Hz passband with a 60 Hz notch.
+    2) **Time/frequency-domain features on clean**:
+       - ``psd_bandpowers(clean, fs, bands=bands)``
+       - ``shannons_entropy(clean, fs, bands=bands)``
+       - ``hjorth_params(clean, fs)``
+    3) **Wavelet & IMF features on raw group block**:
+       - ``wavelet_band_energy(block, fs, bands=bands)`` → ``wavelet_entropy(...)``
+       - ``imf_band_energy(block, fs)`` → ``imf_entropy(...)``
+    4) **Concatenation**: Features (and metadata keys) are concatenated horizontally
+       for each window, then vertically across groups.
+
+    Parameters
+    ----------
+    raw_eeg_df : pandas.DataFrame
+        Input dataframe that may include both EEG columns and metadata columns.
+        For PSD bandpowers, EEG columns are expected to follow the
+        ``{channel}_{band}`` naming convention (e.g., ``AF3_alpha``).
+    fs : int
+        Sampling frequency (Hz).
+    bands : list[str] | None, default=FREQUENCY_BANDS
+        List of band names to pass downstream (e.g., ``["delta","theta","alpha","beta","gamma"]``).
+        Must match the band keys used in your preprocessing and PSD functions.
+    channels : list[str] | None, default=None
+        If provided, restricts processing to the listed EEG columns.
+        **Important:** ensure that any columns required for grouping (specified in
+        ``group_by_metadata_columns``) remain present in the dataframe.
+    group_by_metadata_columns : list[str] | None, default=None
+        Column names to group by (e.g., ``["patient_index","video_index"]``).
+        If ``None``, the entire dataframe is processed as a single group.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A dataframe with one row per (group, window). Columns include:
+        - The metadata columns listed in ``group_by_metadata_columns`` (if any), and
+        - Feature columns from PSD bandpowers, Shannon entropy, Hjorth parameters,
+          wavelet band energy/entropy, and IMF energy/entropy.
+    """
+    meta = list(group_by_metadata_columns or [])
+
     if channels is not None:
-        keep_columns = [ch for ch in channels if ch in raw_eeg_df.columns]
+        keep = [c for c in (metadata + channels) if c in raw_eeg_df.columns]
+        raw_eeg_df = raw_eeg_df.loc[:, keep]
 
-    clean = bandpass_filter(
-        eeg_df, fs, bands=bands, low=0.5, high=45.0, notch_hz=60
-    )
-    psd = psd_bandpowers(clean, fs, bands=bands)
-    shannons = shannons_entropy(clean, fs, bands=bands)
-    hj = hjorth_params(clean, fs)
-    wt_energy = wavelet_band_energy(raw_eeg_df, fs, bands=bands)
-    wt_entropy = wavelet_entropy(wt_energy, bands=bands)
-    imf_energy = imf_band_energy(raw_eeg_df, fs)
-    imf_entr = imf_entropy(imf_energy)
+    grouped = raw_eeg_df.groupby(group_by_metadata_columns, dropna=False, sort=False)
+    total_groups = max(1, grouped.ngroups)
 
-    res_df = pd.concat(
-        [psd, shannons, hj, wt_energy, wt_entropy, imf_energy, imf_entr],
-        axis=1,
-        index=index,
-    )
+    for i, (keys, block) in enumerate(grouped, start=1):
+        print(
+            f"\r[EEGProc] Loading… {i/total_groups:6.2%}  ({i}/{total_groups})",
+            end="",
+            flush=True,
+        )
+
+        clean = bandpass_filter(block, fs, bands=bands, low=0.5, high=45.0, notch_hz=60)
+        psd = psd_bandpowers(clean, fs, bands=bands)
+        shannons = shannons_entropy(clean, fs, bands=bands)
+        hj = hjorth_params(clean, fs)
+        wt_energy = wavelet_band_energy(block, fs, bands=bands)
+        wt_entropy = wavelet_entropy(wt_energy, bands=bands)
+        imf_energy = imf_band_energy(block, fs)
+        metadata = pd.DataFrame()
+        for j in range(len(group_by_metadata_columns)):
+            metadata[group_by_metadata_columns[j]] = [keys[j]] * len(psd)
+        imf_entr = imf_entropy(imf_energy)
+
+        res_df = pd.concat(
+            [metadata, psd, shannons, hj, wt_energy, wt_entropy, imf_energy, imf_entr],
+            axis=1,
+        )
+    print("\r[EEGProc] Loading… 100.00%  (done)".ljust(60))
 
     return res_df
+
+
+def feature_grouped_by_metadata(
+    eeg_df: pd.DataFrame,
+    target_function: Callable[..., pd.DataFrame] = psd_bandpowers,
+    fs: int = 128,
+    bands: dict[str, tuple[float, float]] = FREQUENCY_BANDS,
+    channels: list[str] | None = None,
+    group_by_metadata_columns: list[str] | None = None,
+    drop_metadata_for_fn: bool = True,
+    **fn_kwargs,
+) -> pd.DataFrame:
+    """
+    Group `eeg_df` by `group_by_metadata_columns`, run `target_function` on each group's EEG slice,
+    and prepend the group keys to every output row. Shows an updating single-line progress print.
+
+    Parameters
+    ----------
+    eeg_df : pd.DataFrame
+        Input with EEG columns (and possibly metadata columns).
+    target_function : Callable
+        Function that takes (df, fs=..., bands=..., **kwargs) and returns a pd.DataFrame of features.
+        Example: `psd_bandpowers`.
+    fs : int
+        Sampling frequency to pass to `target_function`.
+    bands : dict | None
+        Bands mapping to pass to `target_function` (if it uses it).
+    channels : list[str] | None
+        If provided, restrict input columns to these (metadata cols are always kept for grouping).
+    group_by_metadata_columns : list[str] | None
+        Columns to group by (e.g., ["patient_id", "video_id"]). If None, process the whole df once.
+    drop_metadata_for_fn : bool
+        If True, drop the group-by columns before calling `target_function`.
+        Set False if your function can safely ignore extra columns.
+    **fn_kwargs :
+        Extra keyword args forwarded to `target_function`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Concatenation of per-group outputs, with metadata keys as leading columns.
+
+     Examples
+    --------
+    Minimal example with synthetic data (two channels, one band):
+
+    >>> import numpy as np, pandas as pd, eegproc as eeg
+    >>> fs = 128.0
+    >>> t = np.arange(int(8*fs)) / fs   # 8 seconds
+    >>> # Two synthetic signals with an ~10 Hz component (alpha band)
+    >>> af3_alpha = 0.8*np.sin(2*np.pi*10*t) + 0.1*np.random.randn(t.size)
+    >>> f7_alpha  = 0.6*np.sin(2*np.pi*10*t + 0.7) + 0.1*np.random.randn(t.size)
+    >>> df = pd.DataFrame({
+    ...     "AF3_alpha": af3_alpha,
+    ...     "F7_alpha":  f7_alpha,
+    ... })
+    >>> bands = {"alpha": (8.0, 12.0)}
+    >>> out = eeg.feature_grouped_by_metadata(
+    ...     eeg_df=clean,
+    ...     target_function=eeg.psd_bandpowers,
+    ...     fs=FS,
+    ...     bands=["alpha"],
+    ...     channels=["AF3", "F7"],
+    ...     group_by_metadata_columns=["patient_index", "video_index"],
+    ...     drop_metadata_for_fn=True,
+    ...     )
+    """
+    meta = list(group_by_metadata_columns or [])
+    df = eeg_df
+
+    if channels is not None and bands is not None:
+        params = [ch + "_" + b for ch in channels for b in bands]
+        keep = []
+        keep = [c for c in (meta + params) if c in df.columns]
+        df = df.loc[:, keep]
+
+    if meta:
+        grouped = df.groupby(meta, dropna=False, sort=False)
+        total_groups = max(1, grouped.ngroups)
+        iterator = grouped
+    else:
+        total_groups = 1
+        iterator = [((), df)]
+
+    out_frames: list[pd.DataFrame] = []
+
+    for i, (keys, block) in enumerate(iterator, start=1):
+        print(
+            f"\r[EEGProc] Loading… {i/total_groups:6.2%}  ({i}/{total_groups})",
+            end="",
+            flush=True,
+        )
+
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        key_map = dict(zip(meta, keys))
+
+        block_for_fn = (
+            block.drop(columns=meta, errors="ignore")
+            if (drop_metadata_for_fn and meta)
+            else block
+        )
+        feats = target_function(block_for_fn, fs=fs, bands=bands, **fn_kwargs)
+
+        if meta and not feats.empty:
+            meta_df = pd.DataFrame({k: [v] * len(feats) for k, v in key_map.items()})
+            feats = pd.concat([meta_df, feats], axis=1)
+            feats = feats[meta + [c for c in feats.columns if c not in meta]]
+
+        out_frames.append(feats)
+
+    print("\r[EEGProc] Loading… 100.00%  (done)".ljust(60))
+
+    if out_frames:
+        return pd.concat(out_frames, axis=0, ignore_index=True)
+
+    return pd.DataFrame(columns=(meta if meta else None))
 
 
 if __name__ == "__main__":
@@ -870,28 +998,45 @@ if __name__ == "__main__":
     csv_path = "DREAMER.csv"
     dreamer_df = pd.read_csv(csv_path)
 
-    for patient_id in dreamer_df["patient_index"].unique():
-        for video_id in dreamer_df["video_index"].unique():
-            mask = (dreamer_df["patient_index"] == patient_id) & (
-                dreamer_df["video_index"] == video_id
-            )
-            eeg_df = dreamer_df.loc[mask, :]
-            del eeg_df["patient_index"]
-            del eeg_df["video_index"]
+    patients = dreamer_df["patient_index"]
+    videos = dreamer_df["video_index"]
+    del dreamer_df["patient_index"]
+    del dreamer_df["video_index"]
 
-            # clean = bandpass_filter(
-            #     eeg_df, FS, bands=FREQUENCY_BANDS, low=0.5, high=45.0, notch_hz=60
-            # )
-            # hj = hjorth_params(clean, FS)
-            # psd_df = psd_bandpowers(clean, FS, bands=FREQUENCY_BANDS)
-            # shannons_df = shannons_entropy(clean, FS, bands=FREQUENCY_BANDS)
-            # wt_df = wavelet_band_energy(eeg_df, FS, bands=FREQUENCY_BANDS)
-            # print("Energy", wt_df)
-            # wt_df = wavelet_entropy(wt_df, bands=FREQUENCY_BANDS)
-            # print("Entropy", wt_df)
+    clean = bandpass_filter(
+        dreamer_df, FS, bands=FREQUENCY_BANDS, low=0.5, high=45.0, notch_hz=60
+    )
+    clean = pd.concat([patients, videos, clean], axis=1)
+    psd_df = psd_bandpowers(clean, FS, bands=FREQUENCY_BANDS)
+    shannons_df = shannons_entropy(psd_df, bands=FREQUENCY_BANDS)
+    print(shannons_df)
+    # hj = hjorth_params(clean, FS)
+    # wt_df = wavelet_band_energy(eeg_df, FS, bands=FREQUENCY_BANDS)
+    # print("Energy", wt_df)
+    # wt_df = wavelet_entropy(wt_df, bands=FREQUENCY_BANDS)
+    # print("Entropy", wt_df)
+    # imf_df = imf_band_energy(eeg_df, FS)
+    # print(imf_df)
+    # imf_df = imf_entropy(imf_df)
+    # print(imf_df)
+    # exit()
+    # print(
+    #     generate_all_features(
+    #         dreamer_df,
+    #         FS,
+    #         FREQUENCY_BANDS,
+    #         group_by_metadata_columns=["video_index", "patient_index"],
+    #     )
+    # )
 
-            imf_df = imf_band_energy(eeg_df, FS)
-            print(imf_df)
-            imf_df = imf_entropy(imf_df)
-            print(imf_df)
-            exit()
+    # print(
+    #     feature_grouped_by_metadata(
+    #         eeg_df=clean,
+    #         target_function=psd_bandpowers,
+    #         fs=FS,
+    #         bands=FREQUENCY_BANDS,
+    #         channels=["AF3", "F7"],
+    #         group_by_metadata_columns=["patient_index", "video_index"],
+    #         drop_metadata_for_fn=True,
+    #     )
+    # )

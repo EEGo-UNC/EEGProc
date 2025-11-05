@@ -16,6 +16,7 @@ from .featurization import (
     imf_entropy,
     dwt_subband_ranges,
     choose_dwt_level,
+    feature_grouped_by_metadata,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "imf_entropy",
     "dwt_subband_ranges",
     "choose_dwt_level",
+    "feature_grouped_by_metadata"
 ]
