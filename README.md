@@ -6,7 +6,7 @@ EEGProc is a fully vectorized library designed for preprocessing and extracting 
 
 ## Documentation
 
-[Click here to read the documentation](https://vitorinserra.github.io/EEGProc/)
+[Click here to read the documentation](https://eego-unc.github.io/EEGProc/)
 
 ## Features
 
