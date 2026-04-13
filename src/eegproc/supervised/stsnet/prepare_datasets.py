@@ -165,11 +165,11 @@ def _extract_centre(arr: np.ndarray, target: int) -> np.ndarray:
 
 
 def prepare_dreamer(input_dir: str, output_dir: str) -> None:
-    """Convert DREAMER_FULL.csv to a single pair of .npy arrays.
+    """Convert dreamer_joined.csv to a single pair of .npy arrays.
 
     Parameters
     ----------
-    input_dir  : str — folder containing DREAMER_FULL.csv
+    input_dir  : str — folder containing dreamer_joined.csv
     output_dir : str — where to write dreamer_eeg.npy and dreamer_labels.npy
 
     Output shapes
@@ -182,11 +182,11 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
     except ImportError:
         raise ImportError("pandas is required to read the CSV: pip install pandas")
 
-    csv_path = os.path.join(input_dir, "DREAMER_FULL.csv")
+    csv_path = os.path.join(input_dir, "dreamer_joined.csv")
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(
-            f"DREAMER_FULL.csv not found in {input_dir}.\n"
-            f"Make sure --dreamer_dir points to the folder containing DREAMER_FULL.csv."
+            f"dreamer_joined.csv not found in {input_dir}.\n"
+            f"Make sure --dreamer_dir points to the folder containing dreamer_joined.csv."
         )
 
     print(f"  Loading {csv_path} (this may take a moment)…")
@@ -196,18 +196,18 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
     for col in ("valence", "arousal"):
         df[col] = df[col].astype(str).str.strip("[]").astype(np.float32)
 
-    subjects = sorted(df["patient_index"].unique())
-    trials   = sorted(df["video_index"].unique())
+    subjects = sorted(df["subject_id"].unique())
+    trials   = sorted(df["trial_id"].unique())
 
     all_eeg, all_labels = [], []
 
     for subj_idx, subj_id in enumerate(subjects):
-        subj_df  = df[df["patient_index"] == subj_id]
+        subj_df  = df[df["subject_id"] == subj_id]
         subj_eeg    = []
         subj_labels = []
 
         for trial_id in trials:
-            trial_df = subj_df[subj_df["video_index"] == trial_id]
+            trial_df = subj_df[subj_df["trial_id"] == trial_id]
 
             eeg_raw = trial_df[DREAMER_EEG_COLS].values.astype(np.float32)  # (n_samples, 14)
             eeg     = _extract_centre(eeg_raw, DREAMER_TRIAL_SAMPLES).T      # (14, 7680)

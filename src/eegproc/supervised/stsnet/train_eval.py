@@ -64,7 +64,7 @@ DATASET_CONFIGS = {
         "bilstm_dropout"  : 0.3,
         "lr"              : 1e-4,
         "weight_decay"    : 5e-4,
-        "epochs"          : 3, # CHANGE BACK TO 50 FOR REAL TRAINING
+        "epochs"          : 50,
         "batch_size"      : 32,
     },
 }
@@ -168,7 +168,7 @@ def run_fold(
         n_classes      = 2,
         bilstm_units   = cfg["bilstm_units"],
         bilstm_dropout = cfg["bilstm_dropout"],
-        n_fm_iters     = 3, # CHANGE BACK TO 10 FOR ACTUAL TRAINING
+        n_fm_iters     = 10,
     )
 
     if gpu_strategy is not None:
