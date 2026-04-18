@@ -73,28 +73,6 @@ LABEL_DIMS = {"valence": 0, "arousal": 1}
 
 
 # ---------------------------------------------------------------------------
-# Label processing (Section: Label processing)
-# ---------------------------------------------------------------------------
-
-def binarize_labels(raw_labels: np.ndarray, median: int) -> np.ndarray:
-    """Convert continuous scores to binary classes via median split.
-
-    Scores >= median → 1 (high), scores < median → 0 (low).
-    (The paper maps to +1/-1; we use 0/1 for SparseCategoricalCrossEntropy.)
-
-    Parameters
-    ----------
-    raw_labels : ndarray, shape (n_trials,)
-    median     : int — dataset-specific median threshold
-
-    Returns
-    -------
-    ndarray of int32, shape (n_trials,)
-    """
-    return (raw_labels >= median).astype(np.int32)
-
-
-# ---------------------------------------------------------------------------
 # Single LOSOCV fold
 # ---------------------------------------------------------------------------
 
@@ -142,25 +120,23 @@ def run_fold(
     )
 
     # --- Preprocess ---
-    xd_tr, bi_tr, y_tr = preprocess_dataset(
+    mani_train, bilstm_train, y_train = preprocess_dataset(
         train_eeg, train_labels,
         fs=cfg["fs"], bands=cfg["bands"],
         n_windows=cfg["n_windows"],
         window_size_sec=cfg["window_size_sec"],
         use_variable_windows=use_variable_windows,
     )
-    xd_te, bi_te, y_te = preprocess_dataset(
+    mani_test, bilstm_test, y_test = preprocess_dataset(
         test_eeg, test_labels,
         fs=cfg["fs"], bands=cfg["bands"],
         n_windows=cfg["n_windows"],
         window_size_sec=cfg["window_size_sec"],
         use_variable_windows=use_variable_windows,
     )
-    print(np.bincount(y_tr))
-    print(np.bincount(y_te))
     # Convert to tensors
-    xd_tr = tf.constant(xd_tr); bi_tr = tf.constant(bi_tr); y_tr = tf.constant(y_tr)
-    xd_te = tf.constant(xd_te); bi_te = tf.constant(bi_te)
+    mani_train = tf.constant(mani_train); bilstm_train = tf.constant(bilstm_train); y_train = tf.constant(y_train)
+    mani_test = tf.constant(mani_test); bilstm_test = tf.constant(bilstm_test)
 
     # --- Build model (inside strategy scope for multi-GPU) ---
     build_fn = lambda: STSNet(
@@ -179,7 +155,7 @@ def run_fold(
 
     # --- Train ---
     model.fit_joint(
-        xd_tr, bi_tr, y_tr,
+        mani_train, bilstm_train, y_train,
         epochs     = cfg["epochs"],
         batch_size = cfg["batch_size"],
         lr         = cfg["lr"],
@@ -187,16 +163,16 @@ def run_fold(
     )
 
     # --- Evaluate ---
-    logits    = model((xd_te, bi_te), training=False).numpy()
+    logits    = model((mani_test, bilstm_test), training=False).numpy()
     probs     = tf.nn.softmax(logits).numpy()[:, 1]   # probability of class 1
     preds     = np.argmax(logits, axis=-1)
 
     return {
-        "acc"      : accuracy_score(y_te,  preds),
-        "precision": precision_score(y_te, preds, zero_division=0),
-        "recall"   : recall_score(y_te,   preds, zero_division=0),
-        "f1"       : f1_score(y_te,       preds, zero_division=0),
-        "roc_auc"  : roc_auc_score(y_te,  probs),
+        "acc"      : accuracy_score(y_test,  preds),
+        "precision": precision_score(y_test, preds, zero_division=0),
+        "recall"   : recall_score(y_test,   preds, zero_division=0),
+        "f1"       : f1_score(y_test,       preds, zero_division=0),
+        "roc_auc"  : roc_auc_score(y_test,  probs),
     }
 
 
@@ -225,7 +201,6 @@ def run_losocv(
     """
     cfg       = DATASET_CONFIGS[dataset]
     dim_idx   = LABEL_DIMS[dimension]
-    median    = cfg["median_label"]
 
     # --- Detect GPUs and build strategy ---
     gpus = tf.config.list_physical_devices("GPU")
@@ -242,10 +217,6 @@ def run_losocv(
     # --- Load data ---
     all_eeg    = np.load(eeg_path)    # (n_subj, n_trials, C, T)
     all_labels_raw = np.load(label_path)  # (n_subj, n_trials, n_dims)
-    # all_labels = np.stack(
-    #     [binarize_labels(all_labels_raw[s, :, dim_idx], median)
-    #      for s in range(all_eeg.shape[0])], axis=0
-    # )  # (n_subj, n_trials)
 
     n_subjects = all_eeg.shape[0]
     fold_results = []
