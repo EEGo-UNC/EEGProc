@@ -157,7 +157,7 @@ Prepare two NumPy files:
 | File | Shape | Description |
 |------|-------|-------------|
 | `deap_eeg.npy` | `(32, 40, 32, 7680)` | subjects × trials × channels × samples |
-| `deap_labels.npy` | `(32, 40, 5)` | subjects × trials × label dimensions (valence, arousal, …) |
+| `deap_labels.npy` | `(32, 40, 4)` | subjects × trials × label dimensions (valence, arousal, dominance, liking) |
 
 ### 2. Run LOSOCV
 
