@@ -30,8 +30,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from data_representation import preprocess_dataset
-from stsnet import STSNet
+from .data_representation import preprocess_dataset
+from .stsnet import STSNet
 
 
 # ---------------------------------------------------------------------------
