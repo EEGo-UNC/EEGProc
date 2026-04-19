@@ -4,18 +4,8 @@ Pytest unit and smoke tests for the STSNet implementation.
 All tests use synthetic data so no real EEG files are needed.
 """
 
-from pathlib import Path
-import sys
-
 import numpy as np
 import tensorflow as tf
-
-
-# Keep compatibility with local imports used inside the STSNet modules.
-STSNET_DIR = Path(__file__).resolve().parents[1] / "eegproc" / "supervised" / "stsnet"
-if str(STSNET_DIR) not in sys.path:
-    sys.path.insert(0, str(STSNET_DIR))
-
 from eegproc.supervised.stsnet.data_representation import (
     build_4d_representation,
     build_spatiotemporal_representation,
