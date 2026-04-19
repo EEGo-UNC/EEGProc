@@ -12,7 +12,7 @@ Usage
     # DEAP  (point to the folder containing s01.dat ... s32.dat)
     python prepare_datasets.py --dataset deap --input_dir /path/to/deap/data_preprocessed_python
 
-    # DREAMER  (point to the folder containing DREAMER_FULL.csv)
+    # DREAMER  (point to the folder containing dreamer_joined.csv)
     python prepare_datasets.py --dataset dreamer --input_dir /path/to/dreamer
 
     # Both
@@ -33,16 +33,18 @@ DEAP (preprocessed Python version):
                    in some versions; we trim to the last 60 s (7680 samples).
         'labels' : (40, 4)  valence, arousal, dominance, liking  (1–9 scale)
 
-DREAMER (DREAMER_FULL.csv):
+DREAMER (dreamer_joined.csv):
     Long/tidy format — one row per EEG sample with columns:
-        patient_index, video_index,
-        arousal  (stored as '[value]'),
-        valence  (stored as '[value]'),
-        AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4  (14 channels)
+        subject_id, trial_id, segment, sample_idx,
+        AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4,
+        ECG1, ECG2, valence, arousal, dominance
+    This script currently uses subject_id/trial_id for grouping,
+    the 14 EEG channels listed above for signals, and valence/arousal for labels.
+    Extra columns (segment, sample_idx, ECG1, ECG2, dominance) are ignored.
     Signals are already at 128 Hz and filtered 4–30 Hz.
     Trial lengths vary; we take 60 s from the middle (7680 samples).
-    NOTE: the CSV contains no dominance score column, so the labels array
-    has shape (n_subjects, 18, 2) with [valence, arousal] only.
+    NOTE: even though the CSV includes dominance, this converter currently writes
+    labels with shape (n_subjects, 18, 2) using [valence, arousal] only.
 """
 
 import argparse
@@ -192,7 +194,8 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
     print(f"  Loading {csv_path} (this may take a moment)…")
     df = pd.read_csv(csv_path)
 
-    # Labels are stored as '[3]' strings — strip brackets and cast
+    # Some exports store labels like '[3]'; strip brackets and cast.
+    # Plain numeric strings are also handled correctly.
     for col in ("valence", "arousal"):
         df[col] = df[col].astype(str).str.strip("[]").astype(np.float32)
 
@@ -249,7 +252,7 @@ def _print_label_stats(name: str, labels: np.ndarray) -> None:
     """Print basic label statistics to help verify the conversion."""
     dim_names = {
         "DEAP":    ["valence", "arousal", "dominance", "liking"],
-        "DREAMER": ["valence", "arousal"],  # CSV has no dominance column
+        "DREAMER": ["valence", "arousal"],  # Converter currently outputs only these two labels
     }
     names = dim_names.get(name, [f"dim{i}" for i in range(labels.shape[-1])])
     print(f"\n{name} label statistics (across all subjects × trials):")
@@ -311,7 +314,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--dreamer_dir", type=str, default=None,
-        help="Folder containing DREAMER_FULL.csv",
+        help="Folder containing dreamer_joined.csv",
     )
     # Shorthand when both are in the same place
     parser.add_argument(
