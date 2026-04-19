@@ -107,12 +107,15 @@ def run_fold(
     train_idx = [i for i in range(n_subjects) if i != subject_idx]
     train_eeg = np.concatenate([all_eeg[i] for i in train_idx], axis=0)
 
-    # Compute median threshold from training labels only, then binarize both sets
-    train_raw    = np.concatenate([all_labels[i] for i in train_idx], axis=0)
-    test_raw     = all_labels[subject_idx]
-    fold_median  = np.median(train_raw)
-    train_labels = (train_raw >= fold_median).astype(np.int32)
-    test_labels  = (test_raw  >= fold_median).astype(np.int32)
+    # Use a configured dataset threshold when provided; otherwise fall back to a
+    # fold-specific median computed from training labels only.
+    train_raw = np.concatenate([all_labels[i] for i in train_idx], axis=0)
+    test_raw = all_labels[subject_idx]
+    label_threshold = cfg.get("median_label")
+    if label_threshold is None:
+        label_threshold = np.median(train_raw)
+    train_labels = (train_raw >= label_threshold).astype(np.int32)
+    test_labels = (test_raw >= label_threshold).astype(np.int32)
 
     print(
         f"  Fold {subject_idx+1}/{n_subjects} — "
