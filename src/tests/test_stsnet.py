@@ -13,7 +13,7 @@ from eegproc.supervised.stsnet.data_representation import (
     flatten_lower_triangular,
 )
 from eegproc.supervised.stsnet.manifold_net import InvariantLayer, ManifoldNet, WFMLayer
-from eegproc.supervised.stsnet import BiLSTMNet, STSNet
+from eegproc.supervised.stsnet.stsnet import BiLSTMNet, STSNet
 
 
 def make_trial(n_channels=32, n_samples=7680, seed=0):
