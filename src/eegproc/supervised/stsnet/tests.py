@@ -4,7 +4,7 @@ tests.py
 Unit and smoke tests for the STSNet implementation.
 
 Run with:
-    python tests.py
+    python -m eegproc.supervised.stsnet.tests
 
 All tests use synthetic data so no real EEG files are needed.
 """
@@ -12,6 +12,16 @@ All tests use synthetic data so no real EEG files are needed.
 import numpy as np
 import tensorflow as tf
 import unittest
+
+from .data_representation import (
+    covariance_to_spd,
+    flatten_lower_triangular,
+    compute_spd,
+    build_4d_representation,
+    build_spatiotemporal_representation,
+)
+from .manifold_net import ManifoldNet, WFMLayer, InvariantLayer
+from .stsnet import BiLSTMNet, STSNet
 
 
 # ---------------------------------------------------------------------------
@@ -30,13 +40,6 @@ def make_trial(n_channels=32, n_samples=7680, seed=0):
 class TestDataRepresentation(unittest.TestCase):
 
     def setUp(self):
-        from data_representation import (
-            covariance_to_spd,
-            flatten_lower_triangular,
-            compute_spd,
-            build_4d_representation,
-            build_spatiotemporal_representation,
-        )
         self.covariance_to_spd          = covariance_to_spd
         self.flatten_lower_triangular   = flatten_lower_triangular
         self.compute_spd                = compute_spd
@@ -97,7 +100,6 @@ class TestManifoldNet(unittest.TestCase):
         return tf.constant(A)
 
     def test_manifoldnet_output_shape(self):
-        from manifold_net import ManifoldNet
         model = ManifoldNet(n_channels=14, kernel_size=2, n_fm_iters=3)
         x = self._make_spd_batch(batch=2, n_windows=13, n_bands=3, n=14)
         mo = model(x, training=False)
@@ -106,7 +108,6 @@ class TestManifoldNet(unittest.TestCase):
         self.assertEqual(mo.shape[1], (13 - 2) * 3)
 
     def test_wfm_layer_output_shape(self):
-        from manifold_net import WFMLayer
         layer = WFMLayer(kernel_size=2, n_fm_iters=3)
         x = self._make_spd_batch(batch=2, n_windows=5, n_bands=3, n=14)
         out = layer(x)
@@ -114,7 +115,6 @@ class TestManifoldNet(unittest.TestCase):
 
     def test_wfm_output_is_spd(self):
         """wFM output matrices should remain SPD (positive eigenvalues)."""
-        from manifold_net import WFMLayer
         layer = WFMLayer(kernel_size=2, n_fm_iters=5)
         x = self._make_spd_batch(batch=1, n_windows=3, n_bands=2, n=8)
         out = layer(x).numpy()
@@ -124,7 +124,6 @@ class TestManifoldNet(unittest.TestCase):
                 self.assertTrue(np.all(vals > 0))
 
     def test_invariant_layer_shape(self):
-        from manifold_net import InvariantLayer
         layer = InvariantLayer(n_fm_iters=3)
         x = self._make_spd_batch(batch=2, n_windows=4, n_bands=3, n=14)
         mo = layer(x)
@@ -138,7 +137,6 @@ class TestManifoldNet(unittest.TestCase):
 class TestBiLSTMNet(unittest.TestCase):
 
     def test_output_shape(self):
-        from stsnet import BiLSTMNet
         model = BiLSTMNet(hidden_units=64, dropout_rate=0.0)
         x = tf.random.normal((4, 15, 528))   # (batch, n_windows, feat_dim)
         ho = model(x, training=False)
@@ -163,7 +161,6 @@ class TestSTSNet(unittest.TestCase):
         return tf.constant(xd), tf.constant(bi), tf.constant(y)
 
     def test_forward_pass_shape(self):
-        from stsnet import STSNet
         model  = STSNet(n_channels=14, n_classes=2,
                         bilstm_units=32, n_fm_iters=3)
         xd, bi, _ = self._make_batch(batch=2, n_windows=13, n_bands=3, C=14)
@@ -171,7 +168,6 @@ class TestSTSNet(unittest.TestCase):
         self.assertEqual(logits.shape, (2, 2))
 
     def test_logits_finite(self):
-        from stsnet import STSNet
         model  = STSNet(n_channels=14, n_classes=2,
                         bilstm_units=32, n_fm_iters=3)
         xd, bi, _ = self._make_batch(batch=2, n_windows=13, n_bands=3, C=14)
@@ -180,8 +176,6 @@ class TestSTSNet(unittest.TestCase):
 
     def test_single_training_step(self):
         """Verify that a single joint training step runs without error."""
-        from stsnet import STSNet
-        import tensorflow as tf
         model  = STSNet(n_channels=14, n_classes=2,
                         bilstm_units=32, n_fm_iters=3)
         xd, bi, y = self._make_batch(batch=4, n_windows=13, n_bands=3, C=14)
