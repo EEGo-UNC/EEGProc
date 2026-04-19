@@ -24,7 +24,7 @@ Li et al., "STSNet ...", HISS 2023.
 """
 
 import tensorflow as tf
-from manifold_net import ManifoldNet
+from .manifold_net import ManifoldNet
 
 
 # ---------------------------------------------------------------------------
