@@ -30,8 +30,14 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from .data_representation import preprocess_dataset
-from .stsnet import STSNet
+try:
+    # Package execution: python -m <package>.train_eval
+    from .data_representation import preprocess_dataset
+    from .stsnet import STSNet
+except ImportError:
+    # Script execution: python train_eval.py
+    from data_representation import preprocess_dataset
+    from stsnet import STSNet
 
 
 # ---------------------------------------------------------------------------
