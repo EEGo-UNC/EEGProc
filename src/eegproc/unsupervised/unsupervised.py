@@ -2,6 +2,24 @@ import tensorflow as tf
 from tensorflow.keras import layers, Model
 from GraphConv import GraphConv
 
+# ---------------------------------------------------------------------------
+# LSTM-based encoder architectures
+#
+# Both encoder_lstm and encoder_bilstm follow the same two-mode design:
+#
+#   Encoder-only mode  (n_classes=None):
+#       Output shape: (batch, ceil(timesteps / 4), emb_dim)
+#       Compatible with training_autoencoder as a drop-in replacement for
+#       encoder_1dcnn / encoder_2dcnn / encoder_gcn.
+#
+#   Classifier mode  (n_classes is an integer):
+#       A GlobalAveragePooling step collapses the time axis, then a Dense
+#       layer maps to n_classes. A Softmax activation is added on top when
+#       include_softmax=True, which is what you normally want for training
+#       with sparse_categorical_crossentropy. Set include_softmax=False if
+#       you want raw logits (e.g. when using from_logits=True in your loss).
+# ---------------------------------------------------------------------------
+
 
 def encoder_1dcnn(
     timesteps: int,
@@ -385,3 +403,240 @@ def encoder_gcn(
     seq_emb = layers.Dense(emb_dim, activation=None, name="seq_emb")(x)
 
     return Model(inputs=x_in, outputs=seq_emb, name="encoder_gcn")
+
+
+def encoder_lstm(
+    timesteps: int,
+    n_features: int,
+    lstm_units: int = 128,
+    n_lstm_layers: int = 2,
+    emb_dim: int = 128,
+    dropout: float = 0.10,
+    n_classes: int | None = None,
+    include_softmax: bool = True,
+) -> tf.keras.Model:
+    """Build a unidirectional LSTM sequence encoder.
+
+    Stacks ``n_lstm_layers`` LSTM layers that each pass the full sequence
+    forward through time (left-to-right only). After the LSTM stack, two
+    ``MaxPool1D`` layers compress the time axis by a factor of 4 and a
+    ``Dense`` layer maps each downsampled timestep to ``emb_dim``.
+
+    The encoder can run in two modes controlled by ``n_classes``:
+
+    * **Encoder-only mode** (``n_classes=None``): output shape is
+      ``(batch, ceil(timesteps / 4), emb_dim)``, identical to
+      ``encoder_1dcnn`` and compatible with ``training_autoencoder``.
+    * **Classifier mode** (``n_classes`` is an integer): a
+      ``GlobalAveragePooling1D`` step collapses the time axis into a single
+      vector, then a ``Dense(n_classes)`` layer maps to class scores.
+      A ``Softmax`` is appended when ``include_softmax=True``.
+
+    Parameters
+    ----------
+    timesteps : int
+        Number of timesteps T in the input sequence.
+    n_features : int
+        Number of features per timestep (e.g. 84 for 14 electrodes x 6 bands).
+    lstm_units : int, optional
+        Number of hidden units in each LSTM layer. Default is 128.
+    n_lstm_layers : int, optional
+        How many LSTM layers to stack. Each layer (except the last) feeds its
+        full sequence output to the next. Default is 2.
+    emb_dim : int, optional
+        Dimensionality of the output embedding at each downsampled timestep.
+        Only used in encoder-only mode. Default is 128.
+    dropout : float, optional
+        Dropout rate applied after each LSTM layer. Default is 0.10.
+    n_classes : int or None, optional
+        When set to an integer the encoder becomes a full classifier.
+        A ``GlobalAveragePooling1D`` collapses the sequence and a
+        ``Dense(n_classes)`` layer produces class scores. Default is None
+        (encoder-only mode).
+    include_softmax : bool, optional
+        Whether to append a ``Softmax`` activation in classifier mode.
+        Set to ``False`` if your loss uses ``from_logits=True``.
+        Ignored when ``n_classes=None``. Default is True.
+
+    Returns
+    -------
+    tf.keras.Model
+        Keras Model with input shape ``(batch, timesteps, n_features)``.
+        Output shape depends on ``n_classes``:
+
+        * Encoder-only: ``(batch, ceil(timesteps / 4), emb_dim)``
+        * Classifier:   ``(batch, n_classes)``
+
+    Examples
+    --------
+    Encoder-only (use with training_autoencoder)::
+
+        enc = encoder_lstm(timesteps=128, n_features=84)
+        autoencoder = training_autoencoder(enc, timesteps=128, n_features=84)
+
+    Classifier (use with run_cross_validation)::
+
+        def build_model():
+            model = encoder_lstm(
+                timesteps=128, n_features=84,
+                n_classes=3, include_softmax=True
+            )
+            model.compile(
+                optimizer="adam",
+                loss="sparse_categorical_crossentropy",
+                metrics=["accuracy"]
+            )
+            return model
+    """
+    x_in = layers.Input(shape=(timesteps, n_features), name="x")
+
+    x = x_in
+    for layer_index in range(n_lstm_layers):
+        # All LSTM layers return the full sequence so the next layer or
+        # pooling step can work across all timesteps.
+        x = layers.LSTM(
+            lstm_units,
+            return_sequences=True,
+            name=f"lstm_{layer_index}",
+        )(x)
+        x = layers.BatchNormalization(name=f"lstm_bn_{layer_index}")(x)
+        x = layers.Dropout(dropout, name=f"lstm_do_{layer_index}")(x)
+
+    # Compress the time axis by 4 (same factor as the CNN encoders) so the
+    # output is compatible with training_autoencoder.
+    x = layers.MaxPool1D(2, padding="same", name="enc_tpool1")(x)
+    x = layers.MaxPool1D(2, padding="same", name="enc_tpool2")(x)
+
+    if n_classes is None:
+        # ---- Encoder-only mode ----------------------------------------
+        # Project each downsampled timestep to emb_dim.
+        output = layers.Dense(emb_dim, activation=None, name="seq_emb")(x)
+        model_name = "encoder_lstm"
+    else:
+        # ---- Classifier mode ------------------------------------------
+        # Collapse all timesteps into one vector by averaging, then classify.
+        x = layers.GlobalAveragePooling1D(name="gap")(x)
+        x = layers.Dense(n_classes, name="class_logits")(x)
+        if include_softmax:
+            output = layers.Softmax(name="class_probabilities")(x)
+        else:
+            output = x  # raw logits, no softmax
+        model_name = "encoder_lstm_classifier"
+
+    return Model(inputs=x_in, outputs=output, name=model_name)
+
+
+def encoder_bilstm(
+    timesteps: int,
+    n_features: int,
+    lstm_units: int = 128,
+    n_bilstm_layers: int = 2,
+    emb_dim: int = 128,
+    dropout: float = 0.10,
+    n_classes: int | None = None,
+    include_softmax: bool = True,
+) -> tf.keras.Model:
+    """Build a bidirectional LSTM sequence encoder.
+
+    Identical in structure to ``encoder_lstm`` but wraps each LSTM in
+    ``tf.keras.layers.Bidirectional``, which processes the sequence both
+    left-to-right *and* right-to-left simultaneously. The two directional
+    outputs are concatenated, so each LSTM layer outputs ``lstm_units * 2``
+    features per timestep instead of ``lstm_units``.
+
+    Processing both directions lets the model use context from both the past
+    *and* the future at every timestep, which is especially useful for EEG
+    signals where a brain-state event at time t is often visible in the signal
+    both before and after its peak.
+
+    Parameters
+    ----------
+    timesteps : int
+        Number of timesteps T in the input sequence.
+    n_features : int
+        Number of features per timestep.
+    lstm_units : int, optional
+        Number of hidden units in *each direction* of the LSTM. The actual
+        feature dimension after each BiLSTM layer is ``lstm_units * 2`` due
+        to concatenation of the two directional outputs. Default is 128.
+    n_bilstm_layers : int, optional
+        How many bidirectional LSTM layers to stack. Default is 2.
+    emb_dim : int, optional
+        Dimensionality of the output embedding per downsampled timestep in
+        encoder-only mode. Default is 128.
+    dropout : float, optional
+        Dropout rate applied after each BiLSTM layer. Default is 0.10.
+    n_classes : int or None, optional
+        When set, switches the model to classifier mode: collapses the time
+        axis with ``GlobalAveragePooling1D`` and appends a
+        ``Dense(n_classes)`` head. Default is None (encoder-only mode).
+    include_softmax : bool, optional
+        Whether to append ``Softmax`` in classifier mode. Set to ``False``
+        when using a loss with ``from_logits=True``. Default is True.
+
+    Returns
+    -------
+    tf.keras.Model
+        Keras Model with input shape ``(batch, timesteps, n_features)``.
+        Output shape:
+
+        * Encoder-only: ``(batch, ceil(timesteps / 4), emb_dim)``
+        * Classifier:   ``(batch, n_classes)``
+
+    Examples
+    --------
+    Classifier for a 3-class EEG task, used with LOSO cross-validation::
+
+        def build_model():
+            model = encoder_bilstm(
+                timesteps=128, n_features=84,
+                lstm_units=64, n_classes=3, include_softmax=True
+            )
+            model.compile(
+                optimizer="adam",
+                loss="sparse_categorical_crossentropy",
+                metrics=["accuracy"]
+            )
+            return model
+
+        results = run_cross_validation(
+            cv_strategy="loso",
+            model_builder_function=build_model,
+            feature_array=X,
+            label_array=y,
+            subject_id_array=subject_ids,
+        )
+    """
+    x_in = layers.Input(shape=(timesteps, n_features), name="x")
+
+    x = x_in
+    for layer_index in range(n_bilstm_layers):
+        # Bidirectional concatenates the forward and backward LSTM outputs,
+        # so the output width is lstm_units * 2.
+        x = layers.Bidirectional(
+            layers.LSTM(lstm_units, return_sequences=True),
+            merge_mode="concat",  # forward + backward outputs are concatenated
+            name=f"bilstm_{layer_index}",
+        )(x)
+        x = layers.BatchNormalization(name=f"bilstm_bn_{layer_index}")(x)
+        x = layers.Dropout(dropout, name=f"bilstm_do_{layer_index}")(x)
+
+    # Compress time axis by 4 — same as the CNN encoders.
+    x = layers.MaxPool1D(2, padding="same", name="enc_tpool1")(x)
+    x = layers.MaxPool1D(2, padding="same", name="enc_tpool2")(x)
+
+    if n_classes is None:
+        # ---- Encoder-only mode ----------------------------------------
+        output = layers.Dense(emb_dim, activation=None, name="seq_emb")(x)
+        model_name = "encoder_bilstm"
+    else:
+        # ---- Classifier mode ------------------------------------------
+        x = layers.GlobalAveragePooling1D(name="gap")(x)
+        x = layers.Dense(n_classes, name="class_logits")(x)
+        if include_softmax:
+            output = layers.Softmax(name="class_probabilities")(x)
+        else:
+            output = x
+        model_name = "encoder_bilstm_classifier"
+
+    return Model(inputs=x_in, outputs=output, name=model_name)
