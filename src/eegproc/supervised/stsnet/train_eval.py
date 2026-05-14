@@ -113,7 +113,9 @@ def run_fold(
     ----------
     subject_idx          : int — index of the held-out test subject
     all_eeg              : ndarray (n_subj, n_trials, n_ch, n_samples)
-    all_labels           : ndarray (n_subj, n_trials) — already binarised
+    all_labels           : ndarray (n_subj, n_trials) — raw label scores in the
+                           original rating scale; binarised internally using the
+                           configured threshold
     cfg                  : dict — dataset configuration
     use_variable_windows : bool — VW vs FW data representation
     gpu_strategy         : optional tf.distribute.Strategy for multi-GPU
