@@ -16,7 +16,7 @@ stsnet/
 ├── data_representation.py   # EEG → 4-D SPD tensor (ManifoldNet) & flattened sequence (BiLSTM)
 ├── manifold_net.py          # ManifoldNet sub-model  (wFM layers + invariant layer → MO)
 ├── prepare_datasets.py      # Convert raw DEAP and DREAMER dataset files into the NumPy format
-├── stsnet.py                # BiLSTMNet + FusionHead + full STSNet model + joint training
+├── stsnet.py                # BiLSTMNet + VariationalFusionHead + full STSNet model + joint training
 ├── train_eval.py            # LOSOCV experiment runner (DEAP / DREAMER)
 ├── tests.py                 # Unit & smoke tests
 └── README.md
@@ -39,11 +39,12 @@ EEG signal
                                       bidirectional
                                       Eq. (10)
                                       
-MH = concat(MO, HO)  ──►  FC  ──►  Softmax  ──►  class label
+MH = concat(MO, HO)  ──►  VariationalFusionHead (Gaussian class priors + Bayes rule)
+                      ──►  class logits  ──►  class label
 ```
 
 Training follows **Algorithm 1** (joint alternating optimisation):
-even batches update ManifoldNet + FC; odd batches update BiLSTM + FC.
+even batches update ManifoldNet + fusion head; odd batches update BiLSTM + fusion head.
 
 ---
 
