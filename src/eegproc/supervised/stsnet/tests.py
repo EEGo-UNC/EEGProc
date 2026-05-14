@@ -179,13 +179,13 @@ class TestSTSNet(unittest.TestCase):
         model  = STSNet(n_channels=14, n_classes=2,
                         bilstm_units=32, n_fm_iters=3)
         xd, bi, y = self._make_batch(batch=4, n_windows=13, n_bands=3, C=14)
-        loss_fn    = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
         opt_m = tf.keras.optimizers.Adam(1e-4)
         opt_b = tf.keras.optimizers.Adam(1e-4)
         opt_f = tf.keras.optimizers.Adam(1e-4)
+        opt_d = tf.keras.optimizers.Adam(1e-4)
 
-        loss_m = model._train_step_manifold(xd, bi, y, opt_m, opt_f, loss_fn)
-        loss_b = model._train_step_bilstm(xd, bi, y, opt_b, opt_f, loss_fn)
+        loss_m = model._train_step_manifold(xd, bi, y, opt_m, opt_f, opt_d)
+        loss_b = model._train_step_bilstm(xd, bi, y, opt_b, opt_f, opt_d)
         self.assertTrue(np.isfinite(float(loss_m)))
         self.assertTrue(np.isfinite(float(loss_b)))
 
