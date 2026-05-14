@@ -198,12 +198,17 @@ def run_fold(
     probs  = tf.nn.softmax(logits).numpy()[:, 1]   # probability of class 1
     preds  = np.argmax(logits, axis=-1)
 
+    if len(np.unique(y_test)) < 2:
+        roc_auc = np.nan
+    else:
+        roc_auc = roc_auc_score(y_test, probs)
+
     return {
         "acc"      : accuracy_score(y_test,  preds),
         "precision": precision_score(y_test, preds, zero_division=0),
         "recall"   : recall_score(y_test,   preds, zero_division=0),
         "f1"       : f1_score(y_test,       preds, zero_division=0),
-        "roc_auc"  : roc_auc_score(y_test,  probs),
+        "roc_auc"  : roc_auc,
     }
 
 
