@@ -188,9 +188,9 @@ def build_4d_representation(
     available_samples = signal.shape[-1]
     if required_samples > available_samples:
         raise ValueError(
-            "build_4d_representation requires signal length >= "
-            "n_windows * window_size; "
-            f"got {available_samples} samples, but need {required_samples}."
+            "Signal too short: "
+            f"{available_samples} samples available, but {required_samples} "
+            f"samples required (n_windows={n_windows} * window_size={window_size})."
         )
 
     # Pre-filter all bands at once

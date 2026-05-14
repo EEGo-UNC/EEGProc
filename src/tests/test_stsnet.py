@@ -54,8 +54,15 @@ def test_4d_representation_shape():
 def test_4d_representation_short_signal_raises():
     sig = make_trial(32, 1000)
     bands = ["theta", "alpha"]
-    with pytest.raises(ValueError, match="signal length"):
+    with pytest.raises(ValueError, match="1000 samples available, but 1536 samples required"):
         build_4d_representation(sig, fs=128, bands=bands, window_size=512, n_windows=3)
+
+
+def test_4d_representation_exact_window_budget_succeeds():
+    sig = make_trial(32, 1000)
+    bands = ["theta", "alpha"]
+    xd = build_4d_representation(sig, fs=128, bands=bands, window_size=512, n_windows=1)
+    assert xd.shape == (1, 2, 32, 32)
 
 
 def test_spatiotemporal_representation_shape_fw():
