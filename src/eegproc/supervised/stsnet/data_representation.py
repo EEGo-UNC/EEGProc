@@ -115,8 +115,18 @@ def compute_spd(segment: np.ndarray) -> np.ndarray:
     Returns
     -------
     ndarray, shape (n_channels, n_channels)
+
+    Raises
+    ------
+    ValueError
+        If the segment has fewer than 2 samples along the last axis.
     """
     n = segment.shape[-1]
+    if n < 2:
+        raise ValueError(
+            "compute_spd requires at least 2 samples per segment; "
+            f"got segment with shape {segment.shape}."
+        )
     cov = (segment @ segment.T) / (n - 1)
     return covariance_to_spd(cov)
 
