@@ -252,16 +252,23 @@ def run_losocv(
         n_fm_iters      = FAST_TEST_OVERRIDES["n_fm_iters"]
         max_subjects    = FAST_TEST_OVERRIDES["max_subjects"]
 
-    # --- Detect GPUs and build strategy ---
+    # --- Detect GPUs ---
+    #
+    # NOTE:
+    # STSNet.fit_joint / run_fold are currently implemented for single-device
+    # training only. Do not construct a MirroredStrategy here unless the full
+    # training pipeline is made distribution-aware (strategy.scope(),
+    # distributed datasets, and strategy.run for train/eval steps).
     gpus = tf.config.list_physical_devices("GPU")
+    strategy = None
     if len(gpus) > 1:
-        strategy = tf.distribute.MirroredStrategy()
-        print(f"Using MirroredStrategy on {len(gpus)} GPUs.")
+        print(
+            f"Detected {len(gpus)} GPUs, but distributed training is not "
+            "enabled for this training loop; using a single device."
+        )
     elif len(gpus) == 1:
-        strategy = None
         print("Using single GPU.")
     else:
-        strategy = None
         print("No GPU found; using CPU.")
 
     # --- Load data ---
