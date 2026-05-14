@@ -5,6 +5,7 @@ All tests use synthetic data so no real EEG files are needed.
 """
 
 import numpy as np
+import pytest
 import tensorflow as tf
 from eegproc.supervised.stsnet.data_representation import (
     build_4d_representation,
@@ -48,6 +49,13 @@ def test_4d_representation_shape():
     bands = ["theta", "alpha", "beta", "gamma"]
     xd = build_4d_representation(sig, fs=128, bands=bands, window_size=512, n_windows=15)
     assert xd.shape == (15, 4, 32, 32)
+
+
+def test_4d_representation_short_signal_raises():
+    sig = make_trial(32, 1000)
+    bands = ["theta", "alpha"]
+    with pytest.raises(ValueError, match="signal length"):
+        build_4d_representation(sig, fs=128, bands=bands, window_size=512, n_windows=3)
 
 
 def test_spatiotemporal_representation_shape_fw():

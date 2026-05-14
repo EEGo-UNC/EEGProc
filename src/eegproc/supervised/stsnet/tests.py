@@ -71,6 +71,12 @@ class TestDataRepresentation(unittest.TestCase):
         xd    = self.build_4d(sig, fs=128, bands=bands, window_size=512, n_windows=15)
         self.assertEqual(xd.shape, (15, 4, 32, 32))
 
+    def test_4d_representation_short_signal_raises(self):
+        sig = make_trial(32, 1000)
+        bands = ["theta", "alpha"]
+        with self.assertRaisesRegex(ValueError, "signal length"):
+            self.build_4d(sig, fs=128, bands=bands, window_size=512, n_windows=3)
+
     def test_spatiotemporal_representation_shape_fw(self):
         sig = make_trial(32, 7680)
         bi  = self.build_st(sig, n_windows=15, use_variable_windows=False,

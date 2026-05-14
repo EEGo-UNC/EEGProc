@@ -176,9 +176,22 @@ def build_4d_representation(
     -------
     ndarray, shape (n_windows, n_bands, n_channels, n_channels)
         Ready to use as ManifoldNet input (one trial).
+
+    Raises
+    ------
+    ValueError
+        If the signal is too short to fill all requested windows.
     """
     n_channels = signal.shape[0]
     n_bands    = len(bands)
+    required_samples = n_windows * window_size
+    available_samples = signal.shape[-1]
+    if required_samples > available_samples:
+        raise ValueError(
+            "build_4d_representation requires signal length >= "
+            "n_windows * window_size; "
+            f"got {available_samples} samples, but need {required_samples}."
+        )
 
     # Pre-filter all bands at once
     band_signals = decompose_bands(signal, fs, bands)
@@ -190,8 +203,6 @@ def build_4d_representation(
         for t in range(n_windows):
             start = t * window_size
             end   = start + window_size
-            if end > bsig.shape[-1]:
-                break
             result[t, b_idx] = compute_spd(bsig[:, start:end])
 
     return result  # (n_windows, n_bands, C, C)
