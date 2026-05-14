@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow.keras import layers, Model
-from GraphConv import GraphConv
+from .GraphConv import GraphConv
 
 # ---------------------------------------------------------------------------
 # LSTM-based encoder architectures
