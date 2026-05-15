@@ -100,13 +100,14 @@ class VariationalClassifier(tf.keras.layers.Layer):
         self,
         mh: tf.Tensor,
         y: tf.Tensor,
+        alpha: float = 1.0,
         beta: float = 1.0,
         lambda_: float = 1.0,
     ) -> tf.Tensor:
         """
         VC objective (Eq. 7).
 
-        L_VC = xent  +  beta * KL(encoder||prior)  +  lambda_ * KL(class prior)
+        L_VC = alpha * xent  +  beta * KL(encoder||prior)  +  lambda_ * KL(class prior)
 
         Setting beta=0 and lambda_=0 reduces this to plain cross-entropy,
         which is the "disc_only" ablation signal seen by the encoder.
@@ -115,14 +116,15 @@ class VariationalClassifier(tf.keras.layers.Layer):
         ----------
         mh      : (batch, d)
         y       : (batch,) int32
+        alpha   : weight for cross-entropy               (0 = disabled)
         beta    : KL weight for encoder/prior alignment  (0 = disabled)
         lambda_ : KL weight for class-prior alignment    (0 = disabled)
         """
         y_onehot = tf.one_hot(y, self.n_classes)
 
-        # Term 1: cross-entropy (always active)
+        # Term 1: cross-entropy
         logits = self(mh, training=True)
-        xent = tf.reduce_mean(
+        xent = alpha * tf.reduce_mean(
             tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
         )
 
