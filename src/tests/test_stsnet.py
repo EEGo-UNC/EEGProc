@@ -5,6 +5,7 @@ All tests use synthetic data so no real EEG files are needed.
 """
 
 import numpy as np
+import pytest
 import tensorflow as tf
 from eegproc.supervised.stsnet.data_representation import (
     build_4d_representation,
@@ -48,6 +49,20 @@ def test_4d_representation_shape():
     bands = ["theta", "alpha", "beta", "gamma"]
     xd = build_4d_representation(sig, fs=128, bands=bands, window_size=512, n_windows=15)
     assert xd.shape == (15, 4, 32, 32)
+
+
+def test_4d_representation_short_signal_raises():
+    sig = make_trial(32, 1000)
+    bands = ["theta", "alpha"]
+    with pytest.raises(ValueError, match="1000 samples available, but 1536 samples required"):
+        build_4d_representation(sig, fs=128, bands=bands, window_size=512, n_windows=3)
+
+
+def test_4d_representation_exact_window_budget_succeeds():
+    sig = make_trial(32, 1000)
+    bands = ["theta", "alpha"]
+    xd = build_4d_representation(sig, fs=128, bands=bands, window_size=512, n_windows=1)
+    assert xd.shape == (1, 2, 32, 32)
 
 
 def test_spatiotemporal_representation_shape_fw():
@@ -149,12 +164,12 @@ def test_stsnet_single_training_step():
     """Verify that a single joint training step runs without error."""
     model = STSNet(n_channels=14, n_classes=2, bilstm_units=32, n_fm_iters=3)
     xd, bi, y = _make_batch(batch=4, n_windows=13, n_bands=3, c=14)
-    loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     opt_m = tf.keras.optimizers.Adam(1e-4)
     opt_b = tf.keras.optimizers.Adam(1e-4)
     opt_f = tf.keras.optimizers.Adam(1e-4)
+    opt_d = tf.keras.optimizers.Adam(1e-4)
 
-    loss_m = model._train_step_manifold(xd, bi, y, opt_m, opt_f, loss_fn)
-    loss_b = model._train_step_bilstm(xd, bi, y, opt_b, opt_f, loss_fn)
+    loss_m = model._train_step_manifold(xd, bi, y, opt_m, opt_f, opt_d)
+    loss_b = model._train_step_bilstm(xd, bi, y, opt_b, opt_f, opt_d)
     assert np.isfinite(float(loss_m))
     assert np.isfinite(float(loss_b))

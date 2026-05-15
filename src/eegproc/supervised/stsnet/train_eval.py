@@ -113,7 +113,9 @@ def run_fold(
     ----------
     subject_idx          : int — index of the held-out test subject
     all_eeg              : ndarray (n_subj, n_trials, n_ch, n_samples)
-    all_labels           : ndarray (n_subj, n_trials) — already binarised
+    all_labels           : ndarray (n_subj, n_trials) — raw label scores in the
+                           original rating scale; binarised internally using the
+                           configured threshold
     cfg                  : dict — dataset configuration
     use_variable_windows : bool — VW vs FW data representation
     gpu_strategy         : optional tf.distribute.Strategy for multi-GPU
@@ -198,12 +200,17 @@ def run_fold(
     probs  = tf.nn.softmax(logits).numpy()[:, 1]   # probability of class 1
     preds  = np.argmax(logits, axis=-1)
 
+    if len(np.unique(y_test)) < 2:
+        roc_auc = np.nan
+    else:
+        roc_auc = roc_auc_score(y_test, probs)
+
     return {
         "acc"      : accuracy_score(y_test,  preds),
         "precision": precision_score(y_test, preds, zero_division=0),
         "recall"   : recall_score(y_test,   preds, zero_division=0),
         "f1"       : f1_score(y_test,       preds, zero_division=0),
-        "roc_auc"  : roc_auc_score(y_test,  probs),
+        "roc_auc"  : roc_auc,
     }
 
 
@@ -245,16 +252,23 @@ def run_losocv(
         n_fm_iters      = FAST_TEST_OVERRIDES["n_fm_iters"]
         max_subjects    = FAST_TEST_OVERRIDES["max_subjects"]
 
-    # --- Detect GPUs and build strategy ---
+    # --- Detect GPUs ---
+    #
+    # NOTE:
+    # STSNet.fit_joint / run_fold are currently implemented for single-device
+    # training only. Do not construct a MirroredStrategy here unless the full
+    # training pipeline is made distribution-aware (strategy.scope(),
+    # distributed datasets, and strategy.run for train/eval steps).
     gpus = tf.config.list_physical_devices("GPU")
+    strategy = None
     if len(gpus) > 1:
-        strategy = tf.distribute.MirroredStrategy()
-        print(f"Using MirroredStrategy on {len(gpus)} GPUs.")
+        print(
+            f"Detected {len(gpus)} GPUs, but distributed training is not "
+            "enabled for this training loop; using a single device."
+        )
     elif len(gpus) == 1:
-        strategy = None
         print("Using single GPU.")
     else:
-        strategy = None
         print("No GPU found; using CPU.")
 
     # --- Load data ---

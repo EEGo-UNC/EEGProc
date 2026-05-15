@@ -115,8 +115,18 @@ def compute_spd(segment: np.ndarray) -> np.ndarray:
     Returns
     -------
     ndarray, shape (n_channels, n_channels)
+
+    Raises
+    ------
+    ValueError
+        If the segment has fewer than 2 samples along the last axis.
     """
     n = segment.shape[-1]
+    if n < 2:
+        raise ValueError(
+            "compute_spd requires at least 2 samples per segment; "
+            f"got segment with shape {segment.shape}."
+        )
     cov = (segment @ segment.T) / (n - 1)
     return covariance_to_spd(cov)
 
@@ -166,9 +176,22 @@ def build_4d_representation(
     -------
     ndarray, shape (n_windows, n_bands, n_channels, n_channels)
         Ready to use as ManifoldNet input (one trial).
+
+    Raises
+    ------
+    ValueError
+        If the signal is too short to fill all requested windows.
     """
     n_channels = signal.shape[0]
     n_bands    = len(bands)
+    required_samples = n_windows * window_size
+    available_samples = signal.shape[-1]
+    if required_samples > available_samples:
+        raise ValueError(
+            "Signal too short: "
+            f"{available_samples} samples available, but {required_samples} "
+            f"samples required (n_windows={n_windows} * window_size={window_size})."
+        )
 
     # Pre-filter all bands at once
     band_signals = decompose_bands(signal, fs, bands)
@@ -180,8 +203,6 @@ def build_4d_representation(
         for t in range(n_windows):
             start = t * window_size
             end   = start + window_size
-            if end > bsig.shape[-1]:
-                break
             result[t, b_idx] = compute_spd(bsig[:, start:end])
 
     return result  # (n_windows, n_bands, C, C)
