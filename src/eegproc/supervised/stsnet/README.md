@@ -7,6 +7,8 @@ A clean, modular, GPU-parallelisable TensorFlow 2 implementation of:
 > *Health Information Science and Systems*, 2023.
 > https://doi.org/10.1007/s13755-023-00226-x
 
+adpated to support variational learning objectives.
+
 ---
 
 ## Repository layout
