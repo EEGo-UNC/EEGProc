@@ -23,9 +23,10 @@ class VariationalClassifier(tf.keras.layers.Layer):
     and classifies via Bayes' rule (generalised softmax, Eq. 6).
 
     The training objective (Eq. 7) has three independently controllable terms:
-      Term 1 -- cross-entropy:      always active
-      Term 2 -- KL (encoder/prior): scaled by `beta`  (set 0 to disable)
-      Term 3 -- KL (class prior):   scaled by `lambda_` (set 0 to disable)
+      Term 1 -- cross-entropy:           always active
+      Term 2 -- KL (encoder/prior):      scaled by `beta`   (set 0 to disable)
+      Term 2b -- NLL (Gaussian, analytic): scaled by `gamma`  (set 0 to disable)
+      Term 3 -- KL (class prior):        scaled by `lambda_` (set 0 to disable)
 
     An auxiliary discriminator (Eq. 9) can be updated separately or skipped
     entirely via the `training_mode` flag on the parent model.
@@ -96,12 +97,68 @@ class VariationalClassifier(tf.keras.layers.Layer):
         """T_psi^y(z) = w_y^T z + b_y"""
         return tf.linalg.matvec(z, self.disc_w[y]) + self.disc_b[y]
 
+    def _gaussian_kl_point(self, mh: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
+        """
+        Per-sample NLL under the empirical class-conditioned Gaussian prior.
+
+        For each sample i, computes:
+            -log p(mh_i | y_i) = 0.5 * sum_d [ (mh_d - mu_c_d)^2 / var_c_d
+                                                + log(var_c_d) ]
+        where mu_c and var_c are the sample mean and diagonal sample covariance
+        of all mh belonging to class c in the current batch:
+            mu_c  = (1 / N_c)     * sum_{i: y_i=c} z_i
+            var_c = (1 / N_c - 1) * sum_{i: y_i=c} (z_i - mu_c)^2
+
+        This penalises each latent for being far from its class centre,
+        weighted by the spread of that class.
+
+        Parameters
+        ----------
+        mh : (batch, d)  -- fused latent embeddings
+        y  : (batch,)    -- integer class labels
+
+        Returns
+        -------
+        Scalar mean NLL over the batch.
+        """
+        nll_parts = []
+
+        for c in range(self.n_classes):
+            mask = tf.equal(y, c)                            # (batch,) bool
+            z_c  = tf.boolean_mask(mh, mask)                 # (N_c, d)
+            n_c  = tf.shape(z_c)[0]
+
+            # Need at least 2 samples to define sample variance
+            if tf.less(n_c, 2):
+                continue
+
+            mu_c  = tf.reduce_mean(z_c, axis=0)              # (d,)
+
+            # Diagonal sample covariance, Bessel-corrected (PI's Sigma_c formula)
+            diff  = z_c - mu_c[tf.newaxis, :]                # (N_c, d)
+            var_c = tf.reduce_sum(tf.square(diff), axis=0) / tf.cast(n_c - 1, tf.float32)  # (d,)
+            var_c = tf.maximum(var_c, 1e-6)                  # numerical floor
+
+            # -log N(z_c | mu_c, diag(var_c)) for every sample in this class
+            nll_c = 0.5 * tf.reduce_sum(
+                tf.square(z_c - mu_c[tf.newaxis, :]) / var_c[tf.newaxis, :]
+                + tf.math.log(var_c)[tf.newaxis, :],
+                axis=-1,
+            )  # (N_c,)
+            nll_parts.append(nll_c)
+
+        if len(nll_parts) == 0:
+            return tf.constant(0.0)
+
+        return tf.reduce_mean(tf.concat(nll_parts, axis=0))
+
     def vc_loss(
         self,
         mh: tf.Tensor,
         y: tf.Tensor,
         alpha: float = 1.0,
         beta: float = 1.0,
+        gamma: float = 1.0,
         lambda_: float = 1.0,
     ) -> tf.Tensor:
         """
@@ -118,6 +175,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         y       : (batch,) int32
         alpha   : weight for cross-entropy               (0 = disabled)
         beta    : KL weight for encoder/prior alignment  (0 = disabled)
+        gamma   : NLL weight for Gaussian analytic term  (0 = disabled)
         lambda_ : KL weight for class-prior alignment    (0 = disabled)
         """
         y_onehot = tf.one_hot(y, self.n_classes)
@@ -135,13 +193,16 @@ class VariationalClassifier(tf.keras.layers.Layer):
         T_true_class = tf.reduce_sum(y_onehot * T_vals, axis=1)
         kl_term = beta * tf.reduce_mean(T_true_class)
 
+        # Term 2b: gamma * per-sample NLL under empirical class Gaussian
+        gaussian_kl_term = gamma * self._gaussian_kl_point(mh, y)
+
         # Term 3: lambda_ * KL(p(y) || p_pi(y))
         p_y         = tf.reduce_mean(y_onehot, axis=0)
         log_p_pi    = tf.nn.log_softmax(self.log_class_prior)
         kl_class_prior = tf.reduce_sum(p_y * (tf.math.log(p_y + 1e-8) - log_p_pi))
         prior_term  = lambda_ * kl_class_prior
 
-        return xent + kl_term + prior_term
+        return xent + kl_term + gaussian_kl_term + prior_term
 
     def discriminator_loss(self, mh: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
         """
