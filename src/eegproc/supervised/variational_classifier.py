@@ -47,23 +47,23 @@ class VariationalClassifier(tf.keras.layers.Layer):
         self.latent_dim = d
 
         self.prior_mu = self.add_weight(
-            "prior_mu", shape=(self.n_classes, d),
+            name="prior_mu", shape=(self.n_classes, d),
             initializer="glorot_normal", trainable=True,
         )
         self.prior_log_sigma = self.add_weight(
-            "prior_log_sigma", shape=(self.n_classes, d),
+            name="prior_log_sigma", shape=(self.n_classes, d),
             initializer="zeros", trainable=True,
         )
         self.log_class_prior = self.add_weight(
-            "log_class_prior", shape=(self.n_classes,),
+            name="log_class_prior", shape=(self.n_classes,),
             initializer="zeros", trainable=True,
         )
         self.disc_w = self.add_weight(
-            "disc_w", shape=(self.n_classes, d),
+            name="disc_w", shape=(self.n_classes, d),
             initializer="glorot_normal", trainable=True,
         )
         self.disc_b = self.add_weight(
-            "disc_b", shape=(self.n_classes,),
+            name="disc_b", shape=(self.n_classes,),
             initializer="zeros", trainable=True,
         )
         super().build(input_shape)
@@ -71,7 +71,12 @@ class VariationalClassifier(tf.keras.layers.Layer):
     def _log_gaussian(self, z, mu, log_sigma):
         sigma2 = tf.exp(2.0 * log_sigma)
         diff   = z - mu[tf.newaxis, :]
-        return -0.5 * tf.reduce_sum(
+        # Use reduce_mean (not reduce_sum) over the latent dimension so that
+        # logit magnitudes are O(1) regardless of latent_dim.  With reduce_sum
+        # the log-likelihood scales with d (hundreds of dims), swamping the
+        # class-prior term and producing near-identical extreme logits before
+        # the priors have had time to learn anything useful.
+        return -0.5 * tf.reduce_mean(
             tf.math.log(2 * np.pi * sigma2) + diff ** 2 / sigma2, axis=-1,
         )
 
@@ -121,22 +126,26 @@ class VariationalClassifier(tf.keras.layers.Layer):
         -------
         Scalar mean NLL over the batch.
         """
-        nll_parts = []
+        # Use a TensorArray so all writes stay in the same graph scope,
+        # avoiding the InaccessibleTensorError that arises when Python-level
+        # conditionals (if / continue) cause tensors to be produced inside a
+        # tf.cond sub-graph that is out of scope at concat time.
+        nll_ta   = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        n_written = tf.constant(0, dtype=tf.int32)
 
         for c in range(self.n_classes):
             mask = tf.equal(y, c)                            # (batch,) bool
             z_c  = tf.boolean_mask(mh, mask)                 # (N_c, d)
             n_c  = tf.shape(z_c)[0]
 
-            # Need at least 2 samples to define sample variance
-            if tf.less(n_c, 2):
-                continue
-
+            # Need at least 2 samples to define sample variance.
+            # Use tf.cond so the guard stays graph-native; the write only
+            # happens inside the true branch, keeping everything in scope.
             mu_c  = tf.reduce_mean(z_c, axis=0)              # (d,)
 
             # Diagonal sample covariance, Bessel-corrected (PI's Sigma_c formula)
             diff  = z_c - mu_c[tf.newaxis, :]                # (N_c, d)
-            var_c = tf.reduce_sum(tf.square(diff), axis=0) / tf.cast(n_c - 1, tf.float32)  # (d,)
+            var_c = tf.reduce_sum(tf.square(diff), axis=0) / tf.cast(tf.maximum(n_c - 1, 1), tf.float32)  # (d,)
             var_c = tf.maximum(var_c, 1e-6)                  # numerical floor
 
             # -log N(z_c | mu_c, diag(var_c)) for every sample in this class
@@ -145,12 +154,24 @@ class VariationalClassifier(tf.keras.layers.Layer):
                 + tf.math.log(var_c)[tf.newaxis, :],
                 axis=-1,
             )  # (N_c,)
-            nll_parts.append(nll_c)
 
-        if len(nll_parts) == 0:
-            return tf.constant(0.0)
+            # Only record if there were enough samples for a valid variance
+            nll_ta, n_written = tf.cond(
+                tf.greater_equal(n_c, 2),
+                true_fn=lambda: (nll_ta.write(n_written, nll_c), n_written + 1),
+                false_fn=lambda: (nll_ta, n_written),
+            )
 
-        return tf.reduce_mean(tf.concat(nll_parts, axis=0))
+        # Stack all written rows into a single (total_samples,) tensor and average.
+        # Using concat(tf.unstack(nll_ta.stack())) is avoided because iterating
+        # over a symbolic tf.Tensor is not allowed in graph mode; stack() returns
+        # a (n_written, N_c) ragged-padded tensor so we rely on the TensorArray
+        # having been written with flat 1-D vectors and just flatten after stack.
+        return tf.cond(
+            tf.equal(n_written, 0),
+            true_fn=lambda: tf.constant(0.0),
+            false_fn=lambda: tf.reduce_mean(tf.reshape(nll_ta.concat(), [-1])),
+        )
 
     def vc_loss(
         self,
@@ -187,14 +208,29 @@ class VariationalClassifier(tf.keras.layers.Layer):
         )
 
         # Term 2: beta * E_y[KL(q_phi(z|y) || p_theta(z|y))] via discriminator scores
+        #
+        # The discriminator T_psi^y is trained to satisfy the variational
+        # lower bound  KL(q||p) >= E_q[T(z)] - log E_p[exp(T(z))]  (Eq. 8).
+        # Here we use the simpler density-ratio trick: T_psi^y(z) approximates
+        # log q(z|y) - log p(z|y), so E_q[T] is a (positive) KL proxy.
+        #
+        # Two safeguards keep this term well-behaved:
+        #   1. stop_gradient: the discriminator weights are updated by
+        #      discriminator_loss; here T is a fixed signal to the encoder.
+        #   2. tf.nn.relu: clamps the estimate to >= 0 so a poorly-initialised
+        #      or collapsing discriminator cannot make the total loss negative.
         T_vals = tf.stack(
             [self.discriminator(mh, c) for c in range(self.n_classes)], axis=1
         )
+        T_vals = tf.stop_gradient(T_vals)
         T_true_class = tf.reduce_sum(y_onehot * T_vals, axis=1)
-        kl_term = beta * tf.reduce_mean(T_true_class)
+        kl_term = beta * tf.reduce_mean(tf.nn.relu(T_true_class))
 
         # Term 2b: gamma * per-sample NLL under empirical class Gaussian
-        gaussian_kl_term = gamma * self._gaussian_kl_point(mh, y)
+        # Clamped to >= 0: log-likelihood of a Gaussian can be positive when
+        # var_c < 1, which would make this term a reward rather than a penalty.
+        # Since the intent is a regularisation cost, we floor it at zero.
+        gaussian_kl_term = gamma * tf.nn.relu(self._gaussian_kl_point(mh, y))
 
         # Term 3: lambda_ * KL(p(y) || p_pi(y))
         p_y         = tf.reduce_mean(y_onehot, axis=0)
