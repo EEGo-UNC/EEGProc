@@ -7,6 +7,8 @@ A clean, modular, GPU-parallelisable TensorFlow 2 implementation of:
 > *Health Information Science and Systems*, 2023.
 > https://doi.org/10.1007/s13755-023-00226-x
 
+adpated to support variational learning objectives.
+
 ---
 
 ## Repository layout
@@ -16,10 +18,11 @@ stsnet/
 ├── data_representation.py   # EEG → 4-D SPD tensor (ManifoldNet) & flattened sequence (BiLSTM)
 ├── manifold_net.py          # ManifoldNet sub-model  (wFM layers + invariant layer → MO)
 ├── prepare_datasets.py      # Convert raw DEAP and DREAMER dataset files into the NumPy format
-├── stsnet.py                # BiLSTMNet + FusionHead + full STSNet model + joint training
+├── stsnet.py                # BiLSTMNet + full STSNet model + joint training
 ├── train_eval.py            # LOSOCV experiment runner (DEAP / DREAMER)
-├── tests.py                 # Unit & smoke tests
 └── README.md
+
+../variational_classifier.py # VariationalClassifier (Gaussian class priors + Bayes rule)
 ```
 
 ---
@@ -39,17 +42,16 @@ EEG signal
                                       bidirectional
                                       Eq. (10)
                                       
-MH = concat(MO, HO)  ──►  FC  ──►  Softmax  ──►  class label
+MH = concat(MO, HO)  ──►  VariationalClassifier (Gaussian class priors + Bayes rule)
+                      ──►  class logits  ──►  class label
 ```
 
 Training follows **Algorithm 1** (joint alternating optimisation):
-even batches update ManifoldNet + FC; odd batches update BiLSTM + FC.
+even batches update ManifoldNet + fusion head; odd batches update BiLSTM + fusion head.
 
 ---
 
-## Installation
-
-The project uses a **Dev Container** (Docker-based) for a consistent, ready-to-run environment. No manual `pip install` is required.
+## GPU Support
 
 GPU support is automatic when a CUDA-capable GPU is available in the container; multi-GPU uses `tf.distribute.MirroredStrategy`.
 
@@ -57,15 +59,15 @@ GPU support is automatic when a CUDA-capable GPU is available in the container; 
 
 ## Full setup walkthrough
 
-### Step 1 — Open in Dev Container
+### Step 1 — Dependencies & Environment
 
-**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) and the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) for VS Code.
+In whatever way works best for you, an environment with tensorflow, numpy, scipy, and scikit-learn, all latest versions, is needed. Suggested options:
 
-1. Clone the repository and open the folder in VS Code
-2. When prompted **"Reopen in Container"**, click it — or open the Command Palette (`Ctrl+Shift+P`) and run **Dev Containers: Reopen in Container**
-3. VS Code will build the Docker image (first run only) and drop you into a shell inside `/app`
+Option 1: Dev Container
+- Build a container from `tensorflow/tensorflow:latest` with `numpy`, `scipy`, and `scikit-learn`.
 
-The container is built from `tensorflow/tensorflow:latest` with `numpy`, `scipy`, and `scikit-learn` pre-installed.
+Option 2: Virtual Environment
+- If you have a supported python version for `tensorflow`, create a virtual environment, and download `tensorflow`, `numpy`, `scipy`, and `scikit-learn`.
 
 ### Step 2 — Download the datasets
 
@@ -76,7 +78,7 @@ The container is built from `tensorflow/tensorflow:latest` with `numpy`, `scipy`
 4. Unzip — you should have a folder containing `s01.dat … s32.dat`
 
 **DREAMER**
-1. File already located at `data/dreamer/DREAMER_FULL.csv`
+1. File already located at `data/dreamer/dreamer_joined.csv`
 
 ### Step 3 — Convert datasets to NumPy
 
@@ -211,8 +213,10 @@ preds  = tf.argmax(logits, axis=-1).numpy()
 ### 4. Run tests
 
 ```bash
-python tests.py
+python -m pytest tests/test_stsnet.py
 ```
+
+This might take a while to finish running.
 
 ---
 
