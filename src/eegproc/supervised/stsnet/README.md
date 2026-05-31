@@ -20,7 +20,6 @@ stsnet/
 ├── prepare_datasets.py      # Convert raw DEAP and DREAMER dataset files into the NumPy format
 ├── stsnet.py                # BiLSTMNet + full STSNet model + joint training
 ├── train_eval.py            # LOSOCV experiment runner (DEAP / DREAMER)
-├── tests.py                 # Unit & smoke tests
 └── README.md
 
 ../variational_classifier.py # VariationalClassifier (Gaussian class priors + Bayes rule)
@@ -214,8 +213,10 @@ preds  = tf.argmax(logits, axis=-1).numpy()
 ### 4. Run tests
 
 ```bash
-python tests.py
+python -m pytest tests/test_stsnet.py
 ```
+
+This might take a while to finish running.
 
 ---
 
