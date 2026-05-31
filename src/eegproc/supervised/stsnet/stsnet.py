@@ -34,12 +34,8 @@ Li et al., "STSNet ...", HISS 2023.
 
 import tensorflow as tf
 import numpy as np
-try:
-    from .manifold_net import ManifoldNet
-    from ..variational_classifier import VariationalClassifier
-except ImportError:
-    from manifold_net import ManifoldNet
-    from variational_classifier import VariationalClassifier
+from .manifold_net import ManifoldNet
+from ..variational_classifier import VariationalClassifier
 
 # Valid values for the training_mode argument throughout this module.
 TRAINING_MODES = ("vc_only", "disc_only", "both")
