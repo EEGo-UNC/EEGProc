@@ -94,7 +94,7 @@ from sklearn.model_selection import (
     LeaveOneOut,        # used for LOO   (leave one sample out)
 )
 from typing import Callable, Literal
-
+from itertools import product
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -134,13 +134,13 @@ def _print_fold_header(fold_number: int, total_folds: int, description: str) -> 
 # ---------------------------------------------------------------------------
 
 def loso_cv(
-    model_builder_function: Callable[[], tf.keras.Model],
+    model_builder: (Callable[[], tf.keras.Model]),
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
-    n_epochs: int = 50,
-    batch_size: int = 32,
-    verbose: int = 0,
+    metrics: list[str] = ["accuracy", "recall"],
+    hyperparams: dict[list] = {"lr": 0.001, "units": 64},
+    fit_hyperparams: dict[list] = {"epochs": 50, "batch_size": 32, "verbose": 0},
     extra_fit_kwargs: dict | None = None,
 ) -> dict:
     """Leave One Subject Out Cross Validation (LOSO CV).
@@ -167,11 +167,13 @@ def loso_cv(
                     timesteps=128, n_features=84,
                     n_classes=3, include_softmax=True
                 )
+                
                 model.compile(
                     optimizer="adam",
                     loss="sparse_categorical_crossentropy",
                     metrics=["accuracy"]
                 )
+
                 return model
 
     feature_array : np.ndarray, shape (n_windows, timesteps, n_features)
@@ -239,35 +241,42 @@ def loso_cv(
             f"(train={len(train_indices)}, test={len(test_indices)} windows)",
         )
 
+        hyperparam_combinations = list(product(*hyperparams.values()))
+
         # Slice the data into training and test portions.
         X_train = feature_array[train_indices]
         y_train = label_array[train_indices]
         X_test  = feature_array[test_indices]
         y_test  = label_array[test_indices]
 
-        # Build a fresh model for this fold (no weight leakage from prior folds).
-        model = model_builder_function()
+        all_grid_search_results = []
+        best_hyperparams_for_fold = []
 
-        model.fit(
-            X_train, y_train,
-            epochs=n_epochs,
-            batch_size=batch_size,
-            verbose=verbose,
-            **extra_fit_kwargs,
-        )
+        for hps in hyperparam_combinations:
+            hps = dict(zip(hyperparams.keys(), hps))
 
-        # Evaluate on the held-out subject.
-        test_score_values = model.evaluate(X_test, y_test, verbose=0)
-        metric_names = _collect_metric_names(model)
+            # Build a fresh model for this fold (no weight leakage from prior folds).
+            model = model_builder(**hps)
+            for fit_hps in fit_hyperparam_combinations:
 
-        fold_result = {
-            "fold_number": fold_number,
-            "left_out_subject": left_out_subject_id,
-            "n_train_windows": len(train_indices),
-            "n_test_windows": len(test_indices),
-            **dict(zip(metric_names, test_score_values)),
-        }
-        all_fold_results.append(fold_result)
+            model.fit(
+                X_train, y_train,
+                **fit_hyperparams,
+                **extra_fit_kwargs,
+            )
+
+            # Evaluate on the held-out subject.
+            test_score_values = model.evaluate(X_test, y_test, verbose=0)
+            metric_names = _collect_metric_names(model)
+
+            fold_result = {
+                "fold_number": fold_number,
+                "left_out_subject": left_out_subject_id,
+                "n_train_windows": len(train_indices),
+                "n_test_windows": len(test_indices),
+                **dict(zip(metric_names, test_score_values)),
+            }
+            all_fold_results.append(fold_result)
 
         score_summary = "  ".join(
             f"{name}={fold_result[name]:.4f}" for name in metric_names
@@ -278,6 +287,7 @@ def loso_cv(
     print(f"\nLOSO CV complete — mean scores: {mean_scores}\n")
 
     return {
+        # return the best hyperparameters for each fold along with each folds results
         "fold_results": all_fold_results,
         "mean_scores": mean_scores,
         "std_scores": std_scores,
