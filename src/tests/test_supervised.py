@@ -39,3 +39,40 @@ def test_variational_loss_not_implemented():
             timesteps=64, n_features=8, n_classes=3,
             loss="variational",
         )
+
+
+def test_loso_cv_end_to_end_with_dumb_hyperparams():
+    """Smoke test: rewritten loso_cv runs through every fold without raising."""
+    from eegproc.unsupervised.cross_validation import loso_cv
+
+    n_subj = 4
+    windows_per_subj = 6
+    T, F, C = 16, 8, 2
+    n_total = n_subj * windows_per_subj
+
+    X = np.random.randn(n_total, T, F).astype("float32")
+    y = np.random.randint(0, C, size=n_total)
+    subject_ids = np.repeat(np.arange(n_subj), windows_per_subj)
+
+    def build_model(**hparams):
+        return lstm_classifier(
+            timesteps=T, n_features=F, n_classes=C,
+            lstm_units=4, n_lstm_layers=1, dropout=0.0,
+        )
+
+    results = loso_cv(
+        model_builder_function=build_model,
+        feature_array=X,
+        label_array=y,
+        subject_id_array=subject_ids,
+        hyperparameters={"epochs": 1, "batch_size": 2},
+    )
+
+    assert {"fold_results", "mean_scores", "std_scores"} <= results.keys()
+    assert len(results["fold_results"]) == n_subj
+    for fold in results["fold_results"]:
+        assert fold["n_test_windows"] > 0
+        assert fold["n_train_windows"] > 0
+        assert fold["n_val_windows"] == 0
+    for metric_name, metric_value in results["mean_scores"].items():
+        assert np.isfinite(metric_value), f"{metric_name} not finite: {metric_value}"

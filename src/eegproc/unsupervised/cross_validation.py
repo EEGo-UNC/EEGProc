@@ -81,6 +81,8 @@ Example::
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import tensorflow as tf
 from sklearn.model_selection import (
@@ -89,6 +91,34 @@ from sklearn.model_selection import (
     LeaveOneOut,        # used for LOO   (leave one sample out)
 )
 from typing import Callable, Literal
+
+
+_FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
+
+
+def _expand_hyperparameter_grid(hp: dict | None) -> list[dict]:
+    """Expand a (possibly empty) hyperparameter dict to a list of configs.
+
+    Values that are lists or tuples are treated as a grid axis; scalars are
+    held constant. The Cartesian product is returned. ``None`` or empty
+    dicts produce ``[{}]`` so the caller can always iterate at least once.
+    """
+    if not hp:
+        return [{}]
+    keys = list(hp.keys())
+    values = [v if isinstance(v, (list, tuple)) else [v] for v in hp.values()]
+    return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
+
+
+def _split_config(config: dict) -> tuple[dict, dict]:
+    """Split a flat config into (model_builder_kwargs, fit_kwargs).
+
+    Keys in ``_FIT_RESERVED_KEYS`` go to ``model.fit``; the rest are
+    forwarded to ``model_builder_function`` via ``**``.
+    """
+    model_hp = {k: v for k, v in config.items() if k not in _FIT_RESERVED_KEYS}
+    fit_hp = {k: v for k, v in config.items() if k in _FIT_RESERVED_KEYS}
+    return model_hp, fit_hp
 
 
 # ---------------------------------------------------------------------------
@@ -129,144 +159,249 @@ def _print_fold_header(fold_number: int, total_folds: int, description: str) -> 
 # ---------------------------------------------------------------------------
 
 def loso_cv(
-    model_builder_function: Callable[[], tf.keras.Model],
+    model_builder_function: Callable[..., tf.keras.Model],
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
-    n_epochs: int = 50,
-    batch_size: int = 32,
+    hyperparameters: dict | None = None,
+    validation_n_users: int | None = None,
     verbose: int = 0,
     extra_fit_kwargs: dict | None = None,
 ) -> dict:
     """Leave One Subject Out Cross Validation (LOSO CV).
 
     In each fold one subject is completely held out as the test set and the
-    model is retrained from scratch on all remaining subjects. Because the
-    test subject's data is *never* seen during training, this strategy
-    measures true cross-subject generalization — the most rigorous EEG
-    evaluation in the literature.
+    model is retrained from scratch on the remaining subjects. The held-out
+    subject's data is never seen during training, so this strategy tests
+    cross-subject generalization. Note that LNSO and Nested LNSO CV also
+    test cross-subject generalization and are typically more robust in
+    low-subject regimes — pick LOSO when subject count is moderate and you
+    want one fold per subject.
 
     Number of folds equals the number of unique subjects.
 
     Parameters
     ----------
-    model_builder_function : callable () -> tf.keras.Model
-        A function that takes **no arguments** and returns a freshly
-        initialized, compiled Keras model. It is called once at the start
-        of every fold so that weights do not carry over between folds.
+    model_builder_function : callable (**hparams) -> tf.keras.Model
+        Called once at the start of every fold so weights do not leak
+        between folds. Any keys in ``hyperparameters`` that are not in
+        ``{"epochs", "batch_size"}`` are forwarded as ``**hparams``. The
+        function may accept ``**hparams`` to be tolerant of unknown keys.
 
         Example::
 
-            from eegproc.supervised import bilstm_classifier
+            from eegproc.supervised import lstm_classifier
 
-            def build_model():
-                # bilstm_classifier returns an already-compiled model.
-                return bilstm_classifier(
+            def build_model(**hparams):
+                return lstm_classifier(
                     timesteps=128, n_features=84, n_classes=3,
+                    lstm_units=hparams.get("lstm_units", 64),
+                    dropout=hparams.get("dropout", 0.1),
                 )
 
     feature_array : np.ndarray, shape (n_windows, timesteps, n_features)
         Preprocessed EEG feature windows. Each row is one sliding window.
     label_array : np.ndarray, shape (n_windows,)
-        Integer class label for each window (e.g. 0=neutral, 1=happy, 2=sad).
+        Integer class label for each window.
     subject_id_array : np.ndarray, shape (n_windows,)
-        Subject identifier for each window. Can be integers or strings.
-        All windows belonging to the same recording session/person should
-        share the same identifier.
-    n_epochs : int, optional
-        Training epochs per fold. Default 50.
-    batch_size : int, optional
-        Mini-batch size. Default 32.
+        Subject identifier for each window. Windows from the same recording
+        session/person should share the same identifier.
+    hyperparameters : dict, optional
+        Either ``{key: scalar, ...}`` (single config) or ``{key: list, ...}``
+        (grid search — Cartesian product across all list-valued keys).
+        Two reserved keys are passed to ``model.fit`` instead of the model
+        builder: ``"epochs"`` and ``"batch_size"``. Everything else is
+        forwarded to ``model_builder_function(**model_hparams)``. ``None``
+        is equivalent to ``{}``.
+
+        Optuna example::
+
+            def objective(trial):
+                hp = {
+                    "lstm_units": trial.suggest_int("lstm_units", 16, 128),
+                    "epochs":     trial.suggest_int("epochs", 5, 50),
+                    "batch_size": trial.suggest_categorical("batch_size", [16, 32]),
+                }
+                results = loso_cv(build_model, X, y, subject_ids, hyperparameters=hp)
+                return results["mean_scores"]["accuracy"]
+
+    validation_n_users : int, optional
+        If provided, hold out this many subjects from each fold's training
+        pool as a validation set and pass them to ``model.fit`` via
+        ``validation_data``. The held-out *test* subject is never used for
+        validation, so there is no leakage. If ``None`` (default), no
+        validation set is used.
     verbose : int, optional
-        Keras verbosity level (0 = silent, 1 = progress bar, 2 = one line
-        per epoch). Default 0.
+        Keras verbosity (0 silent, 1 progress bar, 2 one line per epoch).
     extra_fit_kwargs : dict, optional
-        Any extra keyword arguments forwarded directly to ``model.fit``
-        (e.g. ``{"callbacks": [early_stopping_callback]}``).
+        Extra keyword arguments forwarded to ``model.fit`` (e.g. callbacks).
 
     Returns
     -------
     dict
-        ``"fold_results"``  — list of dicts, one per fold. Each dict has:
+        ``"fold_results"`` — list with one entry per fold (length =
+        n_unique_subjects). Each entry has:
 
             * ``"fold_number"`` : int (1-indexed)
             * ``"left_out_subject"`` : the subject ID held out for testing
-            * ``"n_train_windows"`` : number of windows used for training
-            * ``"n_test_windows"``  : number of windows used for testing
-            * one key per Keras metric (e.g. ``"loss"``, ``"accuracy"``)
+            * ``"n_train_windows"`` / ``"n_val_windows"`` /
+              ``"n_test_windows"`` : window counts
 
-        ``"mean_scores"``  — dict of per-metric means across all folds.
+        **Single-config case** — the fold entry also has ``"config"``
+        (the applied hparams) and one key per Keras metric at the top
+        level (e.g. ``"loss"``, ``"accuracy"``). ``"mean_scores"`` and
+        ``"std_scores"`` are plain ``dict[metric_name, float]``.
 
-        ``"std_scores"``   — dict of per-metric standard deviations.
+        **Grid-search case** (any list-valued entry in ``hyperparameters``)
+        — the fold entry has a ``"configs"`` list, one entry per grid
+        point: ``{"config": {...}, "loss": ..., "accuracy": ...}``.
+        ``"mean_scores"`` and ``"std_scores"`` are ``list[dict]``, one
+        entry per grid point.
+
+    Raises
+    ------
+    ValueError
+        If ``validation_n_users`` is negative or would leave no training
+        data in some fold.
     """
     extra_fit_kwargs = extra_fit_kwargs or {}
 
-    # sklearn's LeaveOneGroupOut treats the subject IDs as "groups" and
-    # generates splits that hold out one group (subject) at a time.
-    leave_one_subject_out_splitter = LeaveOneGroupOut()
+    if validation_n_users is not None and validation_n_users < 0:
+        raise ValueError(
+            f"validation_n_users must be >= 0 or None, got {validation_n_users}."
+        )
 
+    grid_configs = _expand_hyperparameter_grid(hyperparameters)
+    is_grid = len(grid_configs) > 1
+
+    # sklearn's LeaveOneGroupOut treats subject IDs as "groups" and yields
+    # splits that hold out one group (subject) at a time.
+    leave_one_subject_out_splitter = LeaveOneGroupOut()
     total_number_of_folds = leave_one_subject_out_splitter.get_n_splits(
         feature_array, label_array, subject_id_array
     )
+
     all_fold_results: list[dict] = []
+    # Per-config accumulators (only used in grid mode but cheap in both).
+    per_config_fold_scores: list[list[dict]] = [[] for _ in grid_configs]
     metric_names: list[str] = []
 
     print(f"\nLOSO CV — {total_number_of_folds} folds "
-          f"({len(np.unique(subject_id_array))} unique subjects)\n")
+          f"({len(np.unique(subject_id_array))} unique subjects, "
+          f"{len(grid_configs)} hparam config{'s' if is_grid else ''})\n")
 
-    for fold_number, (train_indices, test_indices) in enumerate(
+    for fold_number, (pool_indices, test_indices) in enumerate(
         leave_one_subject_out_splitter.split(
             feature_array, label_array, subject_id_array
         ),
         start=1,
     ):
-        # The left-out subject is whoever appears in the test split.
         left_out_subject_id = subject_id_array[test_indices[0]]
+
+        # Partition the training pool into train + (optional) validation.
+        pool_subject_ids = subject_id_array[pool_indices]
+        unique_pool_subjects = np.sort(np.unique(pool_subject_ids))
+
+        if validation_n_users:
+            if validation_n_users >= len(unique_pool_subjects):
+                raise ValueError(
+                    f"validation_n_users ({validation_n_users}) >= "
+                    f"unique training subjects in fold "
+                    f"({len(unique_pool_subjects)}) — would leave no "
+                    f"training data."
+                )
+            # Deterministic: first N sorted unique subjects → validation.
+            val_subject_set = set(unique_pool_subjects[:validation_n_users].tolist())
+            val_mask = np.array([s in val_subject_set for s in pool_subject_ids])
+            train_indices = pool_indices[~val_mask]
+            val_indices = pool_indices[val_mask]
+        else:
+            train_indices = pool_indices
+            val_indices = np.array([], dtype=int)
+
+        X_train = feature_array[train_indices]
+        y_train = label_array[train_indices]
+        X_test  = feature_array[test_indices]
+        y_test  = label_array[test_indices]
+        if len(val_indices) > 0:
+            validation_data = (feature_array[val_indices], label_array[val_indices])
+        else:
+            validation_data = None
 
         _print_fold_header(
             fold_number,
             total_number_of_folds,
             f"testing on subject '{left_out_subject_id}'  "
-            f"(train={len(train_indices)}, test={len(test_indices)} windows)",
+            f"(train={len(train_indices)}, "
+            f"val={len(val_indices)}, "
+            f"test={len(test_indices)} windows)",
         )
 
-        # Slice the data into training and test portions.
-        X_train = feature_array[train_indices]
-        y_train = label_array[train_indices]
-        X_test  = feature_array[test_indices]
-        y_test  = label_array[test_indices]
+        per_config_results_this_fold: list[dict] = []
 
-        # Build a fresh model for this fold (no weight leakage from prior folds).
-        model = model_builder_function()
+        for config_index, config in enumerate(grid_configs):
+            model_hp, fit_hp = _split_config(config)
 
-        model.fit(
-            X_train, y_train,
-            epochs=n_epochs,
-            batch_size=batch_size,
-            verbose=verbose,
-            **extra_fit_kwargs,
-        )
+            # Build a fresh model per config per fold — no weight leakage.
+            model = model_builder_function(**model_hp)
 
-        # Evaluate on the held-out subject.
-        test_score_values = model.evaluate(X_test, y_test, verbose=0)
-        metric_names = _collect_metric_names(model)
+            fit_kwargs = dict(fit_hp)
+            if validation_data is not None:
+                fit_kwargs.setdefault("validation_data", validation_data)
 
-        fold_result = {
+            model.fit(
+                X_train, y_train,
+                verbose=verbose,
+                **fit_kwargs,
+                **extra_fit_kwargs,
+            )
+
+            test_score_values = model.evaluate(X_test, y_test, verbose=0)
+            metric_names = _collect_metric_names(model)
+            metric_scores = dict(zip(metric_names, test_score_values))
+
+            config_result = {"config": dict(config), **metric_scores}
+            per_config_results_this_fold.append(config_result)
+            per_config_fold_scores[config_index].append(metric_scores)
+
+            score_summary = "  ".join(
+                f"{name}={metric_scores[name]:.4f}" for name in metric_names
+            )
+            config_tag = f" [config {config_index + 1}/{len(grid_configs)}]" if is_grid else ""
+            print(f"           →{config_tag} {score_summary}")
+
+        fold_entry: dict = {
             "fold_number": fold_number,
             "left_out_subject": left_out_subject_id,
-            "n_train_windows": len(train_indices),
-            "n_test_windows": len(test_indices),
-            **dict(zip(metric_names, test_score_values)),
+            "n_train_windows": int(len(train_indices)),
+            "n_val_windows":   int(len(val_indices)),
+            "n_test_windows":  int(len(test_indices)),
         }
-        all_fold_results.append(fold_result)
+        if is_grid:
+            fold_entry["configs"] = per_config_results_this_fold
+        else:
+            single = per_config_results_this_fold[0]
+            fold_entry["config"] = single["config"]
+            for name in metric_names:
+                fold_entry[name] = single[name]
+        all_fold_results.append(fold_entry)
 
-        score_summary = "  ".join(
-            f"{name}={fold_result[name]:.4f}" for name in metric_names
+    # Aggregate scores across folds.
+    if is_grid:
+        mean_scores: list[dict] | dict = []
+        std_scores:  list[dict] | dict = []
+        for config_index, config in enumerate(grid_configs):
+            mean_scores_for_config, std_scores_for_config = _average_fold_scores(
+                per_config_fold_scores[config_index], metric_names
+            )
+            mean_scores.append({"config": dict(config), **mean_scores_for_config})
+            std_scores.append({"config": dict(config), **std_scores_for_config})
+        print(f"\nLOSO CV complete — {len(grid_configs)} configs evaluated.\n")
+    else:
+        mean_scores, std_scores = _average_fold_scores(
+            per_config_fold_scores[0], metric_names
         )
-        print(f"           → {score_summary}")
-
-    mean_scores, std_scores = _average_fold_scores(all_fold_results, metric_names)
-    print(f"\nLOSO CV complete — mean scores: {mean_scores}\n")
+        print(f"\nLOSO CV complete — mean scores: {mean_scores}\n")
 
     return {
         "fold_results": all_fold_results,
@@ -824,7 +959,7 @@ def nested_lnso_cv(
 
 def run_cross_validation(
     cv_strategy: Literal["loso", "loo", "lkocv", "nested_lnso"],
-    model_builder_function: Callable[[], tf.keras.Model],
+    model_builder_function: Callable[..., tf.keras.Model],
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray | None = None,
@@ -833,6 +968,8 @@ def run_cross_validation(
     n_inner_subjects_to_leave_out: int = 1,
     n_epochs: int = 50,
     batch_size: int = 32,
+    hyperparameters: dict | None = None,
+    validation_n_users: int | None = None,
     verbose: int = 0,
     extra_fit_kwargs: dict | None = None,
 ) -> dict:
@@ -889,9 +1026,20 @@ def run_cross_validation(
         Subjects held out for the inner validation set. Only used by
         ``"nested_lnso"``. Default is 1.
     n_epochs : int, optional
-        Training epochs per fold. Default 50.
+        Training epochs per fold. Default 50. Ignored for ``"loso"`` when
+        ``hyperparameters`` is provided.
     batch_size : int, optional
-        Mini-batch size. Default 32.
+        Mini-batch size. Default 32. Ignored for ``"loso"`` when
+        ``hyperparameters`` is provided.
+    hyperparameters : dict, optional
+        Currently only honored by ``cv_strategy="loso"``. Forwarded to
+        :func:`loso_cv` (see its docstring). For other strategies this
+        kwarg is silently ignored — they still use ``n_epochs`` and
+        ``batch_size`` until the broader CV redesign lands.
+    validation_n_users : int, optional
+        Currently only honored by ``cv_strategy="loso"``. Forwarded to
+        :func:`loso_cv` to create a subject-level validation split inside
+        each fold.
     verbose : int, optional
         Keras verbosity (0 = silent, 1 = progress bar, 2 = one line per
         epoch). Default 0.
@@ -972,7 +1120,7 @@ def run_cross_validation(
             f"Pass a numpy array of subject identifiers, one entry per window."
         )
 
-    shared_kwargs = dict(
+    legacy_shared_kwargs = dict(
         model_builder_function=model_builder_function,
         feature_array=feature_array,
         label_array=label_array,
@@ -983,17 +1131,34 @@ def run_cross_validation(
     )
 
     if cv_strategy == "loso":
-        return loso_cv(subject_id_array=subject_id_array, **shared_kwargs)
+        # loso_cv no longer takes n_epochs / batch_size directly. Build a
+        # legacy-compat hyperparameters dict from those kwargs if the caller
+        # didn't supply one.
+        effective_hyperparameters = (
+            hyperparameters
+            if hyperparameters is not None
+            else {"epochs": n_epochs, "batch_size": batch_size}
+        )
+        return loso_cv(
+            model_builder_function=model_builder_function,
+            feature_array=feature_array,
+            label_array=label_array,
+            subject_id_array=subject_id_array,
+            hyperparameters=effective_hyperparameters,
+            validation_n_users=validation_n_users,
+            verbose=verbose,
+            extra_fit_kwargs=extra_fit_kwargs,
+        )
 
     elif cv_strategy == "loo":
         # LOO does not use subject IDs — it iterates over individual windows.
-        return loo_cv(**shared_kwargs)
+        return loo_cv(**legacy_shared_kwargs)
 
     elif cv_strategy == "lkocv":
         return lkocv(
             subject_id_array=subject_id_array,
             k_subjects_to_leave_out=k_subjects_to_leave_out,
-            **shared_kwargs,
+            **legacy_shared_kwargs,
         )
 
     elif cv_strategy == "nested_lnso":
@@ -1001,7 +1166,7 @@ def run_cross_validation(
             subject_id_array=subject_id_array,
             n_outer_subjects_to_leave_out=n_outer_subjects_to_leave_out,
             n_inner_subjects_to_leave_out=n_inner_subjects_to_leave_out,
-            **shared_kwargs,
+            **legacy_shared_kwargs,
         )
 
     else:
