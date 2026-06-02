@@ -51,7 +51,7 @@ Typical usage
 Example::
 
     import numpy as np
-    from eegproc.unsupervised import encoder_bilstm
+    from eegproc.supervised import bilstm_classifier
     from eegproc.unsupervised.cross_validation import run_cross_validation
 
     # --- Dummy data (replace with your real arrays) ---
@@ -60,16 +60,11 @@ Example::
     subject_ids  = np.repeat(np.arange(10), 20)   # 10 subjects, 20 windows each
 
     def build_my_model():
-        model = encoder_bilstm(
+        # bilstm_classifier returns an already-compiled model.
+        return bilstm_classifier(
             timesteps=128, n_features=84,
-            lstm_units=64, n_classes=3, include_softmax=True
+            lstm_units=64, n_classes=3,
         )
-        model.compile(
-            optimizer="adam",
-            loss="sparse_categorical_crossentropy",
-            metrics=["accuracy"]
-        )
-        return model
 
     results = run_cross_validation(
         cv_strategy="loso",
@@ -162,17 +157,13 @@ def loso_cv(
 
         Example::
 
+            from eegproc.supervised import bilstm_classifier
+
             def build_model():
-                model = encoder_bilstm(
-                    timesteps=128, n_features=84,
-                    n_classes=3, include_softmax=True
+                # bilstm_classifier returns an already-compiled model.
+                return bilstm_classifier(
+                    timesteps=128, n_features=84, n_classes=3,
                 )
-                model.compile(
-                    optimizer="adam",
-                    loss="sparse_categorical_crossentropy",
-                    metrics=["accuracy"]
-                )
-                return model
 
     feature_array : np.ndarray, shape (n_windows, timesteps, n_features)
         Preprocessed EEG feature windows. Each row is one sliding window.
@@ -872,17 +863,14 @@ def run_cross_validation(
 
         Example::
 
+            from eegproc.supervised import bilstm_classifier
+
             def build_model():
-                model = encoder_bilstm(
+                # bilstm_classifier returns an already-compiled model.
+                return bilstm_classifier(
                     timesteps=128, n_features=84,
-                    lstm_units=64, n_classes=3, include_softmax=True
+                    lstm_units=64, n_classes=3,
                 )
-                model.compile(
-                    optimizer="adam",
-                    loss="sparse_categorical_crossentropy",
-                    metrics=["accuracy"]
-                )
-                return model
 
     feature_array : np.ndarray, shape (n_windows, timesteps, n_features)
         Preprocessed EEG feature windows. Each row is one sliding window.

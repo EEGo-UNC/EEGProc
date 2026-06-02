@@ -2,8 +2,6 @@ from .unsupervised import (
     encoder_1dcnn,
     encoder_2dcnn,
     encoder_gcn,
-    encoder_lstm,
-    encoder_bilstm,
     training_autoencoder,
 )
 from .cross_validation import (
@@ -19,8 +17,6 @@ __all__ = [
     "encoder_1dcnn",
     "encoder_2dcnn",
     "encoder_gcn",
-    "encoder_lstm",
-    "encoder_bilstm",
     "training_autoencoder",
 
     # Cross-validation strategies
