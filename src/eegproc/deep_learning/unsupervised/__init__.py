@@ -4,7 +4,7 @@ from .unsupervised import (
     encoder_gcn,
     training_autoencoder,
 )
-from .cross_validation import (
+from ..cross_validation import (
     loso_cv,
     loo_cv,
     lkocv,

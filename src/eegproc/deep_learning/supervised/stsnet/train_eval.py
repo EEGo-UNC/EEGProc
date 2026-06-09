@@ -39,8 +39,8 @@ try:
     from .stsnet import STSNet
 except ImportError:
     # Script execution: python train_eval.py
-    from data_representation import preprocess_dataset
-    from stsnet import STSNet
+    from eegproc.deep_learning.supervised.stsnet.data_representation import preprocess_dataset
+    from eegproc.deep_learning.supervised.stsnet.stsnet import STSNet
 
 
 # ---------------------------------------------------------------------------

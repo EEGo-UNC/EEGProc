@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
-from eegproc.supervised import lstm_classifier, bilstm_classifier
+from eegproc.deep_learning.supervised import lstm_classifier, bilstm_classifier
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +43,7 @@ def test_variational_loss_not_implemented():
 
 def test_loso_cv_end_to_end_with_dumb_hyperparams():
     """Smoke test: rewritten loso_cv runs through every fold without raising."""
-    from eegproc.unsupervised.cross_validation import loso_cv
+    from eegproc.deep_learning.cross_validation import loso_cv
 
     n_subj = 4
     windows_per_subj = 6

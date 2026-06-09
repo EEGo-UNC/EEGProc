@@ -37,7 +37,7 @@ import numpy as np
 try:
     from .manifold_net import ManifoldNet
 except ImportError:
-    from manifold_net import ManifoldNet
+    from eegproc.deep_learning.supervised.stsnet.manifold_net import ManifoldNet
 
 # Valid values for the training_mode argument throughout this module.
 TRAINING_MODES = ("vc_only", "disc_only", "both")

@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
-from eegproc.unsupervised.unsupervised import encoder_1dcnn, training_autoencoder
+from eegproc.deep_learning.unsupervised.unsupervised import encoder_1dcnn, training_autoencoder
 
 
 @pytest.fixture(autouse=True)

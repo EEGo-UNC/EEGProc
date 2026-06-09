@@ -7,14 +7,14 @@ All tests use synthetic data so no real EEG files are needed.
 import numpy as np
 import pytest
 import tensorflow as tf
-from eegproc.supervised.stsnet.data_representation import (
+from eegproc.deep_learning.supervised.stsnet.data_representation import (
     build_4d_representation,
     build_spatiotemporal_representation,
     compute_spd,
     flatten_lower_triangular,
 )
-from eegproc.supervised.stsnet.manifold_net import InvariantLayer, ManifoldNet, WFMLayer
-from eegproc.supervised.stsnet.stsnet import BiLSTMNet, STSNet
+from eegproc.deep_learning.supervised.stsnet.manifold_net import InvariantLayer, ManifoldNet, WFMLayer
+from eegproc.deep_learning.supervised.stsnet.stsnet import BiLSTMNet, STSNet
 
 
 def make_trial(n_channels=32, n_samples=7680, seed=0):
