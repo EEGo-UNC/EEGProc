@@ -13,7 +13,7 @@ from typing import Callable, Union
 
 import tensorflow as tf
 from tensorflow.keras import layers, Model
-
+from .variational_classifier import VariationalClassifier
 
 LossLike = Union[str, Callable, tf.keras.losses.Loss]
 
@@ -21,14 +21,7 @@ LossLike = Union[str, Callable, tf.keras.losses.Loss]
 class RNNClassifier(ABC):
     """Base class for RNN-based EEG sequence classifiers.
 
-    Subclasses define the recurrent layer type. The shared classifier body is:
-
-        Input
-        -> recurrent stack
-        -> temporal pooling
-        -> global average pooling
-        -> Dense logits
-        -> Softmax probabilities
+    Subclasses define the recurrent layer type.
     """
 
     def __init__(
@@ -43,6 +36,10 @@ class RNNClassifier(ABC):
         optimizer: Union[str, tf.keras.optimizers.Optimizer] = "adam",
         metrics: list[str] | None = None,
         name: str = "rnn_classifier",
+        alpha: float = 1.0,
+        beta: float = 0.0,
+        gamma: float = 1e-4,
+        lambda_: float = 0.0,
     ) -> None:
         self.timesteps = timesteps
         self.n_features = n_features
@@ -54,20 +51,16 @@ class RNNClassifier(ABC):
         self.optimizer = optimizer
         self.metrics = metrics if metrics is not None else ["accuracy"]
         self.name = name
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.lambda_ = lambda_
 
     @staticmethod
     def resolve_loss(loss: LossLike) -> Union[str, Callable, tf.keras.losses.Loss]:
         """Map friendly loss aliases to Keras-compatible losses."""
         if loss == "softmax_crossentropy":
-            return tf.keras.losses.SparseCategoricalCrossentropy(
-                from_logits=False
-            )
-
-        if loss == "variational":
-            raise NotImplementedError(
-                "Variational loss is not yet implemented; "
-                "use 'softmax_crossentropy' until it is."
-            )
+            return tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
 
         return loss
 
@@ -80,18 +73,16 @@ class RNNClassifier(ABC):
         """Apply the recurrent stack."""
         for layer_index in range(self.n_rnn_layers):
             x = self.recurrent_layer(layer_index)(x)
-            x = layers.BatchNormalization(
-                name=f"{self.name}_bn_{layer_index}"
-            )(x)
+            x = layers.BatchNormalization(name=f"{self.name}_bn_{layer_index}")(x)
             x = layers.Dropout(
                 self.dropout,
                 name=f"{self.name}_do_{layer_index}",
             )(x)
 
         return x
-
-    def classifier_head(self, x: tf.Tensor) -> tf.Tensor:
-        """Apply temporal pooling and classification head."""
+    
+    def classifier_head(self, x: tf.Tensor):
+        """Apply temporal pooling and either standard or variational classification."""
         x = layers.MaxPool1D(
             pool_size=2,
             padding="same",
@@ -104,29 +95,52 @@ class RNNClassifier(ABC):
             name="enc_tpool2",
         )(x)
 
-        x = layers.GlobalAveragePooling1D(name="gap")(x)
-        x = layers.Dense(self.n_classes, name="class_logits")(x)
-        x = layers.Softmax(name="class_probabilities")(x)
+        mh = layers.GlobalAveragePooling1D(name="gap")(x)
 
-        return x
+        if self.loss == "variational":
+            vc_head = VariationalClassifier(
+                n_classes=self.n_classes,
+                name="variational_classifier",
+            )
+            logits = vc_head(mh)
+            probs = layers.Softmax(name="class_probabilities")(logits)
+            return probs, vc_head
+
+        logits = layers.Dense(self.n_classes, name="class_logits")(mh)
+        probs = layers.Softmax(name="class_probabilities")(logits)
+
+        return probs, None
 
     def build(self) -> tf.keras.Model:
         """Build and compile the Keras model."""
-        resolved_loss = self.resolve_loss(self.loss)
-
         x_in = layers.Input(
             shape=(self.timesteps, self.n_features),
             name="x",
         )
 
         x = self.recurrent_stack(x_in)
-        output = self.classifier_head(x)
+        output, vc_head = self.classifier_head(x)
 
         model = Model(
             inputs=x_in,
             outputs=output,
             name=self.name,
         )
+
+        if self.loss == "variational":
+            model.compile(
+                optimizer=self.optimizer,
+                loss=vc_head.keras_loss(
+                    alpha=self.alpha,
+                    beta=self.beta,
+                    gamma=self.gamma,
+                    lambda_=self.lambda_,
+                ),
+                metrics=self.metrics,
+            )
+            return model
+
+        resolved_loss = self.resolve_loss(self.loss)
 
         model.compile(
             optimizer=self.optimizer,
@@ -156,6 +170,10 @@ class LSTMClassifier(RNNClassifier):
         optimizer: Union[str, tf.keras.optimizers.Optimizer] = "adam",
         metrics: list[str] | None = None,
         name: str = "lstm_classifier",
+        alpha: float = 1.0,
+        beta: float = 0.0,
+        gamma: float = 1e-4,
+        lambda_: float = 0.0,
     ) -> None:
         super().__init__(
             timesteps=timesteps,
@@ -168,6 +186,10 @@ class LSTMClassifier(RNNClassifier):
             optimizer=optimizer,
             metrics=metrics,
             name=name,
+            alpha = alpha,
+            beta = beta,
+            gamma = gamma,
+            lambda_ = lambda_
         )
 
         self.lstm_units = lstm_units
@@ -196,6 +218,10 @@ class BiLSTMClassifier(RNNClassifier):
         optimizer: Union[str, tf.keras.optimizers.Optimizer] = "adam",
         metrics: list[str] | None = None,
         name: str = "bilstm_classifier",
+        alpha: float = 1.0,
+        beta: float = 0.0,
+        gamma: float = 1e-4,
+        lambda_: float = 0.0,
     ) -> None:
         super().__init__(
             timesteps=timesteps,
@@ -208,6 +234,10 @@ class BiLSTMClassifier(RNNClassifier):
             optimizer=optimizer,
             metrics=metrics,
             name=name,
+            alpha = alpha,
+            beta = beta,
+            gamma = gamma,
+            lambda_ = lambda_
         )
 
         self.lstm_units = lstm_units
@@ -222,3 +252,4 @@ class BiLSTMClassifier(RNNClassifier):
             merge_mode="concat",
             name=f"bilstm_{layer_index}",
         )
+

@@ -41,61 +41,87 @@ class VariationalClassifier(tf.keras.layers.Layer):
         super().__init__(**kwargs)
         self.n_classes = n_classes
         self.latent_dim = latent_dim
+        self._last_mh = None
 
     def build(self, input_shape):
         d = input_shape[-1]
         self.latent_dim = d
 
         self.prior_mu = self.add_weight(
-            name="prior_mu", shape=(self.n_classes, d),
-            initializer="glorot_normal", trainable=True,
+            name="prior_mu",
+            shape=(self.n_classes, d),
+            initializer="glorot_normal",
+            trainable=True,
         )
         self.prior_log_sigma = self.add_weight(
-            name="prior_log_sigma", shape=(self.n_classes, d),
-            initializer="zeros", trainable=True,
+            name="prior_log_sigma",
+            shape=(self.n_classes, d),
+            initializer="zeros",
+            trainable=True,
         )
         self.log_class_prior = self.add_weight(
-            name="log_class_prior", shape=(self.n_classes,),
-            initializer="zeros", trainable=True,
+            name="log_class_prior",
+            shape=(self.n_classes,),
+            initializer="zeros",
+            trainable=True,
         )
         self.disc_w = self.add_weight(
-            name="disc_w", shape=(self.n_classes, d),
-            initializer="glorot_normal", trainable=True,
+            name="disc_w",
+            shape=(self.n_classes, d),
+            initializer="glorot_normal",
+            trainable=True,
         )
         self.disc_b = self.add_weight(
-            name="disc_b", shape=(self.n_classes,),
-            initializer="zeros", trainable=True,
+            name="disc_b",
+            shape=(self.n_classes,),
+            initializer="zeros",
+            trainable=True,
         )
         super().build(input_shape)
 
     def _log_gaussian(self, z, mu, log_sigma):
         sigma2 = tf.exp(2.0 * log_sigma)
-        diff   = z - mu[tf.newaxis, :]
+        diff = z - mu[tf.newaxis, :]
         # Use reduce_mean (not reduce_sum) over the latent dimension so that
         # logit magnitudes are O(1) regardless of latent_dim.  With reduce_sum
         # the log-likelihood scales with d (hundreds of dims), swamping the
         # class-prior term and producing near-identical extreme logits before
         # the priors have had time to learn anything useful.
         return -0.5 * tf.reduce_mean(
-            tf.math.log(2 * np.pi * sigma2) + diff ** 2 / sigma2, axis=-1,
+            tf.math.log(2 * np.pi * sigma2) + diff**2 / sigma2,
+            axis=-1,
         )
 
     def call(self, mh: tf.Tensor, training: bool = False) -> tf.Tensor:
         """
+        Classify latent features using learned Gaussian class priors.
+
         Parameters
         ----------
-        mh : (batch, latent_dim) -- pre-concatenated feature vectors
+        mh : tf.Tensor
+            Latent feature vectors with shape (batch, latent_dim).
 
         Returns
         -------
-        logits : (batch, n_classes)
+        tf.Tensor
+            Class logits with shape (batch, n_classes).
         """
+        self._last_mh = mh
+
         log_class_prior = tf.nn.log_softmax(self.log_class_prior)
+
         log_likelihoods = tf.stack(
-            [self._log_gaussian(mh, self.prior_mu[y], self.prior_log_sigma[y])
-             for y in range(self.n_classes)],
+            [
+                self._log_gaussian(
+                    mh,
+                    self.prior_mu[class_index],
+                    self.prior_log_sigma[class_index],
+                )
+                for class_index in range(self.n_classes)
+            ],
             axis=1,
         )
+
         return log_likelihoods + log_class_prior[tf.newaxis, :]
 
     def discriminator(self, z: tf.Tensor, y: int) -> tf.Tensor:
@@ -130,23 +156,25 @@ class VariationalClassifier(tf.keras.layers.Layer):
         # avoiding the InaccessibleTensorError that arises when Python-level
         # conditionals (if / continue) cause tensors to be produced inside a
         # tf.cond sub-graph that is out of scope at concat time.
-        nll_ta   = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        nll_ta = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         n_written = tf.constant(0, dtype=tf.int32)
 
         for c in range(self.n_classes):
-            mask = tf.equal(y, c)                            # (batch,) bool
-            z_c  = tf.boolean_mask(mh, mask)                 # (N_c, d)
-            n_c  = tf.shape(z_c)[0]
+            mask = tf.equal(y, c)  # (batch,) bool
+            z_c = tf.boolean_mask(mh, mask)  # (N_c, d)
+            n_c = tf.shape(z_c)[0]
 
             # Need at least 2 samples to define sample variance.
             # Use tf.cond so the guard stays graph-native; the write only
             # happens inside the true branch, keeping everything in scope.
-            mu_c  = tf.reduce_mean(z_c, axis=0)              # (d,)
+            mu_c = tf.reduce_mean(z_c, axis=0)  # (d,)
 
             # Diagonal sample covariance, Bessel-corrected (PI's Sigma_c formula)
-            diff  = z_c - mu_c[tf.newaxis, :]                # (N_c, d)
-            var_c = tf.reduce_sum(tf.square(diff), axis=0) / tf.cast(tf.maximum(n_c - 1, 1), tf.float32)  # (d,)
-            var_c = tf.maximum(var_c, 1e-6)                  # numerical floor
+            diff = z_c - mu_c[tf.newaxis, :]  # (N_c, d)
+            var_c = tf.reduce_sum(tf.square(diff), axis=0) / tf.cast(
+                tf.maximum(n_c - 1, 1), tf.float32
+            )  # (d,)
+            var_c = tf.maximum(var_c, 1e-6)  # numerical floor
 
             # -log N(z_c | mu_c, diag(var_c)) for every sample in this class
             nll_c = 0.5 * tf.reduce_sum(
@@ -178,9 +206,9 @@ class VariationalClassifier(tf.keras.layers.Layer):
         mh: tf.Tensor,
         y: tf.Tensor,
         alpha: float = 1.0,
-        beta: float = 1.0,
-        gamma: float = 1.0,
-        lambda_: float = 1.0,
+        beta: float = 0.0,
+        gamma: float = 1e-4,
+        lambda_: float = 0.0,
     ) -> tf.Tensor:
         """
         VC objective (Eq. 7).
@@ -233,12 +261,50 @@ class VariationalClassifier(tf.keras.layers.Layer):
         gaussian_kl_term = gamma * tf.nn.relu(self._gaussian_kl_point(mh, y))
 
         # Term 3: lambda_ * KL(p(y) || p_pi(y))
-        p_y         = tf.reduce_mean(y_onehot, axis=0)
-        log_p_pi    = tf.nn.log_softmax(self.log_class_prior)
+        p_y = tf.reduce_mean(y_onehot, axis=0)
+        log_p_pi = tf.nn.log_softmax(self.log_class_prior)
         kl_class_prior = tf.reduce_sum(p_y * (tf.math.log(p_y + 1e-8) - log_p_pi))
-        prior_term  = lambda_ * kl_class_prior
+        prior_term = lambda_ * kl_class_prior
 
         return xent + kl_term + gaussian_kl_term + prior_term
+    
+    def keras_loss(
+        self,
+        alpha: float = 1.0,
+        beta: float = 0.0,
+        gamma: float = 1e-4,
+        lambda_: float = 0.0,
+    ):
+        """
+        Return a Keras-compatible loss function that uses the latest latent features
+        seen by this classifier head.
+
+        This lets models compile with:
+
+            loss=vc_head.keras_loss(...)
+
+        while still allowing vc_loss to use mh internally.
+        """
+
+        def loss_fn(y_true, y_pred):
+            if self._last_mh is None:
+                raise ValueError(
+                    "VariationalClassifier has no stored latent features. "
+                    "Make sure the model output comes from this classifier head."
+                )
+
+            y_true = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+
+            return self.vc_loss(
+                mh=self._last_mh,
+                y=y_true,
+                alpha=alpha,
+                beta=beta,
+                gamma=gamma,
+                lambda_=lambda_,
+            )
+
+        return loss_fn
 
     def discriminator_loss(self, mh: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
         """
@@ -252,9 +318,9 @@ class VariationalClassifier(tf.keras.layers.Layer):
             mask = tf.equal(y, c)
             if tf.reduce_sum(tf.cast(mask, tf.int32)) == 0:
                 continue
-            z_q     = tf.boolean_mask(mh, mask)
+            z_q = tf.boolean_mask(mh, mask)
             sigma_c = tf.exp(self.prior_log_sigma[c])
-            z_p     = tf.random.normal(tf.shape(z_q)) * sigma_c + self.prior_mu[c]
+            z_p = tf.random.normal(tf.shape(z_q)) * sigma_c + self.prior_mu[c]
 
             T_q = self.discriminator(z_q, c)
             T_p = self.discriminator(z_p, c)
