@@ -14,11 +14,6 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
 
-
-# ---------------------------------------------------------------------
-# Hyperparameter helpers
-# ---------------------------------------------------------------------
-
 def _expand_hyperparameter_grid(hp: dict | None) -> list[dict]:
     """Expand a hyperparameter dict into a Cartesian-product grid."""
     if not hp:
@@ -49,10 +44,6 @@ def _choose_best_config_index(
 
     return int(np.argmin(metric_values))
 
-
-# ---------------------------------------------------------------------
-# Data / preprocessing helpers
-# ---------------------------------------------------------------------
 
 def _apply_preprocessing_strategy(
     preprocessing_strategy: Callable | None,
@@ -97,10 +88,6 @@ def _apply_preprocessing_strategy(
         "(X_train, X_eval) or (X_train, y_train, X_eval, y_eval)."
     )
 
-
-# ---------------------------------------------------------------------
-# Prediction / metric helpers
-# ---------------------------------------------------------------------
 
 def _as_numpy_1d(values: np.ndarray) -> np.ndarray:
     """Return labels as a 1D numpy array.
@@ -357,10 +344,6 @@ def _make_variational_interval_log(
 
     return rows
 
-
-# ---------------------------------------------------------------------
-# Printing / result helpers
-# ---------------------------------------------------------------------
 
 def _python_scalar(value):
     """Convert numpy scalars to plain Python scalars for logs/JSON."""
@@ -1002,50 +985,3 @@ def nested_lnso_cv(
     print(pformat(std_scores, indent=4, width=120, sort_dicts=False))
 
     return results
-
-
-# ---------------------------------------------------------------------
-# Optional compatibility wrapper
-# ---------------------------------------------------------------------
-
-def run_cross_validation(
-    cv_strategy: Literal["nested_lnso", "loso"] = "nested_lnso",
-    model_builder_function: Callable[..., tf.keras.Model] | None = None,
-    feature_array: np.ndarray | None = None,
-    label_array: np.ndarray | None = None,
-    subject_id_array: np.ndarray | None = None,
-    **kwargs,
-) -> dict:
-    """Small compatibility wrapper around nested_lnso_cv.
-
-    This preserves a simple public entry point if older scripts import
-    run_cross_validation. Currently this wrapper routes LOSO/nested_lnso to
-    nested_lnso_cv. For LOSO, set both N values to 1 unless the caller overrides
-    them explicitly.
-    """
-    if cv_strategy not in {"nested_lnso", "loso"}:
-        raise ValueError(
-            "This rewritten cross_val.py currently supports cv_strategy='nested_lnso' "
-            "or 'loso'. Use nested_lnso_cv directly for explicit control."
-        )
-
-    if model_builder_function is None:
-        raise ValueError("model_builder_function is required.")
-    if feature_array is None:
-        raise ValueError("feature_array is required.")
-    if label_array is None:
-        raise ValueError("label_array is required.")
-    if subject_id_array is None:
-        raise ValueError("subject_id_array is required.")
-
-    if cv_strategy == "loso":
-        kwargs.setdefault("n_outer_subjects_to_leave_out", 1)
-        kwargs.setdefault("n_inner_subjects_to_leave_out", 1)
-
-    return nested_lnso_cv(
-        model_builder_function=model_builder_function,
-        feature_array=feature_array,
-        label_array=label_array,
-        subject_id_array=subject_id_array,
-        **kwargs,
-    )
