@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 from ..BaseEncoder import BaseEncoder
-from utils import _ensure_tuple, _product
+from ..utils import _ensure_tuple, _product
 
 
 class CNN2DEncoder(BaseEncoder):

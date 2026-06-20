@@ -8,11 +8,28 @@ This file provides two minimal checks:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import tensorflow as tf
 
-from .joint_autoencoder_vc import JointAutoencoderVariationalClassifier
-from ..supervised.variational_classifier import VariationalClassifier
-from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
+try:
+    from .joint_autoencoder_vc import JointAutoencoderVariationalClassifier
+    from ..supervised.variational_classifier import VariationalClassifier
+    from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
+except ImportError:
+    CURRENT_DIR = Path(__file__).resolve().parent
+    if str(CURRENT_DIR) not in sys.path:
+        sys.path.insert(0, str(CURRENT_DIR))
+
+    from joint_autoencoder_vc import JointAutoencoderVariationalClassifier
+    from eegproc.deep_learning.supervised.variational_classifier import (
+        VariationalClassifier,
+    )
+    from eegproc.deep_learning.unsupervised.Convolutions.CNN1D import (
+        CNN1DDecoder,
+        CNN1DEncoder,
+    )
 
 
 def _make_model(
@@ -121,7 +138,7 @@ def smoke_test_joint_single_train_step_and_gradient_flow() -> None:
     x = tf.random.normal((batch_size, timesteps, n_features), dtype=tf.float32)
     y = tf.random.uniform((batch_size,), minval=0, maxval=2, dtype=tf.int32)
 
-    with tf.GradientTape() as tape:
+    with tf.GradientTape(persistent=True) as tape:
         total_loss, reconstruction_loss, vc_loss = model._compute_weighted_losses(
             x=x,
             y=y,
@@ -135,6 +152,8 @@ def smoke_test_joint_single_train_step_and_gradient_flow() -> None:
     encoder_grads = tape.gradient(total_loss, encoder_vars)
     decoder_grads = tape.gradient(total_loss, decoder_vars)
     classifier_grads = tape.gradient(total_loss, classifier_vars)
+
+    del tape
 
     _assert_any_finite_nonzero_grad(encoder_grads)
     _assert_any_finite_nonzero_grad(decoder_grads)

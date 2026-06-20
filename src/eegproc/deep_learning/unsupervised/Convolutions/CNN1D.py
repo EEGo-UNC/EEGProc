@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 from ..BaseEncoder import BaseEncoder
-from utils import _ensure_tuple, _product
+from ..utils import _ensure_tuple, _product
 
 
 
@@ -222,6 +222,113 @@ class CNN1DDecoder(tf.keras.Model):
     The decoder mirrors the encoder by reversing the convolutional filter
     schedule and replacing temporal pooling with temporal upsampling.
     """
+    def __init__(
+        self,
+        timesteps: int,
+        n_features: int,
+        t_down: int,
+        conv_filters: tuple[int, ...],
+        kernel_sizes: int | tuple[int, ...],
+        pool_after_layers: tuple[int, ...],
+        pool_sizes: int | tuple[int, ...],
+        emb_dim: int,
+        dropout: float = 0.10,
+        activation: str = "relu",
+        use_batch_norm: bool = True,
+        name: str = "decoder_mirror",
+        **kwargs,
+    ):
+        super().__init__(name=name, **kwargs)
+
+        if timesteps <= 0:
+            raise ValueError(f"timesteps must be positive, got {timesteps}.")
+        if n_features <= 0:
+            raise ValueError(f"n_features must be positive, got {n_features}.")
+        if t_down <= 0:
+            raise ValueError(f"t_down must be positive, got {t_down}.")
+        if len(conv_filters) == 0:
+            raise ValueError("conv_filters must contain at least one layer.")
+
+        self.timesteps = timesteps
+        self._n_features = n_features
+        self.t_down = t_down
+        self.conv_filters = tuple(conv_filters)
+        self.kernel_sizes = _ensure_tuple(
+            kernel_sizes,
+            len(self.conv_filters),
+            "kernel_sizes",
+        )
+        self.pool_after_layers = tuple(pool_after_layers)
+        self.pool_sizes = _ensure_tuple(
+            pool_sizes,
+            len(self.pool_after_layers),
+            "pool_sizes",
+        )
+        self.emb_dim = emb_dim
+        self.dropout_rate = dropout
+        self.activation = activation
+        self.use_batch_norm = use_batch_norm
+
+        effective_t_down = _product(self.pool_sizes)
+        if effective_t_down != self.t_down:
+            raise ValueError(
+                f"t_down={self.t_down}, but the configured pooling produces "
+                f"a downsampling factor of {effective_t_down}. "
+                "Set t_down equal to product(pool_sizes)."
+            )
+
+        self.input_projection = layers.Conv1D(
+            self.conv_filters[-1],
+            1,
+            padding="same",
+            activation=activation,
+            name="dec_input_projection",
+        )
+
+        self.upsample_layers = {
+            i: layers.UpSampling1D(size=pool_size, name=f"dec_upsample1d_{i}")
+            for i, pool_size in zip(
+                reversed(self.pool_after_layers),
+                reversed(self.pool_sizes),
+            )
+        }
+
+        self.conv_layers = [
+            layers.Conv1D(
+                filters,
+                kernel_size,
+                padding="same",
+                activation=activation,
+                name=f"dec_conv1d_{i}",
+            )
+            for i, (filters, kernel_size) in enumerate(
+                zip(self.conv_filters, self.kernel_sizes)
+            )
+        ]
+
+        self.bn_layers = [
+            layers.BatchNormalization(name=f"dec_bn1d_{i}") if use_batch_norm else None
+            for i, _ in enumerate(self.conv_filters)
+        ]
+
+        self.dropout_layers = [
+            layers.Dropout(dropout, name=f"dec_do1d_{i}")
+            for i, _ in enumerate(self.conv_filters)
+        ]
+
+        self.x_hat = layers.Conv1D(
+            self.n_features,
+            1,
+            padding="same",
+            activation=None,
+            name="x_hat",
+        )
+
+    @property
+    def n_features(self) -> int:
+        """Flattened number of reconstructed channel-band features."""
+        return self._n_features
+
     @classmethod
     def from_encoder(
         cls,
@@ -229,11 +336,7 @@ class CNN1DDecoder(tf.keras.Model):
         name: str = "decoder_mirror",
     ):
         """Create a mirror decoder from a configured ``CNN1DEncoder``."""
-        pool_sizes = getattr(
-            encoder,
-            "pool_sizes",
-            tuple(encoder.pool_size for _ in encoder.pool_after_layers),
-        )
+        pool_sizes = getattr(encoder, "pool_sizes")
 
         return cls(
             timesteps=encoder.timesteps,
@@ -278,5 +381,29 @@ class CNN1DDecoder(tf.keras.Model):
         x = self.x_hat(x)
 
         return self.fix_length(x)
+
+    def compute_output_shape(self, input_shape):
+        """Return the decoder output shape."""
+        return (input_shape[0], self.timesteps, self.n_features)
+
+    def get_config(self) -> dict:
+        """Return serializable configuration for the decoder."""
+        config = super().get_config()
+        config.update(
+            {
+                "timesteps": self.timesteps,
+                "n_features": self.n_features,
+                "t_down": self.t_down,
+                "conv_filters": self.conv_filters,
+                "kernel_sizes": self.kernel_sizes,
+                "pool_after_layers": self.pool_after_layers,
+                "pool_sizes": self.pool_sizes,
+                "emb_dim": self.emb_dim,
+                "dropout": self.dropout_rate,
+                "activation": self.activation,
+                "use_batch_norm": self.use_batch_norm,
+            }
+        )
+        return config
     
 

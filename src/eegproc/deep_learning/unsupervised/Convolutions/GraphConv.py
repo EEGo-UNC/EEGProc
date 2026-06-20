@@ -5,7 +5,7 @@ from tensorflow.keras import layers
 
 from ..BaseEncoder import BaseEncoder
 from .GraphConv import GraphConv
-from utils import _product
+from ..utils import _product
 
 
 class GCNEncoder(BaseEncoder):

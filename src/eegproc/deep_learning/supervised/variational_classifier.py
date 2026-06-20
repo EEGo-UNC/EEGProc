@@ -152,53 +152,46 @@ class VariationalClassifier(tf.keras.layers.Layer):
         -------
         Scalar mean NLL over the batch.
         """
-        # Use a TensorArray so all writes stay in the same graph scope,
-        # avoiding the InaccessibleTensorError that arises when Python-level
-        # conditionals (if / continue) cause tensors to be produced inside a
-        # tf.cond sub-graph that is out of scope at concat time.
-        nll_ta = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
-        n_written = tf.constant(0, dtype=tf.int32)
+        total_nll = tf.constant(0.0, dtype=tf.float32)
+        n_valid = tf.constant(0, dtype=tf.int32)
 
         for c in range(self.n_classes):
             mask = tf.equal(y, c)  # (batch,) bool
             z_c = tf.boolean_mask(mh, mask)  # (N_c, d)
             n_c = tf.shape(z_c)[0]
 
-            # Need at least 2 samples to define sample variance.
-            # Use tf.cond so the guard stays graph-native; the write only
-            # happens inside the true branch, keeping everything in scope.
-            mu_c = tf.reduce_mean(z_c, axis=0)  # (d,)
+            def class_nll() -> tf.Tensor:
+                mu_c = tf.reduce_mean(z_c, axis=0)  # (d,)
 
-            # Diagonal sample covariance, Bessel-corrected (PI's Sigma_c formula)
-            diff = z_c - mu_c[tf.newaxis, :]  # (N_c, d)
-            var_c = tf.reduce_sum(tf.square(diff), axis=0) / tf.cast(
-                tf.maximum(n_c - 1, 1), tf.float32
-            )  # (d,)
-            var_c = tf.maximum(var_c, 1e-6)  # numerical floor
+                # Diagonal sample covariance, Bessel-corrected (PI's Sigma_c formula)
+                diff = z_c - mu_c[tf.newaxis, :]  # (N_c, d)
+                var_c = tf.reduce_sum(tf.square(diff), axis=0) / tf.cast(
+                    tf.maximum(n_c - 1, 1), tf.float32
+                )  # (d,)
+                var_c = tf.maximum(var_c, 1e-6)  # numerical floor
 
-            # -log N(z_c | mu_c, diag(var_c)) for every sample in this class
-            nll_c = 0.5 * tf.reduce_sum(
-                tf.square(z_c - mu_c[tf.newaxis, :]) / var_c[tf.newaxis, :]
-                + tf.math.log(var_c)[tf.newaxis, :],
-                axis=-1,
-            )  # (N_c,)
+                # -log N(z_c | mu_c, diag(var_c)) for every sample in this class
+                nll_c = 0.5 * tf.reduce_sum(
+                    tf.square(z_c - mu_c[tf.newaxis, :]) / var_c[tf.newaxis, :]
+                    + tf.math.log(var_c)[tf.newaxis, :],
+                    axis=-1,
+                )  # (N_c,)
 
-            # Only record if there were enough samples for a valid variance
-            nll_ta, n_written = tf.cond(
+                return tf.reduce_mean(nll_c)
+
+            class_loss = tf.cond(
                 tf.greater_equal(n_c, 2),
-                true_fn=lambda: (nll_ta.write(n_written, nll_c), n_written + 1),
-                false_fn=lambda: (nll_ta, n_written),
+                true_fn=class_nll,
+                false_fn=lambda: tf.constant(0.0, dtype=tf.float32),
             )
 
-        # Stack all written rows into a single (total_samples,) tensor and average.
-        # Using concat(tf.unstack(nll_ta.stack())) is avoided because iterating
-        # over a symbolic tf.Tensor is not allowed in graph mode; stack() returns
-        # a (n_written, N_c) ragged-padded tensor so we rely on the TensorArray
-        # having been written with flat 1-D vectors and just flatten after stack.
+            total_nll += class_loss
+            n_valid += tf.cast(tf.greater_equal(n_c, 2), tf.int32)
+
         return tf.cond(
-            tf.equal(n_written, 0),
-            true_fn=lambda: tf.constant(0.0),
-            false_fn=lambda: tf.reduce_mean(tf.reshape(nll_ta.concat(), [-1])),
+            tf.equal(n_valid, 0),
+            true_fn=lambda: tf.constant(0.0, dtype=tf.float32),
+            false_fn=lambda: total_nll / tf.cast(n_valid, tf.float32),
         )
 
     def vc_loss(
