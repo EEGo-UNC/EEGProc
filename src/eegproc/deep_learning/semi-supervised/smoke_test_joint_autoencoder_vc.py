@@ -14,7 +14,8 @@ from pathlib import Path
 import tensorflow as tf
 
 try:
-    from .joint_autoencoder_vc import JointAutoencoderVariationalClassifier
+    from .joint_autoencoder_vc import JointAutoencoderVariationalClassifierV1
+    from .joint_autoencoder_vc_v2 import JointAutoencoderVariationalClassifierV2
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
 except ImportError:
@@ -22,7 +23,8 @@ except ImportError:
     if str(CURRENT_DIR) not in sys.path:
         sys.path.insert(0, str(CURRENT_DIR))
 
-    from joint_autoencoder_vc import JointAutoencoderVariationalClassifier
+    from joint_autoencoder_vc import JointAutoencoderVariationalClassifierV1
+    from joint_autoencoder_vc_v2 import JointAutoencoderVariationalClassifierV2
     from eegproc.deep_learning.supervised.variational_classifier import (
         VariationalClassifier,
     )
@@ -36,7 +38,7 @@ def _make_model(
     timesteps: int = 32,
     n_features: int = 8,
     n_classes: int = 2,
-) -> JointAutoencoderVariationalClassifier:
+) -> JointAutoencoderVariationalClassifierV1:
     encoder = CNN1DEncoder(
         timesteps=timesteps,
         n_features=n_features,
@@ -54,7 +56,7 @@ def _make_model(
     decoder = CNN1DDecoder.from_encoder(encoder, name="smoke_decoder")
     vc_head = VariationalClassifier(n_classes=n_classes, name="smoke_vc_head")
 
-    model = JointAutoencoderVariationalClassifier(
+    model = JointAutoencoderVariationalClassifierV1(
         encoder=encoder,
         decoder=decoder,
         variational_classifier=vc_head,
@@ -62,6 +64,45 @@ def _make_model(
         vc_loss_weight=0.5,
         vc_gamma=1e-4,
         name="smoke_joint_ae_vc",
+    )
+
+    return model
+
+
+def _make_model_v2(
+    timesteps: int = 32,
+    n_features: int = 8,
+    n_classes: int = 2,
+    update_discriminator: bool = True,
+) -> JointAutoencoderVariationalClassifierV2:
+    encoder = CNN1DEncoder(
+        timesteps=timesteps,
+        n_features=n_features,
+        t_down=2,
+        conv_filters=(16, 32),
+        kernel_sizes=(5, 3),
+        pool_after_layers=(0,),
+        pool_sizes=(2,),
+        emb_dim=16,
+        dropout=0.0,
+        use_batch_norm=False,
+        name="smoke_encoder_v2",
+    )
+
+    decoder = CNN1DDecoder.from_encoder(encoder, name="smoke_decoder_v2")
+    vc_head = VariationalClassifier(n_classes=n_classes, name="smoke_vc_head_v2")
+
+    model = JointAutoencoderVariationalClassifierV2(
+        encoder=encoder,
+        decoder=decoder,
+        variational_classifier=vc_head,
+        ae_loss_weight=0.5,
+        vc_loss_weight=0.5,
+        vc_beta=0.1,
+        vc_gamma=1e-4,
+        vc_lambda=0.1,
+        update_discriminator=update_discriminator,
+        name="smoke_joint_ae_vc_v2",
     )
 
     return model
@@ -175,7 +216,89 @@ def smoke_test_joint_single_train_step_and_gradient_flow() -> None:
     assert bool(tf.math.is_finite(vc_loss).numpy())
 
 
+def smoke_test_joint_v2_forward_and_train_step() -> None:
+    """Run one forward pass and one train step for the V2 model."""
+    tf.random.set_seed(789)
+
+    batch_size = 6
+    timesteps = 32
+    n_features = 8
+
+    model = _make_model_v2(
+        timesteps=timesteps,
+        n_features=n_features,
+        n_classes=2,
+        update_discriminator=True,
+    )
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3))
+
+    x = tf.random.normal((batch_size, timesteps, n_features), dtype=tf.float32)
+    y = tf.random.uniform((batch_size,), minval=0, maxval=2, dtype=tf.int32)
+
+    outputs = model(x, training=False)
+
+    assert set(outputs.keys()) == {
+        "latent_sequence",
+        "pooled_latent",
+        "logits",
+        "reconstruction",
+    }
+    assert outputs["logits"].shape == (batch_size, 2)
+    assert outputs["reconstruction"].shape == (batch_size, timesteps, n_features)
+
+    with tf.GradientTape(persistent=True) as tape:
+        total_loss, reconstruction_loss, vc_loss, outputs = model._compute_weighted_losses(
+            x=x,
+            y=y,
+            training=True,
+        )
+        disc_loss = model.variational_classifier.discriminator_loss(
+            tf.stop_gradient(outputs["pooled_latent"]),
+            y,
+        )
+
+    encoder_vars = model.encoder.trainable_variables
+    decoder_vars = model.decoder.trainable_variables
+    classifier_vars = [
+        model.variational_classifier.prior_mu,
+        model.variational_classifier.prior_log_sigma,
+        model.variational_classifier.log_class_prior,
+    ]
+    discriminator_vars = [
+        model.variational_classifier.disc_w,
+        model.variational_classifier.disc_b,
+    ]
+
+    encoder_grads = tape.gradient(total_loss, encoder_vars)
+    decoder_grads = tape.gradient(total_loss, decoder_vars)
+    classifier_grads = tape.gradient(total_loss, classifier_vars)
+
+    disc_grads = tape.gradient(disc_loss, discriminator_vars)
+    del tape
+
+    _assert_any_finite_nonzero_grad(encoder_grads)
+    _assert_any_finite_nonzero_grad(decoder_grads)
+    _assert_any_finite_nonzero_grad(classifier_grads)
+    _assert_any_finite_nonzero_grad(disc_grads)
+
+    metrics = model.train_step((x, y))
+
+    assert "loss" in metrics
+    assert "reconstruction_loss" in metrics
+    assert "vc_loss" in metrics
+
+    for key in ("loss", "reconstruction_loss", "vc_loss"):
+        value = tf.convert_to_tensor(metrics[key])
+        assert bool(tf.reduce_all(tf.math.is_finite(value)).numpy())
+        assert bool(tf.greater_equal(value, 0.0).numpy())
+
+    assert bool(tf.math.is_finite(total_loss).numpy())
+    assert bool(tf.math.is_finite(reconstruction_loss).numpy())
+    assert bool(tf.math.is_finite(vc_loss).numpy())
+
+
 if __name__ == "__main__":
     smoke_test_joint_forward_shapes_and_finite_outputs()
     smoke_test_joint_single_train_step_and_gradient_flow()
+    smoke_test_joint_v2_forward_and_train_step()
     print("Joint AE+VC smoke tests passed.")

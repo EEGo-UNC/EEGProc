@@ -1,8 +1,9 @@
 """Joint autoencoder + variational-classifier architecture for EEG.
 
-This module defines a first-pass semi-supervised model that shares a single
+This module defines a second-pass semi-supervised model that shares a single
 encoder pathway and optimizes reconstruction and classification objectives in
-one gradient step.
+one gradient step, while also allowing the variational-classifier head's
+internal losses to be trained explicitly.
 
 Pipeline
 --------
@@ -17,7 +18,8 @@ The model minimizes a weighted sum in a single backward pass:
     total_loss = ae_loss_weight * reconstruction_loss
                + vc_loss_weight * variational_classifier_loss
 
-Both weights are tunable and default to ``0.5``.
+In addition, the variational-classifier discriminator can optionally receive
+its own gradient step by enabling ``update_discriminator``.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 
-class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
+class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
     """Combined autoencoder and variational-classification model.
 
     Parameters
@@ -55,7 +57,10 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
         Gaussian analytic term coefficient for ``variational_classifier.vc_loss``.
     vc_lambda : float, default=0.0
         Class-prior KL coefficient for ``variational_classifier.vc_loss``.
-    name : str, default="joint_autoencoder_variational_classifier"
+    update_discriminator : bool, default=False
+        Whether to run a separate discriminator gradient step after the main
+        joint update.
+    name : str, default="joint_autoencoder_variational_classifier_v2"
         Keras model name.
     """
 
@@ -71,7 +76,8 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
         vc_beta: float = 0.0,
         vc_gamma: float = 1e-4,
         vc_lambda: float = 0.0,
-        name: str = "joint_autoencoder_variational_classifier",
+        update_discriminator: bool = False,
+        name: str = "joint_autoencoder_variational_classifier_v2",
         **kwargs,
     ):
         super().__init__(name=name, **kwargs)
@@ -100,6 +106,7 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
         self.vc_beta = float(vc_beta)
         self.vc_gamma = float(vc_gamma)
         self.vc_lambda = float(vc_lambda)
+        self.update_discriminator = bool(update_discriminator)
 
         self.temporal_pool = layers.GlobalAveragePooling1D(name="latent_temporal_pool")
 
@@ -165,10 +172,24 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
             + self.vc_loss_weight * vc_loss
         )
 
-        return total_loss, reconstruction_loss, vc_loss
+        return total_loss, reconstruction_loss, vc_loss, outputs
+
+    def _discriminator_variables(self):
+        if not hasattr(self.variational_classifier, "disc_w"):
+            return []
+        return [self.variational_classifier.disc_w, self.variational_classifier.disc_b]
+
+    def _apply_gradients(self, optimizer, gradients, variables):
+        filtered_pairs = [
+            (gradient, variable)
+            for gradient, variable in zip(gradients, variables)
+            if gradient is not None
+        ]
+        if filtered_pairs:
+            optimizer.apply_gradients(filtered_pairs)
 
     def train_step(self, data):
-        """Train one step with a single gradient update on weighted loss."""
+        """Train one step with a weighted joint loss and optional discriminator update."""
         if isinstance(data, tuple):
             if len(data) == 2:
                 x, y = data
@@ -179,15 +200,39 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
         else:
             raise ValueError("Expected data as (x, y) tuple.")
 
+        disc_vars = self._discriminator_variables()
+        disc_var_ids = {id(variable) for variable in disc_vars}
+        main_variables = [
+            variable for variable in self.trainable_variables if id(variable) not in disc_var_ids
+        ]
+
+        discriminator_optimizer = None
+        if self.update_discriminator and disc_vars:
+            discriminator_optimizer = getattr(self, "_discriminator_optimizer", None)
+            if discriminator_optimizer is None:
+                discriminator_optimizer = self.optimizer.__class__.from_config(
+                    self.optimizer.get_config()
+                )
+                self._discriminator_optimizer = discriminator_optimizer
+
         with tf.GradientTape() as tape:
-            total_loss, reconstruction_loss, vc_loss = self._compute_weighted_losses(
+            total_loss, reconstruction_loss, vc_loss, outputs = self._compute_weighted_losses(
                 x=x,
                 y=y,
                 training=True,
             )
 
-        grads = tape.gradient(total_loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
+        main_gradients = tape.gradient(total_loss, main_variables)
+        self._apply_gradients(self.optimizer, main_gradients, main_variables)
+
+        if discriminator_optimizer is not None:
+            with tf.GradientTape() as disc_tape:
+                disc_loss = self.variational_classifier.discriminator_loss(
+                    tf.stop_gradient(outputs["pooled_latent"]),
+                    tf.cast(tf.reshape(y, [-1]), tf.int32),
+                )
+            disc_gradients = disc_tape.gradient(disc_loss, disc_vars)
+            self._apply_gradients(discriminator_optimizer, disc_gradients, disc_vars)
 
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
@@ -211,7 +256,7 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
         else:
             raise ValueError("Expected data as (x, y) tuple.")
 
-        total_loss, reconstruction_loss, vc_loss = self._compute_weighted_losses(
+        total_loss, reconstruction_loss, vc_loss, _outputs = self._compute_weighted_losses(
             x=x,
             y=y,
             training=False,
@@ -238,6 +283,7 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
                 "vc_beta": self.vc_beta,
                 "vc_gamma": self.vc_gamma,
                 "vc_lambda": self.vc_lambda,
+                "update_discriminator": self.update_discriminator,
             }
         )
         return config
