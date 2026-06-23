@@ -120,6 +120,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             name="reconstruction_loss"
         )
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
+        self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
+            name="accuracy"
+        )
 
     @property
     def metrics(self):
@@ -127,6 +130,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             self.total_loss_tracker,
             self.reconstruction_loss_tracker,
             self.vc_loss_tracker,
+            self.accuracy_tracker,
         ]
 
     def call(self, inputs, training: bool = False):
@@ -253,11 +257,13 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vc_loss_tracker.update_state(vc_loss)
+        self.accuracy_tracker.update_state(y, outputs["logits"])
 
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vc_loss": self.vc_loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
         }
 
     def test_step(self, data):
@@ -272,7 +278,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         else:
             raise ValueError("Expected data as (x, y) tuple.")
 
-        total_loss, reconstruction_loss, vc_loss, _outputs = self._compute_weighted_losses(
+        total_loss, reconstruction_loss, vc_loss, outputs = self._compute_weighted_losses(
             x=x,
             y=y,
             training=False,
@@ -281,11 +287,13 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vc_loss_tracker.update_state(vc_loss)
+        self.accuracy_tracker.update_state(y, outputs["logits"])
 
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vc_loss": self.vc_loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
         }
 
     def get_config(self) -> dict:
