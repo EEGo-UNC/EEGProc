@@ -29,6 +29,8 @@ from collections.abc import Callable
 import tensorflow as tf
 from tensorflow.keras import layers
 
+from ..unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
+
 
 class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
     """Combined autoencoder and variational-classification model.
@@ -48,7 +50,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
     vc_loss_weight : float, default=0.5
         Weight for variational-classifier loss.
     reconstruction_loss_fn : Callable | None, default=None
-        Loss used for the autoencoder branch. Defaults to mean squared error.
+        Loss used for the autoencoder branch. Defaults to a VAE loss with
+        mean-squared reconstruction and KL regularization.
     vc_alpha : float, default=1.0
         Cross-entropy coefficient for ``variational_classifier.vc_loss``.
     vc_beta : float, default=0.0
@@ -71,7 +74,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         variational_classifier: tf.keras.layers.Layer,
         ae_loss_weight: float = 0.5,
         vc_loss_weight: float = 0.5,
-        reconstruction_loss_fn: Callable | None = None,
+        reconstruction_loss_fn: VariationalAutoencoderLoss | None = None,
         vc_alpha: float = 1.0,
         vc_beta: float = 0.0,
         vc_gamma: float = 1e-4,
@@ -97,8 +100,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.reconstruction_loss_fn = (
             reconstruction_loss_fn
             if reconstruction_loss_fn is not None
-            else tf.keras.losses.MeanSquaredError(
-                reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
+            else VariationalAutoencoderLoss(
+                reconstruction="mse",
+                beta=1.0,
+                feature_reduction="mean",
             )
         )
 
@@ -155,7 +160,18 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
     def _compute_weighted_losses(self, x, y, training: bool):
         outputs = self(x, training=training)
 
-        reconstruction_loss = self.reconstruction_loss_fn(x, outputs["reconstruction"])
+        latent_sequence = outputs["latent_sequence"]
+        z_mean = tf.reshape(latent_sequence, [tf.shape(latent_sequence)[0], -1])
+        z_log_var = tf.zeros_like(z_mean)
+
+        vae_losses = self.reconstruction_loss_fn(
+            x_true=x,
+            x_pred=outputs["reconstruction"],
+            z_mean=z_mean,
+            z_log_var=z_log_var,
+        )
+        reconstruction_loss = vae_losses["reconstruction_loss"]
+        ae_loss = vae_losses["total_loss"]
 
         y = tf.cast(tf.reshape(y, [-1]), tf.int32)
         vc_loss = self.variational_classifier.vc_loss(
@@ -168,7 +184,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
 
         total_loss = (
-            self.ae_loss_weight * reconstruction_loss
+            self.ae_loss_weight * ae_loss
             + self.vc_loss_weight * vc_loss
         )
 

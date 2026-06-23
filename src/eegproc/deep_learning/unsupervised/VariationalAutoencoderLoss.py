@@ -129,6 +129,7 @@ class VariationalAutoencoderLoss:
 
         raise ValueError(f"Unknown feature reduction: {self.feature_reduction}")
 
+    @staticmethod
     def compute_huber_loss(
         error: tf.Tensor,
         delta: float = 1.0,
@@ -142,6 +143,7 @@ class VariationalAutoencoderLoss:
         linear = abs_error - quadratic
         return 0.5 * tf.square(quadratic) + delta * linear
 
+    @staticmethod
     def compute_kl_loss(
         z_mean: tf.Tensor,
         z_log_var: tf.Tensor,
