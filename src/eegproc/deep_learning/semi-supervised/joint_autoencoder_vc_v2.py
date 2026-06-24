@@ -29,7 +29,7 @@ from collections.abc import Callable
 import tensorflow as tf
 from tensorflow.keras import layers
 
-from ..unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
+from eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
 
 
 class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
@@ -133,6 +133,36 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             self.accuracy_tracker,
         ]
 
+    def compile(self, optimizer=None, discriminator_optimizer=None, **kwargs):
+        """Compile the model, eagerly preparing the discriminator optimizer.
+
+        The discriminator optimizer must be created here (or lazily, but only
+        from a guaranteed-eager context) rather than inside ``train_step``.
+        ``train_step`` is traced into a graph the first time ``model.fit()``
+        runs it, and cloning ``self.optimizer`` via
+        ``self.optimizer.__class__.from_config(self.optimizer.get_config())``
+        requires reading the optimizer's current learning rate with
+        ``.numpy()`` -- which raises ``NotImplementedError`` during tracing.
+        Building the clone here, at ``compile()`` time, guarantees it happens
+        eagerly, before any graph tracing can occur.
+
+        Parameters
+        ----------
+        discriminator_optimizer : tf.keras.optimizers.Optimizer | None
+            Optimizer to use for the discriminator's own gradient step. If
+            omitted and ``update_discriminator`` is True, a fresh optimizer
+            is cloned from ``optimizer``'s config.
+        """
+        super().compile(optimizer=optimizer, **kwargs)
+
+        if self.update_discriminator:
+            if discriminator_optimizer is not None:
+                self._discriminator_optimizer = discriminator_optimizer
+            elif not hasattr(self, "_discriminator_optimizer"):
+                self._discriminator_optimizer = self.optimizer.__class__.from_config(
+                    self.optimizer.get_config()
+                )
+
     def call(self, inputs, training: bool = False):
         """Run the joint forward pass.
 
@@ -228,12 +258,19 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
 
         discriminator_optimizer = None
         if self.update_discriminator and disc_vars:
+            # Built eagerly in compile() -- never construct an optimizer here.
+            # train_step gets traced into a tf.function graph the first time
+            # model.fit() runs it, and cloning an optimizer via
+            # self.optimizer.__class__.from_config(self.optimizer.get_config())
+            # reads the learning rate with .numpy(), which raises
+            # NotImplementedError during tracing.
             discriminator_optimizer = getattr(self, "_discriminator_optimizer", None)
             if discriminator_optimizer is None:
-                discriminator_optimizer = self.optimizer.__class__.from_config(
-                    self.optimizer.get_config()
+                raise RuntimeError(
+                    "update_discriminator=True but no discriminator optimizer "
+                    "was built. This should have happened in compile(); did "
+                    "you forget to call model.compile(...)?"
                 )
-                self._discriminator_optimizer = discriminator_optimizer
 
         with tf.GradientTape() as tape:
             total_loss, reconstruction_loss, vc_loss, outputs = self._compute_weighted_losses(
