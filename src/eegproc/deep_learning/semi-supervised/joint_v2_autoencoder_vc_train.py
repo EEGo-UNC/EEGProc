@@ -22,7 +22,7 @@ import numpy as np
 import tensorflow as tf
 
 try:
-    from .joint_autoencoder_vc_v2 import JointAutoencoderVariationalClassifierV2
+    from .joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
     from .joint_v2_data import (
         DEFAULT_DREAMER_EEG_PATH,
         DEFAULT_DREAMER_LABELS_PATH,
@@ -35,7 +35,7 @@ except ImportError:
     if str(CURRENT_DIR) not in sys.path:
         sys.path.insert(0, str(CURRENT_DIR))
 
-    from joint_autoencoder_vc_v2 import JointAutoencoderVariationalClassifierV2
+    from joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
     from joint_v2_data import (
         DEFAULT_DREAMER_EEG_PATH,
         DEFAULT_DREAMER_LABELS_PATH,
