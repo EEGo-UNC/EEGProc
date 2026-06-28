@@ -1,8 +1,9 @@
 """
 prepare_datasets.py
 ===================
-Convert raw DEAP and DREAMER dataset files into the NumPy format
-expected by STSNet's train_eval.py:
+Convert raw DEAP, DREAMER, and AMIGOS dataset files into the NumPy format
+expected by STSNet's train_eval.py (and by joint_v2_data.py's
+``build_dataset``):
 
     {dataset}_eeg.npy    — float32, shape (n_subjects, n_trials, n_channels, n_samples)
     {dataset}_labels.npy — float32, shape (n_subjects, n_trials, n_label_dims)
@@ -15,10 +16,16 @@ Usage
     # DREAMER  (point to the folder containing dreamer_joined.csv)
     python prepare_datasets.py --dataset dreamer --input_dir /path/to/dreamer
 
-    # Both
-    python prepare_datasets.py --dataset both \
+    # AMIGOS  (point to the folder containing amigos_joined.csv, or to the
+    # legacy unzipped 'data_preprocessed' folder containing
+    # Data_Preprocessed_P01.mat ... Data_Preprocessed_P40.mat)
+    python prepare_datasets.py --dataset amigos --input_dir /path/to/amigos
+
+    # All three
+    python prepare_datasets.py --dataset all \
         --deap_dir /path/to/deap/data_preprocessed_python \
-        --dreamer_dir /path/to/dreamer
+        --dreamer_dir /path/to/dreamer \
+        --amigos_dir /path/to/amigos/data_preprocessed
 
 Output files are written to the current working directory (or --output_dir).
 
@@ -45,11 +52,28 @@ DREAMER (dreamer_joined.csv):
     Trial lengths vary; we take 60 s from the middle (7680 samples).
     NOTE: even though the CSV includes dominance, this converter currently writes
     labels with shape (n_subjects, 18, 2) using [valence, arousal] only.
+
+AMIGOS (joined CSV or legacy preprocessed Matlab version):
+    ``amigos_joined.csv`` is a long-form table with one row per EEG sample.
+    It contains ``subject_id``, ``trial_id``, ``sample_idx``, the 14 EEG
+    channels in the same Emotiv EPOC order as DREAMER, two peripheral ECG
+    columns that are ignored here, and ``valence``, ``arousal``,
+    ``dominance`` labels. This script groups by subject/trial, keeps the 14
+    EEG channels, extracts the center 60 s from each trial, and writes raw
+    labels with shape ``(n_subjects, n_trials, 2)`` using [valence,
+    arousal] only.
+
+    For backwards compatibility, the legacy ``Data_Preprocessed_P01.mat`` ...
+    ``Data_Preprocessed_P40.mat`` layout is still supported if the joined CSV
+    is not present.
 """
 
 import argparse
+import csv
 import os
 import pickle
+from pathlib import Path
+
 import numpy as np
 
 
@@ -70,6 +94,28 @@ DREAMER_N_CHANNELS  = 14
 DREAMER_FS          = 128
 DREAMER_TRIAL_SECS  = 60
 DREAMER_TRIAL_SAMPLES = DREAMER_TRIAL_SECS * DREAMER_FS  # 7680
+
+AMIGOS_N_SUBJECTS_TOTAL = 40
+# Participant IDs with known-invalid data in the public preprocessed
+# release (missing/corrupt signal or label arrays). Matches TorchEEG's
+# AMIGOSDataset default `skipped_subjects`.
+AMIGOS_SKIPPED_SUBJECTS = [9, 12, 21, 22, 23, 24, 33]
+AMIGOS_N_SUBJECTS  = AMIGOS_N_SUBJECTS_TOTAL - len(AMIGOS_SKIPPED_SUBJECTS)  # 33
+# Only the 16 short-video trials -- watched by every retained subject, so
+# the (n_subjects, n_trials, ...) array stays rectangular. The 4 long-video
+# trials (indices 16-19) are skipped entirely by several subjects and are
+# not used by this converter.
+AMIGOS_N_TRIALS    = 16
+AMIGOS_N_CHANNELS  = 14
+AMIGOS_FS          = 128
+AMIGOS_TRIAL_SECS  = 60
+AMIGOS_TRIAL_SAMPLES = AMIGOS_TRIAL_SECS * AMIGOS_FS  # 7680
+# Column order within each `labels_selfassessment` trial entry. Note this is
+# arousal-then-valence -- the opposite of DREAMER's CSV column order.
+AMIGOS_LABEL_NAMES = [
+    "arousal", "valence", "dominance", "liking", "familiarity",
+    "neutral", "disgust", "happiness", "surprise", "anger", "fear", "sadness",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +199,17 @@ def prepare_deap(input_dir: str, output_dir: str) -> None:
 DREAMER_EEG_COLS = ["AF3", "F7", "F3", "FC5", "T7", "P7",
                     "O1", "O2", "P8", "T8", "FC6", "F4", "F8", "AF4"]
 
+AMIGOS_SHORT_TRIALS = 16
+
 
 def _extract_centre(arr: np.ndarray, target: int) -> np.ndarray:
     """Return `target` samples from the centre of `arr` (n_samples, n_ch),
-    repeat-padding if the trial is shorter than `target`."""
+    repeat-padding if the trial is shorter than `target`.
+
+    Shared helper: used by both the DREAMER (CSV) and AMIGOS (.mat)
+    converters below, since both have variable per-trial trial lengths that
+    need to be reduced to a fixed sample count.
+    """
     n = arr.shape[0]
     if n >= target:
         mid   = n // 2
@@ -164,6 +217,137 @@ def _extract_centre(arr: np.ndarray, target: int) -> np.ndarray:
         return arr[start: start + target, :]
     repeats = (target // n) + 1
     return np.tile(arr, (repeats, 1))[:target, :]
+
+
+def load_amigos_joined_csv(filepath: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load the joined AMIGOS CSV and convert it to raw trial arrays.
+
+    The joined CSV stores one EEG sample per row, so this loader streams the
+    file in subject/trial order, groups rows into trials, keeps only the 14
+    EEG channels, and extracts the center 60 s from each trial.
+    """
+    filepath = os.fspath(filepath)
+    if not os.path.isfile(filepath):
+        raise FileNotFoundError(f"AMIGOS joined CSV not found at {filepath}.")
+
+    required_columns = {
+        "subject_id",
+        "trial_id",
+        "sample_idx",
+        *DREAMER_EEG_COLS,
+        "valence",
+        "arousal",
+    }
+
+    all_subject_eeg: list[np.ndarray] = []
+    all_subject_labels: list[np.ndarray] = []
+
+    current_subject_id: int | None = None
+    current_trial_id: int | None = None
+    current_trial_rows: list[list[float]] = []
+    current_trial_label: tuple[float, float] | None = None
+    current_subject_trials: list[np.ndarray] = []
+    current_subject_labels: list[np.ndarray] = []
+    expected_trials_per_subject: int = AMIGOS_SHORT_TRIALS
+
+    def finalize_trial() -> None:
+        nonlocal current_trial_rows, current_trial_label
+        if not current_trial_rows:
+            return
+
+        trial_signal = np.asarray(current_trial_rows, dtype=np.float32)
+        if trial_signal.shape[1] != len(DREAMER_EEG_COLS):
+            raise ValueError(
+                f"Expected {len(DREAMER_EEG_COLS)} EEG channels in AMIGOS CSV, "
+                f"got shape {trial_signal.shape}."
+            )
+        if current_trial_label is None:
+            raise ValueError("Encountered AMIGOS trial with no labels.")
+
+        trial_windows = _extract_centre(trial_signal, AMIGOS_TRIAL_SAMPLES).T
+        current_subject_trials.append(trial_windows)
+        current_subject_labels.append(
+            np.asarray(current_trial_label, dtype=np.float32)
+        )
+        current_trial_rows = []
+        current_trial_label = None
+
+    def finalize_subject(subject_id: int) -> None:
+        nonlocal current_subject_trials, current_subject_labels, expected_trials_per_subject
+        if not current_subject_trials:
+            return
+
+        trial_count = len(current_subject_trials)
+        if trial_count != expected_trials_per_subject:
+            raise ValueError(
+                f"AMIGOS CSV is not rectangular: subject {subject_id} has "
+                f"{trial_count} trials, expected {expected_trials_per_subject}."
+            )
+
+        all_subject_eeg.append(np.stack(current_subject_trials, axis=0))
+        all_subject_labels.append(np.stack(current_subject_labels, axis=0))
+        current_subject_trials = []
+        current_subject_labels = []
+
+    with open(filepath, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None:
+            raise ValueError(f"AMIGOS CSV {filepath} does not have a header row.")
+        missing = required_columns - set(reader.fieldnames)
+        if missing:
+            raise ValueError(
+                f"AMIGOS CSV {filepath} is missing required columns: {sorted(missing)}"
+            )
+
+        for row in reader:
+            subject_id = int(row["subject_id"])
+            trial_id = int(row["trial_id"])
+            sample_idx = int(row["sample_idx"])
+            label = (float(row["valence"]), float(row["arousal"]))
+            eeg_row = [float(row[col]) for col in DREAMER_EEG_COLS]
+
+            if current_subject_id is None:
+                current_subject_id = subject_id
+                current_trial_id = trial_id
+            elif subject_id < current_subject_id or (
+                subject_id == current_subject_id and trial_id < current_trial_id
+            ):
+                raise ValueError(
+                    "AMIGOS CSV must be sorted by subject_id, trial_id, and "
+                    "sample_idx."
+                )
+            elif subject_id != current_subject_id:
+                finalize_trial()
+                finalize_subject(current_subject_id)
+                current_subject_id = subject_id
+                current_trial_id = trial_id
+            elif trial_id != current_trial_id:
+                finalize_trial()
+                current_trial_id = trial_id
+
+            if trial_id > AMIGOS_SHORT_TRIALS:
+                current_trial_rows = []
+                current_trial_label = None
+                continue
+
+            if current_trial_label is None:
+                current_trial_label = label
+            elif current_trial_label != label:
+                raise ValueError(
+                    f"AMIGOS labels changed within subject {subject_id}, trial {trial_id}."
+                )
+
+            current_trial_rows.append(eeg_row)
+
+    if current_subject_id is None:
+        raise ValueError(f"AMIGOS CSV {filepath} did not contain any rows.")
+
+    finalize_trial()
+    finalize_subject(current_subject_id)
+
+    eeg_arr = np.stack(all_subject_eeg, axis=0)
+    labels_arr = np.stack(all_subject_labels, axis=0)
+    return eeg_arr.astype(np.float32), labels_arr.astype(np.float32)
 
 
 def prepare_dreamer(input_dir: str, output_dir: str) -> None:
@@ -245,6 +429,151 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# AMIGOS  (joined CSV version, with legacy .mat fallback)
+# ---------------------------------------------------------------------------
+
+def load_amigos_subject(filepath: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load one AMIGOS subject .mat file.
+
+    Parameters
+    ----------
+    filepath : str — path to Data_Preprocessed_P{XX}.mat
+
+    Returns
+    -------
+    eeg    : float32 ndarray, shape (AMIGOS_N_TRIALS, AMIGOS_N_CHANNELS, AMIGOS_TRIAL_SAMPLES)
+    labels : float32 ndarray, shape (AMIGOS_N_TRIALS, 2)  [valence, arousal]
+
+    Raises
+    ------
+    ValueError
+        If one of the first ``AMIGOS_N_TRIALS`` trials is missing its EEG
+        signal or its self-assessment label (this shouldn't happen for any
+        subject not already in ``AMIGOS_SKIPPED_SUBJECTS``, since the
+        missing-data issue in the public release only affects the 4
+        long-video trials this converter doesn't use).
+    """
+    try:
+        import scipy.io
+    except ImportError:
+        raise ImportError("scipy is required to read AMIGOS .mat files: pip install scipy")
+
+    mat = scipy.io.loadmat(filepath, verify_compressed_data_integrity=False)
+
+    # 'joined_data': object array of shape (1, n_trials); each entry is
+    # (n_timesteps, 17) -- first 14 columns EEG, remaining 3 peripheral
+    # (ECG x2, GSR x1), which we drop.
+    trial_signals = mat["joined_data"][0]
+    # 'labels_selfassessment': object array of shape (1, n_trials); each
+    # entry is (1, 12) = [arousal, valence, dominance, liking, familiarity,
+    # neutral, disgust, happiness, surprise, anger, fear, sadness].
+    trial_ratings = mat["labels_selfassessment"][0]
+
+    n_trials_available = min(len(trial_signals), AMIGOS_N_TRIALS)
+    if n_trials_available < AMIGOS_N_TRIALS:
+        raise ValueError(
+            f"{filepath}: expected at least {AMIGOS_N_TRIALS} trials in "
+            f"'joined_data', found {len(trial_signals)}."
+        )
+
+    arousal_idx = AMIGOS_LABEL_NAMES.index("arousal")
+    valence_idx = AMIGOS_LABEL_NAMES.index("valence")
+
+    eeg_trials, label_trials = [], []
+    for trial_idx in range(AMIGOS_N_TRIALS):
+        signal = trial_signals[trial_idx]
+        rating = trial_ratings[trial_idx]
+
+        if signal.size == 0 or rating.size == 0:
+            raise ValueError(
+                f"{filepath}: trial {trial_idx} is missing EEG or label "
+                "data. This converter only uses the first AMIGOS_N_TRIALS "
+                "short-video trials, which should be present for every "
+                "subject not in AMIGOS_SKIPPED_SUBJECTS -- double check "
+                "that this subject really belongs in the preprocessed "
+                "release you downloaded."
+            )
+
+        eeg_only = signal[:, :AMIGOS_N_CHANNELS].astype(np.float32)  # (n_timesteps, 14)
+        eeg = _extract_centre(eeg_only, AMIGOS_TRIAL_SAMPLES).T       # (14, 7680)
+
+        rating_values = np.asarray(rating, dtype=np.float32).reshape(-1)  # (12,)
+        valence = rating_values[valence_idx]
+        arousal = rating_values[arousal_idx]
+
+        eeg_trials.append(eeg)
+        label_trials.append([valence, arousal])
+
+    eeg_arr    = np.stack(eeg_trials, axis=0)                    # (16, 14, 7680)
+    labels_arr = np.array(label_trials, dtype=np.float32)        # (16, 2)
+    return eeg_arr, labels_arr
+
+
+def prepare_amigos(input_dir: str, output_dir: str) -> None:
+    """Convert AMIGOS inputs to a single pair of .npy arrays.
+
+    ``input_dir`` can point to one of three things:
+    - a directory containing ``amigos_joined.csv``;
+    - the ``amigos_joined.csv`` file itself;
+    - a legacy ``data_preprocessed`` folder containing ``Data_Preprocessed_P*.mat``.
+
+    The joined CSV path is preferred because it matches the current AMIGOS
+    source file used by the joint-v2 pipeline.
+    """
+    input_path = Path(input_dir)
+    csv_path = input_path if input_path.is_file() and input_path.suffix.lower() == ".csv" else input_path / "amigos_joined.csv"
+    legacy_input_dir = input_path.parent if input_path.is_file() and input_path.suffix.lower() == ".mat" else input_path
+
+    used_csv = False
+    if csv_path.is_file():
+        eeg_arr, labels_arr = load_amigos_joined_csv(csv_path)
+        used_csv = True
+        print(f"  AMIGOS joined CSV loaded from {csv_path}")
+        print(f"  AMIGOS CSV output: eeg={eeg_arr.shape}  labels={labels_arr.shape}")
+    else:
+        all_eeg, all_labels, kept_subjects = [], [], []
+
+        for subj_idx in range(1, AMIGOS_N_SUBJECTS_TOTAL + 1):
+            if subj_idx in AMIGOS_SKIPPED_SUBJECTS:
+                print(f"  AMIGOS subject {subj_idx:02d}/{AMIGOS_N_SUBJECTS_TOTAL}  "
+                      f"skipped (known invalid data in the preprocessed release)")
+                continue
+
+            filename = legacy_input_dir / f"Data_Preprocessed_P{subj_idx:02d}.mat"
+            if not filename.is_file():
+                raise FileNotFoundError(
+                    f"Expected AMIGOS file not found: {filename}\n"
+                    f"Make sure --amigos_dir points to either the folder containing "
+                    f"amigos_joined.csv or the legacy unzipped 'data_preprocessed' "
+                    f"folder containing Data_Preprocessed_P*.mat."
+                )
+
+            eeg, labels = load_amigos_subject(str(filename))
+            all_eeg.append(eeg)
+            all_labels.append(labels)
+            kept_subjects.append(subj_idx)
+            print(f"  AMIGOS subject {subj_idx:02d}/{AMIGOS_N_SUBJECTS_TOTAL}  "
+                  f"eeg={eeg.shape}  labels={labels.shape}")
+
+        eeg_arr    = np.stack(all_eeg,    axis=0)  # (33, 16, 14, 7680)
+        labels_arr = np.stack(all_labels, axis=0)  # (33, 16, 2)
+
+    eeg_path    = os.path.join(output_dir, "amigos_eeg.npy")
+    labels_path = os.path.join(output_dir, "amigos_labels.npy")
+    np.save(eeg_path,    eeg_arr)
+    np.save(labels_path, labels_arr)
+
+    if used_csv:
+        print("\nAMIGOS saved from joined CSV:")
+    else:
+        print(f"\nAMIGOS saved ({len(kept_subjects)}/{AMIGOS_N_SUBJECTS_TOTAL} subjects kept; "
+              f"skipped {AMIGOS_SKIPPED_SUBJECTS}):")
+    print(f"  {eeg_path}    {eeg_arr.shape}  {eeg_arr.dtype}")
+    print(f"  {labels_path} {labels_arr.shape}  {labels_arr.dtype}")
+    _print_label_stats("AMIGOS", labels_arr)
+
+
+# ---------------------------------------------------------------------------
 # Sanity-check helper
 # ---------------------------------------------------------------------------
 
@@ -253,6 +582,7 @@ def _print_label_stats(name: str, labels: np.ndarray) -> None:
     dim_names = {
         "DEAP":    ["valence", "arousal", "dominance", "liking"],
         "DREAMER": ["valence", "arousal"],  # Converter currently outputs only these two labels
+        "AMIGOS":  ["valence", "arousal"],  # Converter currently outputs only these two labels
     }
     names = dim_names.get(name, [f"dim{i}" for i in range(labels.shape[-1])])
     print(f"\n{name} label statistics (across all subjects × trials):")
@@ -274,17 +604,40 @@ def verify_npy(output_dir: str, dataset: str) -> None:
     expected_shapes = {
         "deap":    {"eeg": (32, 40, 32, 7680), "labels": (32, 40, 4)},
         "dreamer": {"eeg": (23, 18, 14, 7680), "labels": (23, 18, 2)},  # labels: valence, arousal
+        "amigos":  [
+            {"eeg": (15, AMIGOS_SHORT_TRIALS, AMIGOS_N_CHANNELS, AMIGOS_TRIAL_SAMPLES), "labels": (15, AMIGOS_SHORT_TRIALS, 2)},
+            {"eeg": (AMIGOS_N_SUBJECTS, AMIGOS_N_TRIALS, AMIGOS_N_CHANNELS, AMIGOS_TRIAL_SAMPLES),
+             "labels": (AMIGOS_N_SUBJECTS, AMIGOS_N_TRIALS, 2)},
+        ],  # labels: valence, arousal
     }
     exp = expected_shapes[dataset]
 
     ok = True
-    for key, arr, exp_shape in [("eeg", eeg, exp["eeg"]),
-                                  ("labels", labels, exp["labels"])]:
-        if arr.shape == exp_shape:
-            print(f"  ✓  {dataset}_{key}.npy  shape={arr.shape}")
+    if dataset == "amigos":
+        allowed_shapes = exp
+        matched = False
+        for shape_set in allowed_shapes:
+            if eeg.shape == shape_set["eeg"] and labels.shape == shape_set["labels"]:
+                matched = True
+                break
+        if matched:
+            print(f"  ✓  {dataset}_eeg.npy  shape={eeg.shape}")
+            print(f"  ✓  {dataset}_labels.npy  shape={labels.shape}")
         else:
-            print(f"  ✗  {dataset}_{key}.npy  shape={arr.shape}  (expected {exp_shape})")
+            expected_text = ", ".join(
+                f"eeg={shape_set['eeg']}, labels={shape_set['labels']}" for shape_set in allowed_shapes
+            )
+            print(f"  ✗  {dataset}_eeg.npy  shape={eeg.shape}  (expected one of {expected_text})")
+            print(f"  ✗  {dataset}_labels.npy  shape={labels.shape}  (expected one of {expected_text})")
             ok = False
+    else:
+        for key, arr, exp_shape in [("eeg", eeg, exp["eeg"]),
+                                      ("labels", labels, exp["labels"])]:
+            if arr.shape == exp_shape:
+                print(f"  ✓  {dataset}_{key}.npy  shape={arr.shape}")
+            else:
+                print(f"  ✗  {dataset}_{key}.npy  shape={arr.shape}  (expected {exp_shape})")
+                ok = False
 
     assert not np.any(np.isnan(eeg)),    "NaN values found in EEG data!"
     assert not np.any(np.isinf(eeg)),    "Inf values found in EEG data!"
@@ -302,11 +655,12 @@ def verify_npy(output_dir: str, dataset: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Convert DEAP / DREAMER raw files to STSNet-ready .npy arrays"
+        description="Convert DEAP / DREAMER / AMIGOS raw files to STSNet-ready .npy arrays"
     )
     parser.add_argument(
-        "--dataset", choices=["deap", "dreamer", "both"], default="both",
-        help="Which dataset to convert (default: both)",
+        "--dataset", choices=["deap", "dreamer", "amigos", "both", "all"], default="all",
+        help="Which dataset to convert. 'both' is a deprecated alias for "
+             "'all' kept for backwards compatibility. (default: all)",
     )
     parser.add_argument(
         "--deap_dir", type=str, default=None,
@@ -316,10 +670,16 @@ if __name__ == "__main__":
         "--dreamer_dir", type=str, default=None,
         help="Folder containing dreamer_joined.csv",
     )
-    # Shorthand when both are in the same place
+    parser.add_argument(
+        "--amigos_dir", type=str, default=None,
+           help="Folder containing amigos_joined.csv, or the legacy unzipped "
+               "'data_preprocessed' folder containing Data_Preprocessed_P01.mat … "
+               "Data_Preprocessed_P40.mat",
+    )
+    # Shorthand when all datasets are in the same place
     parser.add_argument(
         "--input_dir", type=str, default=None,
-        help="Shorthand: single folder for both datasets",
+        help="Shorthand: single folder for all requested datasets",
     )
     parser.add_argument(
         "--output_dir", type=str, default=".",
@@ -334,10 +694,14 @@ if __name__ == "__main__":
     # Resolve input directories
     deap_dir    = args.deap_dir    or args.input_dir
     dreamer_dir = args.dreamer_dir or args.input_dir
+    amigos_dir  = args.amigos_dir  or args.input_dir
+
+    # 'both' predates AMIGOS support; treat it the same as 'all'.
+    requested = "all" if args.dataset == "both" else args.dataset
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    if args.dataset in ("deap", "both"):
+    if requested in ("deap", "all"):
         if deap_dir is None:
             parser.error("--deap_dir (or --input_dir) is required for DEAP")
         print(f"\n{'='*50}\nConverting DEAP\n{'='*50}")
@@ -346,7 +710,7 @@ if __name__ == "__main__":
             print("\nVerifying DEAP output…")
             verify_npy(args.output_dir, "deap")
 
-    if args.dataset in ("dreamer", "both"):
+    if requested in ("dreamer", "all"):
         if dreamer_dir is None:
             parser.error("--dreamer_dir (or --input_dir) is required for DREAMER")
         print(f"\n{'='*50}\nConverting DREAMER\n{'='*50}")
@@ -354,3 +718,12 @@ if __name__ == "__main__":
         if args.verify:
             print("\nVerifying DREAMER output…")
             verify_npy(args.output_dir, "dreamer")
+
+    if requested in ("amigos", "all"):
+        if amigos_dir is None:
+            parser.error("--amigos_dir (or --input_dir) is required for AMIGOS")
+        print(f"\n{'='*50}\nConverting AMIGOS\n{'='*50}")
+        prepare_amigos(amigos_dir, args.output_dir)
+        if args.verify:
+            print("\nVerifying AMIGOS output…")
+            verify_npy(args.output_dir, "amigos")
