@@ -7,7 +7,6 @@ from ..BaseEncoder import BaseEncoder
 from ..utils import _ensure_tuple, _product
 
 
-
 class CNN1DEncoder(BaseEncoder):
     """Configurable-depth 1D convolutional encoder for EEG sequence data.
 
@@ -155,9 +154,7 @@ class CNN1DEncoder(BaseEncoder):
                 else None
             )
 
-            self.dropout_layers.append(
-                layers.Dropout(dropout, name=f"enc_do1d_{i}")
-            )
+            self.dropout_layers.append(layers.Dropout(dropout, name=f"enc_do1d_{i}"))
 
         self.seq_emb = layers.Conv1D(
             emb_dim,
@@ -222,6 +219,7 @@ class CNN1DDecoder(tf.keras.Model):
     The decoder mirrors the encoder by reversing the convolutional filter
     schedule and replacing temporal pooling with temporal upsampling.
     """
+
     def __init__(
         self,
         timesteps: int,
@@ -405,5 +403,3 @@ class CNN1DDecoder(tf.keras.Model):
             }
         )
         return config
-    
-
