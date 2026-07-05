@@ -23,9 +23,12 @@ python -m pip install --no-cache-dir -r requirements.txt
 
 export PYTHONUNBUFFERED=1
 
-python -u src/eegproc/deep_learning/joint_architectures/joint_v2_autoencoder_vc_train.py \
-    --raw-eeg-npy src/eegproc/deep_learning/joint_architectures/data/amigos_eeg.npy \
-    --raw-labels-npy src/eegproc/deep_learning/joint_architectures/data/amigos_labels.npy \
-    --label-dimension arousal \
-    --out-dir src/eegproc/deep_learning/joint_architectures/runs/amigos_arousal \
-    --run-name amigos_arousal
+python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
+  --raw-eeg-npy src/eegproc/deep_learning/joint_architectures/data/amigos_eeg.npy \
+  --raw-labels-npy src/eegproc/deep_learning/joint_architectures/data/amigos_labels.npy \
+  --label-dimension arousal \
+  --outer-subjects 1 \
+  --inner-subjects 1 \
+  --epochs 300 \
+  --batch-size 64 \
+  --hyperparameters-json '{"epochs":[200,350,500],"batch_size":[64, 128, 256, 512],"learning_rate":[0.0001, 0.00005, 0.00003],"ae_loss_weight":[0.2,0.3],"vc_loss_weight":[0.8,0.7],"emb_dim":[8,16,32],"dropout":[0.2]}'
