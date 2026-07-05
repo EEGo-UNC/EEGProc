@@ -29,6 +29,4 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
   --label-dimension arousal \
   --outer-subjects 2 \
   --inner-subjects 1 \
-  --epochs 3 \
-  --batch-size 16 \
   --hyperparameters-json '{"epochs":[3,5],"batch_size":[16],"learning_rate":[0.001],"ae_loss_weight":[0.3],"vc_loss_weight":[0.7],"emb_dim":[16],"dropout":[0.2]}'
