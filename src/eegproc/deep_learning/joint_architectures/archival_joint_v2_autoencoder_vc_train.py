@@ -8,7 +8,6 @@ saving.
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -46,7 +45,7 @@ except ImportError:
     )
 
 try:
-    from ..cross_val import nested_lnso_cv
+    from ..archival_cv import nested_lnso_cv
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
 except ImportError:
@@ -54,7 +53,7 @@ except ImportError:
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
 
-    from eegproc.deep_learning.cross_val import nested_lnso_cv
+    from eegproc.deep_learning.archival_cv import nested_lnso_cv
     from eegproc.deep_learning.supervised.variational_classifier import (
         VariationalClassifier,
     )
@@ -91,7 +90,6 @@ class JointV2TrainingConfig:
     decoder_kwargs: dict = field(default_factory=dict)
     classifier_kwargs: dict = field(default_factory=dict)
     model_kwargs: dict = field(default_factory=dict)
-    hyperparameters: dict = field(default_factory=dict)
 
 
 def load_joint_v2_training_data(
@@ -221,13 +219,7 @@ def _select_final_epochs(
     if fixed_epochs is not None:
         return max(1, int(fixed_epochs))
 
-    candidate_epochs: list[int] = []
-    for fold in outer_fold_results:
-        if "best_inner_epochs" in fold:
-            candidate_epochs.append(int(fold["best_inner_epochs"]))
-        elif "best_config" in fold and "epochs" in fold["best_config"]:
-            candidate_epochs.append(int(fold["best_config"]["epochs"]))
-
+    candidate_epochs = [int(fold["best_inner_epochs"]) for fold in outer_fold_results]
     if not candidate_epochs:
         return 1
 
@@ -237,21 +229,6 @@ def _select_final_epochs(
         return max(1, int(max(candidate_epochs)))
 
     return max(1, int(round(float(np.median(candidate_epochs)))))
-
-
-def _select_final_config(nested_results: dict) -> dict:
-    """Pick the most frequently selected best config across outer folds."""
-    best_configs = [
-        row["best_config"]
-        for row in nested_results.get("best_configs", [])
-        if "best_config" in row
-    ]
-    if not best_configs:
-        return {}
-
-    encoded = [json.dumps(config, sort_keys=True, default=_json_default) for config in best_configs]
-    most_common_config_json = Counter(encoded).most_common(1)[0][0]
-    return json.loads(most_common_config_json)
 
 
 def build_joint_autoencoder_variational_classifier_v2(
@@ -354,105 +331,39 @@ def train_joint_autoencoder_variational_classifier_v2(
         )
 
     if model_builder_function is None:
-        encoder_hparam_keys = {
-            "t_down",
-            "conv_filters",
-            "kernel_sizes",
-            "pool_after_layers",
-            "pool_sizes",
-            "emb_dim",
-            "dropout",
-            "use_batch_norm",
-        }
-        model_hparam_keys = {
-            "learning_rate",
-            "ae_loss_weight",
-            "vc_loss_weight",
-            "vc_alpha",
-            "vc_beta",
-            "vc_gamma",
-            "vc_lambda",
-            "update_discriminator",
-            *encoder_hparam_keys,
-            "encoder_kwargs",
-            "decoder_kwargs",
-            "classifier_kwargs",
-        }
-
-        def model_builder_function(**hparams) -> tf.keras.Model:
-            unknown_hparams = set(hparams) - model_hparam_keys
-            if unknown_hparams:
-                raise ValueError(f"Unknown hyperparameter(s): {sorted(unknown_hparams)}")
-
-            encoder_kwargs = dict(training_config.encoder_kwargs)
-            encoder_kwargs.update(
-                {key: hparams[key] for key in encoder_hparam_keys if key in hparams}
-            )
-            encoder_kwargs.update(hparams.get("encoder_kwargs", {}))
-
-            decoder_kwargs = dict(training_config.decoder_kwargs)
-            decoder_kwargs.update(hparams.get("decoder_kwargs", {}))
-
-            classifier_kwargs = dict(training_config.classifier_kwargs)
-            classifier_kwargs.update(hparams.get("classifier_kwargs", {}))
-
-            return build_joint_autoencoder_variational_classifier_v2(
-                input_shape=tuple(feature_array.shape[1:]),
-                n_classes=int(np.max(label_array)) + 1,
-                learning_rate=float(
-                    hparams.get("learning_rate", training_config.learning_rate)
-                ),
-                ae_loss_weight=float(
-                    hparams.get(
-                        "ae_loss_weight",
-                        training_config.model_kwargs.get("ae_loss_weight", 0.5),
-                    )
-                ),
-                vc_loss_weight=float(
-                    hparams.get(
-                        "vc_loss_weight",
-                        training_config.model_kwargs.get("vc_loss_weight", 0.5),
-                    )
-                ),
-                vc_alpha=float(
-                    hparams.get(
-                        "vc_alpha",
-                        training_config.model_kwargs.get("vc_alpha", 1.0),
-                    )
-                ),
-                vc_beta=float(
-                    hparams.get(
-                        "vc_beta",
-                        training_config.model_kwargs.get("vc_beta", 0.0),
-                    )
-                ),
-                vc_gamma=float(
-                    hparams.get(
-                        "vc_gamma",
-                        training_config.model_kwargs.get("vc_gamma", 1e-4),
-                    )
-                ),
-                vc_lambda=float(
-                    hparams.get(
-                        "vc_lambda",
-                        training_config.model_kwargs.get("vc_lambda", 0.0),
-                    )
-                ),
-                update_discriminator=bool(
-                    hparams.get(
-                        "update_discriminator",
-                        training_config.model_kwargs.get("update_discriminator", False),
-                    )
-                ),
-                encoder_kwargs=encoder_kwargs,
-                decoder_kwargs=decoder_kwargs,
-                classifier_kwargs=classifier_kwargs,
-            )
+        model_builder_function = lambda: build_joint_autoencoder_variational_classifier_v2(
+            input_shape=tuple(feature_array.shape[1:]),
+            n_classes=int(np.max(label_array)) + 1,
+            learning_rate=training_config.learning_rate,
+            ae_loss_weight=float(training_config.model_kwargs.get("ae_loss_weight", 0.5)),
+            vc_loss_weight=float(training_config.model_kwargs.get("vc_loss_weight", 0.5)),
+            vc_alpha=float(training_config.model_kwargs.get("vc_alpha", 1.0)),
+            vc_beta=float(training_config.model_kwargs.get("vc_beta", 0.0)),
+            vc_gamma=float(training_config.model_kwargs.get("vc_gamma", 1e-4)),
+            vc_lambda=float(training_config.model_kwargs.get("vc_lambda", 0.0)),
+            update_discriminator=bool(
+                training_config.model_kwargs.get("update_discriminator", False)
+            ),
+            encoder_kwargs=training_config.encoder_kwargs,
+            decoder_kwargs=training_config.decoder_kwargs,
+            classifier_kwargs=training_config.classifier_kwargs,
+        )
 
     logger.info("Starting joint-model v2 training run in %s", run_dir)
     logger.info("Feature shape: %s", feature_array.shape)
     logger.info("Unique subjects: %d", len(np.unique(subject_id_array)))
     _write_json(run_dir / "training_config.json", asdict(training_config))
+
+    inner_callbacks: list[tf.keras.callbacks.Callback] = []
+    if training_config.use_inner_early_stopping:
+        inner_callbacks.append(
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=training_config.inner_early_stopping_patience,
+                min_delta=training_config.inner_early_stopping_min_delta,
+                restore_best_weights=True,
+            )
+        )
 
     nested_results = nested_lnso_cv(
         model_builder_function=model_builder_function,
@@ -463,19 +374,16 @@ def train_joint_autoencoder_variational_classifier_v2(
         n_inner_subjects_to_leave_out=training_config.n_inner_subjects_to_leave_out,
         n_epochs=training_config.cv_max_epochs,
         batch_size=training_config.batch_size,
-        hyperparameters=training_config.hyperparameters,
-        selection_metric="loss",
-        metrics=("accuracy", "f1", "precision", "recall"),
-        log_predictions=True,
         verbose=training_config.outer_verbose,
-        extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
+        inner_verbose=training_config.inner_verbose,
+        extra_fit_kwargs={},
+        inner_extra_fit_kwargs={"callbacks": inner_callbacks} if inner_callbacks else {},
     )
 
     fold_rows: list[dict] = []
     for fold_result in nested_results["outer_fold_results"]:
         row = dict(fold_result)
-        test_subjects = row.pop("outer_test_subjects", row.pop("left_out_subjects", []))
-        row["outer_test_subjects"] = ",".join(map(str, test_subjects))
+        row["outer_test_subjects"] = ",".join(map(str, row["outer_test_subjects"]))
         row["inner_fold_results"] = json.dumps(
             row["inner_fold_results"], default=_json_default
         )
@@ -484,25 +392,15 @@ def train_joint_autoencoder_variational_classifier_v2(
     _write_json(run_dir / "nested_cv_results.json", nested_results)
     _write_csv(run_dir / "nested_cv_outer_folds.csv", fold_rows)
 
-    selected_final_config = _select_final_config(nested_results)
     selected_final_epochs = _select_final_epochs(
         nested_results["outer_fold_results"],
         strategy=training_config.final_epoch_strategy,
         fixed_epochs=training_config.final_epochs,
     )
-    selected_final_batch_size = int(
-        selected_final_config.get("batch_size", training_config.batch_size)
-    )
-    selected_final_model_hparams = {
-        key: value
-        for key, value in selected_final_config.items()
-        if key not in {"epochs", "batch_size"}
-    }
 
-    logger.info("Selected final config: %s", selected_final_config)
     logger.info("Selected %d epochs for the final full-data fit.", selected_final_epochs)
 
-    final_model = model_builder_function(**selected_final_model_hparams)
+    final_model = model_builder_function()
     final_callbacks: list[tf.keras.callbacks.Callback] = [
         tf.keras.callbacks.TerminateOnNaN(),
     ]
@@ -516,7 +414,7 @@ def train_joint_autoencoder_variational_classifier_v2(
         feature_array,
         label_array,
         epochs=selected_final_epochs,
-        batch_size=selected_final_batch_size,
+        batch_size=training_config.batch_size,
         verbose=training_config.final_verbose,
         callbacks=final_callbacks,
     )
@@ -536,9 +434,7 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     final_summary = {
         "run_dir": str(run_dir),
-        "selected_final_config": selected_final_config,
         "selected_final_epochs": selected_final_epochs,
-        "selected_final_batch_size": selected_final_batch_size,
         "nested_cv": nested_results,
         "final_fit_history": final_history.history,
         "final_full_dataset_metrics": final_eval,
@@ -585,14 +481,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--vc-gamma", type=float, default=1e-4)
     parser.add_argument("--vc-lambda", type=float, default=0.0)
     parser.add_argument("--update-discriminator", action="store_true")
-    parser.add_argument(
-        "--hyperparameters-json",
-        default=None,
-        help=(
-            "JSON dict passed to cross_val.nested_lnso_cv as the grid search. "
-            "Example: '{\"epochs\": [3, 5], \"learning_rate\": [0.001, 0.0005]}'."
-        ),
-    )
     parser.add_argument("--features-npy", default=None)
     parser.add_argument("--labels-npy", default=None)
     parser.add_argument("--subjects-npy", default=None)
@@ -685,11 +573,6 @@ def main(argv: list[str] | None = None) -> int:
             "vc_lambda": args.vc_lambda,
             "update_discriminator": args.update_discriminator,
         },
-        hyperparameters=(
-            json.loads(args.hyperparameters_json)
-            if args.hyperparameters_json
-            else {}
-        ),
     )
 
     feature_array = label_array = subject_id_array = None

@@ -29,7 +29,7 @@ from collections.abc import Callable
 import tensorflow as tf
 from tensorflow.keras import layers
 
-from eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
+from ..unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
 
 
 class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
