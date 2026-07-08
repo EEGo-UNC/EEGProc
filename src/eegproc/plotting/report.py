@@ -146,9 +146,25 @@ def _to_markdown(table: pd.DataFrame) -> str:
 
 
 def _latex_escape(value: str) -> str:
-    """Escape the LaTeX specials that show up in model/metric names and cells."""
-    return value.replace("\\", r"\textbackslash{}").replace("_", r"\_").replace("±", r"$\pm$")
-
+    """Escape LaTeX special characters in model/metric names and cell values."""
+    text = str(value)
+    # Order matters: escape backslash first.
+    replacements = [
+        ("\\", r"\textbackslash{}"),
+        ("&", r"\&"),
+        ("%", r"\%"),
+        ("$", r"\$"),
+        ("#", r"\#"),
+        ("_", r"\_"),
+        ("{", r"\{"),
+        ("}", r"\}"),
+        ("~", r"\textasciitilde{}"),
+        ("^", r"\textasciicircum{}"),
+        ("±", r"$\pm$"),
+    ]
+    for char, repl in replacements:
+        text = text.replace(char, repl)
+    return text
 
 def _to_latex(table: pd.DataFrame, caption: str, label: str) -> str:
     """Render an indexed DataFrame as a self-contained LaTeX table (no jinja2 dep)."""
