@@ -156,13 +156,33 @@ def _attach_subject_labels(
     if predictions.empty or "subject_id" not in predictions.columns:
         return predictions
 
-    def lookup(row: pd.Series):
-        mapping = subject_id_mapping.get(row["model"], {})
-        return mapping.get(str(row["subject_id"]), row["subject_id"])
+    # Build a per-(model, subject_id) lookup table and join it onto predictions.
+    mapping_rows: list[dict] = []
+    for model, mapping in subject_id_mapping.items():
+        if not mapping:
+            continue
+        for code, label in mapping.items():
+            mapping_rows.append(
+                {"model": model, "subject_id_str": str(code), "subject_label": label}
+            )
 
     predictions = predictions.copy()
-    predictions["subject_label"] = predictions.apply(lookup, axis=1)
-    return predictions
+    predictions["subject_id_str"] = predictions["subject_id"].astype(str)
+
+    if mapping_rows:
+        mapping_df = pd.DataFrame(mapping_rows)
+        predictions = predictions.merge(
+            mapping_df,
+            on=["model", "subject_id_str"],
+            how="left",
+        )
+        predictions["subject_label"] = predictions["subject_label"].fillna(
+            predictions["subject_id"]
+        )
+    else:
+        predictions["subject_label"] = predictions["subject_id"]
+
+    return predictions.drop(columns=["subject_id_str"])
 
 
 def load_results(path: str | Path) -> ResultsTables:
