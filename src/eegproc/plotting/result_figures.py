@@ -255,12 +255,11 @@ def plot_subject_task_heatmap(
     if predictions.empty:
         raise ValueError("No predictions to plot.")
 
-    if "task_id" not in predictions.columns:
+    if "task_id" not in predictions.columns or predictions["task_id"].isna().all():
         raise ValueError(
-            "predictions has no 'task_id' column; re-run cross-validation with "
+            "predictions has no usable 'task_id' values; re-run cross-validation with "
             "task_id_array to enable the per-subject/per-task heatmap."
         )
-
     correct = (predictions["y_true"] == predictions["y_pred"]).astype(float)
     table = predictions.assign(correct=correct)
     # Prefer the real subject id (subject_label) on the axis when available so it
