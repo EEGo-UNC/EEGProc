@@ -71,7 +71,17 @@ def _headline_figure(tables: ResultsTables, model: str, class_names, metric: str
 
 def _subject_figure(tables: ResultsTables, model: str, metric: str):
     subject_labels = tables.subject_id_mapping.get(model) or None
-    include_tasks = tables.has_tasks
+
+    model_predictions = (
+        tables.predictions[tables.predictions["model"] == model]
+        if (not tables.predictions.empty and "model" in tables.predictions.columns)
+        else tables.predictions
+    )
+    include_tasks = (
+        not model_predictions.empty
+        and "task_id" in model_predictions.columns
+        and model_predictions["task_id"].notna().any()
+    )
 
     fig, axes = plt.subplots(1, 2 if include_tasks else 1, figsize=(13 if include_tasks else 7, 5))
     axes = axes if include_tasks else [axes]
