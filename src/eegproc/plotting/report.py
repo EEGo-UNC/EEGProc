@@ -11,6 +11,9 @@ This is the deliverable entry point. Given a result JSON written by
 * **Fig 4 - Reliability**: calibration | predictive-interval width (only when a
   variational interval log is present).
 
+When the JSON holds more than one model, an extra **model_comparison** figure
+compares the models' accuracies (or ``--compare-metrics``) side by side.
+
 plus a paper-ready mean +/- std metrics table (CSV, LaTeX, Markdown).
 
 CLI::
@@ -145,26 +148,27 @@ def _to_markdown(table: pd.DataFrame) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Single-pass character map. Sequential str.replace() is wrong here because
+# escaping "\" to "\textbackslash{}" would then have its braces re-escaped by a
+# later "{"/"}" pass; a per-character translation avoids re-processing.
+_LATEX_SPECIALS = {
+    "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+    "±": r"$\pm$",
+}
+
+
 def _latex_escape(value: str) -> str:
-    """Escape LaTeX special characters in model/metric names and cell values."""
-    text = str(value)
-    # Order matters: escape backslash first.
-    replacements = [
-        ("\\", r"\textbackslash{}"),
-        ("&", r"\&"),
-        ("%", r"\%"),
-        ("$", r"\$"),
-        ("#", r"\#"),
-        ("_", r"\_"),
-        ("{", r"\{"),
-        ("}", r"\}"),
-        ("~", r"\textasciitilde{}"),
-        ("^", r"\textasciicircum{}"),
-        ("±", r"$\pm$"),
-    ]
-    for char, repl in replacements:
-        text = text.replace(char, repl)
-    return text
+    """Escape LaTeX special characters in a single pass (no re-escaping)."""
+    return "".join(_LATEX_SPECIALS.get(char, char) for char in str(value))
 
 def _to_latex(table: pd.DataFrame, caption: str, label: str) -> str:
     """Render an indexed DataFrame as a self-contained LaTeX table (no jinja2 dep)."""
@@ -220,10 +224,14 @@ def build_report(
     class_names: list[str] | None = None,
     hyperparams: list[str] | None = None,
     metric: str = "accuracy",
+    compare_metrics: tuple[str, ...] = ("accuracy",),
     formats: tuple[str, ...] = ("png", "pdf"),
     dpi: int = 300,
 ) -> list[Path]:
     """Generate the figure set + metrics table for every model in a result JSON.
+
+    When the JSON holds more than one model, an extra ``model_comparison`` figure
+    is written that compares ``compare_metrics`` across models.
 
     Returns the list of figure paths written.
     """
@@ -259,6 +267,11 @@ def build_report(
             _save(fig, out_dir, f"{prefix}_fig4_reliability", formats, dpi)
             written.append(out_dir / f"{prefix}_fig4_reliability.{formats[0]}")
 
+    if len(tables.models) > 1 and not tables.fold_metrics.empty:
+        fig = rf.plot_model_comparison(tables.fold_metrics, metrics=compare_metrics)
+        _save(fig, out_dir, "model_comparison", formats, dpi)
+        written.append(out_dir / f"model_comparison.{formats[0]}")
+
     _write_summary_tables(tables.summary, out_dir)
 
     print(f"Wrote {len(written)} figures + metrics table to {out_dir}/")
@@ -287,6 +300,11 @@ def main() -> None:
         "Default: auto-detect the swept ones.",
     )
     parser.add_argument("--metric", default="accuracy", help="Metric for per-subject/sweep panels.")
+    parser.add_argument(
+        "--compare-metrics",
+        default="accuracy",
+        help="Comma-separated metric(s) for the multi-model comparison figure.",
+    )
     parser.add_argument("--formats", default="png,pdf", help="Comma-separated output formats.")
     parser.add_argument("--dpi", type=int, default=300, help="Raster DPI.")
     args = parser.parse_args()
@@ -297,6 +315,7 @@ def main() -> None:
         class_names=_split_csv(args.class_names),
         hyperparams=_split_csv(args.hyperparams),
         metric=args.metric,
+        compare_metrics=tuple(_split_csv(args.compare_metrics) or ("accuracy",)),
         formats=tuple(_split_csv(args.formats) or ("png", "pdf")),
         dpi=args.dpi,
     )

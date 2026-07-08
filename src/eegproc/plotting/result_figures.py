@@ -200,15 +200,17 @@ def plot_per_subject_accuracy(
     subject_labels: dict | None = None,
     ax=None,
 ):
-    """Sorted per-subject score bars with the cohort mean drawn as a line."""
+    """Per-subject score as a line, ordered by subject, with the cohort mean drawn.
+
+    Subjects are plotted in subject-id order (not sorted by score) so the x-axis is
+    stable and comparable across models/metrics.
+    """
     user_metrics = _filter_model(user_metrics, model)
 
     if user_metrics.empty:
         raise ValueError("No per-user metrics to plot.")
 
-    per_subject = (
-        user_metrics.groupby("subject_id")[metric].mean().sort_values(ascending=False)
-    )
+    per_subject = user_metrics.groupby("subject_id")[metric].mean().sort_index()
 
     if subject_labels:
         index = [subject_labels.get(str(s), s) for s in per_subject.index]
@@ -217,7 +219,7 @@ def plot_per_subject_accuracy(
 
     fig, ax = _resolve_ax(ax)
     x = np.arange(len(per_subject))
-    ax.bar(x, per_subject.to_numpy(), color="#55A868", alpha=0.85)
+    ax.plot(x, per_subject.to_numpy(), marker="o", color="#55A868", linewidth=1.5)
 
     mean_value = float(per_subject.mean())
     ax.axhline(
@@ -235,7 +237,7 @@ def plot_per_subject_accuracy(
     ax.set_ylabel(metric.capitalize())
     ax.set_title(f"Per-subject {metric}")
     ax.legend(loc="lower left", fontsize=9)
-    ax.grid(axis="y", linewidth=0.5, alpha=0.4)
+    ax.grid(True, linewidth=0.5, alpha=0.4)
     return fig
 
 
@@ -468,4 +470,75 @@ def plot_uncertainty(
     ax.set_ylabel("Count")
     ax.set_title(title)
     ax.grid(axis="y", linewidth=0.5, alpha=0.4)
+    return fig
+
+
+# ---------------------------------------------------------------------
+# Multi-model comparison
+# ---------------------------------------------------------------------
+
+_MODEL_COMPARISON_PALETTE = ("#4C72B0", "#55A868", "#C44E52", "#8172B3", "#CCB974")
+
+
+def plot_model_comparison(
+    fold_metrics: pd.DataFrame,
+    metrics: str | tuple[str, ...] = "accuracy",
+    ax=None,
+):
+    """Compare one or more metrics across models (mean +/- std across outer folds).
+
+    Draws one bar group per model. With a single metric the models are sorted
+    best-first and each bar is annotated; with several metrics the bars are
+    grouped per model and colour-coded by metric. Error bars are the std across
+    outer folds. Expects ``fold_metrics`` with a ``model`` column (i.e. a
+    multi-model results file loaded via :func:`results_io.load_results`).
+    """
+    if fold_metrics.empty or "model" not in fold_metrics.columns:
+        raise ValueError("fold_metrics must be non-empty and have a 'model' column.")
+
+    metrics = (metrics,) if isinstance(metrics, str) else tuple(metrics)
+    metrics = tuple(m for m in metrics if m in fold_metrics.columns)
+    if not metrics:
+        raise ValueError("None of the requested metrics are present in fold_metrics.")
+
+    means = fold_metrics.groupby("model")[list(metrics)].mean()
+    stds = fold_metrics.groupby("model")[list(metrics)].std(ddof=0).fillna(0.0)
+
+    # Order models best-first by the primary (first) metric.
+    order = means[metrics[0]].sort_values(ascending=False).index
+    means = means.loc[order]
+    stds = stds.loc[order]
+    models = list(means.index)
+
+    fig, ax = _resolve_ax(ax)
+    x = np.arange(len(models))
+    n_metrics = len(metrics)
+    width = 0.8 / n_metrics
+
+    for j, metric in enumerate(metrics):
+        offset = (j - (n_metrics - 1) / 2) * width
+        ax.bar(
+            x + offset,
+            means[metric].to_numpy(),
+            width,
+            yerr=stds[metric].to_numpy(),
+            capsize=3,
+            label=metric,
+            color=_MODEL_COMPARISON_PALETTE[j % len(_MODEL_COMPARISON_PALETTE)],
+            alpha=0.85,
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, rotation=45, ha="right")
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Score (mean +/- std across outer folds)")
+    ax.set_title("Model comparison")
+    ax.grid(axis="y", linewidth=0.5, alpha=0.4)
+
+    if n_metrics > 1:
+        ax.legend(fontsize=9)
+    else:
+        for xi, value in zip(x, means[metrics[0]].to_numpy()):
+            ax.text(xi, value + 0.02, f"{value:.2f}", ha="center", fontsize=9)
+
     return fig

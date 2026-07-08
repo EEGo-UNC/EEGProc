@@ -112,3 +112,24 @@ def test_build_report_writes_figures_and_tables(tmp_path):
     names = {p.name for p in out_dir.glob("model_a_*.png")}
     assert "model_a_fig1_headline.png" in names
     assert "model_a_fig3_hyperparameters.png" in names
+
+    # multiple models -> a cross-model comparison figure is written.
+    assert (out_dir / "model_comparison.png").exists()
+
+
+def test_model_comparison_single_and_multi_metric(tmp_path):
+    path = tmp_path / "multi.json"
+    path.write_text(json.dumps(make_multi_result()), encoding="utf-8")
+    tables = load_results(path)
+
+    _assert_saves(rf.plot_model_comparison(tables.fold_metrics, metrics="accuracy"), tmp_path, "cmp1")
+    _assert_saves(
+        rf.plot_model_comparison(tables.fold_metrics, metrics=("accuracy", "f1")), tmp_path, "cmpN"
+    )
+
+
+def test_model_comparison_requires_model_column():
+    import pandas as pd
+
+    with pytest.raises(ValueError):
+        rf.plot_model_comparison(pd.DataFrame())

@@ -8,6 +8,7 @@ from .result_figures import (
     plot_hyperparameter_sweep,
     plot_reliability,
     plot_uncertainty,
+    plot_model_comparison,
 )
 from .report import build_report
 
@@ -23,5 +24,6 @@ __all__ = [
     "plot_hyperparameter_sweep",
     "plot_reliability",
     "plot_uncertainty",
+    "plot_model_comparison",
     "build_report",
 ]
