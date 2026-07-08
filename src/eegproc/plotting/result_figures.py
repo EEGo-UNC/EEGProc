@@ -379,12 +379,16 @@ def _sweep_surface(grouped: pd.DataFrame, params: list[str], metric: str, ax):
     pivot = grouped.pivot(index=params[1], columns=params[0], values=metric)
     fig, ax = _resolve_ax(ax, projection="3d")
 
-    x_grid, y_grid = np.meshgrid(
-        np.asarray(pivot.columns, dtype=float),
-        np.asarray(pivot.index, dtype=float),
-    )
+    try:
+        x_vals = np.asarray(pd.to_numeric(pivot.columns, errors="raise"), dtype=float)
+        y_vals = np.asarray(pd.to_numeric(pivot.index, errors="raise"), dtype=float)
+    except Exception as exc:
+        raise ValueError(
+            "surface=True requires numeric hyperparameter values on both axes."
+        ) from exc
+
+    x_grid, y_grid = np.meshgrid(x_vals, y_vals)
     ax.plot_surface(x_grid, y_grid, pivot.to_numpy(), cmap="viridis", edgecolor="none")
-    ax.set_xlabel(params[0])
     ax.set_ylabel(params[1])
     ax.set_zlabel(f"mean inner-CV {metric}")
     ax.set_title(f"{metric} surface")
