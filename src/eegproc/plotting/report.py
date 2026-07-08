@@ -97,8 +97,10 @@ def _subject_figure(tables: ResultsTables, model: str, metric: str):
 
 
 def _hyperparameter_figure(tables: ResultsTables, model: str, params: list[str], metric: str):
-    surface = len(params) >= 2
     use_params = params[:2]
+
+    # Default to 2D plots (line/heatmap). 3D surfaces are optional and require numeric params.
+    surface = False
     projection = "3d" if surface and len(use_params) == 2 else None
 
     fig = plt.figure(figsize=(7, 6))
