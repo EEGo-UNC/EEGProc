@@ -261,9 +261,9 @@ def build_joint_autoencoder_variational_classifier_v2(
     ae_loss_weight: float = 0.5,
     vc_loss_weight: float = 0.5,
     vc_alpha: float = 1.0,
-    vc_beta: float = 0.0,
-    vc_gamma: float = 1e-4,
-    vc_lambda: float = 0.0,
+    vc_beta: float = 1.0,
+    vc_gamma: float = 0.0,
+    vc_lambda: float = 1.0,
     update_discriminator: bool = False,
     encoder_kwargs: dict | None = None,
     decoder_kwargs: dict | None = None,
@@ -423,19 +423,19 @@ def train_joint_autoencoder_variational_classifier_v2(
                 vc_beta=float(
                     hparams.get(
                         "vc_beta",
-                        training_config.model_kwargs.get("vc_beta", 0.0),
+                        training_config.model_kwargs.get("vc_beta", 1.0),
                     )
                 ),
                 vc_gamma=float(
                     hparams.get(
                         "vc_gamma",
-                        training_config.model_kwargs.get("vc_gamma", 1e-4),
+                        training_config.model_kwargs.get("vc_gamma", 0.0),
                     )
                 ),
                 vc_lambda=float(
                     hparams.get(
                         "vc_lambda",
-                        training_config.model_kwargs.get("vc_lambda", 0.0),
+                        training_config.model_kwargs.get("vc_lambda", 1.0),
                     )
                 ),
                 update_discriminator=bool(
@@ -581,9 +581,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ae-loss-weight", type=float, default=0.5)
     parser.add_argument("--vc-loss-weight", type=float, default=0.5)
     parser.add_argument("--vc-alpha", type=float, default=1.0)
-    parser.add_argument("--vc-beta", type=float, default=0.0)
-    parser.add_argument("--vc-gamma", type=float, default=1e-4)
-    parser.add_argument("--vc-lambda", type=float, default=0.0)
+    parser.add_argument("--vc-beta", type=float, default=1.0)
+    parser.add_argument("--vc-gamma", type=float, default=0.0)
+    parser.add_argument("--vc-lambda", type=float, default=1.0)
     parser.add_argument("--update-discriminator", action="store_true")
     parser.add_argument(
         "--hyperparameters-json",
