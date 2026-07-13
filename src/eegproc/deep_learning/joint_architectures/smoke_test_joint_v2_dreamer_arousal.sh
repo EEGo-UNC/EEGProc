@@ -12,7 +12,7 @@
 set -euo pipefail
 
 module purge
-module load python
+module load python/3.12.4
 module load cuda/12.9
 module load cudnn/9.11.0
 
