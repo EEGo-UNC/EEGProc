@@ -24,8 +24,8 @@ python -m pip install --no-cache-dir -r requirements.txt
 export PYTHONUNBUFFERED=1
 
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
-  --raw-eeg-npy src/eegproc/deep_learning/joint_architectures/data/amigos_eeg.npy \
-  --raw-labels-npy src/eegproc/deep_learning/joint_architectures/data/amigos_labels.npy \
+  --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
+  --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
   --label-dimension arousal \
   --outer-subjects 1 \
   --inner-subjects 1 \
