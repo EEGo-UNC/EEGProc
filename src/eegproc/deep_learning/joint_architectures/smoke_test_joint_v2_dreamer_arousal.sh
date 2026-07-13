@@ -17,10 +17,14 @@ module load cuda/12.9
 module load cudnn/9.11.0
 
 cd "$HOME/EEGProc"
-source "$HOME/EEGProc/venv/bin/activate"
+
+python -m venv "$HOME/EEGProc/venv312"
+source "$HOME/EEGProc/venv312/bin/activate"
 
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
+
+
 
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
