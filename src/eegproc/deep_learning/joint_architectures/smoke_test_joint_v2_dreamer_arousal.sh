@@ -22,6 +22,8 @@ source "$HOME/EEGProc/venv/bin/activate"
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
