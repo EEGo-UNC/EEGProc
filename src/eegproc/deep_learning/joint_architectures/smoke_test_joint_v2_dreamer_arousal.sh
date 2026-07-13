@@ -19,6 +19,7 @@ module load cudnn/9.11.0
 cd ~/EEGProc
 source venv/bin/activate
 
+python -m pip install --upgrade pip
 python -m pip install --no-cache-dir -r requirements.txt
 
 export PYTHONUNBUFFERED=1
