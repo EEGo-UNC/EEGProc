@@ -87,7 +87,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         # the log-likelihood scales with d (hundreds of dims), swamping the
         # class-prior term and producing near-identical extreme logits before
         # the priors have had time to learn anything useful.
-        return -0.5 * tf.reduce_mean(
+        return -0.5 * tf.reduce_sum(
             tf.math.log(2 * np.pi * sigma2) + diff**2 / sigma2,
             axis=-1,
         )
@@ -239,93 +239,14 @@ class VariationalClassifier(tf.keras.layers.Layer):
             false_fn=lambda: tf.zeros((), dtype=dtype),
         )
 
-    def _gaussian_entropy(
-        self,
-        mh: tf.Tensor,
-        y: tf.Tensor,
-    ) -> tf.Tensor:
-        """
-        Estimate E_{p(y)}[H(q_phi(z|y))] using a diagonal Gaussian
-        fitted to the class-conditioned latent vectors in the batch.
-
-        For each class c:
-
-            q_phi(z|y=c) = N(mu_c, diag(var_c))
-
-            H[q_phi(z|y=c)]
-                = 0.5 * sum_d log(2 * pi * e * var_{c,d})
-
-        Class entropies are weighted by the empirical batch probability p(y=c).
-
-        Parameters
-        ----------
-        mh : tf.Tensor
-            Latent embeddings with shape (batch_size, latent_dim).
-
-        y : tf.Tensor
-            Integer class labels with shape (batch_size,).
-
-        Returns
-        -------
-        tf.Tensor
-            Scalar estimate of E_{p(y)}[H(q_phi(z|y))].
-        """
-        mh = tf.convert_to_tensor(mh)
-        y = tf.cast(tf.reshape(y, [-1]), tf.int32)
-
-        dtype = mh.dtype
-        eps = tf.cast(1e-6, dtype)
-
-        batch_size = tf.cast(tf.shape(mh)[0], dtype)
-        total_entropy = tf.zeros((), dtype=dtype)
-
-        log_two_pi_e = tf.math.log(tf.cast(2.0 * np.pi * np.e, dtype))
-
-        for c in range(self.n_classes):
-            mask = tf.equal(y, c)
-            z_c = tf.boolean_mask(mh, mask)
-            n_c = tf.shape(z_c)[0]
-
-            def compute_class_entropy() -> tf.Tensor:
-                mu_c = tf.reduce_mean(z_c, axis=0)
-
-                centered = z_c - mu_c[tf.newaxis, :]
-
-                # Diagonal sample covariance with Bessel correction.
-                var_c = tf.reduce_sum(
-                    tf.square(centered),
-                    axis=0,
-                ) / tf.cast(n_c - 1, dtype)
-
-                var_c = tf.maximum(var_c, eps)
-
-                # Differential entropy of a diagonal multivariate Gaussian.
-                entropy_c = 0.5 * tf.reduce_sum(log_two_pi_e + tf.math.log(var_c))
-
-                # Weight by empirical p(y=c) in the current batch.
-                class_probability = tf.cast(n_c, dtype) / batch_size
-
-                return class_probability * entropy_c
-
-            weighted_entropy_c = tf.cond(
-                tf.greater_equal(n_c, 2),
-                true_fn=compute_class_entropy,
-                false_fn=lambda: tf.zeros((), dtype=dtype),
-            )
-
-            total_entropy += weighted_entropy_c
-
-        return total_entropy
-
     def vc_loss(
         self,
         mh: tf.Tensor,
         y: tf.Tensor,
         alpha: float = 1.0,
-        gamma: float = 0.0, # discriminator term
-        beta: float = 1.4, # gaussian assumptionterm
+        beta: float = 1.0,  # gaussian assumptionterm
+        gamma: float = 0.0,  # discriminator term
         lambda_: float = 0.0,
-        delta: float = 0.0,
     ) -> tf.Tensor:
         """
         VC objective (Eq. 7).
@@ -369,7 +290,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         )
         T_vals = tf.stop_gradient(T_vals)
         T_true_class = tf.reduce_sum(y_onehot * T_vals, axis=1)
-        kl_term = gamma * tf.reduce_mean(tf.nn.relu(T_true_class))
+        kl_disc = gamma * tf.reduce_mean(tf.nn.relu(T_true_class))
 
         # Term 2b: gamma * E_{p(y)}[
         #     KL(q_phi(z | y) || p_theta(z | y))
@@ -387,18 +308,13 @@ class VariationalClassifier(tf.keras.layers.Layer):
         kl_class_prior = tf.reduce_sum(p_y * (tf.math.log(p_y + 1e-8) - log_p_pi))
         prior_term = lambda_ * kl_class_prior
 
-        # Term 4: delta * H(q(y|z))
-        # Entropy regularisation:
-        q_entropy = self._gaussian_entropy(mh, y)
-        entropy_term = -delta * q_entropy
-
-        return xent + kl_term + latent_posterior_kl + prior_term + entropy_term
+        return xent + kl_term + kl_disc + prior_term
 
     def keras_loss(
         self,
         alpha: float = 1.0,
-        beta: float = 0.0,
-        gamma: float = 1e-4,
+        beta: float = 1.0,
+        gamma: float = 0.0,
         lambda_: float = 0.0,
     ):
         """
