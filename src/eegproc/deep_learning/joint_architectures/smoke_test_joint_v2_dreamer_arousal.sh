@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=joint_v2_amigos_arousal
-#SBATCH --output=joint_v2_amigos_arousal_%j.out
-#SBATCH --error=joint_v2_amigos_arousal_%j.err
+#SBATCH --job-name=smoke_joint_v2_dreamer_arousal
+#SBATCH --output=smoke_joint_v2_dreamer_arousal_%j.out
+#SBATCH --error=smoke_joint_v2_dreamer_arousal_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
+#SBATCH --mem=16G
 #SBATCH --time=08:00:00
 
 set -euo pipefail
@@ -16,13 +16,33 @@ module load python/3.12.4
 module load cuda/12.9
 module load cudnn/9.11.0
 
-cd ~/EEGProc
-source venv/bin/activate
+cd "$HOME/EEGProc"
+source "$HOME/EEGProc/venv/bin/activate"
 
-python -m pip install --upgrade pip
-python -m pip install --no-cache-dir -r requirements.txt
-
+export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
+
+
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Node: $(hostname)"
+echo "Python: $(command -v python)"
+python --version
+
+nvidia-smi
+
+python - <<'PY'
+import site
+import sys
+import tensorflow as tf
+
+print("Python executable:", sys.executable)
+print("Virtual environment:", sys.prefix)
+print("User site enabled:", site.ENABLE_USER_SITE)
+print("TensorFlow version:", tf.__version__)
+print("TensorFlow location:", tf.__file__)
+print("Available GPUs:", tf.config.list_physical_devices("GPU"))
+PY
+
 
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
   --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
