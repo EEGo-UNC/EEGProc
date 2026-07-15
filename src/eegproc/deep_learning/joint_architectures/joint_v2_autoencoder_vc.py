@@ -1,24 +1,34 @@
-"""Joint autoencoder, recurrent encoder, and variational classifier.
+"""Joint variational autoencoder, recurrent encoder, and classifier.
 
-This model shares a CNN encoder between two branches:
+The shared CNN encoder first produces a deterministic feature sequence. Two
+learned projections parameterize a diagonal Gaussian posterior at every latent
+timestep::
 
-1. ``latent_sequence -> decoder -> reconstruction``
-2. ``latent_sequence -> classification_model -> variational_classifier``
+    encoder_output -> z_mean, z_log_var
+    z = z_mean + exp(0.5 * z_log_var) * epsilon
 
-The classification model is expected to be a recurrent feature extractor,
-such as ``BiLSTMClassifier.build_feature_extractor()``, that returns one 2D
-sequence-level embedding per sample. The joint model owns the final
-``VariationalClassifier`` and all of its losses.
+The sampled latent sequence is used by both downstream branches during
+training:
+
+1. ``z -> decoder -> reconstruction``
+2. ``z -> classification_model -> variational_classifier``
+
+At evaluation/inference time, ``z_mean`` is used instead of a random sample so
+predictions are deterministic unless the model is explicitly called with
+``training=True`` (for example, for uncertainty sampling).
 
 Training objective
 ------------------
 The main gradient step minimizes::
 
+    autoencoder_loss = reconstruction_loss
+                     + vae_beta * KL(q(z|x) || N(0, I))
+
     total_loss = ae_loss_weight * autoencoder_loss
                + vc_loss_weight * variational_classifier_loss
 
 When ``update_discriminator=True``, the variational classifier's optional
-discriminator receives a separate gradient step using the same recurrent
+discriminator receives a separate gradient step using the recurrent
 classification embedding.
 """
 
@@ -30,31 +40,35 @@ from ..unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
 
 
 class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
-    """Combine a sequence autoencoder with recurrent variational classification.
+    """Combine a sequence VAE with recurrent variational classification.
 
     Parameters
     ----------
     encoder : tf.keras.Model
         Sequence encoder mapping raw EEG shaped
-        ``(batch, timesteps, n_features)`` to a latent sequence shaped
-        ``(batch, latent_timesteps, latent_features)``.
+        ``(batch, timesteps, n_features)`` to a deterministic feature sequence
+        shaped ``(batch, latent_timesteps, encoder_features)``.
     decoder : tf.keras.Model
-        Decoder that reconstructs raw EEG from ``latent_sequence``.
+        Decoder mapping the sampled latent sequence back to raw EEG.
     classification_model : tf.keras.Model
-        Recurrent feature extractor mapping ``latent_sequence`` to one
-        classification embedding per sample, shaped
-        ``(batch, classification_features)``. This should not contain its own
-        dense/softmax/variational classification head.
+        Recurrent feature extractor mapping the sampled latent sequence to one
+        classification embedding per sample.
     variational_classifier : tf.keras.layers.Layer
         Final variational classification head accepting the recurrent
         classification embedding and returning class logits.
+    latent_features : int
+        Width of the learned Gaussian latent sequence. In the current builder,
+        this matches the CNN encoder output width so the existing decoder can
+        consume the sampled latent sequence without a shape adapter.
     ae_loss_weight : float, default=0.5
-        Weight assigned to the autoencoder loss.
+        Weight assigned to the complete VAE loss.
     vc_loss_weight : float, default=0.5
         Weight assigned to the variational-classifier loss.
+    vae_beta : float, default=1.0
+        Non-negative multiplier on ``KL(q(z|x) || N(0, I))``.
     reconstruction_loss_fn : VariationalAutoencoderLoss | None
-        Autoencoder loss object. Defaults to mean-squared reconstruction with
-        the existing VAE-loss interface.
+        Optional preconfigured VAE loss object. When omitted, one is created
+        with mean-squared reconstruction and ``beta=vae_beta``.
     vc_alpha, vc_beta, vc_gamma, vc_lambda : float
         Coefficients forwarded to ``variational_classifier.vc_loss``.
     update_discriminator : bool, default=False
@@ -68,8 +82,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         decoder: tf.keras.Model,
         classification_model: tf.keras.Model,
         variational_classifier: tf.keras.layers.Layer,
+        latent_features: int,
         ae_loss_weight: float = 0.5,
         vc_loss_weight: float = 0.5,
+        vae_beta: float = 1.0,
         reconstruction_loss_fn: VariationalAutoencoderLoss | None = None,
         vc_alpha: float = 1.0,
         vc_beta: float = 1.0,
@@ -79,28 +95,56 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         name: str = "joint_autoencoder_variational_classifier_v2",
         **kwargs,
     ) -> None:
+        # ``latent_features`` and ``vae_beta`` are consumed explicitly here.
+        # They must not leak through **kwargs into tf.keras.Model.__init__.
         super().__init__(name=name, **kwargs)
 
+        if encoder is None:
+            raise ValueError("encoder must be provided.")
+        if decoder is None:
+            raise ValueError("decoder must be provided.")
+        if classification_model is None:
+            raise ValueError("classification_model must be provided.")
+        if variational_classifier is None:
+            raise ValueError("variational_classifier must be provided.")
+        if latent_features < 1:
+            raise ValueError("latent_features must be at least 1.")
         if ae_loss_weight < 0.0 or vc_loss_weight < 0.0:
             raise ValueError("Loss weights must be non-negative.")
         if ae_loss_weight == 0.0 and vc_loss_weight == 0.0:
             raise ValueError("At least one loss weight must be greater than 0.")
-        if classification_model is None:
-            raise ValueError("classification_model must be provided.")
+        if vae_beta < 0.0:
+            raise ValueError("vae_beta must be non-negative.")
 
         self.encoder = encoder
         self.decoder = decoder
         self.classification_model = classification_model
         self.variational_classifier = variational_classifier
 
+        self.latent_features = int(latent_features)
         self.ae_loss_weight = float(ae_loss_weight)
         self.vc_loss_weight = float(vc_loss_weight)
+        self.vae_beta = float(vae_beta)
+
+        # These two trainable projections turn the deterministic CNN output
+        # into a true diagonal-Gaussian posterior q(z|x).
+        self.z_mean_projection = tf.keras.layers.Dense(
+            self.latent_features,
+            name="z_mean",
+        )
+        self.z_log_var_projection = tf.keras.layers.Dense(
+            self.latent_features,
+            kernel_initializer="zeros",
+            bias_initializer="zeros",
+            name="z_log_var",
+        )
+
         self.reconstruction_loss_fn = (
             reconstruction_loss_fn
             if reconstruction_loss_fn is not None
             else VariationalAutoencoderLoss(
                 reconstruction="mse",
-                beta=1.0,
+                beta=self.vae_beta,
                 feature_reduction="mean",
             )
         )
@@ -112,6 +156,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.update_discriminator = bool(update_discriminator)
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
+        self.autoencoder_loss_tracker = tf.keras.metrics.Mean(
+            name="autoencoder_loss"
+        )
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
         )
@@ -122,9 +169,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
 
     @property
     def metrics(self) -> list[tf.keras.metrics.Metric]:
-        """Metrics reset automatically by Keras at each epoch/evaluation."""
+        """Metrics reset automatically by Keras each epoch/evaluation."""
         return [
             self.total_loss_tracker,
+            self.autoencoder_loss_tracker,
             self.reconstruction_loss_tracker,
             self.vc_loss_tracker,
             self.accuracy_tracker,
@@ -150,15 +198,65 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 raise ValueError(
                     "An optimizer is required when update_discriminator=True."
                 )
-            self._discriminator_optimizer = (
-                self.optimizer.__class__.from_config(
-                    self.optimizer.get_config()
-                )
+            self._discriminator_optimizer = self.optimizer.__class__.from_config(
+                self.optimizer.get_config()
             )
 
+    @staticmethod
+    def _reparameterize(
+        z_mean: tf.Tensor,
+        z_log_var: tf.Tensor,
+    ) -> tf.Tensor:
+        """Draw a differentiable sample from a diagonal Gaussian posterior."""
+        epsilon = tf.random.normal(
+            shape=tf.shape(z_mean),
+            mean=0.0,
+            stddev=1.0,
+            dtype=z_mean.dtype,
+        )
+        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+
+    def _latent_for_mode(
+        self,
+        z_mean: tf.Tensor,
+        z_log_var: tf.Tensor,
+        training: bool | tf.Tensor | None,
+    ) -> tf.Tensor:
+        """Sample during training and use the posterior mean otherwise."""
+        if training is None:
+            training = False
+
+        if tf.is_tensor(training):
+            return tf.cond(
+                tf.cast(training, tf.bool),
+                lambda: self._reparameterize(z_mean, z_log_var),
+                lambda: z_mean,
+            )
+
+        return (
+            self._reparameterize(z_mean, z_log_var)
+            if bool(training)
+            else z_mean
+        )
+
     def call(self, inputs, training: bool = False) -> dict[str, tf.Tensor]:
-        """Run the shared encoder and both downstream branches."""
-        latent_sequence = self.encoder(inputs, training=training)
+        """Run the encoder, Gaussian posterior, decoder, and classifier."""
+        encoder_output = self.encoder(inputs, training=training)
+
+        if encoder_output.shape.rank != 3:
+            raise ValueError(
+                "encoder must return a rank-3 sequence shaped "
+                "(batch, latent_timesteps, encoder_features); got "
+                f"{encoder_output.shape}."
+            )
+
+        z_mean = self.z_mean_projection(encoder_output)
+        z_log_var = self.z_log_var_projection(encoder_output)
+        latent_sequence = self._latent_for_mode(
+            z_mean=z_mean,
+            z_log_var=z_log_var,
+            training=training,
+        )
 
         classification_latent = self.classification_model(
             latent_sequence,
@@ -168,13 +266,17 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             classification_latent,
             training=training,
         )
-
         reconstruction = self.decoder(
             latent_sequence,
             training=training,
         )
 
         return {
+            "encoder_output": encoder_output,
+            "z_mean": z_mean,
+            "z_log_var": z_log_var,
+            # Backwards-compatible name for the latent sequence consumed by
+            # the decoder and recurrent classifier.
             "latent_sequence": latent_sequence,
             "classification_latent": classification_latent,
             "logits": logits,
@@ -203,24 +305,34 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         x,
         y,
         training: bool,
-    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor, dict[str, tf.Tensor]]:
+    ) -> tuple[
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        dict[str, tf.Tensor],
+    ]:
         outputs = self(x, training=training)
 
-        latent_sequence = outputs["latent_sequence"]
-        z_mean = tf.reshape(
-            latent_sequence,
-            [tf.shape(latent_sequence)[0], -1],
+        # Flatten the latent timestep and feature axes only for the analytic KL
+        # calculation. The decoder and BiLSTM still consume the 3D sequence.
+        z_mean_flat = tf.reshape(
+            outputs["z_mean"],
+            [tf.shape(outputs["z_mean"])[0], -1],
         )
-        z_log_var = tf.zeros_like(z_mean)
+        z_log_var_flat = tf.reshape(
+            outputs["z_log_var"],
+            [tf.shape(outputs["z_log_var"])[0], -1],
+        )
 
         vae_losses = self.reconstruction_loss_fn(
             x_true=x,
             x_pred=outputs["reconstruction"],
-            z_mean=z_mean,
-            z_log_var=z_log_var,
+            z_mean=z_mean_flat,
+            z_log_var=z_log_var_flat,
         )
         reconstruction_loss = vae_losses["reconstruction_loss"]
-        ae_loss = vae_losses["total_loss"]
+        autoencoder_loss = vae_losses["total_loss"]
 
         y_flat = self._flatten_labels(y)
         vc_loss = self.variational_classifier.vc_loss(
@@ -233,10 +345,16 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
 
         total_loss = (
-            self.ae_loss_weight * ae_loss
+            self.ae_loss_weight * autoencoder_loss
             + self.vc_loss_weight * vc_loss
         )
-        return total_loss, reconstruction_loss, vc_loss, outputs
+        return (
+            total_loss,
+            autoencoder_loss,
+            reconstruction_loss,
+            vc_loss,
+            outputs,
+        )
 
     def _discriminator_variables(self) -> list[tf.Variable]:
         """Return discriminator variables when the VC head defines them."""
@@ -249,7 +367,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
 
     @staticmethod
     def _apply_gradients(optimizer, gradients, variables) -> None:
-        """Apply only gradients that are connected to the current loss."""
+        """Apply only gradients connected to the current loss."""
         gradient_variable_pairs = [
             (gradient, variable)
             for gradient, variable in zip(gradients, variables)
@@ -266,6 +384,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         with tf.GradientTape() as tape:
             (
                 total_loss,
+                autoencoder_loss,
                 reconstruction_loss,
                 vc_loss,
                 outputs,
@@ -275,8 +394,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 training=True,
             )
 
-        # The first forward call creates all lazily built variables before the
-        # trainable-variable list is inspected.
+        # The first forward call creates all lazily built variables, including
+        # the z_mean and z_log_var projections, before variables are collected.
         discriminator_variables = self._discriminator_variables()
         discriminator_variable_ids = {
             id(variable) for variable in discriminator_variables
@@ -309,9 +428,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             with tf.GradientTape() as discriminator_tape:
                 discriminator_loss = (
                     self.variational_classifier.discriminator_loss(
-                        tf.stop_gradient(
-                            outputs["classification_latent"]
-                        ),
+                        tf.stop_gradient(outputs["classification_latent"]),
                         y_flat,
                     )
                 )
@@ -327,49 +444,59 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             )
 
         self.total_loss_tracker.update_state(total_loss)
+        self.autoencoder_loss_tracker.update_state(autoencoder_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vc_loss_tracker.update_state(vc_loss)
         self.accuracy_tracker.update_state(y_flat, outputs["logits"])
 
         return {
             "loss": self.total_loss_tracker.result(),
+            "autoencoder_loss": self.autoencoder_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vc_loss": self.vc_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
 
     def test_step(self, data) -> dict[str, tf.Tensor]:
-        """Evaluate with the same joint objective, without updating weights."""
+        """Evaluate with the posterior mean and without updating weights."""
         x, y = self._unpack_data(data)
         y_flat = self._flatten_labels(y)
 
-        total_loss, reconstruction_loss, vc_loss, outputs = (
-            self._compute_weighted_losses(
-                x=x,
-                y=y_flat,
-                training=False,
-            )
+        (
+            total_loss,
+            autoencoder_loss,
+            reconstruction_loss,
+            vc_loss,
+            outputs,
+        ) = self._compute_weighted_losses(
+            x=x,
+            y=y_flat,
+            training=False,
         )
 
         self.total_loss_tracker.update_state(total_loss)
+        self.autoencoder_loss_tracker.update_state(autoencoder_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vc_loss_tracker.update_state(vc_loss)
         self.accuracy_tracker.update_state(y_flat, outputs["logits"])
 
         return {
             "loss": self.total_loss_tracker.result(),
+            "autoencoder_loss": self.autoencoder_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vc_loss": self.vc_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
 
     def get_config(self) -> dict:
-        """Return scalar loss settings used by this subclassed model."""
+        """Return scalar settings used by this subclassed model."""
         config = super().get_config()
         config.update(
             {
+                "latent_features": self.latent_features,
                 "ae_loss_weight": self.ae_loss_weight,
                 "vc_loss_weight": self.vc_loss_weight,
+                "vae_beta": self.vae_beta,
                 "vc_alpha": self.vc_alpha,
                 "vc_beta": self.vc_beta,
                 "vc_gamma": self.vc_gamma,

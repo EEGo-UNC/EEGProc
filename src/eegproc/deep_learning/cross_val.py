@@ -3,6 +3,8 @@ from __future__ import annotations
 import gc
 import itertools
 import multiprocessing as mp
+import os
+import queue
 import traceback
 from itertools import combinations
 from pprint import pformat
@@ -10,6 +12,7 @@ from typing import Callable, Literal, Mapping
 
 import numpy as np
 import tensorflow as tf
+from joblib.externals import cloudpickle
 from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score, recall_score
 
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
@@ -23,6 +26,37 @@ def _expand_hyperparameter_grid(hp: dict | None) -> list[dict]:
     keys = list(hp.keys())
     values = [v if isinstance(v, (list, tuple)) else [v] for v in hp.values()]
     return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
+
+
+def _normalize_fixed_hyperparameters(hp: dict | None) -> dict:
+    """Normalize one fixed hyperparameter configuration.
+
+    Plain LOSO evaluates a configuration that has already been selected; it
+    does not perform an inner hyperparameter search. Scalar values are accepted
+    directly. Singleton lists/tuples are also accepted for compatibility with
+    JSON grids used by ``nested_lnso_cv``. Any parameter containing multiple
+    candidate values is rejected to prevent accidental tuning on the LOSO test
+    folds.
+    """
+    if not hp:
+        return {}
+
+    fixed: dict = {}
+
+    for key, value in hp.items():
+        if isinstance(value, (list, tuple)):
+            if len(value) != 1:
+                raise ValueError(
+                    "loso_cv evaluates one fixed hyperparameter configuration. "
+                    f"Parameter {key!r} contains {len(value)} candidates: "
+                    f"{value!r}. Tune the configuration separately, then pass "
+                    "one value per parameter."
+                )
+            fixed[key] = value[0]
+        else:
+            fixed[key] = value
+
+    return fixed
 
 
 def _split_config(config: dict) -> tuple[dict, dict]:
@@ -948,14 +982,132 @@ def _evaluate_inner_config(
 # ---------------------------------------------------------------------
 
 
+def _resolve_cuda_device_token(gpu_id: int) -> str:
+    """Resolve a local GPU index to the token inherited by a child process.
+
+    Slurm commonly sets ``CUDA_VISIBLE_DEVICES`` to physical ordinals or GPU
+    UUIDs. Public ``gpu_ids`` are interpreted as local indices into that visible
+    list, so ``gpu_ids=(0, 1)`` always means the first and second GPUs allocated
+    to the job rather than physical devices 0 and 1 on the node.
+    """
+    gpu_id = int(gpu_id)
+    if gpu_id < 0:
+        raise ValueError(f"GPU indices must be non-negative, got {gpu_id}.")
+
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible_devices is None:
+        return str(gpu_id)
+
+    tokens = [token.strip() for token in visible_devices.split(",") if token.strip()]
+    if not tokens or tokens == ["-1"]:
+        raise ValueError(
+            "gpu_ids were supplied, but CUDA_VISIBLE_DEVICES disables all GPUs."
+        )
+    if gpu_id >= len(tokens):
+        raise ValueError(
+            f"Requested local GPU index {gpu_id}, but CUDA_VISIBLE_DEVICES="
+            f"{visible_devices!r} exposes only {len(tokens)} device(s)."
+        )
+
+    return tokens[gpu_id]
+
+
+def _count_visible_gpus() -> int:
+    """Return the number of GPUs visible to the current Slurm/job process."""
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible_devices is not None:
+        tokens = [
+            token.strip()
+            for token in visible_devices.split(",")
+            if token.strip()
+        ]
+        if not tokens or tokens == ["-1"]:
+            return 0
+        return len(tokens)
+
+    # Outside Slurm, fall back to TensorFlow's physical-device discovery.
+    return len(tf.config.list_physical_devices("GPU"))
+
+
+def _auto_assign_gpu_ids(n_workers: int) -> tuple[int, ...] | None:
+    """Assign one local visible GPU to each worker when GPUs are available."""
+    visible_gpu_count = _count_visible_gpus()
+    if visible_gpu_count == 0:
+        return None
+
+    if n_workers > visible_gpu_count:
+        print(
+            f"Requested {n_workers} workers, but only {visible_gpu_count} GPU(s) "
+            "are visible. Reducing the worker count to one worker per GPU.",
+            flush=True,
+        )
+
+    return tuple(range(min(n_workers, visible_gpu_count)))
+
+
+def _start_device_bound_process(
+    context,
+    target: Callable,
+    target_args_prefix: tuple,
+    requested_gpu_id: int | None,
+    cpus_per_worker: int | None,
+    name: str,
+) -> mp.Process:
+    """Start one spawned process with its GPU mask set before TensorFlow import.
+
+    ``spawn`` launches a fresh interpreter that imports this module. Temporarily
+    changing the parent's environment around ``Process.start`` ensures the child
+    sees only its assigned GPU before importing TensorFlow. Inside a GPU-bound
+    worker that device is therefore always worker-local GPU 0.
+    """
+    previous_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+
+    if requested_gpu_id is None:
+        child_cuda_visible_devices = "-1"
+        worker_local_gpu_id = None
+        assigned_device_label = "CPU"
+    else:
+        cuda_token = _resolve_cuda_device_token(requested_gpu_id)
+        child_cuda_visible_devices = cuda_token
+        worker_local_gpu_id = 0
+        assigned_device_label = (
+            f"GPU {int(requested_gpu_id)} "
+            f"(CUDA_VISIBLE_DEVICES={cuda_token})"
+        )
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = child_cuda_visible_devices
+    try:
+        process = context.Process(
+            target=target,
+            args=(
+                *target_args_prefix,
+                worker_local_gpu_id,
+                cpus_per_worker,
+                assigned_device_label,
+            ),
+            name=name,
+        )
+        process.start()
+    finally:
+        if previous_cuda_visible_devices is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = previous_cuda_visible_devices
+
+    return process
+
+
 def _configure_tensorflow_worker(
     gpu_id: int | None,
     cpus_per_worker: int | None,
+    assigned_device_label: str | None = None,
 ) -> None:
     """Configure TensorFlow before a worker constructs any model.
 
-    ``gpu_id=None`` makes the worker CPU-only. Otherwise the worker sees one
-    local GPU index after any CUDA_VISIBLE_DEVICES/Slurm filtering.
+    A GPU worker is started with a one-device ``CUDA_VISIBLE_DEVICES`` mask, so
+    ``gpu_id`` is normally 0 inside that process. A CPU worker is started with
+    ``CUDA_VISIBLE_DEVICES=-1``. This prevents every process from probing or
+    allocating memory on every GPU in a multi-GPU Slurm allocation.
     """
     if cpus_per_worker is not None:
         if cpus_per_worker < 1:
@@ -967,23 +1119,36 @@ def _configure_tensorflow_worker(
     physical_gpus = tf.config.list_physical_devices("GPU")
 
     if gpu_id is None:
-        # Prevent concurrent CPU workers from all contending for GPU 0.
         tf.config.set_visible_devices([], "GPU")
-        device_description = "CPU"
+        logical_gpus = tf.config.list_logical_devices("GPU")
+        if logical_gpus:
+            raise RuntimeError(
+                "CPU-only worker still has visible logical GPUs after TensorFlow "
+                "configuration."
+            )
+        device_description = assigned_device_label or "CPU"
     else:
         gpu_id = int(gpu_id)
 
         if gpu_id < 0 or gpu_id >= len(physical_gpus):
             raise ValueError(
-                f"Worker requested GPU index {gpu_id}, but TensorFlow sees "
-                f"{len(physical_gpus)} GPU(s). GPU indices are local to the "
-                "devices exposed by CUDA_VISIBLE_DEVICES/Slurm."
+                f"Worker requested local GPU index {gpu_id}, but TensorFlow sees "
+                f"{len(physical_gpus)} GPU(s). The child process should have been "
+                "started with exactly one assigned CUDA device."
             )
 
         selected_gpu = physical_gpus[gpu_id]
         tf.config.set_visible_devices(selected_gpu, "GPU")
         tf.config.experimental.set_memory_growth(selected_gpu, True)
-        device_description = f"GPU {gpu_id}"
+
+        logical_gpus = tf.config.list_logical_devices("GPU")
+        if len(logical_gpus) != 1:
+            raise RuntimeError(
+                "A GPU worker must see exactly one logical GPU after isolation; "
+                f"TensorFlow sees {len(logical_gpus)}."
+            )
+
+        device_description = assigned_device_label or f"GPU {gpu_id}"
 
     print(
         f"[{mp.current_process().name}] initialized on {device_description}",
@@ -991,19 +1156,170 @@ def _configure_tensorflow_worker(
     )
 
 
-def _outer_fold_process_main(
+def _collect_spawned_results(
+    result_queue,
+    processes: list[mp.Process],
+    expected_results: int,
+    worker_description: str,
+) -> list[dict]:
+    """Collect fold results without hanging forever after a worker crash."""
+    outputs_by_fold: dict[int, dict] = {}
+
+    while len(outputs_by_fold) < expected_results:
+        try:
+            status, fold_number, payload = result_queue.get(timeout=1.0)
+        except queue.Empty:
+            failed_processes = [
+                process
+                for process in processes
+                if process.exitcode not in (None, 0)
+            ]
+            if failed_processes:
+                failures = ", ".join(
+                    f"{process.name} exitcode={process.exitcode}"
+                    for process in failed_processes
+                )
+                raise RuntimeError(
+                    f"A spawned {worker_description} process exited without "
+                    f"returning a Python traceback: {failures}. This commonly "
+                    "indicates an OS-level kill, CUDA failure, or out-of-memory "
+                    "condition."
+                )
+
+            if all(process.exitcode is not None for process in processes):
+                missing = expected_results - len(outputs_by_fold)
+                raise RuntimeError(
+                    f"All spawned {worker_description} processes exited, but "
+                    f"{missing} fold result(s) were never returned."
+                )
+            continue
+
+        if status == "error":
+            location = (
+                f" while running fold {fold_number}"
+                if fold_number >= 0
+                else " during TensorFlow worker initialization"
+            )
+            raise RuntimeError(
+                f"A spawned {worker_description} worker failed{location}.\n\n"
+                f"{payload}"
+            )
+
+        if status != "ok":
+            raise RuntimeError(
+                f"Unknown worker status {status!r} from fold {fold_number}."
+            )
+
+        if fold_number in outputs_by_fold:
+            raise RuntimeError(
+                f"Received duplicate result for fold {fold_number}."
+            )
+
+        outputs_by_fold[int(fold_number)] = payload
+
+    return [outputs_by_fold[index] for index in sorted(outputs_by_fold)]
+
+
+def _run_spawned_fold_pool(
+    worker_target: Callable,
     worker_state: dict,
+    tasks: list[tuple],
+    n_workers: int,
+    gpu_ids: tuple[int, ...] | None,
+    cpus_per_worker: int | None,
+    worker_name_prefix: str,
+    worker_description: str,
+) -> list[dict]:
+    """Run fold tasks using persistent, device-isolated spawned workers."""
+    context = mp.get_context("spawn")
+    task_queue = context.Queue()
+    result_queue = context.Queue()
+    processes: list[mp.Process] = []
+    completed_successfully = False
+
+    try:
+        try:
+            worker_state_payload = cloudpickle.dumps(worker_state)
+        except BaseException as exc:
+            raise RuntimeError(
+                "Could not serialize the cross-validation worker state. "
+                "The model builder, preprocessing strategy, callbacks, and "
+                "captured configuration must be cloudpickle-serializable."
+            ) from exc
+
+        payload_size_mb = len(worker_state_payload) / (1024 ** 2)
+        if payload_size_mb >= 256.0:
+            print(
+                f"Warning: serialized worker state is {payload_size_mb:.1f} MiB. "
+                "Each spawned worker will hold its own host-memory copy.",
+                flush=True,
+            )
+
+        for worker_index in range(n_workers):
+            requested_gpu_id = (
+                gpu_ids[worker_index] if gpu_ids is not None else None
+            )
+            process = _start_device_bound_process(
+                context=context,
+                target=worker_target,
+                target_args_prefix=(worker_state_payload, task_queue, result_queue),
+                requested_gpu_id=requested_gpu_id,
+                cpus_per_worker=cpus_per_worker,
+                name=f"{worker_name_prefix}-{worker_index + 1}",
+            )
+            processes.append(process)
+
+        for task in tasks:
+            task_queue.put(task)
+
+        for _ in processes:
+            task_queue.put(None)
+
+        outputs = _collect_spawned_results(
+            result_queue=result_queue,
+            processes=processes,
+            expected_results=len(tasks),
+            worker_description=worker_description,
+        )
+        completed_successfully = True
+        return outputs
+    finally:
+        if not completed_successfully:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+
+        for process in processes:
+            process.join(timeout=10.0)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5.0)
+
+        for multiprocessing_queue in (task_queue, result_queue):
+            try:
+                if not completed_successfully:
+                    multiprocessing_queue.cancel_join_thread()
+                multiprocessing_queue.close()
+            except (AttributeError, OSError, ValueError):
+                pass
+
+
+def _outer_fold_process_main(
+    worker_state_payload: bytes,
     task_queue,
     result_queue,
     gpu_id: int | None,
     cpus_per_worker: int | None,
+    assigned_device_label: str | None,
 ) -> None:
     """Run outer-fold tasks in one persistent spawned process."""
     try:
         _configure_tensorflow_worker(
             gpu_id=gpu_id,
             cpus_per_worker=cpus_per_worker,
+            assigned_device_label=assigned_device_label,
         )
+        worker_state = cloudpickle.loads(worker_state_payload)
 
         while True:
             task = task_queue.get()
@@ -1031,8 +1347,10 @@ def _outer_fold_process_main(
                 return
 
     except BaseException:
-        # Initialization errors occur before the worker has received a fold.
         result_queue.put(("error", -1, traceback.format_exc()))
+    finally:
+        tf.keras.backend.clear_session()
+        gc.collect()
 
 
 def _run_outer_fold(
@@ -1430,19 +1748,19 @@ def nested_lnso_cv(
         Number of persistent outer-fold worker processes. ``1`` preserves the
         original sequential behavior unless ``gpu_ids`` is supplied.
     gpu_ids:
-        Local TensorFlow GPU indices assigned one-per-worker. For example,
-        ``gpu_ids=(0, 1, 2, 3)`` with ``n_jobs=4``. When ``n_jobs > 1`` and this
-        is ``None``, workers are deliberately CPU-only so that they do not all
-        contend for GPU 0.
+        Local GPU indices assigned one-per-worker. For example,
+        ``gpu_ids=(0, 1, 2, 3)`` with ``n_jobs=4``. When this is ``None`` and
+        multiple workers are requested, visible Slurm/TensorFlow GPUs are
+        assigned automatically, one per worker.
     cpus_per_worker:
         TensorFlow intra-op CPU threads available to each worker. Keep
         ``n_jobs * cpus_per_worker`` within the CPUs allocated by Slurm.
 
     Notes
     -----
-    With ``spawn``, ``model_builder_function`` and ``preprocessing_strategy``
-    must be importable module-level callables. The training entry point must
-    also be protected by ``if __name__ == "__main__":``.
+    Worker state is serialized with cloudpickle, so locally defined model
+    builders and preprocessing callables are supported. The training entry
+    point must still be protected by ``if __name__ == "__main__":``.
     """
     extra_fit_kwargs = extra_fit_kwargs or {}
 
@@ -1550,7 +1868,11 @@ def nested_lnso_cv(
 
     normalized_gpu_ids: tuple[int, ...] | None = None
 
-    if gpu_ids is not None:
+    if gpu_ids is None and effective_n_jobs > 1:
+        normalized_gpu_ids = _auto_assign_gpu_ids(effective_n_jobs)
+        if normalized_gpu_ids is not None:
+            effective_n_jobs = len(normalized_gpu_ids)
+    elif gpu_ids is not None:
         normalized_gpu_ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
 
         if not normalized_gpu_ids:
@@ -1563,8 +1885,6 @@ def nested_lnso_cv(
                 f"but gpu_ids={normalized_gpu_ids}. Use one GPU per worker."
             )
 
-        # Do not create fewer processes than requested merely because more GPU
-        # IDs were provided; use the first effective_n_jobs devices.
         normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
 
     results = {
@@ -1655,65 +1975,16 @@ def nested_lnso_cv(
             for fold_number, outer_test_subjects in tasks
         ]
     else:
-        context = mp.get_context("spawn")
-        task_queue = context.Queue()
-        result_queue = context.Queue()
-        processes: list[mp.Process] = []
-
-        for worker_index in range(effective_n_jobs):
-            worker_gpu_id = (
-                normalized_gpu_ids[worker_index]
-                if normalized_gpu_ids is not None
-                else None
-            )
-            process = context.Process(
-                target=_outer_fold_process_main,
-                args=(
-                    worker_state,
-                    task_queue,
-                    result_queue,
-                    worker_gpu_id,
-                    cpus_per_worker,
-                ),
-                name=f"OuterFoldWorker-{worker_index + 1}",
-            )
-            process.start()
-            processes.append(process)
-
-        for task in tasks:
-            task_queue.put(task)
-
-        for _ in processes:
-            task_queue.put(None)
-
-        fold_outputs = []
-
-        try:
-            while len(fold_outputs) < total_outer_folds:
-                status, fold_number, payload = result_queue.get()
-
-                if status == "error":
-                    raise RuntimeError(
-                        "A spawned outer-fold worker failed"
-                        + (
-                            f" while running fold {fold_number}."
-                            if fold_number >= 0
-                            else " during TensorFlow worker initialization."
-                        )
-                        + f"\n\n{payload}"
-                    )
-
-                fold_outputs.append(payload)
-        finally:
-            for process in processes:
-                if process.is_alive() and len(fold_outputs) < total_outer_folds:
-                    process.terminate()
-
-            for process in processes:
-                process.join()
-
-            task_queue.close()
-            result_queue.close()
+        fold_outputs = _run_spawned_fold_pool(
+            worker_target=_outer_fold_process_main,
+            worker_state=worker_state,
+            tasks=tasks,
+            n_workers=effective_n_jobs,
+            gpu_ids=normalized_gpu_ids,
+            cpus_per_worker=cpus_per_worker,
+            worker_name_prefix="OuterFoldWorker",
+            worker_description="outer-fold",
+        )
 
     # Results arrive in completion order, so restore deterministic fold order.
     fold_outputs.sort(key=lambda row: row["outer_fold_number"])
@@ -1763,6 +2034,601 @@ def nested_lnso_cv(
     print("Mean outer scores:")
     print(pformat(mean_scores, indent=4, width=120, sort_dicts=False))
     print("Std outer scores:")
+    print(pformat(std_scores, indent=4, width=120, sort_dicts=False))
+    print("Window-level mean scores:")
+    print(pformat(window_mean_scores, indent=4, width=120, sort_dicts=False))
+    print("Trial-level mean scores:")
+    print(pformat(trial_mean_scores, indent=4, width=120, sort_dicts=False))
+
+    return results
+
+
+# ---------------------------------------------------------------------
+# Plain Leave-One-Subject-Out cross-validation
+# ---------------------------------------------------------------------
+
+
+def _run_loso_fold(
+    fold_number: int,
+    test_subject,
+    total_folds: int,
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+    fixed_config: dict,
+    batch_size: int,
+    preprocessing_strategy: Callable | None,
+    evaluation_level: Literal["window", "trial"],
+    metrics: tuple[str, ...],
+    log_predictions: bool,
+    log_variational_intervals: bool,
+    n_uncertainty_samples: int,
+    ci_level: float,
+    verbose: int,
+    extra_fit_kwargs: dict,
+) -> dict:
+    """Train and evaluate one ordinary LOSO fold.
+
+    No inner folds or hyperparameter selection occur here. ``fixed_config`` is
+    applied unchanged in every fold.
+    """
+    test_mask = subject_id_array == test_subject
+    train_mask = ~test_mask
+
+    train_indices = np.where(train_mask)[0]
+    test_indices = np.where(test_mask)[0]
+
+    if len(train_indices) == 0 or len(test_indices) == 0:
+        raise ValueError(
+            f"Invalid LOSO split for subject {test_subject!r}: "
+            f"train={len(train_indices)}, test={len(test_indices)} windows."
+        )
+
+    _print_fold_header(
+        fold_number,
+        total_folds,
+        f"LOSO test subject={_python_scalar(test_subject)!r} "
+        f"(train={len(train_indices)}, test={len(test_indices)} windows)",
+    )
+
+    X_train = feature_array[train_indices]
+    y_train = label_array[train_indices]
+    X_test = feature_array[test_indices]
+    y_test = label_array[test_indices]
+
+    subject_ids_train = subject_id_array[train_indices]
+    subject_ids_test = subject_id_array[test_indices]
+    trial_ids_train = trial_id_array[train_indices]
+    trial_ids_test = trial_id_array[test_indices]
+
+    X_train, y_train, X_test, y_test = _apply_preprocessing_strategy(
+        preprocessing_strategy=preprocessing_strategy,
+        X_train=X_train,
+        y_train=y_train,
+        X_eval=X_test,
+        y_eval=y_test,
+        train_indices=train_indices,
+        eval_indices=test_indices,
+    )
+
+    _validate_processed_alignment(
+        X_train,
+        y_train,
+        subject_ids_train,
+        trial_ids_train,
+        "LOSO-training",
+    )
+    _validate_processed_alignment(
+        X_test,
+        y_test,
+        subject_ids_test,
+        trial_ids_test,
+        "LOSO-test",
+    )
+
+    model_hp, fit_hp = _split_config(fixed_config)
+    current_batch_size = int(fit_hp.get("batch_size", batch_size))
+
+    duplicate_fit_keys = set(fit_hp).intersection(extra_fit_kwargs)
+    if duplicate_fit_keys:
+        raise ValueError(
+            "The following model.fit arguments were supplied in both the fixed "
+            f"configuration and extra_fit_kwargs: {sorted(duplicate_fit_keys)}"
+        )
+
+    tf.keras.backend.clear_session()
+    model = model_builder_function(**model_hp)
+
+    try:
+        model.fit(
+            X_train,
+            y_train,
+            verbose=verbose,
+            **fit_hp,
+            **extra_fit_kwargs,
+        )
+
+        evaluation = _evaluate_classification_fold(
+            model=model,
+            X_test=X_test,
+            y_test=y_test,
+            subject_ids_test=subject_ids_test,
+            trial_ids_test=trial_ids_test,
+            fold_index=fold_number,
+            metrics=metrics,
+            evaluation_level=evaluation_level,
+            batch_size=current_batch_size,
+            log_predictions=log_predictions,
+            log_variational_intervals=log_variational_intervals,
+            n_uncertainty_samples=n_uncertainty_samples,
+            ci_level=ci_level,
+        )
+    finally:
+        del model
+        gc.collect()
+        tf.keras.backend.clear_session()
+
+    fold_record = {
+        "fold_number": int(fold_number),
+        "outer_fold_number": int(fold_number),
+        "left_out_subject": _python_scalar(test_subject),
+        "left_out_subjects": [_python_scalar(test_subject)],
+        "outer_test_subjects": [_python_scalar(test_subject)],
+        "n_train_windows": int(len(train_indices)),
+        "n_test_windows": int(len(test_indices)),
+        # Compatibility aliases for code that previously consumed nested CV.
+        "n_outer_train_windows": int(len(train_indices)),
+        "n_outer_test_windows": int(len(test_indices)),
+        "n_train_trials": int(
+            len(
+                set(
+                    zip(
+                        subject_ids_train.tolist(),
+                        trial_ids_train.tolist(),
+                    )
+                )
+            )
+        ),
+        "n_test_trials": int(
+            len(
+                set(
+                    zip(
+                        subject_ids_test.tolist(),
+                        trial_ids_test.tolist(),
+                    )
+                )
+            )
+        ),
+        "n_outer_train_trials": int(
+            len(
+                set(
+                    zip(
+                        subject_ids_train.tolist(),
+                        trial_ids_train.tolist(),
+                    )
+                )
+            )
+        ),
+        "n_outer_test_trials": int(
+            len(
+                set(
+                    zip(
+                        subject_ids_test.tolist(),
+                        trial_ids_test.tolist(),
+                    )
+                )
+            )
+        ),
+        "evaluation_level": evaluation_level,
+        "selection_level": None,
+        "fixed_config": dict(fixed_config),
+        # Compatibility aliases: there was no inner search in plain LOSO.
+        "best_config": dict(fixed_config),
+        "inner_fold_results": [],
+        "inner_mean_scores": [],
+        "inner_std_scores": [],
+        "fold_metrics": evaluation["fold_metrics"],
+        "window_fold_metrics": evaluation["window_fold_metrics"],
+        "trial_fold_metrics": evaluation["trial_fold_metrics"],
+        "user_metrics": evaluation["user_metrics"],
+        "prediction_log": evaluation["prediction_log"],
+        "window_prediction_log": evaluation["window_prediction_log"],
+        "trial_prediction_log": evaluation["trial_prediction_log"],
+        "variational_interval_log": evaluation["variational_interval_log"],
+        "window_variational_interval_log": evaluation[
+            "window_variational_interval_log"
+        ],
+        "trial_variational_interval_log": evaluation[
+            "trial_variational_interval_log"
+        ],
+    }
+
+    fixed_config_record = {
+        "outer_fold": int(fold_number),
+        "best_config_index": 0,
+        "best_config": dict(fixed_config),
+        "selection_metric": None,
+        "selection_level": None,
+        "selection_score": None,
+        "configuration_source": "fixed",
+    }
+
+    empty_inner_cv_record = {
+        "outer_fold": int(fold_number),
+        "inner_fold_results": [],
+        "inner_mean_scores": [],
+        "inner_std_scores": [],
+        "configuration_source": "not_applicable_for_loso",
+    }
+
+    return {
+        "outer_fold_number": int(fold_number),
+        "fold_record": fold_record,
+        "outer_fold_result": fold_record,
+        "best_config_result": fixed_config_record,
+        "inner_cv_result": empty_inner_cv_record,
+        **evaluation,
+    }
+
+
+def _loso_fold_process_main(
+    worker_state_payload: bytes,
+    task_queue,
+    result_queue,
+    gpu_id: int | None,
+    cpus_per_worker: int | None,
+    assigned_device_label: str | None,
+) -> None:
+    """Run ordinary LOSO folds in one persistent spawned process."""
+    try:
+        _configure_tensorflow_worker(
+            gpu_id=gpu_id,
+            cpus_per_worker=cpus_per_worker,
+            assigned_device_label=assigned_device_label,
+        )
+        worker_state = cloudpickle.loads(worker_state_payload)
+
+        while True:
+            task = task_queue.get()
+
+            if task is None:
+                return
+
+            fold_number, test_subject = task
+
+            try:
+                fold_output = _run_loso_fold(
+                    fold_number=fold_number,
+                    test_subject=test_subject,
+                    **worker_state,
+                )
+                result_queue.put(("ok", int(fold_number), fold_output))
+            except BaseException:
+                result_queue.put(
+                    (
+                        "error",
+                        int(fold_number),
+                        traceback.format_exc(),
+                    )
+                )
+                return
+
+    except BaseException:
+        result_queue.put(("error", -1, traceback.format_exc()))
+    finally:
+        tf.keras.backend.clear_session()
+        gc.collect()
+
+def loso_cv(
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray | None = None,
+    n_epochs: int = 50,
+    batch_size: int = 32,
+    hyperparameters: dict | None = None,
+    preprocessing_strategy: Callable | None = None,
+    evaluation_level: Literal["window", "trial"] = "trial",
+    metrics: list[str] | tuple[str, ...] = (
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+    ),
+    log_predictions: bool = True,
+    log_variational_intervals: bool = False,
+    n_uncertainty_samples: int = 30,
+    ci_level: float = 0.95,
+    verbose: int = 0,
+    extra_fit_kwargs: dict | None = None,
+    n_jobs: int = 1,
+    gpu_ids: list[int] | tuple[int, ...] | None = None,
+    cpus_per_worker: int | None = None,
+    max_folds: int | None = None,
+) -> dict:
+    """Run ordinary Leave-One-Subject-Out cross-validation.
+
+    Each unique subject is held out exactly once. The model is trained on all
+    remaining subjects and evaluated on the held-out subject. There is no inner
+    cross-validation and no hyperparameter selection.
+
+    Hyperparameters
+    ---------------
+    ``hyperparameters`` must describe one fixed configuration. Scalar values
+    are accepted directly, and singleton lists/tuples are accepted for
+    compatibility with existing JSON grids. Multiple candidate values are
+    rejected because selecting among them using LOSO test results would bias
+    the reported performance.
+
+    Trial-level evaluation
+    ----------------------
+    ``trial_id_array`` must contain one trial ID per window. Predictions are
+    made per window and averaged within each ``(subject_id, trial_id)`` group.
+    Both window- and trial-level metrics are always returned;
+    ``evaluation_level`` controls the unprefixed primary metrics.
+
+    Concurrency
+    -----------
+    Outer LOSO folds may run concurrently. Worker state is serialized with
+    cloudpickle, so locally defined builders are supported. When ``n_jobs > 1``
+    and ``gpu_ids`` is omitted, visible GPUs are assigned automatically, one per
+    worker. The training entry point must still use an
+    ``if __name__ == "__main__":`` guard.
+
+    Smoke testing
+    -------------
+    ``max_folds`` deterministically limits execution to the first N sorted
+    subjects. Leave it as ``None`` for a complete LOSO evaluation.
+    """
+    extra_fit_kwargs = extra_fit_kwargs or {}
+
+    if "validation_data" in extra_fit_kwargs:
+        raise ValueError(
+            "Do not pass a fixed validation_data array to loso_cv. It would not "
+            "be reconstructed fold-locally and could create leakage."
+        )
+
+    if subject_id_array is None:
+        raise ValueError("subject_id_array is required for LOSO CV.")
+    if trial_id_array is None:
+        raise ValueError(
+            "trial_id_array is required for trial-level prediction and metrics. "
+            "Pass one trial ID per window, aligned with feature_array."
+        )
+
+    _validate_evaluation_level(evaluation_level, "evaluation_level")
+
+    feature_array = np.asarray(feature_array)
+    label_array = np.asarray(label_array)
+    subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
+
+    input_lengths = (
+        len(feature_array),
+        len(label_array),
+        len(subject_id_array),
+        len(trial_id_array),
+    )
+    if len(set(input_lengths)) != 1:
+        raise ValueError(
+            "feature_array, label_array, subject_id_array, and trial_id_array "
+            "must have the same first dimension. Got lengths "
+            f"{input_lengths}."
+        )
+
+    metrics = tuple(metrics)
+    for metric in metrics:
+        if metric not in _CLASSIFICATION_METRICS:
+            raise ValueError(
+                f"Unsupported metric: {metric}. Supported metrics: "
+                f"{sorted(_CLASSIFICATION_METRICS)}"
+            )
+
+    if not (0.0 < ci_level < 1.0):
+        raise ValueError("ci_level must be between 0 and 1.")
+
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be >= 1.")
+
+    if cpus_per_worker is not None and cpus_per_worker < 1:
+        raise ValueError("cpus_per_worker must be >= 1 when provided.")
+
+    unique_subjects = np.sort(np.unique(subject_id_array))
+    if len(unique_subjects) < 2:
+        raise ValueError(
+            "LOSO CV requires at least two unique subjects. "
+            f"Got {len(unique_subjects)}."
+        )
+
+    if max_folds is not None:
+        if max_folds < 1:
+            raise ValueError("max_folds must be >= 1 when provided.")
+        test_subjects = unique_subjects[: min(max_folds, len(unique_subjects))]
+    else:
+        test_subjects = unique_subjects
+
+    fixed_hyperparameters = _normalize_fixed_hyperparameters(hyperparameters)
+    fixed_config = {
+        "epochs": n_epochs,
+        "batch_size": batch_size,
+        **fixed_hyperparameters,
+    }
+
+    total_folds = len(test_subjects)
+    effective_n_jobs = min(n_jobs, total_folds)
+
+    normalized_gpu_ids: tuple[int, ...] | None = None
+    if gpu_ids is None and effective_n_jobs > 1:
+        normalized_gpu_ids = _auto_assign_gpu_ids(effective_n_jobs)
+        if normalized_gpu_ids is not None:
+            effective_n_jobs = len(normalized_gpu_ids)
+    elif gpu_ids is not None:
+        normalized_gpu_ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
+
+        if not normalized_gpu_ids:
+            raise ValueError("gpu_ids must contain at least one GPU index.")
+        if len(set(normalized_gpu_ids)) != len(normalized_gpu_ids):
+            raise ValueError("gpu_ids must not contain duplicate GPU indices.")
+        if effective_n_jobs > len(normalized_gpu_ids):
+            raise ValueError(
+                f"n_jobs={effective_n_jobs} requires at least that many GPU IDs, "
+                f"but gpu_ids={normalized_gpu_ids}. Use one GPU per worker."
+            )
+
+        normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
+
+    results = {
+        "cv_strategy": "loso",
+        "fixed_config": dict(fixed_config),
+        "n_subjects": int(len(unique_subjects)),
+        "n_evaluated_folds": int(total_folds),
+        "max_folds": max_folds,
+        "fold_metrics": [],
+        "window_fold_metrics": [],
+        "trial_fold_metrics": [],
+        "user_metrics": [],
+        "prediction_log": [],
+        "window_prediction_log": [],
+        "trial_prediction_log": [],
+        "variational_interval_log": [],
+        "window_variational_interval_log": [],
+        "trial_variational_interval_log": [],
+        "fold_results": [],
+        # Compatibility fields used by the previous nested-CV training script.
+        "best_configs": [],
+        "inner_cv_results": [],
+        "outer_fold_results": [],
+        "mean_scores": {},
+        "std_scores": {},
+        "window_mean_scores": {},
+        "window_std_scores": {},
+        "trial_mean_scores": {},
+        "trial_std_scores": {},
+    }
+
+    print(f"\nLOSO CV — {total_folds} fold{'s' if total_folds != 1 else ''}")
+    print(f"Total available subjects: {len(unique_subjects)}")
+    if max_folds is not None:
+        print(
+            f"Smoke-test fold limit: {total_folds} of "
+            f"{len(unique_subjects)} subjects"
+        )
+    _print_config("Fixed configuration:", fixed_config)
+    print(f"Requested metrics: {list(metrics)}")
+    print(f"Primary reported metrics: {evaluation_level}-level")
+    print(f"Prediction logging: {log_predictions}")
+    print(f"Variational interval logging: {log_variational_intervals}")
+    print(f"Fold workers: {effective_n_jobs}")
+
+    if effective_n_jobs > 1 and normalized_gpu_ids is None:
+        print("Worker devices: CPU-only")
+    elif normalized_gpu_ids is not None:
+        print(f"Worker devices: GPUs {list(normalized_gpu_ids)}")
+    else:
+        print("Worker device: current TensorFlow default")
+
+    tasks = [
+        (fold_number, _python_scalar(test_subject))
+        for fold_number, test_subject in enumerate(test_subjects, start=1)
+    ]
+
+    worker_state = {
+        "total_folds": total_folds,
+        "model_builder_function": model_builder_function,
+        "feature_array": feature_array,
+        "label_array": label_array,
+        "subject_id_array": subject_id_array,
+        "trial_id_array": trial_id_array,
+        "fixed_config": fixed_config,
+        "batch_size": batch_size,
+        "preprocessing_strategy": preprocessing_strategy,
+        "evaluation_level": evaluation_level,
+        "metrics": metrics,
+        "log_predictions": log_predictions,
+        "log_variational_intervals": log_variational_intervals,
+        "n_uncertainty_samples": n_uncertainty_samples,
+        "ci_level": ci_level,
+        "verbose": verbose,
+        "extra_fit_kwargs": extra_fit_kwargs,
+    }
+
+    if effective_n_jobs == 1 and normalized_gpu_ids is None:
+        fold_outputs = [
+            _run_loso_fold(
+                fold_number=fold_number,
+                test_subject=test_subject,
+                **worker_state,
+            )
+            for fold_number, test_subject in tasks
+        ]
+    else:
+        fold_outputs = _run_spawned_fold_pool(
+            worker_target=_loso_fold_process_main,
+            worker_state=worker_state,
+            tasks=tasks,
+            n_workers=effective_n_jobs,
+            gpu_ids=normalized_gpu_ids,
+            cpus_per_worker=cpus_per_worker,
+            worker_name_prefix="LOSOFoldWorker",
+            worker_description="LOSO-fold",
+        )
+
+    fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+
+    for fold_output in fold_outputs:
+        results["fold_metrics"].append(fold_output["fold_metrics"])
+        results["window_fold_metrics"].append(fold_output["window_fold_metrics"])
+        results["trial_fold_metrics"].append(fold_output["trial_fold_metrics"])
+        results["user_metrics"].extend(fold_output["user_metrics"])
+        results["prediction_log"].extend(fold_output["prediction_log"])
+        results["window_prediction_log"].extend(
+            fold_output["window_prediction_log"]
+        )
+        results["trial_prediction_log"].extend(
+            fold_output["trial_prediction_log"]
+        )
+        results["variational_interval_log"].extend(
+            fold_output["variational_interval_log"]
+        )
+        results["window_variational_interval_log"].extend(
+            fold_output["window_variational_interval_log"]
+        )
+        results["trial_variational_interval_log"].extend(
+            fold_output["trial_variational_interval_log"]
+        )
+        results["fold_results"].append(fold_output["fold_record"])
+        results["outer_fold_results"].append(fold_output["outer_fold_result"])
+        results["best_configs"].append(fold_output["best_config_result"])
+        results["inner_cv_results"].append(fold_output["inner_cv_result"])
+
+    mean_scores, std_scores = _mean_std_rows(
+        results["fold_metrics"],
+        ["loss", *metrics],
+    )
+    window_mean_scores, window_std_scores = _mean_std_rows(
+        results["window_fold_metrics"],
+        ["loss", *metrics],
+    )
+    trial_mean_scores, trial_std_scores = _mean_std_rows(
+        results["trial_fold_metrics"],
+        ["loss", *metrics],
+    )
+
+    results["mean_scores"] = mean_scores
+    results["std_scores"] = std_scores
+    results["window_mean_scores"] = window_mean_scores
+    results["window_std_scores"] = window_std_scores
+    results["trial_mean_scores"] = trial_mean_scores
+    results["trial_std_scores"] = trial_std_scores
+
+    print("\nLOSO CV complete")
+    print("=" * 80)
+    print("Primary mean scores:")
+    print(pformat(mean_scores, indent=4, width=120, sort_dicts=False))
+    print("Primary score standard deviations:")
     print(pformat(std_scores, indent=4, width=120, sort_dicts=False))
     print("Window-level mean scores:")
     print(pformat(window_mean_scores, indent=4, width=120, sort_dicts=False))

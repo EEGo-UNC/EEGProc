@@ -1,9 +1,9 @@
 """Training entry point for the joint VAE + BiLSTM + variational classifier.
 
 This module keeps the v2 model file focused on architecture only. It provides
-nested LNSO cross-validation, structured logging, tunable hyperparameters,
-DREAMER-backed data loading (see ``joint_v2_data.py``), and final model
-saving.
+ordinary leave-one-subject-out cross-validation, structured logging, fixed
+hyperparameters, DREAMER-backed data loading (see ``joint_v2_data.py``), and
+final model saving.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ except ImportError:
     )
 
 try:
-    from ..cross_val import nested_lnso_cv
+    from ..cross_val import loso_cv
     from ..supervised.rnn_architectures import BiLSTMClassifier
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
@@ -55,7 +55,7 @@ except ImportError:
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
 
-    from eegproc.deep_learning.cross_val import nested_lnso_cv
+    from eegproc.deep_learning.cross_val import loso_cv
     from eegproc.deep_learning.supervised.rnn_architectures import (
         BiLSTMClassifier,
     )
@@ -102,6 +102,7 @@ class JointV2TrainingConfig:
     hyperparameters: dict = field(default_factory=dict)
     n_jobs: int = 4
     cpus_per_worker: int = 2
+    max_folds: int | None = None
 
 
 def load_joint_v2_training_data(
@@ -113,48 +114,16 @@ def load_joint_v2_training_data(
     overlap: float = 0.0,
     median_label: float = DREAMER_MEDIAN_LABEL,
     zscore: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Default data loader for the joint-model training pipeline.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load windowed data plus aligned subject and trial identifiers.
 
-    Wraps ``joint_v2_data.build_joint_v2_dataset``, which adapts STSNet's
-    DREAMER loading/label-binarization conventions
-    (``STSNet/prepare_datasets.py``, ``STSNet/train_eval.py``) but windows
-    the *raw* EEG signal (rather than STSNet's covariance/SPD features)
-    since this model's decoder reconstructs raw amplitudes directly.
-
-    By default this loads the pre-converted DREAMER arrays already present
-    in ``eegproc/supervised/stsnet/data/`` (produced by STSNet's
-    ``prepare_datasets.py``), using STSNet's DREAMER conventions: fs=128 Hz,
-    4-second windows (512 samples, 15 windows per 60 s trial), median-split
-    threshold of 3 (DREAMER's 1-5 Likert midpoint), and per-subject,
-    per-channel z-scoring (see ``joint_v2_data.zscore_subject_eeg`` for why
-    this is added on top of STSNet's pipeline).
-
-    Parameters
-    ----------
-    eeg_path, labels_path : str or Path
-        Paths to the pre-converted ``*_eeg.npy`` / ``*_labels.npy`` files.
-    label_dimension : {"valence", "arousal"}, default="valence"
-        Which label dimension to classify.
-    window_size_sec : float, default=4.0
-        Window length in seconds.
-    fs : float, default=128
-        Sampling frequency in Hz.
-    overlap : float, default=0.0
-        Fractional overlap between consecutive windows within a trial.
-    median_label : float, default=3
-        Median-split threshold for binarizing the chosen label dimension.
-    zscore : bool, default=True
-        Whether to z-score each subject's EEG per channel before windowing.
-
-    Returns
-    -------
-    feature_array : np.ndarray, shape (n_windows, timesteps, n_channels)
-    label_array : np.ndarray, shape (n_windows,)
-    subject_id_array : np.ndarray, shape (n_windows,)
+    ``joint_v2_data.build_joint_v2_dataset`` historically returned only
+    features, labels, and subject IDs. When that older interface is present,
+    this wrapper reconstructs trial IDs from the raw four-dimensional array
+    and the exact windowing parameters. A newer four-array return value is
+    accepted directly.
     """
-
-    return build_joint_v2_dataset(
+    dataset_arrays = build_joint_v2_dataset(
         eeg_path=eeg_path,
         labels_path=labels_path,
         label_dimension=label_dimension,
@@ -165,6 +134,59 @@ def load_joint_v2_training_data(
         zscore=zscore,
     )
 
+    if len(dataset_arrays) == 4:
+        feature_array, label_array, subject_id_array, trial_id_array = dataset_arrays
+        return feature_array, label_array, subject_id_array, trial_id_array
+
+    if len(dataset_arrays) != 3:
+        raise ValueError(
+            "build_joint_v2_dataset must return either three arrays "
+            "(features, labels, subject_ids) or four arrays with trial_ids."
+        )
+
+    feature_array, label_array, subject_id_array = dataset_arrays
+
+    # build_joint_v2_dataset emits windows in subject-major, trial-major order.
+    # mmap_mode reads only the array metadata/shape here, not another full copy.
+    raw_eeg = np.load(Path(eeg_path), mmap_mode="r", allow_pickle=False)
+    if raw_eeg.ndim != 4:
+        raise ValueError(
+            "Expected raw EEG shaped "
+            "(n_subjects, n_trials, n_channels, n_samples); got "
+            f"{raw_eeg.shape}."
+        )
+
+    n_subjects, n_trials, _n_channels, n_samples = raw_eeg.shape
+    window_size = int(round(window_size_sec * fs))
+    if window_size <= 0:
+        raise ValueError(
+            f"window_size_sec * fs must produce a positive size; got {window_size}."
+        )
+    if not (0.0 <= overlap < 1.0):
+        raise ValueError(f"overlap must be in [0, 1), got {overlap}.")
+    if n_samples < window_size:
+        raise ValueError(
+            f"Raw trials contain {n_samples} samples, shorter than "
+            f"window_size={window_size}."
+        )
+
+    hop = max(1, int(round(window_size * (1.0 - overlap))))
+    n_windows_per_trial = 1 + (n_samples - window_size) // hop
+    per_subject_trial_ids = np.repeat(
+        np.arange(n_trials, dtype=np.int64),
+        n_windows_per_trial,
+    )
+    trial_id_array = np.tile(per_subject_trial_ids, n_subjects)
+
+    if len(trial_id_array) != len(feature_array):
+        raise ValueError(
+            "Generated trial IDs do not align with the windowed dataset. "
+            f"Generated {len(trial_id_array)} IDs for {len(feature_array)} windows. "
+            "If joint_v2_data changed its window ordering or count, update it "
+            "to return trial IDs directly."
+        )
+
+    return feature_array, label_array, subject_id_array, trial_id_array
 
 def _load_numpy_array(path: str | Path) -> np.ndarray:
     return np.load(Path(path), allow_pickle=False)
@@ -249,11 +271,11 @@ def _select_final_epochs(
     return max(1, int(round(float(np.median(candidate_epochs)))))
 
 
-def _select_final_config(nested_results: dict) -> dict:
+def _select_final_config(cv_results: dict) -> dict:
     """Pick the most frequently selected best config across outer folds."""
     best_configs = [
         row["best_config"]
-        for row in nested_results.get("best_configs", [])
+        for row in cv_results.get("best_configs", [])
         if "best_config" in row
     ]
     if not best_configs:
@@ -400,11 +422,14 @@ def train_joint_autoencoder_variational_classifier_v2(
     feature_array: np.ndarray | None = None,
     label_array: np.ndarray | None = None,
     subject_id_array: np.ndarray | None = None,
-    data_loader: Callable[[], tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
+    trial_id_array: np.ndarray | None = None,
+    data_loader: Callable[
+        [], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    ] | None = None,
     training_config: JointV2TrainingConfig | None = None,
     model_builder_function: Callable[[], tf.keras.Model] | None = None,
 ) -> dict:
-    """Train the joint v2 model with nested LNSO selection and final saving."""
+    """Train the joint v2 model with ordinary LOSO CV and final saving."""
 
     training_config = training_config or JointV2TrainingConfig()
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -418,17 +443,38 @@ def train_joint_autoencoder_variational_classifier_v2(
         np.random.seed(training_config.seed)
 
     if data_loader is not None:
-        feature_array, label_array, subject_id_array = data_loader()
-    elif feature_array is None or label_array is None or subject_id_array is None:
-        feature_array, label_array, subject_id_array = load_joint_v2_training_data()
+        feature_array, label_array, subject_id_array, trial_id_array = data_loader()
+    elif any(
+        array is None
+        for array in (feature_array, label_array, subject_id_array, trial_id_array)
+    ):
+        (
+            feature_array,
+            label_array,
+            subject_id_array,
+            trial_id_array,
+        ) = load_joint_v2_training_data()
 
     feature_array = np.asarray(feature_array, dtype=np.float32)
     label_array = np.asarray(label_array)
     subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
 
     if feature_array.ndim != 3:
         raise ValueError(
             f"feature_array must have shape (n_windows, timesteps, n_features); got {feature_array.shape}."
+        )
+
+    input_lengths = (
+        len(feature_array),
+        len(label_array),
+        len(subject_id_array),
+        len(trial_id_array),
+    )
+    if len(set(input_lengths)) != 1:
+        raise ValueError(
+            "feature_array, label_array, subject_id_array, and trial_id_array "
+            f"must align. Got lengths {input_lengths}."
         )
 
     if model_builder_function is None:
@@ -565,29 +611,33 @@ def train_joint_autoencoder_variational_classifier_v2(
     logger.info("Starting joint-model v2 training run in %s", run_dir)
     logger.info("Feature shape: %s", feature_array.shape)
     logger.info("Unique subjects: %d", len(np.unique(subject_id_array)))
+    logger.info(
+        "Unique subject/trial pairs: %d",
+        len(set(zip(subject_id_array.tolist(), trial_id_array.tolist()))),
+    )
     _write_json(run_dir / "training_config.json", asdict(training_config))
 
-    nested_results = nested_lnso_cv(
+    cv_results = loso_cv(
         model_builder_function=model_builder_function,
         feature_array=feature_array,
         label_array=label_array,
         subject_id_array=subject_id_array,
-        n_outer_subjects_to_leave_out=training_config.n_outer_subjects_to_leave_out,
-        n_inner_subjects_to_leave_out=training_config.n_inner_subjects_to_leave_out,
+        trial_id_array=trial_id_array,
         n_epochs=training_config.cv_max_epochs,
         batch_size=training_config.batch_size,
         hyperparameters=training_config.hyperparameters,
-        selection_metric="loss",
+        evaluation_level="trial",
         metrics=("accuracy", "f1", "precision", "recall"),
         log_predictions=True,
         verbose=training_config.outer_verbose,
         extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
         n_jobs=training_config.n_jobs,
         cpus_per_worker=training_config.cpus_per_worker,
+        max_folds=training_config.max_folds,
     )
 
     fold_rows: list[dict] = []
-    for fold_result in nested_results["outer_fold_results"]:
+    for fold_result in cv_results["outer_fold_results"]:
         row = dict(fold_result)
         test_subjects = row.pop("outer_test_subjects", row.pop("left_out_subjects", []))
         row["outer_test_subjects"] = ",".join(map(str, test_subjects))
@@ -596,12 +646,12 @@ def train_joint_autoencoder_variational_classifier_v2(
         )
         fold_rows.append(row)
 
-    _write_json(run_dir / "nested_cv_results.json", nested_results)
-    _write_csv(run_dir / "nested_cv_outer_folds.csv", fold_rows)
+    _write_json(run_dir / "loso_cv_results.json", cv_results)
+    _write_csv(run_dir / "loso_cv_folds.csv", fold_rows)
 
-    selected_final_config = _select_final_config(nested_results)
+    selected_final_config = _select_final_config(cv_results)
     selected_final_epochs = _select_final_epochs(
-        nested_results["outer_fold_results"],
+        cv_results["outer_fold_results"],
         strategy=training_config.final_epoch_strategy,
         fixed_epochs=training_config.final_epochs,
     )
@@ -656,7 +706,7 @@ def train_joint_autoencoder_variational_classifier_v2(
         "selected_final_config": selected_final_config,
         "selected_final_epochs": selected_final_epochs,
         "selected_final_batch_size": selected_final_batch_size,
-        "nested_cv": nested_results,
+        "loso_cv": cv_results,
         "final_fit_history": final_history.history,
         "final_full_dataset_metrics": final_eval,
     }
@@ -670,15 +720,22 @@ def train_joint_autoencoder_variational_classifier_v2(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train JointAutoencoderVariationalClassifierV2 with nested LNSO CV."
+        description="Train JointAutoencoderVariationalClassifierV2 with ordinary LOSO CV."
     )
     parser.add_argument("--out-dir", default="runs/joint_autoencoder_vc_v2")
     parser.add_argument("--run-name", default="joint_autoencoder_vc_v2")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--outer-subjects", type=int, default=2)
-    parser.add_argument("--inner-subjects", type=int, default=1)
+    parser.add_argument(
+        "--max-folds",
+        type=int,
+        default=None,
+        help=(
+            "Optionally run only the first N sorted LOSO folds. "
+            "Use 1 for an end-to-end smoke test; omit for complete LOSO."
+        ),
+    )
     parser.add_argument("--final-epochs", type=int, default=None)
     parser.add_argument(
         "--final-epoch-strategy",
@@ -733,15 +790,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hyperparameters-json",
         default=None,
         help=(
-            "JSON dict passed to cross_val.nested_lnso_cv as the grid search. "
-            'Example: \'{"epochs":[3,5],"learning_rate":[0.001],'
-            '"vae_beta":[1.0],"bilstm_units":[32,64],'
-            '"bilstm_layers":[1,2],"bilstm_dropout":[0.1,0.2]}\'.'
+            "One fixed hyperparameter configuration passed to cross_val.loso_cv. "
+            'Example: \'{"epochs":[3],"learning_rate":[0.001],'
+            '"vae_beta":[1.0],"bilstm_units":[32],'
+            '"bilstm_layers":[1],"bilstm_dropout":[0.1]}\'.'
         ),
     )
     parser.add_argument("--features-npy", default=None)
     parser.add_argument("--labels-npy", default=None)
     parser.add_argument("--subjects-npy", default=None)
+    parser.add_argument(
+        "--trials-npy",
+        default=None,
+        help=(
+            "Trial ID array aligned with --features-npy. Required with "
+            "pre-windowed feature, label, and subject arrays."
+        ),
+    )
     parser.add_argument(
         "--raw-eeg-npy",
         default=None,
@@ -831,8 +896,6 @@ def main(argv: list[str] | None = None) -> int:
         cv_max_epochs=args.epochs,
         final_epoch_strategy=args.final_epoch_strategy,
         final_epochs=args.final_epochs,
-        n_outer_subjects_to_leave_out=args.outer_subjects,
-        n_inner_subjects_to_leave_out=args.inner_subjects,
         outer_verbose=args.outer_verbose,
         inner_verbose=args.inner_verbose,
         final_verbose=args.final_verbose,
@@ -861,13 +924,29 @@ def main(argv: list[str] | None = None) -> int:
         ),
         n_jobs=args.n_jobs,
         cpus_per_worker=args.cpus_per_worker,
+        max_folds=args.max_folds,
     )
 
-    feature_array = label_array = subject_id_array = None
-    if args.features_npy and args.labels_npy and args.subjects_npy:
+    feature_array = label_array = subject_id_array = trial_id_array = None
+    windowed_paths = (
+        args.features_npy,
+        args.labels_npy,
+        args.subjects_npy,
+        args.trials_npy,
+    )
+    if any(path is not None for path in windowed_paths) and not all(
+        path is not None for path in windowed_paths
+    ):
+        raise ValueError(
+            "Pre-windowed input requires --features-npy, --labels-npy, "
+            "--subjects-npy, and --trials-npy together."
+        )
+
+    if all(path is not None for path in windowed_paths):
         feature_array = _load_numpy_array(args.features_npy)
         label_array = _load_numpy_array(args.labels_npy)
         subject_id_array = _load_numpy_array(args.subjects_npy)
+        trial_id_array = _load_numpy_array(args.trials_npy)
         data_loader = None
     else:
         eeg_path = args.raw_eeg_npy or DEFAULT_DREAMER_EEG_PATH
@@ -887,6 +966,7 @@ def main(argv: list[str] | None = None) -> int:
         feature_array=feature_array,
         label_array=label_array,
         subject_id_array=subject_id_array,
+        trial_id_array=trial_id_array,
         data_loader=data_loader,
         training_config=config,
     )
