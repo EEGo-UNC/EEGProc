@@ -1,4 +1,4 @@
-"""Training entry point for JointAutoencoderVariationalClassifierV2.
+"""Training entry point for the joint VAE + BiLSTM + variational classifier.
 
 This module keeps the v2 model file focused on architecture only. It provides
 nested LNSO cross-validation, structured logging, tunable hyperparameters,
@@ -47,6 +47,7 @@ except ImportError:
 
 try:
     from ..cross_val import nested_lnso_cv
+    from ..supervised.rnn_architectures import BiLSTMClassifier
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
 except ImportError:
@@ -55,6 +56,9 @@ except ImportError:
         sys.path.insert(0, str(SRC_ROOT))
 
     from eegproc.deep_learning.cross_val import nested_lnso_cv
+    from eegproc.deep_learning.supervised.rnn_architectures import (
+        BiLSTMClassifier,
+    )
     from eegproc.deep_learning.supervised.variational_classifier import (
         VariationalClassifier,
     )
@@ -87,6 +91,10 @@ class JointV2TrainingConfig:
     save_weights: bool = True
     save_final_history_csv: bool = True
     seed: int | None = None
+    bilstm_units: int = 64
+    n_bilstm_layers: int = 2
+    bilstm_dropout: float = 0.10
+    bilstm_kwargs: dict = field(default_factory=dict)
     encoder_kwargs: dict = field(default_factory=dict)
     decoder_kwargs: dict = field(default_factory=dict)
     classifier_kwargs: dict = field(default_factory=dict)
@@ -265,18 +273,31 @@ def build_joint_autoencoder_variational_classifier_v2(
     learning_rate: float = 1e-3,
     ae_loss_weight: float = 0.5,
     vc_loss_weight: float = 0.5,
+    vae_beta: float = 1.0,
     vc_alpha: float = 1.0,
     vc_beta: float = 1.0,
     vc_gamma: float = 0.0,
     vc_lambda: float = 1.0,
     update_discriminator: bool = False,
+    bilstm_units: int = 64,
+    n_bilstm_layers: int = 2,
+    bilstm_dropout: float = 0.10,
+    bilstm_kwargs: dict | None = None,
     encoder_kwargs: dict | None = None,
     decoder_kwargs: dict | None = None,
     classifier_kwargs: dict | None = None,
     model_name: str = "joint_autoencoder_variational_classifier_v2",
 ) -> JointAutoencoderVariationalClassifierV2:
-    """Build and compile a default v2 joint model."""
+    """Build and compile the CNN-VAE + BiLSTM + VC model.
 
+    The CNN output is projected to learned ``z_mean`` and ``z_log_var``
+    sequences inside ``JointAutoencoderVariationalClassifierV2``. Training
+    uses reparameterized samples; evaluation uses the posterior mean.
+
+    ``bilstm_units``, ``n_bilstm_layers``, and ``bilstm_dropout`` are exposed
+    directly so nested cross-validation can tune them. ``bilstm_kwargs`` is
+    available for less common ``BiLSTMClassifier`` constructor options.
+    """
     timesteps, n_features = input_shape
 
     encoder_defaults = {
@@ -299,15 +320,67 @@ def build_joint_autoencoder_variational_classifier_v2(
         classifier_defaults.update(classifier_kwargs)
 
     encoder = CNN1DEncoder(**encoder_defaults)
-    decoder = CNN1DDecoder.from_encoder(encoder, **(decoder_kwargs or {}))
+
+    # Build the encoder once so the recurrent input dimensions are known.
+    dummy_input = tf.zeros(
+        shape=(1, timesteps, n_features),
+        dtype=tf.float32,
+    )
+    latent_sequence = encoder(dummy_input, training=False)
+    if latent_sequence.shape.rank != 3:
+        raise ValueError(
+            "CNN1DEncoder must return a rank-3 sequence shaped "
+            "(batch, latent_timesteps, latent_features); got "
+            f"{latent_sequence.shape}."
+        )
+
+    latent_timesteps = latent_sequence.shape[1]
+    latent_features = latent_sequence.shape[2]
+    if latent_timesteps is None or latent_features is None:
+        raise ValueError(
+            "The CNN encoder must expose static latent timestep and feature "
+            "dimensions so the BiLSTM feature extractor can be built."
+        )
+
+    decoder = CNN1DDecoder.from_encoder(
+        encoder,
+        **(decoder_kwargs or {}),
+    )
+
+    recurrent_defaults = {
+        "lstm_units": int(bilstm_units),
+        "n_bilstm_layers": int(n_bilstm_layers),
+        "dropout": float(bilstm_dropout),
+        "name": "joint_bilstm",
+    }
+    if bilstm_kwargs:
+        reserved = {"timesteps", "n_features", "n_classes"}
+        conflicting = reserved.intersection(bilstm_kwargs)
+        if conflicting:
+            raise ValueError(
+                "bilstm_kwargs cannot override dimensions supplied by the "
+                f"joint model: {sorted(conflicting)}"
+            )
+        recurrent_defaults.update(bilstm_kwargs)
+
+    classification_model = BiLSTMClassifier(
+        timesteps=int(latent_timesteps),
+        n_features=int(latent_features),
+        n_classes=n_classes,
+        **recurrent_defaults,
+    ).build_feature_extractor()
+
     variational_classifier = VariationalClassifier(**classifier_defaults)
 
     model = JointAutoencoderVariationalClassifierV2(
         encoder=encoder,
         decoder=decoder,
+        classification_model=classification_model,
         variational_classifier=variational_classifier,
+        latent_features=int(latent_features),
         ae_loss_weight=ae_loss_weight,
         vc_loss_weight=vc_loss_weight,
+        vae_beta=vae_beta,
         vc_alpha=vc_alpha,
         vc_beta=vc_beta,
         vc_gamma=vc_gamma,
@@ -315,7 +388,11 @@ def build_joint_autoencoder_variational_classifier_v2(
         update_discriminator=update_discriminator,
         name=model_name,
     )
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate))
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(
+            learning_rate=learning_rate,
+        )
+    )
     return model
 
 
@@ -365,16 +442,24 @@ def train_joint_autoencoder_variational_classifier_v2(
             "dropout",
             "use_batch_norm",
         }
+        bilstm_hparam_keys = {
+            "bilstm_units",
+            "bilstm_layers",
+            "bilstm_dropout",
+        }
         model_hparam_keys = {
             "learning_rate",
             "ae_loss_weight",
             "vc_loss_weight",
+            "vae_beta",
             "vc_alpha",
             "vc_beta",
             "vc_gamma",
             "vc_lambda",
             "update_discriminator",
             *encoder_hparam_keys,
+            *bilstm_hparam_keys,
+            "bilstm_kwargs",
             "encoder_kwargs",
             "decoder_kwargs",
             "classifier_kwargs",
@@ -386,6 +471,9 @@ def train_joint_autoencoder_variational_classifier_v2(
                 raise ValueError(
                     f"Unknown hyperparameter(s): {sorted(unknown_hparams)}"
                 )
+
+            bilstm_kwargs = dict(training_config.bilstm_kwargs)
+            bilstm_kwargs.update(hparams.get("bilstm_kwargs", {}))
 
             encoder_kwargs = dict(training_config.encoder_kwargs)
             encoder_kwargs.update(
@@ -415,6 +503,12 @@ def train_joint_autoencoder_variational_classifier_v2(
                     hparams.get(
                         "vc_loss_weight",
                         training_config.model_kwargs.get("vc_loss_weight", 0.5),
+                    )
+                ),
+                vae_beta=float(
+                    hparams.get(
+                        "vae_beta",
+                        training_config.model_kwargs.get("vae_beta", 1.0),
                     )
                 ),
                 vc_alpha=float(
@@ -447,6 +541,22 @@ def train_joint_autoencoder_variational_classifier_v2(
                         training_config.model_kwargs.get("update_discriminator", False),
                     )
                 ),
+                bilstm_units=int(
+                    hparams.get("bilstm_units", training_config.bilstm_units)
+                ),
+                n_bilstm_layers=int(
+                    hparams.get(
+                        "bilstm_layers",
+                        training_config.n_bilstm_layers,
+                    )
+                ),
+                bilstm_dropout=float(
+                    hparams.get(
+                        "bilstm_dropout",
+                        training_config.bilstm_dropout,
+                    )
+                ),
+                bilstm_kwargs=bilstm_kwargs,
                 encoder_kwargs=encoder_kwargs,
                 decoder_kwargs=decoder_kwargs,
                 classifier_kwargs=classifier_kwargs,
@@ -587,17 +697,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-save-final-history-csv", action="store_true")
     parser.add_argument("--ae-loss-weight", type=float, default=0.5)
     parser.add_argument("--vc-loss-weight", type=float, default=0.5)
+    parser.add_argument(
+        "--vae-beta",
+        type=float,
+        default=1.0,
+        help=(
+            "Positive KL weight for the autoencoder posterior "
+            "q(z_ae|x) against N(0, I) (default: 1.0)."
+        ),
+    )
     parser.add_argument("--vc-alpha", type=float, default=1.0)
     parser.add_argument("--vc-beta", type=float, default=1.0)
     parser.add_argument("--vc-gamma", type=float, default=0.0)
     parser.add_argument("--vc-lambda", type=float, default=1.0)
     parser.add_argument("--update-discriminator", action="store_true")
     parser.add_argument(
+        "--bilstm-units",
+        type=int,
+        default=64,
+        help="Hidden units per BiLSTM direction/layer (default: 64).",
+    )
+    parser.add_argument(
+        "--bilstm-layers",
+        type=int,
+        default=2,
+        help="Number of stacked bidirectional LSTM layers (default: 2).",
+    )
+    parser.add_argument(
+        "--bilstm-dropout",
+        type=float,
+        default=0.10,
+        help="Dropout after each BiLSTM block (default: 0.10).",
+    )
+    parser.add_argument(
         "--hyperparameters-json",
         default=None,
         help=(
             "JSON dict passed to cross_val.nested_lnso_cv as the grid search. "
-            'Example: \'{"epochs": [3, 5], "learning_rate": [0.001, 0.0005]}\'.'
+            'Example: \'{"epochs":[3,5],"learning_rate":[0.001],'
+            '"vae_beta":[1.0],"bilstm_units":[32,64],'
+            '"bilstm_layers":[1,2],"bilstm_dropout":[0.1,0.2]}\'.'
         ),
     )
     parser.add_argument("--features-npy", default=None)
@@ -704,9 +843,13 @@ def main(argv: list[str] | None = None) -> int:
         save_weights=not args.no_save_weights,
         save_final_history_csv=not args.no_save_final_history_csv,
         seed=args.seed,
+        bilstm_units=args.bilstm_units,
+        n_bilstm_layers=args.bilstm_layers,
+        bilstm_dropout=args.bilstm_dropout,
         model_kwargs={
             "ae_loss_weight": args.ae_loss_weight,
             "vc_loss_weight": args.vc_loss_weight,
+            "vae_beta": args.vae_beta,
             "vc_alpha": args.vc_alpha,
             "vc_beta": args.vc_beta,
             "vc_gamma": args.vc_gamma,
@@ -717,7 +860,7 @@ def main(argv: list[str] | None = None) -> int:
             json.loads(args.hyperparameters_json) if args.hyperparameters_json else {}
         ),
         n_jobs=args.n_jobs,
-        cpus_per_worker=args.cpus_per_worker
+        cpus_per_worker=args.cpus_per_worker,
     )
 
     feature_array = label_array = subject_id_array = None

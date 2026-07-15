@@ -10,7 +10,7 @@ from typing import Callable, Literal, Mapping
 
 import numpy as np
 import tensorflow as tf
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score, recall_score
 
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
@@ -272,6 +272,160 @@ def _classification_metrics(
     return scores
 
 
+
+def _aggregate_window_probabilities_by_trial(
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    subject_ids: np.ndarray,
+    trial_ids: np.ndarray,
+) -> dict:
+    """Aggregate window probabilities into one prediction per subject/trial.
+
+    The model is still trained and run at the window level. For evaluation, all
+    window probabilities belonging to the same ``(subject_id, trial_id)`` are
+    averaged, and the class with the highest mean probability becomes the trial
+    prediction.
+
+    Every window in one trial must have the same ground-truth label. Subject ID
+    is included in the grouping key because trial numbers commonly repeat across
+    subjects.
+    """
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    y_true = _as_numpy_1d(y_true).astype(np.int64)
+    subject_ids = np.asarray(subject_ids)
+    trial_ids = np.asarray(trial_ids)
+
+    n_windows = len(y_true)
+    if probabilities.ndim != 2 or len(probabilities) != n_windows:
+        raise ValueError(
+            "probabilities must have shape (n_windows, n_classes) and align "
+            f"with y_true. Got probabilities={probabilities.shape}, "
+            f"n_windows={n_windows}."
+        )
+    if len(subject_ids) != n_windows or len(trial_ids) != n_windows:
+        raise ValueError(
+            "subject_ids and trial_ids must contain one value per window. "
+            f"Got {len(subject_ids)} subjects, {len(trial_ids)} trials, "
+            f"and {n_windows} labels."
+        )
+
+    grouped_indices: dict[tuple, list[int]] = {}
+    for index, (subject_id, trial_id) in enumerate(zip(subject_ids, trial_ids)):
+        key = (_python_scalar(subject_id), _python_scalar(trial_id))
+        grouped_indices.setdefault(key, []).append(index)
+
+    trial_probabilities: list[np.ndarray] = []
+    trial_y_true: list[int] = []
+    trial_subject_ids: list = []
+    output_trial_ids: list = []
+    trial_window_counts: list[int] = []
+    trial_window_indices: list[np.ndarray] = []
+
+    for (subject_id, trial_id), indices_list in grouped_indices.items():
+        indices = np.asarray(indices_list, dtype=np.int64)
+        labels = np.unique(y_true[indices])
+
+        if len(labels) != 1:
+            raise ValueError(
+                "All windows in one trial must share one ground-truth label. "
+                f"Subject {subject_id!r}, trial {trial_id!r} contains labels "
+                f"{labels.tolist()}."
+            )
+
+        trial_probabilities.append(probabilities[indices].mean(axis=0))
+        trial_y_true.append(int(labels[0]))
+        trial_subject_ids.append(subject_id)
+        output_trial_ids.append(trial_id)
+        trial_window_counts.append(int(len(indices)))
+        trial_window_indices.append(indices)
+
+    trial_probabilities_array = np.stack(trial_probabilities, axis=0)
+
+    return {
+        "probabilities": trial_probabilities_array,
+        "y_true": np.asarray(trial_y_true, dtype=np.int64),
+        "y_pred": _predict_labels(trial_probabilities_array),
+        "subject_ids": np.asarray(trial_subject_ids),
+        "trial_ids": np.asarray(output_trial_ids),
+        "n_windows": np.asarray(trial_window_counts, dtype=np.int64),
+        "window_indices": trial_window_indices,
+    }
+
+
+def _probability_log_loss(
+    y_true: np.ndarray,
+    probabilities: np.ndarray,
+) -> float:
+    """Return multiclass log loss for a probability matrix."""
+    y_true = _as_numpy_1d(y_true).astype(np.int64)
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+
+    if probabilities.ndim != 2:
+        raise ValueError(
+            f"Expected probabilities with shape (n, c), got {probabilities.shape}."
+        )
+
+    return float(
+        log_loss(
+            y_true,
+            probabilities,
+            labels=list(range(probabilities.shape[1])),
+        )
+    )
+
+
+def _level_scores(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    probabilities: np.ndarray,
+    metrics: list[str] | tuple[str, ...],
+) -> dict:
+    """Compute loss and requested metrics for one evaluation level."""
+    scores = {
+        "loss": _probability_log_loss(y_true, probabilities),
+    }
+    scores.update(
+        _classification_metrics(
+            y_true=y_true,
+            y_pred=y_pred,
+            metrics=metrics,
+            n_classes=probabilities.shape[1],
+        )
+    )
+    return scores
+
+
+def _prefix_scores(scores: dict, prefix: str) -> dict:
+    """Prefix metric names, for example ``accuracy`` -> ``trial_accuracy``."""
+    return {f"{prefix}_{key}": value for key, value in scores.items()}
+
+
+def _validate_evaluation_level(level: str, parameter_name: str) -> None:
+    """Validate a window/trial evaluation-level parameter."""
+    if level not in {"window", "trial"}:
+        raise ValueError(
+            f"{parameter_name} must be 'window' or 'trial', got {level!r}."
+        )
+
+
+def _validate_processed_alignment(
+    X: np.ndarray,
+    y: np.ndarray,
+    subject_ids: np.ndarray,
+    trial_ids: np.ndarray,
+    partition_name: str,
+) -> None:
+    """Ensure fold-local preprocessing preserved window order and count."""
+    lengths = (len(X), len(y), len(subject_ids), len(trial_ids))
+    if len(set(lengths)) != 1:
+        raise ValueError(
+            f"Preprocessing changed the number of {partition_name} windows or "
+            "misaligned labels/IDs. Window creation, removal, reordering, and "
+            "resampling must occur before nested_lnso_cv. Got lengths "
+            f"X/y/subject/trial={lengths}."
+        )
+
+
 def _keras_loss_value(
     model: tf.keras.Model,
     X: np.ndarray,
@@ -301,8 +455,9 @@ def _make_prediction_log(
     y_pred: np.ndarray,
     probabilities: np.ndarray,
     subject_ids: np.ndarray,
+    trial_ids: np.ndarray,
 ) -> list[dict]:
-    """Create one prediction-log row per evaluated sample/window."""
+    """Create one prediction-log row per evaluated window."""
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
 
@@ -312,8 +467,11 @@ def _make_prediction_log(
         pred_class = int(y_pred[i])
         row = {
             "fold": int(fold_index),
+            "window_index": int(i),
+            # Backwards-compatible alias retained for existing exports.
             "sample_index": int(i),
             "subject_id": _python_scalar(subject_ids[i]),
+            "trial_id": _python_scalar(trial_ids[i]),
             "y_true": int(y_true[i]),
             "y_pred": pred_class,
             "p_pred": float(probabilities[i, pred_class]),
@@ -327,20 +485,70 @@ def _make_prediction_log(
     return rows
 
 
-def _make_variational_interval_log(
+def _make_trial_prediction_log(
+    fold_index: int,
+    trial_aggregation: dict,
+) -> list[dict]:
+    """Create one prediction-log row per evaluated subject/trial."""
+    rows: list[dict] = []
+    probabilities = trial_aggregation["probabilities"]
+    y_true = trial_aggregation["y_true"]
+    y_pred = trial_aggregation["y_pred"]
+
+    for i in range(len(y_true)):
+        pred_class = int(y_pred[i])
+        row = {
+            "fold": int(fold_index),
+            "trial_index": int(i),
+            "subject_id": _python_scalar(trial_aggregation["subject_ids"][i]),
+            "trial_id": _python_scalar(trial_aggregation["trial_ids"][i]),
+            "n_windows": int(trial_aggregation["n_windows"][i]),
+            "y_true": int(y_true[i]),
+            "y_pred": pred_class,
+            "p_pred": float(probabilities[i, pred_class]),
+        }
+
+        for class_idx in range(probabilities.shape[1]):
+            row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
+
+        rows.append(row)
+
+    return rows
+
+
+def _extract_classifier_output(raw_output):
+    """Extract classifier logits/probabilities from a model call or prediction."""
+    if isinstance(raw_output, Mapping):
+        if "probabilities" in raw_output:
+            return raw_output["probabilities"]
+        if "logits" in raw_output:
+            return raw_output["logits"]
+        raise ValueError(
+            "Model output dictionary did not contain 'logits' or "
+            f"'probabilities'. Available outputs: {list(raw_output.keys())}"
+        )
+
+    if isinstance(raw_output, (tuple, list)):
+        return raw_output[0]
+
+    return raw_output
+
+
+def _make_variational_interval_logs(
     model: tf.keras.Model,
     X: np.ndarray,
     y_true: np.ndarray,
     subject_ids: np.ndarray,
+    trial_ids: np.ndarray,
     fold_index: int,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
-) -> list[dict]:
-    """Estimate predictive probability intervals with stochastic forward passes.
+) -> tuple[list[dict], list[dict]]:
+    """Estimate stochastic probability intervals for windows and trials.
 
-    This logs empirical probability intervals, not a closed-form Bayesian credible
-    interval. It is useful when the model has stochastic inference behavior under
-    training=True, such as dropout or latent sampling.
+    Trial intervals are calculated correctly by first averaging window
+    probabilities within each trial for every stochastic forward pass, then
+    taking quantiles across those trial-level samples.
     """
     if n_uncertainty_samples < 2:
         raise ValueError(
@@ -353,50 +561,91 @@ def _make_variational_interval_log(
     probability_samples: list[np.ndarray] = []
 
     for _ in range(n_uncertainty_samples):
-        raw_output = model(X_tensor, training=True)
+        raw_output = _extract_classifier_output(model(X_tensor, training=True))
+        if hasattr(raw_output, "numpy"):
+            raw_output = raw_output.numpy()
+        probability_samples.append(_to_probabilities(raw_output))
 
-        if isinstance(raw_output, (tuple, list)):
-            raw_output = raw_output[0]
-
-        probabilities = _to_probabilities(raw_output.numpy())
-        probability_samples.append(probabilities)
-
-    probability_samples_array = np.stack(probability_samples, axis=0)
-    mean_probabilities = probability_samples_array.mean(axis=0)
+    window_samples = np.stack(probability_samples, axis=0)
+    window_mean = window_samples.mean(axis=0)
 
     alpha = 1.0 - ci_level
-    ci_low = np.quantile(probability_samples_array, alpha / 2.0, axis=0)
-    ci_high = np.quantile(probability_samples_array, 1.0 - alpha / 2.0, axis=0)
+    window_low = np.quantile(window_samples, alpha / 2.0, axis=0)
+    window_high = np.quantile(window_samples, 1.0 - alpha / 2.0, axis=0)
+    window_pred = _predict_labels(window_mean)
 
-    y_pred = np.argmax(mean_probabilities, axis=1).astype(np.int64)
-
-    rows: list[dict] = []
-
+    window_rows: list[dict] = []
     for i in range(len(y_true)):
-        pred_class = int(y_pred[i])
-
+        pred_class = int(window_pred[i])
         row = {
             "fold": int(fold_index),
+            "window_index": int(i),
             "sample_index": int(i),
             "subject_id": _python_scalar(subject_ids[i]),
+            "trial_id": _python_scalar(trial_ids[i]),
             "y_true": int(y_true[i]),
             "y_pred": pred_class,
-            "p_pred_mean": float(mean_probabilities[i, pred_class]),
-            "p_pred_ci_low": float(ci_low[i, pred_class]),
-            "p_pred_ci_high": float(ci_high[i, pred_class]),
+            "p_pred_mean": float(window_mean[i, pred_class]),
+            "p_pred_ci_low": float(window_low[i, pred_class]),
+            "p_pred_ci_high": float(window_high[i, pred_class]),
             "ci_level": float(ci_level),
             "n_uncertainty_samples": int(n_uncertainty_samples),
         }
+        for class_idx in range(window_mean.shape[1]):
+            row[f"p_class_{class_idx}_mean"] = float(window_mean[i, class_idx])
+            row[f"p_class_{class_idx}_ci_low"] = float(window_low[i, class_idx])
+            row[f"p_class_{class_idx}_ci_high"] = float(window_high[i, class_idx])
+        window_rows.append(row)
 
-        for class_idx in range(mean_probabilities.shape[1]):
-            row[f"p_class_{class_idx}_mean"] = float(mean_probabilities[i, class_idx])
-            row[f"p_class_{class_idx}_ci_low"] = float(ci_low[i, class_idx])
-            row[f"p_class_{class_idx}_ci_high"] = float(ci_high[i, class_idx])
+    reference_aggregation = _aggregate_window_probabilities_by_trial(
+        probabilities=window_mean,
+        y_true=y_true,
+        subject_ids=subject_ids,
+        trial_ids=trial_ids,
+    )
 
-        rows.append(row)
+    trial_sample_list: list[np.ndarray] = []
+    for sample_index in range(window_samples.shape[0]):
+        trial_sample_list.append(
+            np.stack(
+                [
+                    window_samples[sample_index, indices].mean(axis=0)
+                    for indices in reference_aggregation["window_indices"]
+                ],
+                axis=0,
+            )
+        )
 
-    return rows
+    trial_samples = np.stack(trial_sample_list, axis=0)
+    trial_mean = trial_samples.mean(axis=0)
+    trial_low = np.quantile(trial_samples, alpha / 2.0, axis=0)
+    trial_high = np.quantile(trial_samples, 1.0 - alpha / 2.0, axis=0)
+    trial_pred = _predict_labels(trial_mean)
 
+    trial_rows: list[dict] = []
+    for i in range(len(reference_aggregation["y_true"])):
+        pred_class = int(trial_pred[i])
+        row = {
+            "fold": int(fold_index),
+            "trial_index": int(i),
+            "subject_id": _python_scalar(reference_aggregation["subject_ids"][i]),
+            "trial_id": _python_scalar(reference_aggregation["trial_ids"][i]),
+            "n_windows": int(reference_aggregation["n_windows"][i]),
+            "y_true": int(reference_aggregation["y_true"][i]),
+            "y_pred": pred_class,
+            "p_pred_mean": float(trial_mean[i, pred_class]),
+            "p_pred_ci_low": float(trial_low[i, pred_class]),
+            "p_pred_ci_high": float(trial_high[i, pred_class]),
+            "ci_level": float(ci_level),
+            "n_uncertainty_samples": int(n_uncertainty_samples),
+        }
+        for class_idx in range(trial_mean.shape[1]):
+            row[f"p_class_{class_idx}_mean"] = float(trial_mean[i, class_idx])
+            row[f"p_class_{class_idx}_ci_low"] = float(trial_low[i, class_idx])
+            row[f"p_class_{class_idx}_ci_high"] = float(trial_high[i, class_idx])
+        trial_rows.append(row)
+
+    return window_rows, trial_rows
 
 def _python_scalar(value):
     """Convert numpy scalars to plain Python scalars for logs/JSON."""
@@ -478,102 +727,169 @@ def _evaluate_classification_fold(
     X_test: np.ndarray,
     y_test: np.ndarray,
     subject_ids_test: np.ndarray,
+    trial_ids_test: np.ndarray,
     fold_index: int,
     metrics: list[str] | tuple[str, ...],
+    evaluation_level: Literal["window", "trial"] = "trial",
     batch_size: int | None = None,
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
 ) -> dict:
-    """Evaluate one outer fold and return all requested logs."""
-    y_true = _as_numpy_1d(y_test).astype(np.int64)
+    """Evaluate one outer fold at both window and trial levels."""
+    _validate_evaluation_level(evaluation_level, "evaluation_level")
+    y_true_window = _as_numpy_1d(y_test).astype(np.int64)
 
-    probabilities = _predict_probabilities(
+    probabilities_window = _predict_probabilities(
         model=model,
         X=X_test,
         batch_size=batch_size,
     )
-    y_pred = _predict_labels(probabilities)
+    y_pred_window = _predict_labels(probabilities_window)
 
-    loss_value = _keras_loss_value(
+    # model.evaluate() is retained as a diagnostic because joint Keras models
+    # may include reconstruction/regularization terms beyond classification.
+    keras_model_loss = _keras_loss_value(
         model=model,
         X=X_test,
         y=y_test,
         batch_size=batch_size,
     )
 
-    fold_scores = {
-        "fold": int(fold_index),
-        "n_samples": int(len(y_true)),
-        "loss": float(loss_value),
-    }
-    fold_scores.update(
-        _classification_metrics(
-            y_true=y_true,
-            y_pred=y_pred,
-            metrics=metrics,
-            n_classes=probabilities.shape[1],
-        )
+    window_scores = _level_scores(
+        y_true=y_true_window,
+        y_pred=y_pred_window,
+        probabilities=probabilities_window,
+        metrics=metrics,
     )
 
+    trial_aggregation = _aggregate_window_probabilities_by_trial(
+        probabilities=probabilities_window,
+        y_true=y_true_window,
+        subject_ids=subject_ids_test,
+        trial_ids=trial_ids_test,
+    )
+    trial_scores = _level_scores(
+        y_true=trial_aggregation["y_true"],
+        y_pred=trial_aggregation["y_pred"],
+        probabilities=trial_aggregation["probabilities"],
+        metrics=metrics,
+    )
+
+    primary_scores = trial_scores if evaluation_level == "trial" else window_scores
+    fold_scores = {
+        "fold": int(fold_index),
+        "evaluation_level": evaluation_level,
+        "n_samples": int(
+            len(trial_aggregation["y_true"])
+            if evaluation_level == "trial"
+            else len(y_true_window)
+        ),
+        "n_windows": int(len(y_true_window)),
+        "n_trials": int(len(trial_aggregation["y_true"])),
+        "keras_model_loss": float(keras_model_loss),
+        **primary_scores,
+        **_prefix_scores(window_scores, "window"),
+        **_prefix_scores(trial_scores, "trial"),
+    }
+
+    window_fold_metrics = {
+        "fold": int(fold_index),
+        "n_windows": int(len(y_true_window)),
+        "keras_model_loss": float(keras_model_loss),
+        **window_scores,
+    }
+    trial_fold_metrics = {
+        "fold": int(fold_index),
+        "n_trials": int(len(trial_aggregation["y_true"])),
+        **trial_scores,
+    }
+
     user_rows: list[dict] = []
-
     for subject_id in np.unique(subject_ids_test):
-        mask = subject_ids_test == subject_id
-        user_y_true = y_true[mask]
-        user_y_pred = y_pred[mask]
+        window_mask = subject_ids_test == subject_id
+        trial_mask = trial_aggregation["subject_ids"] == subject_id
 
-        user_row = {
-            "fold": int(fold_index),
-            "subject_id": _python_scalar(subject_id),
-            "n_samples": int(mask.sum()),
-        }
-        user_row.update(
-            _classification_metrics(
-                y_true=user_y_true,
-                y_pred=user_y_pred,
-                metrics=metrics,
-                n_classes=probabilities.shape[1],
-            )
+        user_window_scores = _level_scores(
+            y_true=y_true_window[window_mask],
+            y_pred=y_pred_window[window_mask],
+            probabilities=probabilities_window[window_mask],
+            metrics=metrics,
         )
-        user_rows.append(user_row)
+        user_trial_scores = _level_scores(
+            y_true=trial_aggregation["y_true"][trial_mask],
+            y_pred=trial_aggregation["y_pred"][trial_mask],
+            probabilities=trial_aggregation["probabilities"][trial_mask],
+            metrics=metrics,
+        )
+        user_primary_scores = (
+            user_trial_scores if evaluation_level == "trial" else user_window_scores
+        )
 
-    prediction_rows: list[dict] = []
+        user_rows.append(
+            {
+                "fold": int(fold_index),
+                "subject_id": _python_scalar(subject_id),
+                "evaluation_level": evaluation_level,
+                "n_samples": int(trial_mask.sum() if evaluation_level == "trial" else window_mask.sum()),
+                "n_windows": int(window_mask.sum()),
+                "n_trials": int(trial_mask.sum()),
+                **user_primary_scores,
+                **_prefix_scores(user_window_scores, "window"),
+                **_prefix_scores(user_trial_scores, "trial"),
+            }
+        )
 
+    window_prediction_rows: list[dict] = []
+    trial_prediction_rows: list[dict] = []
     if log_predictions:
-        prediction_rows = _make_prediction_log(
+        window_prediction_rows = _make_prediction_log(
             fold_index=fold_index,
-            y_true=y_true,
-            y_pred=y_pred,
-            probabilities=probabilities,
+            y_true=y_true_window,
+            y_pred=y_pred_window,
+            probabilities=probabilities_window,
             subject_ids=subject_ids_test,
+            trial_ids=trial_ids_test,
+        )
+        trial_prediction_rows = _make_trial_prediction_log(
+            fold_index=fold_index,
+            trial_aggregation=trial_aggregation,
         )
 
-    interval_rows: list[dict] = []
-
+    window_interval_rows: list[dict] = []
+    trial_interval_rows: list[dict] = []
     if log_variational_intervals:
-        interval_rows = _make_variational_interval_log(
+        window_interval_rows, trial_interval_rows = _make_variational_interval_logs(
             model=model,
             X=X_test,
-            y_true=y_true,
+            y_true=y_true_window,
             subject_ids=subject_ids_test,
+            trial_ids=trial_ids_test,
             fold_index=fold_index,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
         )
 
     _print_metric_row(
-        title=f"Fold {fold_index} metrics",
+        title=f"Fold {fold_index} metrics ({evaluation_level} primary)",
         row=fold_scores,
     )
     _print_user_metrics(user_rows)
 
     return {
         "fold_metrics": fold_scores,
+        "window_fold_metrics": window_fold_metrics,
+        "trial_fold_metrics": trial_fold_metrics,
         "user_metrics": user_rows,
-        "prediction_log": prediction_rows,
-        "variational_interval_log": interval_rows,
+        # Backwards-compatible name: prediction_log remains window-level.
+        "prediction_log": window_prediction_rows,
+        "window_prediction_log": window_prediction_rows,
+        "trial_prediction_log": trial_prediction_rows,
+        # Backwards-compatible name: variational_interval_log remains window-level.
+        "variational_interval_log": window_interval_rows,
+        "window_variational_interval_log": window_interval_rows,
+        "trial_variational_interval_log": trial_interval_rows,
     }
 
 
@@ -581,26 +897,50 @@ def _evaluate_inner_config(
     model: tf.keras.Model,
     X_val: np.ndarray,
     y_val: np.ndarray,
+    subject_ids_val: np.ndarray,
+    trial_ids_val: np.ndarray,
     metrics: list[str] | tuple[str, ...],
+    selection_level: Literal["window", "trial"] = "trial",
     batch_size: int | None = None,
 ) -> dict:
-    """Evaluate an inner validation fold for hyperparameter selection."""
-    y_true = _as_numpy_1d(y_val).astype(np.int64)
-    probabilities = _predict_probabilities(model, X_val, batch_size=batch_size)
-    y_pred = _predict_labels(probabilities)
+    """Evaluate an inner fold at both levels and expose selection-level scores."""
+    _validate_evaluation_level(selection_level, "selection_level")
+    y_true_window = _as_numpy_1d(y_val).astype(np.int64)
+    probabilities_window = _predict_probabilities(model, X_val, batch_size=batch_size)
+    y_pred_window = _predict_labels(probabilities_window)
 
-    scores = {
-        "loss": _keras_loss_value(model, X_val, y_val, batch_size=batch_size),
-    }
-    scores.update(
-        _classification_metrics(
-            y_true,
-            y_pred,
-            metrics=metrics,
-            n_classes=probabilities.shape[1],
-        )
+    window_scores = _level_scores(
+        y_true=y_true_window,
+        y_pred=y_pred_window,
+        probabilities=probabilities_window,
+        metrics=metrics,
     )
-    return scores
+    window_scores["keras_model_loss"] = _keras_loss_value(
+        model, X_val, y_val, batch_size=batch_size
+    )
+
+    trial_aggregation = _aggregate_window_probabilities_by_trial(
+        probabilities=probabilities_window,
+        y_true=y_true_window,
+        subject_ids=subject_ids_val,
+        trial_ids=trial_ids_val,
+    )
+    trial_scores = _level_scores(
+        y_true=trial_aggregation["y_true"],
+        y_pred=trial_aggregation["y_pred"],
+        probabilities=trial_aggregation["probabilities"],
+        metrics=metrics,
+    )
+
+    primary_scores = trial_scores if selection_level == "trial" else window_scores
+    return {
+        **{key: primary_scores[key] for key in ["loss", *metrics]},
+        **_prefix_scores(window_scores, "window"),
+        **_prefix_scores(trial_scores, "trial"),
+        "selection_level": selection_level,
+        "n_val_windows": int(len(y_true_window)),
+        "n_val_trials": int(len(trial_aggregation["y_true"])),
+    }
 
 
 # ---------------------------------------------------------------------
@@ -703,11 +1043,14 @@ def _run_outer_fold(
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
     n_inner_subjects_to_leave_out: int,
     grid_configs: list[dict],
     batch_size: int,
     preprocessing_strategy: Callable | None,
     selection_metric: str,
+    selection_level: Literal["window", "trial"],
+    evaluation_level: Literal["window", "trial"],
     maximize_metric: bool,
     metrics: tuple[str, ...],
     log_predictions: bool,
@@ -764,6 +1107,10 @@ def _run_outer_fold(
         y_inner_train = label_array[inner_train_indices]
         X_inner_val = feature_array[inner_val_indices]
         y_inner_val = label_array[inner_val_indices]
+        subject_ids_inner_train = subject_id_array[inner_train_indices]
+        subject_ids_inner_val = subject_id_array[inner_val_indices]
+        trial_ids_inner_train = trial_id_array[inner_train_indices]
+        trial_ids_inner_val = trial_id_array[inner_val_indices]
 
         (
             X_inner_train,
@@ -778,6 +1125,15 @@ def _run_outer_fold(
             y_eval=y_inner_val,
             train_indices=inner_train_indices,
             eval_indices=inner_val_indices,
+        )
+
+        _validate_processed_alignment(
+            X_inner_train, y_inner_train, subject_ids_inner_train,
+            trial_ids_inner_train, "inner-training"
+        )
+        _validate_processed_alignment(
+            X_inner_val, y_inner_val, subject_ids_inner_val,
+            trial_ids_inner_val, "inner-validation"
         )
 
         config_results_this_inner_fold: list[dict] = []
@@ -805,7 +1161,10 @@ def _run_outer_fold(
                     model=model,
                     X_val=X_inner_val,
                     y_val=y_inner_val,
+                    subject_ids_val=subject_ids_inner_val,
+                    trial_ids_val=trial_ids_inner_val,
                     metrics=metrics,
+                    selection_level=selection_level,
                     batch_size=current_batch_size,
                 )
 
@@ -833,6 +1192,12 @@ def _run_outer_fold(
                 "left_out_subjects": inner_val_subjects.tolist(),
                 "n_train_windows": int(len(inner_train_indices)),
                 "n_val_windows": int(len(inner_val_indices)),
+                "n_train_trials": int(len(set(zip(
+                    subject_ids_inner_train.tolist(), trial_ids_inner_train.tolist()
+                )))),
+                "n_val_trials": int(len(set(zip(
+                    subject_ids_inner_val.tolist(), trial_ids_inner_val.tolist()
+                )))),
                 "configs": config_results_this_inner_fold,
             }
         )
@@ -842,7 +1207,11 @@ def _run_outer_fold(
     # -----------------------------------------------------------------
     inner_mean_scores: list[dict] = []
     inner_std_scores: list[dict] = []
-    score_metric_names = ["loss", *metrics]
+    score_metric_names = [
+        "loss", *metrics, "window_loss", "window_keras_model_loss",
+        *[f"window_{metric}" for metric in metrics],
+        "trial_loss", *[f"trial_{metric}" for metric in metrics],
+    ]
 
     for config_index, config in enumerate(grid_configs):
         mean_scores_for_config, std_scores_for_config = _mean_std_rows(
@@ -885,6 +1254,7 @@ def _run_outer_fold(
         "best_config_index": int(best_config_index),
         "best_config": dict(best_config),
         "selection_metric": selection_metric,
+        "selection_level": selection_level,
         "selection_score": float(
             inner_mean_scores[best_config_index][selection_metric]
         ),
@@ -904,7 +1274,10 @@ def _run_outer_fold(
     y_outer_train = label_array[outer_train_indices]
     X_outer_test = feature_array[outer_test_indices]
     y_outer_test = label_array[outer_test_indices]
+    subject_ids_outer_train = subject_id_array[outer_train_indices]
     subject_ids_outer_test = subject_id_array[outer_test_indices]
+    trial_ids_outer_train = trial_id_array[outer_train_indices]
+    trial_ids_outer_test = trial_id_array[outer_test_indices]
 
     (
         X_outer_train,
@@ -919,6 +1292,15 @@ def _run_outer_fold(
         y_eval=y_outer_test,
         train_indices=outer_train_indices,
         eval_indices=outer_test_indices,
+    )
+
+    _validate_processed_alignment(
+        X_outer_train, y_outer_train, subject_ids_outer_train,
+        trial_ids_outer_train, "outer-training"
+    )
+    _validate_processed_alignment(
+        X_outer_test, y_outer_test, subject_ids_outer_test,
+        trial_ids_outer_test, "outer-test"
     )
 
     model_hp, fit_hp = _split_config(best_config)
@@ -941,8 +1323,10 @@ def _run_outer_fold(
             X_test=X_outer_test,
             y_test=y_outer_test,
             subject_ids_test=subject_ids_outer_test,
+            trial_ids_test=trial_ids_outer_test,
             fold_index=outer_fold_number,
             metrics=metrics,
+            evaluation_level=evaluation_level,
             batch_size=current_batch_size,
             log_predictions=log_predictions,
             log_variational_intervals=log_variational_intervals,
@@ -960,14 +1344,28 @@ def _run_outer_fold(
         "left_out_subjects": outer_test_subjects.tolist(),
         "n_outer_train_windows": int(len(outer_train_indices)),
         "n_outer_test_windows": int(len(outer_test_indices)),
+        "n_outer_train_trials": int(len(set(zip(
+            subject_ids_outer_train.tolist(), trial_ids_outer_train.tolist()
+        )))),
+        "n_outer_test_trials": int(len(set(zip(
+            subject_ids_outer_test.tolist(), trial_ids_outer_test.tolist()
+        )))),
+        "selection_level": selection_level,
+        "evaluation_level": evaluation_level,
         "best_config": dict(best_config),
         "inner_fold_results": inner_fold_results,
         "inner_mean_scores": inner_mean_scores,
         "inner_std_scores": inner_std_scores,
         "fold_metrics": fold_result["fold_metrics"],
+        "window_fold_metrics": fold_result["window_fold_metrics"],
+        "trial_fold_metrics": fold_result["trial_fold_metrics"],
         "user_metrics": fold_result["user_metrics"],
         "prediction_log": fold_result["prediction_log"],
+        "window_prediction_log": fold_result["window_prediction_log"],
+        "trial_prediction_log": fold_result["trial_prediction_log"],
         "variational_interval_log": fold_result["variational_interval_log"],
+        "window_variational_interval_log": fold_result["window_variational_interval_log"],
+        "trial_variational_interval_log": fold_result["trial_variational_interval_log"],
     }
 
     return {
@@ -989,6 +1387,7 @@ def nested_lnso_cv(
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray | None = None,
     n_outer_subjects_to_leave_out: int = 1,
     n_inner_subjects_to_leave_out: int = 1,
     n_epochs: int = 50,
@@ -996,6 +1395,8 @@ def nested_lnso_cv(
     hyperparameters: dict | None = None,
     preprocessing_strategy: Callable | None = None,
     selection_metric: str = "loss",
+    selection_level: Literal["window", "trial"] = "trial",
+    evaluation_level: Literal["window", "trial"] = "trial",
     maximize_metric: bool | None = None,
     metrics: list[str] | tuple[str, ...] = ("accuracy", "f1", "precision", "recall"),
     log_predictions: bool = True,
@@ -1013,6 +1414,15 @@ def nested_lnso_cv(
     Outer folds can be executed concurrently using multiprocessing with the
     ``spawn`` start method. Inner folds and hyperparameter configurations remain
     sequential inside each worker, preventing nested process oversubscription.
+
+    Trial-level evaluation
+    ----------------------
+    ``trial_id_array`` must contain one trial ID per input window. Predictions
+    are made per window, then probabilities are averaged within each
+    ``(subject_id, trial_id)`` group. ``selection_level`` controls inner-CV
+    hyperparameter selection and ``evaluation_level`` controls the unprefixed
+    primary metrics. Both window- and trial-level metrics/logs are always
+    returned.
 
     Parameters added for concurrency
     --------------------------------
@@ -1044,18 +1454,28 @@ def nested_lnso_cv(
 
     if subject_id_array is None:
         raise ValueError("subject_id_array is required for nested LNSO CV.")
+    if trial_id_array is None:
+        raise ValueError(
+            "trial_id_array is required for trial-level prediction and metrics. "
+            "Pass one trial ID per window, aligned with feature_array."
+        )
+
+    _validate_evaluation_level(selection_level, "selection_level")
+    _validate_evaluation_level(evaluation_level, "evaluation_level")
 
     feature_array = np.asarray(feature_array)
     label_array = np.asarray(label_array)
     subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
 
-    if len(feature_array) != len(label_array) or len(feature_array) != len(
-        subject_id_array
-    ):
+    input_lengths = (
+        len(feature_array), len(label_array), len(subject_id_array), len(trial_id_array)
+    )
+    if len(set(input_lengths)) != 1:
         raise ValueError(
-            "feature_array, label_array, and subject_id_array must have the same "
-            f"first dimension. Got {len(feature_array)}, {len(label_array)}, "
-            f"and {len(subject_id_array)}."
+            "feature_array, label_array, subject_id_array, and trial_id_array "
+            "must have the same first dimension. Got lengths "
+            f"{input_lengths}."
         )
 
     metrics = tuple(metrics)
@@ -1149,14 +1569,24 @@ def nested_lnso_cv(
 
     results = {
         "fold_metrics": [],
+        "window_fold_metrics": [],
+        "trial_fold_metrics": [],
         "user_metrics": [],
         "prediction_log": [],
+        "window_prediction_log": [],
+        "trial_prediction_log": [],
         "variational_interval_log": [],
+        "window_variational_interval_log": [],
+        "trial_variational_interval_log": [],
         "best_configs": [],
         "inner_cv_results": [],
         "outer_fold_results": [],
         "mean_scores": {},
         "std_scores": {},
+        "window_mean_scores": {},
+        "window_std_scores": {},
+        "trial_mean_scores": {},
+        "trial_std_scores": {},
     }
 
     print(
@@ -1166,9 +1596,10 @@ def nested_lnso_cv(
     )
     print(f"Requested metrics: {list(metrics)}")
     print(
-        f"Selection metric: {selection_metric} "
+        f"Selection metric: {selection_level}-level {selection_metric} "
         f"({'maximize' if maximize_metric else 'minimize'})"
     )
+    print(f"Primary reported metrics: {evaluation_level}-level")
     print(f"Prediction logging: {log_predictions}")
     print(f"Variational interval logging: {log_variational_intervals}")
     print(f"Outer-fold workers: {effective_n_jobs}")
@@ -1194,11 +1625,14 @@ def nested_lnso_cv(
         "feature_array": feature_array,
         "label_array": label_array,
         "subject_id_array": subject_id_array,
+        "trial_id_array": trial_id_array,
         "n_inner_subjects_to_leave_out": n_inner_subjects_to_leave_out,
         "grid_configs": grid_configs,
         "batch_size": batch_size,
         "preprocessing_strategy": preprocessing_strategy,
         "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "evaluation_level": evaluation_level,
         "maximize_metric": bool(maximize_metric),
         "metrics": metrics,
         "log_predictions": log_predictions,
@@ -1286,10 +1720,20 @@ def nested_lnso_cv(
 
     for fold_output in fold_outputs:
         results["fold_metrics"].append(fold_output["fold_metrics"])
+        results["window_fold_metrics"].append(fold_output["window_fold_metrics"])
+        results["trial_fold_metrics"].append(fold_output["trial_fold_metrics"])
         results["user_metrics"].extend(fold_output["user_metrics"])
         results["prediction_log"].extend(fold_output["prediction_log"])
+        results["window_prediction_log"].extend(fold_output["window_prediction_log"])
+        results["trial_prediction_log"].extend(fold_output["trial_prediction_log"])
         results["variational_interval_log"].extend(
             fold_output["variational_interval_log"]
+        )
+        results["window_variational_interval_log"].extend(
+            fold_output["window_variational_interval_log"]
+        )
+        results["trial_variational_interval_log"].extend(
+            fold_output["trial_variational_interval_log"]
         )
         results["best_configs"].append(fold_output["best_config_result"])
         results["inner_cv_results"].append(fold_output["inner_cv_result"])
@@ -1303,11 +1747,26 @@ def nested_lnso_cv(
     results["mean_scores"] = mean_scores
     results["std_scores"] = std_scores
 
+    window_mean_scores, window_std_scores = _mean_std_rows(
+        results["window_fold_metrics"], ["loss", *metrics]
+    )
+    trial_mean_scores, trial_std_scores = _mean_std_rows(
+        results["trial_fold_metrics"], ["loss", *metrics]
+    )
+    results["window_mean_scores"] = window_mean_scores
+    results["window_std_scores"] = window_std_scores
+    results["trial_mean_scores"] = trial_mean_scores
+    results["trial_std_scores"] = trial_std_scores
+
     print("\nNested LNSO CV complete")
     print("=" * 80)
     print("Mean outer scores:")
     print(pformat(mean_scores, indent=4, width=120, sort_dicts=False))
     print("Std outer scores:")
     print(pformat(std_scores, indent=4, width=120, sort_dicts=False))
+    print("Window-level mean scores:")
+    print(pformat(window_mean_scores, indent=4, width=120, sort_dicts=False))
+    print("Trial-level mean scores:")
+    print(pformat(trial_mean_scores, indent=4, width=120, sort_dicts=False))
 
     return results
