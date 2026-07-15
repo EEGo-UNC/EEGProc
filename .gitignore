@@ -212,7 +212,10 @@ scripts/
 datasets/
 figures/
 
+venv312/
+
 data/
 outputs/
 .devcontainer/
 *.npy
+
