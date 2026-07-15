@@ -153,8 +153,14 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             omitted and ``update_discriminator`` is True, a fresh optimizer
             is cloned from ``optimizer``'s config.
         """
-        super().compile(optimizer=optimizer, **kwargs)
+        # This custom training loop does not require XLA. Keras 3 defaults
+        # jit_compile to "auto", which may enable XLA on GPU.
+        kwargs.setdefault("jit_compile", False)
 
+        super().compile(
+            optimizer=optimizer,
+            **kwargs,
+        )
         if self.update_discriminator:
             if discriminator_optimizer is not None:
                 self._discriminator_optimizer = discriminator_optimizer
