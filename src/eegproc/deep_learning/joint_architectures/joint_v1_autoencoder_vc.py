@@ -49,11 +49,11 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
         Loss used for the autoencoder branch. Defaults to mean squared error.
     vc_alpha : float, default=1.0
         Cross-entropy coefficient for ``variational_classifier.vc_loss``.
-    vc_beta : float, default=0.0
+    vc_beta : float, default=1.0
         Encoder/prior KL coefficient for ``variational_classifier.vc_loss``.
-    vc_gamma : float, default=1e-4
+    vc_gamma : float, default=0.0
         Gaussian analytic term coefficient for ``variational_classifier.vc_loss``.
-    vc_lambda : float, default=0.0
+    vc_lambda : float, default=1.0
         Class-prior KL coefficient for ``variational_classifier.vc_loss``.
     name : str, default="joint_autoencoder_variational_classifier"
         Keras model name.

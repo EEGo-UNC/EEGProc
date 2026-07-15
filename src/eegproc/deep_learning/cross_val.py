@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import gc
 import itertools
+import multiprocessing as mp
+import traceback
 from itertools import combinations
 from pprint import pformat
 from typing import Callable, Literal, Mapping
@@ -9,7 +11,6 @@ from typing import Callable, Literal, Mapping
 import numpy as np
 import tensorflow as tf
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-
 
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
@@ -106,7 +107,9 @@ def _as_numpy_1d(values: np.ndarray) -> np.ndarray:
     if values.ndim == 2 and values.shape[1] > 1:
         return np.argmax(values, axis=1)
 
-    raise ValueError(f"Expected labels with shape (n,), (n, 1), or (n, c). Got {values.shape}.")
+    raise ValueError(
+        f"Expected labels with shape (n,), (n, 1), or (n, c). Got {values.shape}."
+    )
 
 
 def _to_probabilities(model_output: np.ndarray) -> np.ndarray:
@@ -189,26 +192,38 @@ def _predict_labels(probabilities: np.ndarray) -> np.ndarray:
     return np.argmax(probabilities, axis=1).astype(np.int64)
 
 
-def _metric_average(y_true: np.ndarray, y_pred: np.ndarray) -> str:
-    """Use binary averaging for binary 0/1 labels, macro otherwise."""
-    classes = np.unique(np.concatenate([y_true, y_pred]))
-
-    if len(classes) <= 2 and set(classes.tolist()) <= {0, 1}:
-        return "binary"
-
-    return "macro"
-
-
 def _classification_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     metrics: list[str] | tuple[str, ...],
+    n_classes: int,
 ) -> dict:
-    """Compute selected classification metrics."""
+    """Compute selected classification metrics across all expected classes.
+
+    F1, precision, and recall use macro averaging so every class contributes
+    equally. ``n_classes`` must come from the model output width rather than
+    from the labels observed in one fold, because a validation/test fold may
+    contain no examples of one of the expected classes.
+    """
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
 
-    average = _metric_average(y_true, y_pred)
+    if n_classes < 2:
+        raise ValueError(f"n_classes must be >= 2, got {n_classes}.")
+
+    expected_labels = list(range(n_classes))
+
+    if np.any(y_true < 0) or np.any(y_true >= n_classes):
+        raise ValueError(
+            f"y_true contains labels outside the expected range "
+            f"[0, {n_classes - 1}]."
+        )
+    if np.any(y_pred < 0) or np.any(y_pred >= n_classes):
+        raise ValueError(
+            f"y_pred contains labels outside the expected range "
+            f"[0, {n_classes - 1}]."
+        )
+
     scores: dict[str, float] = {}
 
     for metric in metrics:
@@ -223,17 +238,35 @@ def _classification_metrics(
 
         elif metric == "f1":
             scores["f1"] = float(
-                f1_score(y_true, y_pred, average=average, zero_division=0)
+                f1_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
             )
 
         elif metric == "precision":
             scores["precision"] = float(
-                precision_score(y_true, y_pred, average=average, zero_division=0)
+                precision_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
             )
 
         elif metric == "recall":
             scores["recall"] = float(
-                recall_score(y_true, y_pred, average=average, zero_division=0)
+                recall_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
             )
 
     return scores
@@ -255,7 +288,9 @@ def _keras_loss_value(
     )
 
     if "loss" not in eval_output:
-        raise ValueError(f"model.evaluate(..., return_dict=True) did not return 'loss': {eval_output}")
+        raise ValueError(
+            f"model.evaluate(..., return_dict=True) did not return 'loss': {eval_output}"
+        )
 
     return float(eval_output["loss"])
 
@@ -308,7 +343,9 @@ def _make_variational_interval_log(
     training=True, such as dropout or latent sampling.
     """
     if n_uncertainty_samples < 2:
-        raise ValueError("n_uncertainty_samples must be >= 2 when interval logging is enabled.")
+        raise ValueError(
+            "n_uncertainty_samples must be >= 2 when interval logging is enabled."
+        )
 
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     X_tensor = tf.convert_to_tensor(X, dtype=tf.float32)
@@ -435,6 +472,7 @@ def _mean_std_rows(rows: list[dict], metric_names: list[str]) -> tuple[dict, dic
 # Fold evaluation
 # ---------------------------------------------------------------------
 
+
 def _evaluate_classification_fold(
     model: tf.keras.Model,
     X_test: np.ndarray,
@@ -475,6 +513,7 @@ def _evaluate_classification_fold(
             y_true=y_true,
             y_pred=y_pred,
             metrics=metrics,
+            n_classes=probabilities.shape[1],
         )
     )
 
@@ -495,6 +534,7 @@ def _evaluate_classification_fold(
                 y_true=user_y_true,
                 y_pred=user_y_pred,
                 metrics=metrics,
+                n_classes=probabilities.shape[1],
             )
         )
         user_rows.append(user_row)
@@ -552,13 +592,397 @@ def _evaluate_inner_config(
     scores = {
         "loss": _keras_loss_value(model, X_val, y_val, batch_size=batch_size),
     }
-    scores.update(_classification_metrics(y_true, y_pred, metrics=metrics))
+    scores.update(
+        _classification_metrics(
+            y_true,
+            y_pred,
+            metrics=metrics,
+            n_classes=probabilities.shape[1],
+        )
+    )
     return scores
+
+
+# ---------------------------------------------------------------------
+# Concurrent outer-fold execution
+# ---------------------------------------------------------------------
+
+
+def _configure_tensorflow_worker(
+    gpu_id: int | None,
+    cpus_per_worker: int | None,
+) -> None:
+    """Configure TensorFlow before a worker constructs any model.
+
+    ``gpu_id=None`` makes the worker CPU-only. Otherwise the worker sees one
+    local GPU index after any CUDA_VISIBLE_DEVICES/Slurm filtering.
+    """
+    if cpus_per_worker is not None:
+        if cpus_per_worker < 1:
+            raise ValueError("cpus_per_worker must be >= 1 when provided.")
+
+        tf.config.threading.set_intra_op_parallelism_threads(cpus_per_worker)
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+
+    physical_gpus = tf.config.list_physical_devices("GPU")
+
+    if gpu_id is None:
+        # Prevent concurrent CPU workers from all contending for GPU 0.
+        tf.config.set_visible_devices([], "GPU")
+        device_description = "CPU"
+    else:
+        gpu_id = int(gpu_id)
+
+        if gpu_id < 0 or gpu_id >= len(physical_gpus):
+            raise ValueError(
+                f"Worker requested GPU index {gpu_id}, but TensorFlow sees "
+                f"{len(physical_gpus)} GPU(s). GPU indices are local to the "
+                "devices exposed by CUDA_VISIBLE_DEVICES/Slurm."
+            )
+
+        selected_gpu = physical_gpus[gpu_id]
+        tf.config.set_visible_devices(selected_gpu, "GPU")
+        tf.config.experimental.set_memory_growth(selected_gpu, True)
+        device_description = f"GPU {gpu_id}"
+
+    print(
+        f"[{mp.current_process().name}] initialized on {device_description}",
+        flush=True,
+    )
+
+
+def _outer_fold_process_main(
+    worker_state: dict,
+    task_queue,
+    result_queue,
+    gpu_id: int | None,
+    cpus_per_worker: int | None,
+) -> None:
+    """Run outer-fold tasks in one persistent spawned process."""
+    try:
+        _configure_tensorflow_worker(
+            gpu_id=gpu_id,
+            cpus_per_worker=cpus_per_worker,
+        )
+
+        while True:
+            task = task_queue.get()
+
+            if task is None:
+                return
+
+            outer_fold_number, outer_test_subjects = task
+
+            try:
+                fold_output = _run_outer_fold(
+                    outer_fold_number=outer_fold_number,
+                    outer_test_subjects=np.asarray(outer_test_subjects),
+                    **worker_state,
+                )
+                result_queue.put(("ok", int(outer_fold_number), fold_output))
+            except BaseException:
+                result_queue.put(
+                    (
+                        "error",
+                        int(outer_fold_number),
+                        traceback.format_exc(),
+                    )
+                )
+                return
+
+    except BaseException:
+        # Initialization errors occur before the worker has received a fold.
+        result_queue.put(("error", -1, traceback.format_exc()))
+
+
+def _run_outer_fold(
+    outer_fold_number: int,
+    outer_test_subjects: np.ndarray,
+    total_outer_folds: int,
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    n_inner_subjects_to_leave_out: int,
+    grid_configs: list[dict],
+    batch_size: int,
+    preprocessing_strategy: Callable | None,
+    selection_metric: str,
+    maximize_metric: bool,
+    metrics: tuple[str, ...],
+    log_predictions: bool,
+    log_variational_intervals: bool,
+    n_uncertainty_samples: int,
+    ci_level: float,
+    verbose: int,
+    extra_fit_kwargs: dict,
+) -> dict:
+    """Run one complete outer fold, including its inner grid search."""
+    outer_test_mask = np.isin(subject_id_array, outer_test_subjects)
+    outer_train_mask = ~outer_test_mask
+
+    outer_train_indices = np.where(outer_train_mask)[0]
+    outer_test_indices = np.where(outer_test_mask)[0]
+
+    outer_train_subject_ids = subject_id_array[outer_train_indices]
+    unique_outer_train_subjects = np.sort(np.unique(outer_train_subject_ids))
+
+    inner_subject_splits = list(
+        combinations(unique_outer_train_subjects, n_inner_subjects_to_leave_out)
+    )
+
+    _print_fold_header(
+        outer_fold_number,
+        total_outer_folds,
+        f"outer test subjects={outer_test_subjects.tolist()} "
+        f"(outer_train={len(outer_train_indices)}, "
+        f"outer_test={len(outer_test_indices)} windows)",
+    )
+
+    inner_scores_by_config: list[list[dict]] = [[] for _ in grid_configs]
+    inner_fold_results: list[dict] = []
+
+    # -----------------------------------------------------------------
+    # Inner CV: choose hyperparameters.
+    # -----------------------------------------------------------------
+    for inner_fold_number, inner_val_subjects in enumerate(
+        inner_subject_splits,
+        start=1,
+    ):
+        inner_val_subjects = np.asarray(inner_val_subjects)
+
+        inner_val_mask_relative = np.isin(
+            outer_train_subject_ids,
+            inner_val_subjects,
+        )
+        inner_train_mask_relative = ~inner_val_mask_relative
+
+        inner_train_indices = outer_train_indices[inner_train_mask_relative]
+        inner_val_indices = outer_train_indices[inner_val_mask_relative]
+
+        X_inner_train = feature_array[inner_train_indices]
+        y_inner_train = label_array[inner_train_indices]
+        X_inner_val = feature_array[inner_val_indices]
+        y_inner_val = label_array[inner_val_indices]
+
+        (
+            X_inner_train,
+            y_inner_train,
+            X_inner_val,
+            y_inner_val,
+        ) = _apply_preprocessing_strategy(
+            preprocessing_strategy=preprocessing_strategy,
+            X_train=X_inner_train,
+            y_train=y_inner_train,
+            X_eval=X_inner_val,
+            y_eval=y_inner_val,
+            train_indices=inner_train_indices,
+            eval_indices=inner_val_indices,
+        )
+
+        config_results_this_inner_fold: list[dict] = []
+
+        for config_index, config in enumerate(grid_configs):
+            model_hp, fit_hp = _split_config(config)
+            current_batch_size = fit_hp.get("batch_size", batch_size)
+
+            tf.keras.backend.clear_session()
+            model = model_builder_function(**model_hp)
+
+            try:
+                fit_kwargs = dict(fit_hp)
+                fit_kwargs["validation_data"] = (X_inner_val, y_inner_val)
+
+                model.fit(
+                    X_inner_train,
+                    y_inner_train,
+                    verbose=verbose,
+                    **fit_kwargs,
+                    **extra_fit_kwargs,
+                )
+
+                val_scores = _evaluate_inner_config(
+                    model=model,
+                    X_val=X_inner_val,
+                    y_val=y_inner_val,
+                    metrics=metrics,
+                    batch_size=current_batch_size,
+                )
+
+                config_result = {
+                    "outer_fold": int(outer_fold_number),
+                    "inner_fold": int(inner_fold_number),
+                    "left_out_subjects": inner_val_subjects.tolist(),
+                    "config_index": int(config_index),
+                    "config": dict(config),
+                    **val_scores,
+                }
+
+                config_results_this_inner_fold.append(config_result)
+                inner_scores_by_config[config_index].append(val_scores)
+
+            finally:
+                del model
+                gc.collect()
+                tf.keras.backend.clear_session()
+
+        inner_fold_results.append(
+            {
+                "outer_fold": int(outer_fold_number),
+                "inner_fold": int(inner_fold_number),
+                "left_out_subjects": inner_val_subjects.tolist(),
+                "n_train_windows": int(len(inner_train_indices)),
+                "n_val_windows": int(len(inner_val_indices)),
+                "configs": config_results_this_inner_fold,
+            }
+        )
+
+    # -----------------------------------------------------------------
+    # Aggregate inner-CV scores and choose the best configuration.
+    # -----------------------------------------------------------------
+    inner_mean_scores: list[dict] = []
+    inner_std_scores: list[dict] = []
+    score_metric_names = ["loss", *metrics]
+
+    for config_index, config in enumerate(grid_configs):
+        mean_scores_for_config, std_scores_for_config = _mean_std_rows(
+            inner_scores_by_config[config_index],
+            score_metric_names,
+        )
+
+        inner_mean_scores.append(
+            {
+                "config_index": int(config_index),
+                "config": dict(config),
+                **mean_scores_for_config,
+            }
+        )
+        inner_std_scores.append(
+            {
+                "config_index": int(config_index),
+                "config": dict(config),
+                **std_scores_for_config,
+            }
+        )
+
+    best_config_index = _choose_best_config_index(
+        mean_scores=inner_mean_scores,
+        selection_metric=selection_metric,
+        maximize_metric=maximize_metric,
+    )
+    best_config = grid_configs[best_config_index]
+
+    print(
+        f"\nBest config from inner CV for outer fold {outer_fold_number}: "
+        f"{selection_metric}="
+        f"{inner_mean_scores[best_config_index][selection_metric]:.6f}",
+        flush=True,
+    )
+    _print_config("Best config:", best_config)
+
+    best_config_result = {
+        "outer_fold": int(outer_fold_number),
+        "best_config_index": int(best_config_index),
+        "best_config": dict(best_config),
+        "selection_metric": selection_metric,
+        "selection_score": float(
+            inner_mean_scores[best_config_index][selection_metric]
+        ),
+    }
+
+    inner_cv_result = {
+        "outer_fold": int(outer_fold_number),
+        "inner_fold_results": inner_fold_results,
+        "inner_mean_scores": inner_mean_scores,
+        "inner_std_scores": inner_std_scores,
+    }
+
+    # -----------------------------------------------------------------
+    # Final outer training and testing.
+    # -----------------------------------------------------------------
+    X_outer_train = feature_array[outer_train_indices]
+    y_outer_train = label_array[outer_train_indices]
+    X_outer_test = feature_array[outer_test_indices]
+    y_outer_test = label_array[outer_test_indices]
+    subject_ids_outer_test = subject_id_array[outer_test_indices]
+
+    (
+        X_outer_train,
+        y_outer_train,
+        X_outer_test,
+        y_outer_test,
+    ) = _apply_preprocessing_strategy(
+        preprocessing_strategy=preprocessing_strategy,
+        X_train=X_outer_train,
+        y_train=y_outer_train,
+        X_eval=X_outer_test,
+        y_eval=y_outer_test,
+        train_indices=outer_train_indices,
+        eval_indices=outer_test_indices,
+    )
+
+    model_hp, fit_hp = _split_config(best_config)
+    current_batch_size = fit_hp.get("batch_size", batch_size)
+
+    tf.keras.backend.clear_session()
+    final_model = model_builder_function(**model_hp)
+
+    try:
+        final_model.fit(
+            X_outer_train,
+            y_outer_train,
+            verbose=verbose,
+            **fit_hp,
+            **extra_fit_kwargs,
+        )
+
+        fold_result = _evaluate_classification_fold(
+            model=final_model,
+            X_test=X_outer_test,
+            y_test=y_outer_test,
+            subject_ids_test=subject_ids_outer_test,
+            fold_index=outer_fold_number,
+            metrics=metrics,
+            batch_size=current_batch_size,
+            log_predictions=log_predictions,
+            log_variational_intervals=log_variational_intervals,
+            n_uncertainty_samples=n_uncertainty_samples,
+            ci_level=ci_level,
+        )
+
+    finally:
+        del final_model
+        gc.collect()
+        tf.keras.backend.clear_session()
+
+    outer_fold_result = {
+        "outer_fold_number": int(outer_fold_number),
+        "left_out_subjects": outer_test_subjects.tolist(),
+        "n_outer_train_windows": int(len(outer_train_indices)),
+        "n_outer_test_windows": int(len(outer_test_indices)),
+        "best_config": dict(best_config),
+        "inner_fold_results": inner_fold_results,
+        "inner_mean_scores": inner_mean_scores,
+        "inner_std_scores": inner_std_scores,
+        "fold_metrics": fold_result["fold_metrics"],
+        "user_metrics": fold_result["user_metrics"],
+        "prediction_log": fold_result["prediction_log"],
+        "variational_interval_log": fold_result["variational_interval_log"],
+    }
+
+    return {
+        "outer_fold_number": int(outer_fold_number),
+        "best_config_result": best_config_result,
+        "inner_cv_result": inner_cv_result,
+        "outer_fold_result": outer_fold_result,
+        **fold_result,
+    }
 
 
 # ---------------------------------------------------------------------
 # Main public API
 # ---------------------------------------------------------------------
+
 
 def nested_lnso_cv(
     model_builder_function: Callable[..., tf.keras.Model],
@@ -580,37 +1004,35 @@ def nested_lnso_cv(
     ci_level: float = 0.95,
     verbose: int = 0,
     extra_fit_kwargs: dict | None = None,
+    n_jobs: int = 1,
+    gpu_ids: list[int] | tuple[int, ...] | None = None,
+    cpus_per_worker: int | None = None,
 ) -> dict:
-    """Run nested Leave-N-Subjects-Out CV with explicit classification logging.
+    """Run nested Leave-N-Subjects-Out CV.
 
-    This function performs subject-level nested cross-validation:
-        1. Outer LNSO estimates generalization to unseen subjects.
-        2. Inner LNSO selects hyperparameters using only outer-training subjects.
-        3. A fresh final model is trained on all outer-training data.
-        4. The final model is evaluated on the outer-test subjects.
+    Outer folds can be executed concurrently using multiprocessing with the
+    ``spawn`` start method. Inner folds and hyperparameter configurations remain
+    sequential inside each worker, preventing nested process oversubscription.
 
-    New classification reporting behavior:
-        - `metrics` controls which post-hoc classification metrics are computed.
-        - `selection_metric` can be "loss" or one of the requested metrics.
-        - `fold_metrics` stores one row per outer fold.
-        - `user_metrics` stores one row per left-out subject per outer fold.
-        - `prediction_log` stores one row per evaluated sample/window.
-        - `variational_interval_log` optionally stores empirical predictive
-          probability intervals from repeated stochastic forward passes.
+    Parameters added for concurrency
+    --------------------------------
+    n_jobs:
+        Number of persistent outer-fold worker processes. ``1`` preserves the
+        original sequential behavior unless ``gpu_ids`` is supplied.
+    gpu_ids:
+        Local TensorFlow GPU indices assigned one-per-worker. For example,
+        ``gpu_ids=(0, 1, 2, 3)`` with ``n_jobs=4``. When ``n_jobs > 1`` and this
+        is ``None``, workers are deliberately CPU-only so that they do not all
+        contend for GPU 0.
+    cpus_per_worker:
+        TensorFlow intra-op CPU threads available to each worker. Keep
+        ``n_jobs * cpus_per_worker`` within the CPUs allocated by Slurm.
 
-    Returns
-    -------
-    dict
-        Main keys:
-            fold_metrics : list[dict]
-            user_metrics : list[dict]
-            prediction_log : list[dict]
-            variational_interval_log : list[dict]
-            best_configs : list[dict]
-            inner_cv_results : list[dict]
-            outer_fold_results : list[dict]
-            mean_scores : dict
-            std_scores : dict
+    Notes
+    -----
+    With ``spawn``, ``model_builder_function`` and ``preprocessing_strategy``
+    must be importable module-level callables. The training entry point must
+    also be protected by ``if __name__ == "__main__":``.
     """
     extra_fit_kwargs = extra_fit_kwargs or {}
 
@@ -627,7 +1049,9 @@ def nested_lnso_cv(
     label_array = np.asarray(label_array)
     subject_id_array = np.asarray(subject_id_array)
 
-    if len(feature_array) != len(label_array) or len(feature_array) != len(subject_id_array):
+    if len(feature_array) != len(label_array) or len(feature_array) != len(
+        subject_id_array
+    ):
         raise ValueError(
             "feature_array, label_array, and subject_id_array must have the same "
             f"first dimension. Got {len(feature_array)}, {len(label_array)}, "
@@ -639,7 +1063,8 @@ def nested_lnso_cv(
     for metric in metrics:
         if metric not in _CLASSIFICATION_METRICS:
             raise ValueError(
-                f"Unsupported metric: {metric}. Supported metrics: {sorted(_CLASSIFICATION_METRICS)}"
+                f"Unsupported metric: {metric}. Supported metrics: "
+                f"{sorted(_CLASSIFICATION_METRICS)}"
             )
 
     allowed_selection_metrics = {"loss", *metrics}
@@ -655,6 +1080,12 @@ def nested_lnso_cv(
 
     if not (0.0 < ci_level < 1.0):
         raise ValueError("ci_level must be between 0 and 1.")
+
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be >= 1.")
+
+    if cpus_per_worker is not None and cpus_per_worker < 1:
+        raise ValueError("cpus_per_worker must be >= 1 when provided.")
 
     unique_subjects = np.sort(np.unique(subject_id_array))
 
@@ -694,6 +1125,27 @@ def nested_lnso_cv(
     outer_subject_splits = list(
         combinations(unique_subjects, n_outer_subjects_to_leave_out)
     )
+    total_outer_folds = len(outer_subject_splits)
+    effective_n_jobs = min(n_jobs, total_outer_folds)
+
+    normalized_gpu_ids: tuple[int, ...] | None = None
+
+    if gpu_ids is not None:
+        normalized_gpu_ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
+
+        if not normalized_gpu_ids:
+            raise ValueError("gpu_ids must contain at least one GPU index.")
+        if len(set(normalized_gpu_ids)) != len(normalized_gpu_ids):
+            raise ValueError("gpu_ids must not contain duplicate GPU indices.")
+        if effective_n_jobs > len(normalized_gpu_ids):
+            raise ValueError(
+                f"n_jobs={effective_n_jobs} requires at least that many GPU IDs, "
+                f"but gpu_ids={normalized_gpu_ids}. Use one GPU per worker."
+            )
+
+        # Do not create fewer processes than requested merely because more GPU
+        # IDs were provided; use the first effective_n_jobs devices.
+        normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
 
     results = {
         "fold_metrics": [],
@@ -708,282 +1160,140 @@ def nested_lnso_cv(
     }
 
     print(
-        f"\nNested LNSO CV — {len(outer_subject_splits)} outer folds, "
+        f"\nNested LNSO CV — {total_outer_folds} outer folds, "
         f"{len(grid_configs)} hyperparameter config"
         f"{'s' if len(grid_configs) != 1 else ''}"
     )
     print(f"Requested metrics: {list(metrics)}")
-    print(f"Selection metric: {selection_metric} ({'maximize' if maximize_metric else 'minimize'})")
+    print(
+        f"Selection metric: {selection_metric} "
+        f"({'maximize' if maximize_metric else 'minimize'})"
+    )
     print(f"Prediction logging: {log_predictions}")
-    print(f"Variational interval logging: {log_variational_intervals}\n")
+    print(f"Variational interval logging: {log_variational_intervals}")
+    print(f"Outer-fold workers: {effective_n_jobs}")
 
-    for outer_fold_number, outer_test_subjects in enumerate(
-        outer_subject_splits,
-        start=1,
-    ):
-        outer_test_subjects = np.array(outer_test_subjects)
+    if effective_n_jobs > 1 and normalized_gpu_ids is None:
+        print("Worker devices: CPU-only")
+    elif normalized_gpu_ids is not None:
+        print(f"Worker devices: GPUs {list(normalized_gpu_ids)}")
+    else:
+        print("Worker device: current TensorFlow default")
 
-        outer_test_mask = np.isin(subject_id_array, outer_test_subjects)
-        outer_train_mask = ~outer_test_mask
-
-        outer_train_indices = np.where(outer_train_mask)[0]
-        outer_test_indices = np.where(outer_test_mask)[0]
-
-        outer_train_subject_ids = subject_id_array[outer_train_indices]
-        unique_outer_train_subjects = np.sort(np.unique(outer_train_subject_ids))
-
-        inner_subject_splits = list(
-            combinations(unique_outer_train_subjects, n_inner_subjects_to_leave_out)
-        )
-
-        _print_fold_header(
-            outer_fold_number,
-            len(outer_subject_splits),
-            f"outer test subjects={outer_test_subjects.tolist()} "
-            f"(outer_train={len(outer_train_indices)}, "
-            f"outer_test={len(outer_test_indices)} windows)",
-        )
-
-        inner_scores_by_config: list[list[dict]] = [[] for _ in grid_configs]
-        inner_fold_results: list[dict] = []
-
-        # -------------------------------------------------------------
-        # Inner CV: choose hyperparameters.
-        # -------------------------------------------------------------
-        for inner_fold_number, inner_val_subjects in enumerate(
-            inner_subject_splits,
+    tasks = [
+        (fold_number, tuple(outer_test_subjects))
+        for fold_number, outer_test_subjects in enumerate(
+            outer_subject_splits,
             start=1,
-        ):
-            inner_val_subjects = np.array(inner_val_subjects)
-
-            inner_val_mask_relative = np.isin(
-                outer_train_subject_ids,
-                inner_val_subjects,
-            )
-            inner_train_mask_relative = ~inner_val_mask_relative
-
-            inner_train_indices = outer_train_indices[inner_train_mask_relative]
-            inner_val_indices = outer_train_indices[inner_val_mask_relative]
-
-            X_inner_train = feature_array[inner_train_indices]
-            y_inner_train = label_array[inner_train_indices]
-            X_inner_val = feature_array[inner_val_indices]
-            y_inner_val = label_array[inner_val_indices]
-
-            (
-                X_inner_train,
-                y_inner_train,
-                X_inner_val,
-                y_inner_val,
-            ) = _apply_preprocessing_strategy(
-                preprocessing_strategy=preprocessing_strategy,
-                X_train=X_inner_train,
-                y_train=y_inner_train,
-                X_eval=X_inner_val,
-                y_eval=y_inner_val,
-                train_indices=inner_train_indices,
-                eval_indices=inner_val_indices,
-            )
-
-            config_results_this_inner_fold: list[dict] = []
-
-            for config_index, config in enumerate(grid_configs):
-                model_hp, fit_hp = _split_config(config)
-                current_batch_size = fit_hp.get("batch_size", batch_size)
-
-                tf.keras.backend.clear_session()
-                model = model_builder_function(**model_hp)
-
-                try:
-                    fit_kwargs = dict(fit_hp)
-                    fit_kwargs["validation_data"] = (X_inner_val, y_inner_val)
-
-                    model.fit(
-                        X_inner_train,
-                        y_inner_train,
-                        verbose=verbose,
-                        **fit_kwargs,
-                        **extra_fit_kwargs,
-                    )
-
-                    val_scores = _evaluate_inner_config(
-                        model=model,
-                        X_val=X_inner_val,
-                        y_val=y_inner_val,
-                        metrics=metrics,
-                        batch_size=current_batch_size,
-                    )
-
-                    config_result = {
-                        "outer_fold": int(outer_fold_number),
-                        "inner_fold": int(inner_fold_number),
-                        "left_out_subjects": inner_val_subjects.tolist(),
-                        "config_index": int(config_index),
-                        "config": dict(config),
-                        **val_scores,
-                    }
-
-                    config_results_this_inner_fold.append(config_result)
-                    inner_scores_by_config[config_index].append(val_scores)
-
-                finally:
-                    del model
-                    gc.collect()
-                    tf.keras.backend.clear_session()
-
-            inner_fold_results.append(
-                {
-                    "outer_fold": int(outer_fold_number),
-                    "inner_fold": int(inner_fold_number),
-                    "left_out_subjects": inner_val_subjects.tolist(),
-                    "n_train_windows": int(len(inner_train_indices)),
-                    "n_val_windows": int(len(inner_val_indices)),
-                    "configs": config_results_this_inner_fold,
-                }
-            )
-
-        # -------------------------------------------------------------
-        # Aggregate inner-CV scores and choose best config.
-        # -------------------------------------------------------------
-        inner_mean_scores: list[dict] = []
-        inner_std_scores: list[dict] = []
-        score_metric_names = ["loss", *metrics]
-
-        for config_index, config in enumerate(grid_configs):
-            mean_scores_for_config, std_scores_for_config = _mean_std_rows(
-                inner_scores_by_config[config_index],
-                score_metric_names,
-            )
-
-            inner_mean_scores.append(
-                {
-                    "config_index": int(config_index),
-                    "config": dict(config),
-                    **mean_scores_for_config,
-                }
-            )
-
-            inner_std_scores.append(
-                {
-                    "config_index": int(config_index),
-                    "config": dict(config),
-                    **std_scores_for_config,
-                }
-            )
-
-        best_config_index = _choose_best_config_index(
-            mean_scores=inner_mean_scores,
-            selection_metric=selection_metric,
-            maximize_metric=maximize_metric,
         )
-        best_config = grid_configs[best_config_index]
+    ]
 
-        print(
-            f"\nBest config from inner CV for outer fold {outer_fold_number}: "
-            f"{selection_metric}={inner_mean_scores[best_config_index][selection_metric]:.6f}"
-        )
-        _print_config("Best config:", best_config)
+    worker_state = {
+        "total_outer_folds": total_outer_folds,
+        "model_builder_function": model_builder_function,
+        "feature_array": feature_array,
+        "label_array": label_array,
+        "subject_id_array": subject_id_array,
+        "n_inner_subjects_to_leave_out": n_inner_subjects_to_leave_out,
+        "grid_configs": grid_configs,
+        "batch_size": batch_size,
+        "preprocessing_strategy": preprocessing_strategy,
+        "selection_metric": selection_metric,
+        "maximize_metric": bool(maximize_metric),
+        "metrics": metrics,
+        "log_predictions": log_predictions,
+        "log_variational_intervals": log_variational_intervals,
+        "n_uncertainty_samples": n_uncertainty_samples,
+        "ci_level": ci_level,
+        "verbose": verbose,
+        "extra_fit_kwargs": extra_fit_kwargs,
+    }
 
-        results["best_configs"].append(
-            {
-                "outer_fold": int(outer_fold_number),
-                "best_config_index": int(best_config_index),
-                "best_config": dict(best_config),
-                "selection_metric": selection_metric,
-                "selection_score": float(inner_mean_scores[best_config_index][selection_metric]),
-            }
-        )
+    # Preserve the old in-process behavior for n_jobs=1 with no explicit GPU
+    # assignment. This avoids spawn/pickling overhead for ordinary runs.
+    if effective_n_jobs == 1 and normalized_gpu_ids is None:
+        fold_outputs = [
+            _run_outer_fold(
+                outer_fold_number=fold_number,
+                outer_test_subjects=np.asarray(outer_test_subjects),
+                **worker_state,
+            )
+            for fold_number, outer_test_subjects in tasks
+        ]
+    else:
+        context = mp.get_context("spawn")
+        task_queue = context.Queue()
+        result_queue = context.Queue()
+        processes: list[mp.Process] = []
 
-        results["inner_cv_results"].append(
-            {
-                "outer_fold": int(outer_fold_number),
-                "inner_fold_results": inner_fold_results,
-                "inner_mean_scores": inner_mean_scores,
-                "inner_std_scores": inner_std_scores,
-            }
-        )
+        for worker_index in range(effective_n_jobs):
+            worker_gpu_id = (
+                normalized_gpu_ids[worker_index]
+                if normalized_gpu_ids is not None
+                else None
+            )
+            process = context.Process(
+                target=_outer_fold_process_main,
+                args=(
+                    worker_state,
+                    task_queue,
+                    result_queue,
+                    worker_gpu_id,
+                    cpus_per_worker,
+                ),
+                name=f"OuterFoldWorker-{worker_index + 1}",
+            )
+            process.start()
+            processes.append(process)
 
-        # -------------------------------------------------------------
-        # Final outer training and testing.
-        # -------------------------------------------------------------
-        X_outer_train = feature_array[outer_train_indices]
-        y_outer_train = label_array[outer_train_indices]
-        X_outer_test = feature_array[outer_test_indices]
-        y_outer_test = label_array[outer_test_indices]
-        subject_ids_outer_test = subject_id_array[outer_test_indices]
+        for task in tasks:
+            task_queue.put(task)
 
-        (
-            X_outer_train,
-            y_outer_train,
-            X_outer_test,
-            y_outer_test,
-        ) = _apply_preprocessing_strategy(
-            preprocessing_strategy=preprocessing_strategy,
-            X_train=X_outer_train,
-            y_train=y_outer_train,
-            X_eval=X_outer_test,
-            y_eval=y_outer_test,
-            train_indices=outer_train_indices,
-            eval_indices=outer_test_indices,
-        )
+        for _ in processes:
+            task_queue.put(None)
 
-        model_hp, fit_hp = _split_config(best_config)
-        current_batch_size = fit_hp.get("batch_size", batch_size)
-
-        tf.keras.backend.clear_session()
-        final_model = model_builder_function(**model_hp)
+        fold_outputs = []
 
         try:
-            final_model.fit(
-                X_outer_train,
-                y_outer_train,
-                verbose=verbose,
-                **fit_hp,
-                **extra_fit_kwargs,
-            )
+            while len(fold_outputs) < total_outer_folds:
+                status, fold_number, payload = result_queue.get()
 
-            fold_result = _evaluate_classification_fold(
-                model=final_model,
-                X_test=X_outer_test,
-                y_test=y_outer_test,
-                subject_ids_test=subject_ids_outer_test,
-                fold_index=outer_fold_number,
-                metrics=metrics,
-                batch_size=current_batch_size,
-                log_predictions=log_predictions,
-                log_variational_intervals=log_variational_intervals,
-                n_uncertainty_samples=n_uncertainty_samples,
-                ci_level=ci_level,
-            )
+                if status == "error":
+                    raise RuntimeError(
+                        "A spawned outer-fold worker failed"
+                        + (
+                            f" while running fold {fold_number}."
+                            if fold_number >= 0
+                            else " during TensorFlow worker initialization."
+                        )
+                        + f"\n\n{payload}"
+                    )
 
+                fold_outputs.append(payload)
         finally:
-            del final_model
-            gc.collect()
-            tf.keras.backend.clear_session()
+            for process in processes:
+                if process.is_alive() and len(fold_outputs) < total_outer_folds:
+                    process.terminate()
 
-        results["fold_metrics"].append(fold_result["fold_metrics"])
-        results["user_metrics"].extend(fold_result["user_metrics"])
-        results["prediction_log"].extend(fold_result["prediction_log"])
+            for process in processes:
+                process.join()
+
+            task_queue.close()
+            result_queue.close()
+
+    # Results arrive in completion order, so restore deterministic fold order.
+    fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+
+    for fold_output in fold_outputs:
+        results["fold_metrics"].append(fold_output["fold_metrics"])
+        results["user_metrics"].extend(fold_output["user_metrics"])
+        results["prediction_log"].extend(fold_output["prediction_log"])
         results["variational_interval_log"].extend(
-            fold_result["variational_interval_log"]
+            fold_output["variational_interval_log"]
         )
-
-        results["outer_fold_results"].append(
-            {
-                "outer_fold_number": int(outer_fold_number),
-                "left_out_subjects": outer_test_subjects.tolist(),
-                "n_outer_train_windows": int(len(outer_train_indices)),
-                "n_outer_test_windows": int(len(outer_test_indices)),
-                "best_config": dict(best_config),
-                "inner_fold_results": inner_fold_results,
-                "inner_mean_scores": inner_mean_scores,
-                "inner_std_scores": inner_std_scores,
-                "fold_metrics": fold_result["fold_metrics"],
-                "user_metrics": fold_result["user_metrics"],
-                "prediction_log": fold_result["prediction_log"],
-                "variational_interval_log": fold_result["variational_interval_log"],
-            }
-        )
+        results["best_configs"].append(fold_output["best_config_result"])
+        results["inner_cv_results"].append(fold_output["inner_cv_result"])
+        results["outer_fold_results"].append(fold_output["outer_fold_result"])
 
     mean_scores, std_scores = _mean_std_rows(
         results["fold_metrics"],

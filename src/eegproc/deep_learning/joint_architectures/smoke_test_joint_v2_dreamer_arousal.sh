@@ -4,9 +4,9 @@
 #SBATCH --error=smoke_joint_v2_dreamer_arousal_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=16G
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
 #SBATCH --time=08:00:00
 
 set -euo pipefail
@@ -178,4 +178,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --label-dimension arousal \
     --outer-subjects 1 \
     --inner-subjects 1 \
+    --n-jobs 4 \
+    --cpus-per-worker 2 \
     --hyperparameters-json '{"epochs":[3,5],"batch_size":[16],"learning_rate":[0.001],"ae_loss_weight":[0.3],"vc_loss_weight":[0.7],"emb_dim":[16],"dropout":[0.2]}'

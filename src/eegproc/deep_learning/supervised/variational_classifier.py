@@ -22,10 +22,10 @@ class VariationalClassifier(tf.keras.layers.Layer):
     Maintains learned Gaussian class priors p_theta(z|y) = N(mu_y, Sigma_y)
     and classifies via Bayes' rule (generalised softmax, Eq. 6).
 
-    The training objective (Eq. 7) has three independently controllable terms:
-      Term 1 -- cross-entropy:           always active
-      Term 2 -- KL (encoder/prior):      scaled by `beta`   (set 0 to disable)
-      Term 2b -- NLL (Gaussian, analytic): scaled by `gamma`  (set 0 to disable)
+    The training objective (Eq. 7) has four independently controllable terms:
+      Term 1 -- cross-entropy:           scaled by `alpha` (set 0 to disable)
+      Term 2 -- KL (encoder/prior):      scaled by `beta`  (set 0 to disable)
+      Term 2b -- NLL (Gaussian, analytic): scaled by `gamma` (set 0 to disable)
       Term 3 -- KL (class prior):        scaled by `lambda_` (set 0 to disable)
 
     An auxiliary discriminator (Eq. 9) can be updated separately or skipped

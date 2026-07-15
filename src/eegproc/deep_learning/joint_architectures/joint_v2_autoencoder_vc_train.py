@@ -92,6 +92,8 @@ class JointV2TrainingConfig:
     classifier_kwargs: dict = field(default_factory=dict)
     model_kwargs: dict = field(default_factory=dict)
     hyperparameters: dict = field(default_factory=dict)
+    n_jobs: int = 4
+    cpus_per_worker: int = 2
 
 
 def load_joint_v2_training_data(
@@ -249,7 +251,10 @@ def _select_final_config(nested_results: dict) -> dict:
     if not best_configs:
         return {}
 
-    encoded = [json.dumps(config, sort_keys=True, default=_json_default) for config in best_configs]
+    encoded = [
+        json.dumps(config, sort_keys=True, default=_json_default)
+        for config in best_configs
+    ]
     most_common_config_json = Counter(encoded).most_common(1)[0][0]
     return json.loads(most_common_config_json)
 
@@ -337,11 +342,7 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     if data_loader is not None:
         feature_array, label_array, subject_id_array = data_loader()
-    elif (
-        feature_array is None
-        or label_array is None
-        or subject_id_array is None
-    ):
+    elif feature_array is None or label_array is None or subject_id_array is None:
         feature_array, label_array, subject_id_array = load_joint_v2_training_data()
 
     feature_array = np.asarray(feature_array, dtype=np.float32)
@@ -382,7 +383,9 @@ def train_joint_autoencoder_variational_classifier_v2(
         def model_builder_function(**hparams) -> tf.keras.Model:
             unknown_hparams = set(hparams) - model_hparam_keys
             if unknown_hparams:
-                raise ValueError(f"Unknown hyperparameter(s): {sorted(unknown_hparams)}")
+                raise ValueError(
+                    f"Unknown hyperparameter(s): {sorted(unknown_hparams)}"
+                )
 
             encoder_kwargs = dict(training_config.encoder_kwargs)
             encoder_kwargs.update(
@@ -469,6 +472,8 @@ def train_joint_autoencoder_variational_classifier_v2(
         log_predictions=True,
         verbose=training_config.outer_verbose,
         extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
+        n_jobs=training_config.n_jobs,
+        cpus_per_worker=training_config.cpus_per_worker,
     )
 
     fold_rows: list[dict] = []
@@ -500,7 +505,9 @@ def train_joint_autoencoder_variational_classifier_v2(
     }
 
     logger.info("Selected final config: %s", selected_final_config)
-    logger.info("Selected %d epochs for the final full-data fit.", selected_final_epochs)
+    logger.info(
+        "Selected %d epochs for the final full-data fit.", selected_final_epochs
+    )
 
     final_model = model_builder_function(**selected_final_model_hparams)
     final_callbacks: list[tf.keras.callbacks.Callback] = [
@@ -590,7 +597,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "JSON dict passed to cross_val.nested_lnso_cv as the grid search. "
-            "Example: '{\"epochs\": [3, 5], \"learning_rate\": [0.001, 0.0005]}'."
+            'Example: \'{"epochs": [3, 5], "learning_rate": [0.001, 0.0005]}\'.'
         ),
     )
     parser.add_argument("--features-npy", default=None)
@@ -650,6 +657,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Disable per-subject, per-channel z-scoring of the raw EEG before windowing.",
     )
+
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help=(
+            "Number of concurrent outer-fold worker processes. "
+            "Use 1 for sequential execution."
+        ),
+    )
+
+    parser.add_argument(
+        "--cpus-per-worker",
+        type=int,
+        default=None,
+        help=(
+            "Maximum TensorFlow CPU threads assigned to each worker. "
+            "For example, 4 jobs with 2 CPUs each requires approximately 8 CPUs."
+        ),
+    )
+
     return parser.parse_args(argv)
 
 
@@ -686,10 +714,10 @@ def main(argv: list[str] | None = None) -> int:
             "update_discriminator": args.update_discriminator,
         },
         hyperparameters=(
-            json.loads(args.hyperparameters_json)
-            if args.hyperparameters_json
-            else {}
+            json.loads(args.hyperparameters_json) if args.hyperparameters_json else {}
         ),
+        n_jobs=args.n_jobs,
+        cpus_per_worker=args.cpus_per_worker
     )
 
     feature_array = label_array = subject_id_array = None

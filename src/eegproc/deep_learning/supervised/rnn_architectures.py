@@ -37,8 +37,8 @@ class RNNClassifier(ABC):
         metrics: list[str] | None = None,
         name: str = "rnn_classifier",
         alpha: float = 1.0,
-        beta: float = 0.0,
-        gamma: float = 1e-4,
+        beta: float = 1.0,
+        gamma: float = 0.0,
         lambda_: float = 0.0,
     ) -> None:
         self.timesteps = timesteps
@@ -171,8 +171,8 @@ class LSTMClassifier(RNNClassifier):
         metrics: list[str] | None = None,
         name: str = "lstm_classifier",
         alpha: float = 1.0,
-        beta: float = 0.0,
-        gamma: float = 1e-4,
+        beta: float = 1.0,
+        gamma: float = 0.0,
         lambda_: float = 0.0,
     ) -> None:
         super().__init__(
@@ -219,8 +219,8 @@ class BiLSTMClassifier(RNNClassifier):
         metrics: list[str] | None = None,
         name: str = "bilstm_classifier",
         alpha: float = 1.0,
-        beta: float = 0.0,
-        gamma: float = 1e-4,
+        beta: float = 1.0,
+        gamma: float = 0.0,
         lambda_: float = 0.0,
     ) -> None:
         super().__init__(
