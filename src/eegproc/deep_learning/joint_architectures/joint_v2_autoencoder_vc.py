@@ -217,10 +217,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             lambda_=self.vc_lambda,
         )
 
-        total_loss = (
-            self.ae_loss_weight * ae_loss
-            + self.vc_loss_weight * vc_loss
-        )
+        total_loss = self.ae_loss_weight * ae_loss + self.vc_loss_weight * vc_loss
 
         return total_loss, reconstruction_loss, vc_loss, outputs
 
@@ -250,51 +247,70 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         else:
             raise ValueError("Expected data as (x, y) tuple.")
 
-        disc_vars = self._discriminator_variables()
-        disc_var_ids = {id(variable) for variable in disc_vars}
-        main_variables = [
-            variable for variable in self.trainable_variables if id(variable) not in disc_var_ids
-        ]
-
-        discriminator_optimizer = None
-        if self.update_discriminator and disc_vars:
-            # Built eagerly in compile() -- never construct an optimizer here.
-            # train_step gets traced into a tf.function graph the first time
-            # model.fit() runs it, and cloning an optimizer via
-            # self.optimizer.__class__.from_config(self.optimizer.get_config())
-            # reads the learning rate with .numpy(), which raises
-            # NotImplementedError during tracing.
-            discriminator_optimizer = getattr(self, "_discriminator_optimizer", None)
-            if discriminator_optimizer is None:
-                raise RuntimeError(
-                    "update_discriminator=True but no discriminator optimizer "
-                    "was built. This should have happened in compile(); did "
-                    "you forget to call model.compile(...)?"
-                )
-
+        # Run the forward pass first. This ensures the encoder, decoder, and
+        # classifier variables exist before self.trainable_variables is inspected.
         with tf.GradientTape() as tape:
-            total_loss, reconstruction_loss, vc_loss, outputs = self._compute_weighted_losses(
+            (
+                total_loss,
+                reconstruction_loss,
+                vc_loss,
+                outputs,
+            ) = self._compute_weighted_losses(
                 x=x,
                 y=y,
                 training=True,
             )
 
-        main_gradients = tape.gradient(total_loss, main_variables)
-        self._apply_gradients(self.optimizer, main_gradients, main_variables)
+        # Collect variables only after the model has completed its first call.
+        disc_vars = self._discriminator_variables()
+        disc_var_ids = {id(variable) for variable in disc_vars}
 
-        if discriminator_optimizer is not None:
+        main_variables = [
+            variable
+            for variable in self.trainable_variables
+            if id(variable) not in disc_var_ids
+        ]
+
+        main_gradients = tape.gradient(total_loss, main_variables)
+        self._apply_gradients(
+            self.optimizer,
+            main_gradients,
+            main_variables,
+        )
+
+        if self.update_discriminator and disc_vars:
+            discriminator_optimizer = getattr(
+                self,
+                "_discriminator_optimizer",
+                None,
+            )
+
+            if discriminator_optimizer is None:
+                raise RuntimeError(
+                    "update_discriminator=True but no discriminator optimizer "
+                    "was created. Make sure model.compile(...) was called."
+                )
+
             with tf.GradientTape() as disc_tape:
                 disc_loss = self.variational_classifier.discriminator_loss(
                     tf.stop_gradient(outputs["pooled_latent"]),
                     tf.cast(tf.reshape(y, [-1]), tf.int32),
                 )
+
             disc_gradients = disc_tape.gradient(disc_loss, disc_vars)
-            self._apply_gradients(discriminator_optimizer, disc_gradients, disc_vars)
+
+            self._apply_gradients(
+                discriminator_optimizer,
+                disc_gradients,
+                disc_vars,
+            )
+
+        y_flat = tf.cast(tf.reshape(y, [-1]), tf.int32)
 
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vc_loss_tracker.update_state(vc_loss)
-        self.accuracy_tracker.update_state(y, outputs["logits"])
+        self.accuracy_tracker.update_state(y_flat, outputs["logits"])
 
         return {
             "loss": self.total_loss_tracker.result(),
@@ -315,10 +331,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         else:
             raise ValueError("Expected data as (x, y) tuple.")
 
-        total_loss, reconstruction_loss, vc_loss, outputs = self._compute_weighted_losses(
-            x=x,
-            y=y,
-            training=False,
+        total_loss, reconstruction_loss, vc_loss, outputs = (
+            self._compute_weighted_losses(
+                x=x,
+                y=y,
+                training=False,
+            )
         )
 
         self.total_loss_tracker.update_state(total_loss)
