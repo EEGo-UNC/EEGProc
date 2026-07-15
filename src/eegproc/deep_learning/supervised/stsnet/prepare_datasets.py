@@ -1,7 +1,7 @@
 """
 prepare_datasets.py
 ===================
-Convert raw DEAP, DREAMER, and AMIGOS dataset files into the NumPy format
+Convert raw DEAP, DREAMER, AMIGOS, and EEGEmotions dataset files into the NumPy format
 expected by STSNet's train_eval.py (and by joint_v2_data.py's
 ``build_dataset``):
 
@@ -26,6 +26,14 @@ Usage
         --deap_dir /path/to/deap/data_preprocessed_python \
         --dreamer_dir /path/to/dreamer \
         --amigos_dir /path/to/amigos/data_preprocessed
+
+    # EEGEmotions (point to the folder containing eegemotions_labeled.csv and cowen_27_valence_arousal.csv)
+    python prepare_datasets.py --dataset eegemotions --input_dir /path/to/eegemotions \
+        --eegemotions_label_mode emotion_27
+
+    # EEGEmotions with valence/arousal labels from the Cowen 27 mapping
+    python prepare_datasets.py --dataset eegemotions --input_dir /path/to/eegemotions \
+        --eegemotions_label_mode valence_arousal
 
 Output files are written to the current working directory (or --output_dir).
 
@@ -66,6 +74,23 @@ AMIGOS (joined CSV or legacy preprocessed Matlab version):
     For backwards compatibility, the legacy ``Data_Preprocessed_P01.mat`` ...
     ``Data_Preprocessed_P40.mat`` layout is still supported if the joined CSV
     is not present.
+
+EEGEmotions (joined CSV + Cowen 27 mapping):
+        ``eegemotions_labeled.csv`` stores one EEG sample per row with columns:
+                subject_id, trial_id, segment, sample_idx,
+                AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4,
+                age, gender, nation, source_file, source_file_label,
+                emo_label_cowen_27, emo_label_ekman_6
+        This converter uses the 14 EEG channels above, keeps the first 27 emotion
+        trials for each complete subject, and extracts the center 60 s from each
+        trial. The labels can be written in one of two modes:
+
+        - ``emotion_27``: one-hot vectors with shape ``(n_subjects, 27)``
+        - ``valence_arousal``: mapped Cowen valence/arousal vectors with shape
+            ``(n_subjects, 2)``
+
+        The accompanying ``cowen_27_valence_arousal.csv`` file provides the
+        emotion-to-valence/arousal mapping.
 """
 
 import argparse
@@ -116,6 +141,13 @@ AMIGOS_LABEL_NAMES = [
     "arousal", "valence", "dominance", "liking", "familiarity",
     "neutral", "disgust", "happiness", "surprise", "anger", "fear", "sadness",
 ]
+
+EEGEMOTIONS_N_TRIALS = 27
+EEGEMOTIONS_N_CHANNELS = 14
+EEGEMOTIONS_FS = 128
+EEGEMOTIONS_TRIAL_SECS = 60
+EEGEMOTIONS_TRIAL_SAMPLES = EEGEMOTIONS_TRIAL_SECS * EEGEMOTIONS_FS  # 7680
+EEGEMOTIONS_LABEL_COL = "emo_label_cowen_27"
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +249,55 @@ def _extract_centre(arr: np.ndarray, target: int) -> np.ndarray:
         return arr[start: start + target, :]
     repeats = (target // n) + 1
     return np.tile(arr, (repeats, 1))[:target, :]
+
+
+def load_cowen_27_mapping(filepath: str) -> tuple[list[str], np.ndarray]:
+    """Load the 27-row Cowen mapping in file order."""
+    filepath = os.fspath(filepath)
+    if not os.path.isfile(filepath):
+        raise FileNotFoundError(f"Cowen 27 mapping not found at {filepath}.")
+
+    rows: list[tuple[str, float, float]] = []
+    with open(filepath, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None:
+            raise ValueError(f"Cowen mapping {filepath} does not have a header row.")
+        required = {"emotion", "valence", "arousal"}
+        missing = required - set(reader.fieldnames)
+        if missing:
+            raise ValueError(
+                f"Cowen mapping {filepath} is missing required columns: {sorted(missing)}"
+            )
+        for row in reader:
+            rows.append((row["emotion"].strip(), float(row["valence"]), float(row["arousal"])))
+
+    if len(rows) != 27:
+        raise ValueError(f"Expected 27 rows in Cowen mapping {filepath}, found {len(rows)}.")
+
+    emotion_names = [name for name, _, _ in rows]
+    va_map = np.asarray([(valence, arousal) for _, valence, arousal in rows], dtype=np.float32)
+    return emotion_names, va_map
+
+
+def _encode_eegemotions_label(label_id: int, label_mode: str, va_map: np.ndarray) -> np.ndarray:
+    """Encode one EEGEmotions label as either one-hot or valence/arousal."""
+    if not 1 <= label_id <= EEGEMOTIONS_N_TRIALS:
+        raise ValueError(
+            f"EEGEmotions label id {label_id} is out of range 1..{EEGEMOTIONS_N_TRIALS}."
+        )
+
+    mode = label_mode.lower()
+    if mode == "emotion_27":
+        label = np.zeros(EEGEMOTIONS_N_TRIALS, dtype=np.float32)
+        label[label_id - 1] = 1.0
+        return label
+    if mode == "valence_arousal":
+        return np.asarray(va_map[label_id - 1], dtype=np.float32)
+
+    raise ValueError(
+        "Unsupported EEGEmotions label mode: "
+        f"{label_mode!r}. Expected 'emotion_27' or 'valence_arousal'."
+    )
 
 
 def load_amigos_joined_csv(filepath: str) -> tuple[np.ndarray, np.ndarray]:
@@ -350,6 +431,140 @@ def load_amigos_joined_csv(filepath: str) -> tuple[np.ndarray, np.ndarray]:
     return eeg_arr.astype(np.float32), labels_arr.astype(np.float32)
 
 
+def load_eegemotions_joined_csv(filepath: str, label_mode: str = "emotion_27") -> tuple[np.ndarray, np.ndarray]:
+    """Load eegemotions_labeled.csv and convert it to raw trial arrays."""
+    filepath = os.fspath(filepath)
+    if not os.path.isfile(filepath):
+        raise FileNotFoundError(f"EEGEmotions labeled CSV not found at {filepath}.")
+
+    cowen_path = str(Path(filepath).with_name("cowen_27_valence_arousal.csv"))
+    _, va_map = load_cowen_27_mapping(cowen_path)
+
+    required_columns = {
+        "subject_id",
+        "trial_id",
+        "sample_idx",
+        *DREAMER_EEG_COLS,
+        EEGEMOTIONS_LABEL_COL,
+    }
+
+    all_subject_eeg: list[np.ndarray] = []
+    all_subject_labels: list[np.ndarray] = []
+    skipped_subjects: list[int] = []
+
+    current_subject_id: int | None = None
+    current_trial_id: int | None = None
+    current_trial_rows: list[list[float]] = []
+    current_trial_label_id: int | None = None
+    current_subject_trials: list[np.ndarray] = []
+    current_subject_labels: list[np.ndarray] = []
+    skipped_sample_rows = 0
+
+    def finalize_trial() -> None:
+        nonlocal current_trial_rows, current_trial_label_id
+        if not current_trial_rows:
+            return
+
+        trial_signal = np.asarray(current_trial_rows, dtype=np.float32)
+        if trial_signal.shape[1] != len(DREAMER_EEG_COLS):
+            raise ValueError(
+                f"Expected {len(DREAMER_EEG_COLS)} EEG channels in EEGEmotions CSV, got shape {trial_signal.shape}."
+            )
+        if current_trial_label_id is None:
+            raise ValueError("Encountered EEGEmotions trial with no labels.")
+
+        trial_windows = _extract_centre(trial_signal, EEGEMOTIONS_TRIAL_SAMPLES).T
+        current_subject_trials.append(trial_windows)
+        current_subject_labels.append(_encode_eegemotions_label(current_trial_label_id, label_mode, va_map))
+        current_trial_rows = []
+        current_trial_label_id = None
+
+    def finalize_subject(subject_id: int) -> None:
+        nonlocal current_subject_trials, current_subject_labels
+        if not current_subject_trials:
+            return
+
+        trial_count = len(current_subject_trials)
+        if trial_count != EEGEMOTIONS_N_TRIALS:
+            skipped_subjects.append(subject_id)
+            current_subject_trials = []
+            current_subject_labels = []
+            return
+
+        all_subject_eeg.append(np.stack(current_subject_trials, axis=0))
+        all_subject_labels.append(np.stack(current_subject_labels, axis=0))
+        current_subject_trials = []
+        current_subject_labels = []
+
+    with open(filepath, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None:
+            raise ValueError(f"EEGEmotions CSV {filepath} does not have a header row.")
+        missing = required_columns - set(reader.fieldnames)
+        if missing:
+            raise ValueError(
+                f"EEGEmotions CSV {filepath} is missing required columns: {sorted(missing)}"
+            )
+
+        for row in reader:
+            subject_id = int(row["subject_id"])
+            trial_id = int(row["trial_id"])
+            sample_idx = int(row["sample_idx"])
+            label_id = int(row[EEGEMOTIONS_LABEL_COL])
+            try:
+                eeg_row = [float(row[col]) for col in DREAMER_EEG_COLS]
+            except ValueError:
+                skipped_sample_rows += 1
+                continue
+
+            if current_subject_id is None:
+                current_subject_id = subject_id
+                current_trial_id = trial_id
+            elif subject_id < current_subject_id or (
+                subject_id == current_subject_id and trial_id < current_trial_id
+            ):
+                raise ValueError(
+                    "EEGEmotions CSV must be sorted by subject_id, trial_id, and sample_idx."
+                )
+            elif subject_id != current_subject_id:
+                finalize_trial()
+                finalize_subject(current_subject_id)
+                current_subject_id = subject_id
+                current_trial_id = trial_id
+            elif trial_id != current_trial_id:
+                finalize_trial()
+                current_trial_id = trial_id
+
+            if current_trial_label_id is None:
+                current_trial_label_id = label_id
+            elif current_trial_label_id != label_id:
+                raise ValueError(
+                    f"EEGEmotions labels changed within subject {subject_id}, trial {trial_id}."
+                )
+
+            current_trial_rows.append(eeg_row)
+
+    if current_subject_id is None:
+        raise ValueError(f"EEGEmotions CSV {filepath} did not contain any rows.")
+
+    finalize_trial()
+    finalize_subject(current_subject_id)
+
+    if not all_subject_eeg:
+        raise ValueError(
+            "EEGEmotions conversion produced no complete subjects. Check that the input CSV contains all 27 trials for at least one subject."
+        )
+
+    if skipped_subjects:
+        print(f"  EEGEmotions skipped incomplete subjects: {sorted(set(skipped_subjects))}")
+    if skipped_sample_rows:
+        print(f"  EEGEmotions skipped malformed sample rows: {skipped_sample_rows}")
+
+    eeg_arr = np.stack(all_subject_eeg, axis=0)
+    labels_arr = np.stack(all_subject_labels, axis=0)
+    return eeg_arr.astype(np.float32), labels_arr.astype(np.float32)
+
+
 def prepare_dreamer(input_dir: str, output_dir: str) -> None:
     """Convert dreamer_joined.csv to a single pair of .npy arrays.
 
@@ -426,6 +641,42 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
     print(f"  {eeg_path}    {eeg_arr.shape}  {eeg_arr.dtype}")
     print(f"  {labels_path} {labels_arr.shape}  {labels_arr.dtype}")
     _print_label_stats("DREAMER", labels_arr)
+
+
+def prepare_eegemotions(input_dir: str, output_dir: str, label_mode: str = "emotion_27") -> None:
+    """Convert eegemotions_labeled.csv to a single pair of .npy arrays."""
+    input_path = Path(input_dir)
+    csv_path = input_path if input_path.is_file() and input_path.suffix.lower() == ".csv" else input_path / "eegemotions_labeled.csv"
+    cowen_path = csv_path.with_name("cowen_27_valence_arousal.csv")
+
+    if not csv_path.is_file():
+        raise FileNotFoundError(
+            f"eegemotions_labeled.csv not found in {input_dir}.\n"
+            f"Make sure --eegemotions_dir (or --input_dir) points to the folder containing eegemotions_labeled.csv."
+        )
+    if not cowen_path.is_file():
+        raise FileNotFoundError(
+            f"cowen_27_valence_arousal.csv not found next to {csv_path}.\n"
+            "The EEGEmotions converter needs both files in the same folder."
+        )
+
+    emotion_names, _ = load_cowen_27_mapping(str(cowen_path))
+    print(f"  Loading {csv_path} (this may take a moment)…")
+    eeg_arr, labels_arr = load_eegemotions_joined_csv(str(csv_path), label_mode=label_mode)
+
+    eeg_path = os.path.join(output_dir, "eegemotions_eeg.npy")
+    labels_path = os.path.join(output_dir, "eegemotions_labels.npy")
+    np.save(eeg_path, eeg_arr)
+    np.save(labels_path, labels_arr)
+
+    print(f"\nEEGEmotions saved ({label_mode}):")
+    print(f"  {eeg_path}    {eeg_arr.shape}  {eeg_arr.dtype}")
+    print(f"  {labels_path} {labels_arr.shape}  {labels_arr.dtype}")
+    _print_label_stats(
+        "EEGEMOTIONS",
+        labels_arr,
+        dim_names=emotion_names if label_mode.lower() == "emotion_27" else ["valence", "arousal"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -577,29 +828,77 @@ def prepare_amigos(input_dir: str, output_dir: str) -> None:
 # Sanity-check helper
 # ---------------------------------------------------------------------------
 
-def _print_label_stats(name: str, labels: np.ndarray) -> None:
+def _print_label_stats(name: str, labels: np.ndarray, dim_names: list[str] | None = None) -> None:
     """Print basic label statistics to help verify the conversion."""
-    dim_names = {
+    default_dim_names = {
         "DEAP":    ["valence", "arousal", "dominance", "liking"],
         "DREAMER": ["valence", "arousal"],  # Converter currently outputs only these two labels
         "AMIGOS":  ["valence", "arousal"],  # Converter currently outputs only these two labels
     }
-    names = dim_names.get(name, [f"dim{i}" for i in range(labels.shape[-1])])
+    names = dim_names if dim_names is not None else default_dim_names.get(name, [f"dim{i}" for i in range(labels.shape[-1])])
     print(f"\n{name} label statistics (across all subjects × trials):")
     flat = labels.reshape(-1, labels.shape[-1])
-    for i, dim in enumerate(names):
-        col = flat[:, i]
-        print(f"  {dim:12s}  min={col.min():.1f}  max={col.max():.1f}  "
-              f"mean={col.mean():.2f}  median={np.median(col):.1f}")
+    if len(names) == labels.shape[-1] and labels.shape[-1] > 2 and np.all((flat == 0.0) | (flat == 1.0)):
+        counts = flat.sum(axis=0)
+        for dim, count in zip(names, counts):
+            print(f"  {dim:12s}  count={int(count)}")
+    else:
+        for i, dim in enumerate(names):
+            col = flat[:, i]
+            print(f"  {dim:12s}  min={col.min():.1f}  max={col.max():.1f}  "
+                  f"mean={col.mean():.2f}  median={np.median(col):.1f}")
 
 
-def verify_npy(output_dir: str, dataset: str) -> None:
+def verify_npy(output_dir: str, dataset: str, label_mode: str | None = None) -> None:
     """Reload and verify the saved .npy files."""
-    eeg_path    = os.path.join(output_dir, f"{dataset}_eeg.npy")
+    eeg_path = os.path.join(output_dir, f"{dataset}_eeg.npy")
     labels_path = os.path.join(output_dir, f"{dataset}_labels.npy")
 
-    eeg    = np.load(eeg_path)
+    eeg = np.load(eeg_path)
     labels = np.load(labels_path)
+
+    assert not np.any(np.isnan(eeg)), "NaN values found in EEG data!"
+    assert not np.any(np.isinf(eeg)), "Inf values found in EEG data!"
+    assert not np.any(np.isnan(labels)), "NaN values found in label data!"
+    assert not np.any(np.isinf(labels)), "Inf values found in label data!"
+    print(f"  ✓  No NaN/Inf in EEG and label data")
+
+    if dataset == "eegemotions":
+        mode = (label_mode or "emotion_27").lower()
+        expected_label_dim = EEGEMOTIONS_N_TRIALS if mode == "emotion_27" else 2
+        ok = True
+
+        if eeg.shape[1:] == (EEGEMOTIONS_N_TRIALS, len(DREAMER_EEG_COLS), EEGEMOTIONS_TRIAL_SAMPLES):
+            print(f"  ✓  {dataset}_eeg.npy  shape={eeg.shape}")
+        else:
+            print(
+                f"  ✗  {dataset}_eeg.npy  shape={eeg.shape}  "
+                f"(expected trailing shape {(EEGEMOTIONS_N_TRIALS, len(DREAMER_EEG_COLS), EEGEMOTIONS_TRIAL_SAMPLES)})"
+            )
+            ok = False
+
+        if labels.shape[1:] == (EEGEMOTIONS_N_TRIALS, expected_label_dim):
+            print(f"  ✓  {dataset}_labels.npy  shape={labels.shape}")
+        else:
+            print(
+                f"  ✗  {dataset}_labels.npy  shape={labels.shape}  "
+                f"(expected trailing shape {(EEGEMOTIONS_N_TRIALS, expected_label_dim)})"
+            )
+            ok = False
+
+        if mode == "emotion_27":
+            sums = labels.sum(axis=-1)
+            if np.allclose(sums, 1.0):
+                print("  ✓  One-hot label rows sum to 1")
+            else:
+                print("  ✗  One-hot label rows do not sum to 1")
+                ok = False
+
+        if ok:
+            print(f"\n  All checks passed for {dataset.upper()}.")
+        else:
+            print(f"\n  Shape mismatch detected — check the raw data layout.")
+        return
 
     expected_shapes = {
         "deap":    {"eeg": (32, 40, 32, 7680), "labels": (32, 40, 4)},
@@ -639,10 +938,6 @@ def verify_npy(output_dir: str, dataset: str) -> None:
                 print(f"  ✗  {dataset}_{key}.npy  shape={arr.shape}  (expected {exp_shape})")
                 ok = False
 
-    assert not np.any(np.isnan(eeg)),    "NaN values found in EEG data!"
-    assert not np.any(np.isinf(eeg)),    "Inf values found in EEG data!"
-    print(f"  ✓  No NaN/Inf in EEG data")
-
     if ok:
         print(f"\n  All checks passed for {dataset.upper()}.")
     else:
@@ -655,10 +950,10 @@ def verify_npy(output_dir: str, dataset: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Convert DEAP / DREAMER / AMIGOS raw files to STSNet-ready .npy arrays"
+        description="Convert DEAP / DREAMER / AMIGOS / EEGEmotions raw files to STSNet-ready .npy arrays"
     )
     parser.add_argument(
-        "--dataset", choices=["deap", "dreamer", "amigos", "both", "all"], default="all",
+        "--dataset", choices=["deap", "dreamer", "amigos", "eegemotions", "both", "all"], default="all",
         help="Which dataset to convert. 'both' is a deprecated alias for "
              "'all' kept for backwards compatibility. (default: all)",
     )
@@ -675,6 +970,15 @@ if __name__ == "__main__":
            help="Folder containing amigos_joined.csv, or the legacy unzipped "
                "'data_preprocessed' folder containing Data_Preprocessed_P01.mat … "
                "Data_Preprocessed_P40.mat",
+    )
+    parser.add_argument(
+        "--eegemotions_dir", type=str, default=None,
+        help="Folder containing eegemotions_labeled.csv and cowen_27_valence_arousal.csv",
+    )
+    parser.add_argument(
+        "--eegemotions_label_mode", type=str, default="emotion_27",
+        choices=["emotion_27", "valence_arousal"],
+        help="How to encode EEGEmotions labels: one-hot 27-way emotion labels or Cowen valence/arousal pairs.",
     )
     # Shorthand when all datasets are in the same place
     parser.add_argument(
@@ -695,6 +999,7 @@ if __name__ == "__main__":
     deap_dir    = args.deap_dir    or args.input_dir
     dreamer_dir = args.dreamer_dir or args.input_dir
     amigos_dir  = args.amigos_dir  or args.input_dir
+    eegemotions_dir = args.eegemotions_dir or args.input_dir
 
     # 'both' predates AMIGOS support; treat it the same as 'all'.
     requested = "all" if args.dataset == "both" else args.dataset
@@ -727,3 +1032,12 @@ if __name__ == "__main__":
         if args.verify:
             print("\nVerifying AMIGOS output…")
             verify_npy(args.output_dir, "amigos")
+
+    if requested == "eegemotions":
+        if eegemotions_dir is None:
+            parser.error("--eegemotions_dir (or --input_dir) is required for EEGEmotions")
+        print(f"\n{'='*50}\nConverting EEGEmotions\n{'='*50}")
+        prepare_eegemotions(eegemotions_dir, args.output_dir, label_mode=args.eegemotions_label_mode)
+        if args.verify:
+            print("\nVerifying EEGEmotions output…")
+            verify_npy(args.output_dir, "eegemotions", label_mode=args.eegemotions_label_mode)

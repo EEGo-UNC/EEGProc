@@ -211,3 +211,8 @@ scripts/
 
 datasets/
 figures/
+
+data/
+outputs/
+.devcontainer/
+*.npy
