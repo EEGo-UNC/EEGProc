@@ -14,8 +14,8 @@ from pathlib import Path
 import tensorflow as tf
 
 try:
-    from .joint_autoencoder_vc import JointAutoencoderVariationalClassifierV1
-    from .joint_autoencoder_vc_v2 import JointAutoencoderVariationalClassifierV2
+    from .joint_v1_autoencoder_vc import JointAutoencoderVariationalClassifierV1
+    from .joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
 except ImportError:
@@ -23,8 +23,8 @@ except ImportError:
     if str(CURRENT_DIR) not in sys.path:
         sys.path.insert(0, str(CURRENT_DIR))
 
-    from joint_autoencoder_vc import JointAutoencoderVariationalClassifierV1
-    from joint_autoencoder_vc_v2 import JointAutoencoderVariationalClassifierV2
+    from joint_v1_autoencoder_vc import JointAutoencoderVariationalClassifierV1
+    from joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
     from eegproc.deep_learning.supervised.variational_classifier import (
         VariationalClassifier,
     )

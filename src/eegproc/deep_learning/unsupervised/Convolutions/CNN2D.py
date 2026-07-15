@@ -253,7 +253,6 @@ class CNN2DEncoder(BaseEncoder):
         return config
 
 
-
 class CNN2DDecoder(tf.keras.Model):
     """Temporal decoder for ``CNN2DEncoder`` latent sequences.
 

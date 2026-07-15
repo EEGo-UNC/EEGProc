@@ -68,9 +68,9 @@ class JointAutoencoderVariationalClassifierV1(tf.keras.Model):
         vc_loss_weight: float = 0.5,
         reconstruction_loss_fn: Callable | None = None,
         vc_alpha: float = 1.0,
-        vc_beta: float = 0.0,
-        vc_gamma: float = 1e-4,
-        vc_lambda: float = 0.0,
+        vc_beta: float = 1.0,
+        vc_gamma: float = 0.0,
+        vc_lambda: float = 1.0,
         name: str = "joint_autoencoder_variational_classifier",
         **kwargs,
     ):
