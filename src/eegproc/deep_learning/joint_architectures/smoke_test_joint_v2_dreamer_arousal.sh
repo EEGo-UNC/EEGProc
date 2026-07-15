@@ -176,7 +176,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
     --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
     --label-dimension arousal \
-    --max-folds 1 \
+    --max-folds 4 \
     --n-jobs 2 \
     --cpus-per-worker 4 \
     --hyperparameters-json '{
