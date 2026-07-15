@@ -4,7 +4,7 @@ import gc
 import itertools
 from itertools import combinations
 from pprint import pformat
-from typing import Callable, Literal
+from typing import Callable, Literal, Mapping
 
 import numpy as np
 import tensorflow as tf
@@ -154,16 +154,32 @@ def _to_probabilities(model_output: np.ndarray) -> np.ndarray:
     return exp / np.sum(exp, axis=1, keepdims=True)
 
 
-def _predict_probabilities(
-    model: tf.keras.Model,
-    X: np.ndarray,
-    batch_size: int | None = None,
-) -> np.ndarray:
-    """Run model.predict and convert output to probabilities."""
-    raw_pred = model.predict(X, batch_size=batch_size, verbose=0)
+def _predict_probabilities(model, X, batch_size=None):
+    """Return class probabilities for Keras and scikit-learn models."""
 
-    if isinstance(raw_pred, (tuple, list)):
-        raw_pred = raw_pred[0]
+    if hasattr(model, "predict_proba"):
+        raw_pred = model.predict_proba(X)
+    else:
+        predict_kwargs = {"verbose": 0}
+
+        if batch_size is not None:
+            predict_kwargs["batch_size"] = batch_size
+
+        raw_pred = model.predict(X, **predict_kwargs)
+
+    # Joint and multi-output Keras models may return a dictionary.
+    # For classification evaluation, extract the classifier output.
+    if isinstance(raw_pred, Mapping):
+        if "probabilities" in raw_pred:
+            raw_pred = raw_pred["probabilities"]
+        elif "logits" in raw_pred:
+            raw_pred = raw_pred["logits"]
+        else:
+            raise ValueError(
+                "Model.predict() returned a dictionary, but it did not contain "
+                "'logits' or 'probabilities'. "
+                f"Available outputs: {list(raw_pred.keys())}"
+            )
 
     return _to_probabilities(raw_pred)
 
