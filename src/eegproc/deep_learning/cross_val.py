@@ -2321,6 +2321,174 @@ def _loso_fold_process_main(
         tf.keras.backend.clear_session()
         gc.collect()
 
+def _compact_loso_fold_result(fold_output: dict) -> dict:
+    """Return one LOSO fold record without large prediction logs.
+
+    Every hyperparameter configuration retains its per-subject metrics so the
+    complete grid search can be inspected later. Window/trial prediction rows
+    are retained only for the globally selected configuration at the top level
+    of the ``loso_cv`` result, preventing the result JSON from growing by one
+    full prediction log per configuration.
+    """
+    fold_record = fold_output["fold_record"]
+    return {
+        "fold_number": int(fold_record["fold_number"]),
+        "outer_fold_number": int(fold_record["outer_fold_number"]),
+        "left_out_subject": fold_record["left_out_subject"],
+        "left_out_subjects": list(fold_record["left_out_subjects"]),
+        "outer_test_subjects": list(fold_record["outer_test_subjects"]),
+        "n_train_windows": int(fold_record["n_train_windows"]),
+        "n_test_windows": int(fold_record["n_test_windows"]),
+        "n_train_trials": int(fold_record["n_train_trials"]),
+        "n_test_trials": int(fold_record["n_test_trials"]),
+        "evaluation_level": fold_record["evaluation_level"],
+        "fold_metrics": dict(fold_output["fold_metrics"]),
+        "window_fold_metrics": dict(fold_output["window_fold_metrics"]),
+        "trial_fold_metrics": dict(fold_output["trial_fold_metrics"]),
+        "user_metrics": [dict(row) for row in fold_output["user_metrics"]],
+    }
+
+
+def _aggregate_loso_config_result(
+    config_index: int,
+    config: dict,
+    fold_outputs: list[dict],
+    metrics: tuple[str, ...],
+    selection_metric: str,
+    selection_level: Literal["window", "trial"],
+) -> dict:
+    """Aggregate a complete LOSO evaluation for one configuration."""
+    fold_outputs = sorted(
+        fold_outputs,
+        key=lambda row: int(row["outer_fold_number"]),
+    )
+
+    fold_metrics = [dict(row["fold_metrics"]) for row in fold_outputs]
+    window_fold_metrics = [
+        dict(row["window_fold_metrics"]) for row in fold_outputs
+    ]
+    trial_fold_metrics = [
+        dict(row["trial_fold_metrics"]) for row in fold_outputs
+    ]
+
+    mean_scores, std_scores = _mean_std_rows(
+        fold_metrics,
+        ["loss", *metrics],
+    )
+    window_mean_scores, window_std_scores = _mean_std_rows(
+        window_fold_metrics,
+        ["loss", *metrics],
+    )
+    trial_mean_scores, trial_std_scores = _mean_std_rows(
+        trial_fold_metrics,
+        ["loss", *metrics],
+    )
+
+    selection_means = (
+        trial_mean_scores if selection_level == "trial" else window_mean_scores
+    )
+    selection_stds = (
+        trial_std_scores if selection_level == "trial" else window_std_scores
+    )
+
+    if selection_metric not in selection_means:
+        raise ValueError(
+            f"Selection metric {selection_metric!r} was not produced for "
+            f"configuration {config_index}. Available metrics: "
+            f"{sorted(selection_means)}"
+        )
+
+    return {
+        "config_index": int(config_index),
+        "config": dict(config),
+        "n_folds": int(len(fold_outputs)),
+        "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "selection_score": float(selection_means[selection_metric]),
+        "selection_score_std": float(selection_stds[selection_metric]),
+        "mean_scores": mean_scores,
+        "std_scores": std_scores,
+        "window_mean_scores": window_mean_scores,
+        "window_std_scores": window_std_scores,
+        "trial_mean_scores": trial_mean_scores,
+        "trial_std_scores": trial_std_scores,
+        "fold_metrics": fold_metrics,
+        "window_fold_metrics": window_fold_metrics,
+        "trial_fold_metrics": trial_fold_metrics,
+        "fold_results": [
+            _compact_loso_fold_result(row) for row in fold_outputs
+        ],
+    }
+
+
+def _loso_config_sort_key(
+    config_result: dict,
+    selection_metric: str,
+    selection_level: Literal["window", "trial"],
+    maximize_metric: bool,
+) -> tuple[float, float, float, int]:
+    """Return a deterministic ranking key for flat LOSO grid search.
+
+    The primary criterion is the mean selected metric across held-out subjects.
+    Ties are resolved by lower between-subject standard deviation, then lower
+    mean log loss, then the earlier configuration index.
+    """
+    mean_key = f"{selection_level}_mean_scores"
+    std_key = f"{selection_level}_std_scores"
+    mean_scores = config_result[mean_key]
+    std_scores = config_result[std_key]
+
+    primary = float(mean_scores[selection_metric])
+    primary_std = float(std_scores[selection_metric])
+    mean_loss = float(mean_scores.get("loss", np.inf))
+
+    if not np.isfinite(primary):
+        primary_rank = np.inf
+    else:
+        primary_rank = -primary if maximize_metric else primary
+
+    if not np.isfinite(primary_std):
+        primary_std = np.inf
+    if not np.isfinite(mean_loss):
+        mean_loss = np.inf
+
+    return (
+        float(primary_rank),
+        float(primary_std),
+        float(mean_loss),
+        int(config_result["config_index"]),
+    )
+
+
+def _choose_best_loso_config_index(
+    config_results: list[dict],
+    selection_metric: str,
+    selection_level: Literal["window", "trial"],
+    maximize_metric: bool,
+) -> int:
+    """Choose the global configuration after every config completes LOSO."""
+    if not config_results:
+        raise ValueError("No LOSO configuration results were produced.")
+
+    best_result = min(
+        config_results,
+        key=lambda row: _loso_config_sort_key(
+            config_result=row,
+            selection_metric=selection_metric,
+            selection_level=selection_level,
+            maximize_metric=maximize_metric,
+        ),
+    )
+
+    best_score = float(best_result["selection_score"])
+    if not np.isfinite(best_score):
+        raise RuntimeError(
+            "All LOSO configurations produced a non-finite selection score."
+        )
+
+    return int(best_result["config_index"])
+
+
 def loso_cv(
     model_builder_function: Callable[..., tf.keras.Model],
     feature_array: np.ndarray,
@@ -2332,6 +2500,9 @@ def loso_cv(
     hyperparameters: dict | None = None,
     preprocessing_strategy: Callable | None = None,
     evaluation_level: Literal["window", "trial"] = "trial",
+    selection_metric: str = "accuracy",
+    selection_level: Literal["window", "trial"] = "trial",
+    maximize_metric: bool | None = None,
     metrics: list[str] | tuple[str, ...] = (
         "accuracy",
         "f1",
@@ -2349,39 +2520,51 @@ def loso_cv(
     cpus_per_worker: int | None = None,
     max_folds: int | None = None,
 ) -> dict:
-    """Run ordinary Leave-One-Subject-Out cross-validation.
+    """Run a flat hyperparameter search using complete LOSO evaluations.
 
-    Each unique subject is held out exactly once. The model is trained on all
-    remaining subjects and evaluated on the held-out subject. There is no inner
-    cross-validation and no hyperparameter selection.
+    For every Cartesian-product hyperparameter configuration, each unique
+    subject is held out exactly once. The configuration is therefore evaluated
+    on the same complete set of subject-wise folds. After all configurations
+    finish, one global configuration is selected from its mean LOSO metric.
 
-    Hyperparameters
-    ---------------
-    ``hyperparameters`` must describe one fixed configuration. Scalar values
-    are accepted directly, and singleton lists/tuples are accepted for
-    compatibility with existing JSON grids. Multiple candidate values are
-    rejected because selecting among them using LOSO test results would bias
-    the reported performance.
+    This is *not* nested cross-validation: the held-out LOSO results are used
+    both to compare configurations and to report the selected configuration's
+    cross-validation performance. This behavior is intentional for a practical
+    flat LOSO hyperparameter search.
 
-    Trial-level evaluation
-    ----------------------
-    ``trial_id_array`` must contain one trial ID per window. Predictions are
-    made per window and averaged within each ``(subject_id, trial_id)`` group.
-    Both window- and trial-level metrics are always returned;
-    ``evaluation_level`` controls the unprefixed primary metrics.
+    Hyperparameter grid
+    -------------------
+    Values may be scalars or lists/tuples. Lists/tuples are expanded with a
+    Cartesian product. ``n_epochs`` and ``batch_size`` provide defaults and are
+    overridden when ``hyperparameters`` contains ``epochs`` or ``batch_size``.
+
+    Selection
+    ---------
+    ``selection_level`` determines whether configurations are ranked using
+    window- or trial-level scores. ``selection_metric`` defaults to macro-F1.
+    Classification metrics are maximized and loss is minimized unless
+    ``maximize_metric`` is explicitly supplied. Ties use lower between-subject
+    standard deviation, lower mean log loss, then the earlier grid index.
+
+    Returned results
+    ----------------
+    ``config_results`` contains per-fold and aggregate metrics for every
+    configuration. For backwards compatibility, top-level fold metrics,
+    prediction logs, ``best_configs``, and ``outer_fold_results`` correspond
+    only to the globally selected configuration. This lets the existing joint
+    training script select and fit the correct final full-data model unchanged.
 
     Concurrency
     -----------
-    Outer LOSO folds may run concurrently. Worker state is serialized with
-    cloudpickle, so locally defined builders are supported. When ``n_jobs > 1``
-    and ``gpu_ids`` is omitted, visible GPUs are assigned automatically, one per
-    worker. The training entry point must still use an
-    ``if __name__ == "__main__":`` guard.
+    LOSO folds for one configuration run concurrently. The next configuration
+    starts after the current configuration's folds complete. With one worker per
+    GPU, this prevents multiple models from competing for the same GPU while
+    bounding parent-process memory to approximately one configuration's logs.
 
     Smoke testing
     -------------
-    ``max_folds`` deterministically limits execution to the first N sorted
-    subjects. Leave it as ``None`` for a complete LOSO evaluation.
+    ``max_folds`` deterministically limits every configuration to the first N
+    sorted subjects. Leave it as ``None`` for complete LOSO evaluation.
     """
     extra_fit_kwargs = extra_fit_kwargs or {}
 
@@ -2400,6 +2583,7 @@ def loso_cv(
         )
 
     _validate_evaluation_level(evaluation_level, "evaluation_level")
+    _validate_evaluation_level(selection_level, "selection_level")
 
     feature_array = np.asarray(feature_array)
     label_array = np.asarray(label_array)
@@ -2427,6 +2611,16 @@ def loso_cv(
                 f"{sorted(_CLASSIFICATION_METRICS)}"
             )
 
+    allowed_selection_metrics = {"loss", *metrics}
+    if selection_metric not in allowed_selection_metrics:
+        raise ValueError(
+            f"selection_metric={selection_metric!r} is unavailable. "
+            f"Use 'loss' or one of metrics={list(metrics)}."
+        )
+
+    if maximize_metric is None:
+        maximize_metric = selection_metric != "loss"
+
     if not (0.0 < ci_level < 1.0):
         raise ValueError("ci_level must be between 0 and 1.")
 
@@ -2450,14 +2644,17 @@ def loso_cv(
     else:
         test_subjects = unique_subjects
 
-    fixed_hyperparameters = _normalize_fixed_hyperparameters(hyperparameters)
-    fixed_config = {
+    effective_hyperparameters = {
         "epochs": n_epochs,
         "batch_size": batch_size,
-        **fixed_hyperparameters,
+        **(hyperparameters or {}),
     }
+    grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    if not grid_configs:
+        raise ValueError("The hyperparameter grid produced no configurations.")
 
     total_folds = len(test_subjects)
+    total_model_fits = len(grid_configs) * total_folds
     effective_n_jobs = min(n_jobs, total_folds)
 
     normalized_gpu_ids: tuple[int, ...] | None = None
@@ -2480,44 +2677,24 @@ def loso_cv(
 
         normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
 
-    results = {
-        "cv_strategy": "loso",
-        "fixed_config": dict(fixed_config),
-        "n_subjects": int(len(unique_subjects)),
-        "n_evaluated_folds": int(total_folds),
-        "max_folds": max_folds,
-        "fold_metrics": [],
-        "window_fold_metrics": [],
-        "trial_fold_metrics": [],
-        "user_metrics": [],
-        "prediction_log": [],
-        "window_prediction_log": [],
-        "trial_prediction_log": [],
-        "variational_interval_log": [],
-        "window_variational_interval_log": [],
-        "trial_variational_interval_log": [],
-        "fold_results": [],
-        # Compatibility fields used by the previous nested-CV training script.
-        "best_configs": [],
-        "inner_cv_results": [],
-        "outer_fold_results": [],
-        "mean_scores": {},
-        "std_scores": {},
-        "window_mean_scores": {},
-        "window_std_scores": {},
-        "trial_mean_scores": {},
-        "trial_std_scores": {},
-    }
-
-    print(f"\nLOSO CV — {total_folds} fold{'s' if total_folds != 1 else ''}")
+    print(
+        f"\nFlat LOSO hyperparameter search — {len(grid_configs)} "
+        f"configuration{'s' if len(grid_configs) != 1 else ''}, "
+        f"{total_folds} fold{'s' if total_folds != 1 else ''} each"
+    )
     print(f"Total available subjects: {len(unique_subjects)}")
+    print(f"Total LOSO model fits: {total_model_fits}")
     if max_folds is not None:
         print(
             f"Smoke-test fold limit: {total_folds} of "
-            f"{len(unique_subjects)} subjects"
+            f"{len(unique_subjects)} subjects per configuration"
         )
-    _print_config("Fixed configuration:", fixed_config)
     print(f"Requested metrics: {list(metrics)}")
+    print(
+        f"Configuration selection: {selection_level}-level "
+        f"{selection_metric} "
+        f"({'maximize' if maximize_metric else 'minimize'})"
+    )
     print(f"Primary reported metrics: {evaluation_level}-level")
     print(f"Prediction logging: {log_predictions}")
     print(f"Variational interval logging: {log_variational_intervals}")
@@ -2535,14 +2712,13 @@ def loso_cv(
         for fold_number, test_subject in enumerate(test_subjects, start=1)
     ]
 
-    worker_state = {
+    common_worker_state = {
         "total_folds": total_folds,
         "model_builder_function": model_builder_function,
         "feature_array": feature_array,
         "label_array": label_array,
         "subject_id_array": subject_id_array,
         "trial_id_array": trial_id_array,
-        "fixed_config": fixed_config,
         "batch_size": batch_size,
         "preprocessing_strategy": preprocessing_strategy,
         "evaluation_level": evaluation_level,
@@ -2555,33 +2731,187 @@ def loso_cv(
         "extra_fit_kwargs": extra_fit_kwargs,
     }
 
-    if effective_n_jobs == 1 and normalized_gpu_ids is None:
-        fold_outputs = [
-            _run_loso_fold(
-                fold_number=fold_number,
-                test_subject=test_subject,
-                **worker_state,
+    config_results: list[dict] = []
+    best_so_far_result: dict | None = None
+    best_fold_outputs: list[dict] | None = None
+
+    for config_index, config in enumerate(grid_configs):
+        print("\n" + "#" * 80)
+        print(
+            f"Configuration {config_index + 1} / {len(grid_configs)} "
+            f"({total_folds} LOSO fits)"
+        )
+        _print_config("Configuration:", config)
+
+        worker_state = {
+            **common_worker_state,
+            "fixed_config": config,
+        }
+
+        if effective_n_jobs == 1 and normalized_gpu_ids is None:
+            fold_outputs = [
+                _run_loso_fold(
+                    fold_number=fold_number,
+                    test_subject=test_subject,
+                    **worker_state,
+                )
+                for fold_number, test_subject in tasks
+            ]
+        else:
+            fold_outputs = _run_spawned_fold_pool(
+                worker_target=_loso_fold_process_main,
+                worker_state=worker_state,
+                tasks=tasks,
+                n_workers=effective_n_jobs,
+                gpu_ids=normalized_gpu_ids,
+                cpus_per_worker=cpus_per_worker,
+                worker_name_prefix=f"LOSOConfig{config_index + 1}Worker",
+                worker_description=(
+                    f"LOSO-fold for configuration {config_index + 1}"
+                ),
             )
-            for fold_number, test_subject in tasks
-        ]
-    else:
-        fold_outputs = _run_spawned_fold_pool(
-            worker_target=_loso_fold_process_main,
-            worker_state=worker_state,
-            tasks=tasks,
-            n_workers=effective_n_jobs,
-            gpu_ids=normalized_gpu_ids,
-            cpus_per_worker=cpus_per_worker,
-            worker_name_prefix="LOSOFoldWorker",
-            worker_description="LOSO-fold",
+
+        fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+        config_result = _aggregate_loso_config_result(
+            config_index=config_index,
+            config=config,
+            fold_outputs=fold_outputs,
+            metrics=metrics,
+            selection_metric=selection_metric,
+            selection_level=selection_level,
+        )
+        config_results.append(config_result)
+
+        if (
+            best_so_far_result is None
+            or _loso_config_sort_key(
+                config_result=config_result,
+                selection_metric=selection_metric,
+                selection_level=selection_level,
+                maximize_metric=bool(maximize_metric),
+            )
+            < _loso_config_sort_key(
+                config_result=best_so_far_result,
+                selection_metric=selection_metric,
+                selection_level=selection_level,
+                maximize_metric=bool(maximize_metric),
+            )
+        ):
+            best_so_far_result = config_result
+            best_fold_outputs = fold_outputs
+
+        print(
+            f"\nConfiguration {config_index + 1} complete: "
+            f"mean {selection_level}_{selection_metric}="
+            f"{config_result['selection_score']:.6f} ± "
+            f"{config_result['selection_score_std']:.6f}",
+            flush=True,
         )
 
-    fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+    best_config_index = _choose_best_loso_config_index(
+        config_results=config_results,
+        selection_metric=selection_metric,
+        selection_level=selection_level,
+        maximize_metric=bool(maximize_metric),
+    )
+    best_config_result = config_results[best_config_index]
+    best_config = dict(best_config_result["config"])
 
-    for fold_output in fold_outputs:
+    if (
+        best_so_far_result is None
+        or best_fold_outputs is None
+        or int(best_so_far_result["config_index"]) != best_config_index
+    ):
+        raise RuntimeError(
+            "Internal LOSO grid-search error: selected configuration logs "
+            "were not retained correctly."
+        )
+
+    # Only the selected configuration's full prediction logs are surfaced at
+    # the top level. Per-fold metrics for all configurations remain available
+    # in config_results.
+    results = {
+        "cv_strategy": "flat_loso_hyperparameter_search",
+        "hyperparameter_search": True,
+        "grid_configs": [dict(config) for config in grid_configs],
+        "n_configs": int(len(grid_configs)),
+        "n_subjects": int(len(unique_subjects)),
+        "n_evaluated_folds_per_config": int(total_folds),
+        # Compatibility with the previous fixed-config result schema.
+        "n_evaluated_folds": int(total_folds),
+        "n_total_loso_fits": int(total_model_fits),
+        "max_folds": max_folds,
+        "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "maximize_metric": bool(maximize_metric),
+        "config_results": config_results,
+        "best_config_index": int(best_config_index),
+        "best_config": best_config,
+        "best_config_result": best_config_result,
+        "fixed_config": best_config,
+        "fold_metrics": [],
+        "window_fold_metrics": [],
+        "trial_fold_metrics": [],
+        "user_metrics": [],
+        "prediction_log": [],
+        "window_prediction_log": [],
+        "trial_prediction_log": [],
+        "variational_interval_log": [],
+        "window_variational_interval_log": [],
+        "trial_variational_interval_log": [],
+        "fold_results": [],
+        "best_configs": [],
+        "inner_cv_results": [],
+        "outer_fold_results": [],
+        "mean_scores": dict(best_config_result["mean_scores"]),
+        "std_scores": dict(best_config_result["std_scores"]),
+        "window_mean_scores": dict(best_config_result["window_mean_scores"]),
+        "window_std_scores": dict(best_config_result["window_std_scores"]),
+        "trial_mean_scores": dict(best_config_result["trial_mean_scores"]),
+        "trial_std_scores": dict(best_config_result["trial_std_scores"]),
+    }
+
+    for fold_output in best_fold_outputs:
+        fold_number = int(fold_output["outer_fold_number"])
+        fold_record = dict(fold_output["fold_record"])
+        fold_record.update(
+            {
+                "config_index": int(best_config_index),
+                "fixed_config": dict(best_config),
+                "best_config": dict(best_config),
+                "selection_metric": selection_metric,
+                "selection_level": selection_level,
+                "selection_score": float(
+                    best_config_result["selection_score"]
+                ),
+                "configuration_source": "global_flat_loso_grid_search",
+            }
+        )
+
+        global_best_record = {
+            "outer_fold": fold_number,
+            "best_config_index": int(best_config_index),
+            "best_config": dict(best_config),
+            "selection_metric": selection_metric,
+            "selection_level": selection_level,
+            "selection_score": float(best_config_result["selection_score"]),
+            "configuration_source": "global_flat_loso_grid_search",
+        }
+        empty_inner_record = {
+            "outer_fold": fold_number,
+            "inner_fold_results": [],
+            "inner_mean_scores": [],
+            "inner_std_scores": [],
+            "configuration_source": "not_applicable_for_flat_loso_grid_search",
+        }
+
         results["fold_metrics"].append(fold_output["fold_metrics"])
-        results["window_fold_metrics"].append(fold_output["window_fold_metrics"])
-        results["trial_fold_metrics"].append(fold_output["trial_fold_metrics"])
+        results["window_fold_metrics"].append(
+            fold_output["window_fold_metrics"]
+        )
+        results["trial_fold_metrics"].append(
+            fold_output["trial_fold_metrics"]
+        )
         results["user_metrics"].extend(fold_output["user_metrics"])
         results["prediction_log"].extend(fold_output["prediction_log"])
         results["window_prediction_log"].extend(
@@ -2599,40 +2929,58 @@ def loso_cv(
         results["trial_variational_interval_log"].extend(
             fold_output["trial_variational_interval_log"]
         )
-        results["fold_results"].append(fold_output["fold_record"])
-        results["outer_fold_results"].append(fold_output["outer_fold_result"])
-        results["best_configs"].append(fold_output["best_config_result"])
-        results["inner_cv_results"].append(fold_output["inner_cv_result"])
+        results["fold_results"].append(fold_record)
+        results["outer_fold_results"].append(fold_record)
+        results["best_configs"].append(global_best_record)
+        results["inner_cv_results"].append(empty_inner_record)
 
-    mean_scores, std_scores = _mean_std_rows(
-        results["fold_metrics"],
-        ["loss", *metrics],
-    )
-    window_mean_scores, window_std_scores = _mean_std_rows(
-        results["window_fold_metrics"],
-        ["loss", *metrics],
-    )
-    trial_mean_scores, trial_std_scores = _mean_std_rows(
-        results["trial_fold_metrics"],
-        ["loss", *metrics],
-    )
-
-    results["mean_scores"] = mean_scores
-    results["std_scores"] = std_scores
-    results["window_mean_scores"] = window_mean_scores
-    results["window_std_scores"] = window_std_scores
-    results["trial_mean_scores"] = trial_mean_scores
-    results["trial_std_scores"] = trial_std_scores
-
-    print("\nLOSO CV complete")
+    print("\nFlat LOSO hyperparameter search complete")
     print("=" * 80)
-    print("Primary mean scores:")
-    print(pformat(mean_scores, indent=4, width=120, sort_dicts=False))
-    print("Primary score standard deviations:")
-    print(pformat(std_scores, indent=4, width=120, sort_dicts=False))
-    print("Window-level mean scores:")
-    print(pformat(window_mean_scores, indent=4, width=120, sort_dicts=False))
-    print("Trial-level mean scores:")
-    print(pformat(trial_mean_scores, indent=4, width=120, sort_dicts=False))
+    print(
+        f"Selected configuration {best_config_index + 1} / "
+        f"{len(grid_configs)} using {selection_level}-level "
+        f"{selection_metric}."
+    )
+    _print_config("Best configuration:", best_config)
+    print(
+        f"Selection score: {best_config_result['selection_score']:.6f} ± "
+        f"{best_config_result['selection_score_std']:.6f}"
+    )
+    print("Selected configuration primary mean scores:")
+    print(
+        pformat(
+            results["mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration primary score standard deviations:")
+    print(
+        pformat(
+            results["std_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration window-level mean scores:")
+    print(
+        pformat(
+            results["window_mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration trial-level mean scores:")
+    print(
+        pformat(
+            results["trial_mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
 
     return results
