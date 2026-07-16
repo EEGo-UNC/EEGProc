@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=32:00:00
+#SBATCH --time=8:00:00
 
 set -euo pipefail
 
