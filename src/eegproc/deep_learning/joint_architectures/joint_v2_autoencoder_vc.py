@@ -13,9 +13,10 @@ training:
 1. ``z -> decoder -> reconstruction``
 2. ``z -> classification_model -> variational_classifier``
 
-At evaluation/inference time, ``z_mean`` is used instead of a random sample so
-predictions are deterministic unless the model is explicitly called with
-``training=True`` (for example, for uncertainty sampling).
+At evaluation/inference time, callers can independently choose whether to use
+``z_mean`` or sample from ``q(z|x)``. Latent sampling is deliberately separated
+from Keras' ``training`` flag so Monte Carlo prediction can keep dropout disabled
+and BatchNorm in inference mode.
 
 Training objective
 ------------------
@@ -226,27 +227,28 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self,
         z_mean: tf.Tensor,
         z_log_var: tf.Tensor,
-        training: bool | tf.Tensor | None,
+        sample_latent: bool | tf.Tensor,
     ) -> tf.Tensor:
-        """Sample during training and use the posterior mean otherwise."""
-        if training is None:
-            training = False
-
-        if tf.is_tensor(training):
+        """Sample from ``q(z|x)`` when requested, otherwise return ``z_mean``."""
+        if tf.is_tensor(sample_latent):
             return tf.cond(
-                tf.cast(training, tf.bool),
+                tf.cast(sample_latent, tf.bool),
                 lambda: self._reparameterize(z_mean, z_log_var),
                 lambda: z_mean,
             )
 
         return (
             self._reparameterize(z_mean, z_log_var)
-            if bool(training)
+            if bool(sample_latent)
             else z_mean
         )
 
-    def call(self, inputs, training: bool = False) -> dict[str, tf.Tensor]:
-        """Run the encoder, Gaussian posterior, decoder, and classifier."""
+    def _posterior_parameters(
+        self,
+        inputs: tf.Tensor,
+        training: bool = False,
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """Return encoder output and diagonal-Gaussian posterior parameters."""
         encoder_output = self.encoder(inputs, training=training)
 
         if encoder_output.shape.rank != 3:
@@ -258,18 +260,52 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
 
         z_mean = self.z_mean_projection(encoder_output)
         z_log_var = self.z_log_var_projection(encoder_output)
-        latent_sequence = self._latent_for_mode(
-            z_mean=z_mean,
-            z_log_var=z_log_var,
-            training=training,
-        )
+        return encoder_output, z_mean, z_log_var
 
+    def _classify_latent(
+        self,
+        latent_sequence: tf.Tensor,
+        training: bool = False,
+    ) -> tuple[tf.Tensor, tf.Tensor]:
+        """Classify one batch of latent sequences."""
         classification_latent = self.classification_model(
             latent_sequence,
             training=training,
         )
         logits = self.variational_classifier(
             classification_latent,
+            training=training,
+        )
+        return classification_latent, logits
+
+    def call(
+        self,
+        inputs,
+        training: bool = False,
+        sample_latent: bool | None = None,
+    ) -> dict[str, tf.Tensor]:
+        """Run the complete model with independent latent-sampling control.
+
+        ``sample_latent=None`` preserves the original behavior: training samples
+        from the posterior and inference uses the posterior mean. Passing
+        ``sample_latent=True`` with ``training=False`` samples the VAE posterior
+        while keeping dropout disabled and BatchNorm in inference mode.
+        """
+        if sample_latent is None:
+            sample_latent = training
+
+        encoder_output, z_mean, z_log_var = self._posterior_parameters(
+            inputs,
+            training=training,
+        )
+        latent_sequence = self._latent_for_mode(
+            z_mean=z_mean,
+            z_log_var=z_log_var,
+            sample_latent=sample_latent,
+        )
+
+        classification_latent, logits = self._classify_latent(
+            latent_sequence,
             training=training,
         )
         reconstruction = self.decoder(
@@ -281,12 +317,86 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "encoder_output": encoder_output,
             "z_mean": z_mean,
             "z_log_var": z_log_var,
-            # Backwards-compatible name for the latent sequence consumed by
-            # the decoder and recurrent classifier.
             "latent_sequence": latent_sequence,
             "classification_latent": classification_latent,
             "logits": logits,
             "reconstruction": reconstruction,
+        }
+
+    def predict_mc_probabilities(
+        self,
+        inputs,
+        n_samples: int = 30,
+        seed: int | tuple[int, int] | None = None,
+    ) -> dict[str, tf.Tensor]:
+        """Average classifier probabilities across posterior latent samples.
+
+        The CNN encoder is evaluated once. ``n_samples`` latent sequences are
+        then drawn from ``q(z|x)`` and classified in one vectorized recurrent
+        pass. Dropout remains disabled and BatchNorm uses moving statistics.
+
+        ``n_samples=1`` performs one random posterior draw. Use ``seed`` for a
+        reproducible draw or Monte Carlo estimate.
+        """
+        if n_samples < 1:
+            raise ValueError("n_samples must be at least 1.")
+
+        inputs = tf.convert_to_tensor(inputs, dtype=tf.float32)
+        _encoder_output, z_mean, z_log_var = self._posterior_parameters(
+            inputs,
+            training=False,
+        )
+
+        epsilon_shape = tf.concat(
+            [tf.constant([int(n_samples)], dtype=tf.int32), tf.shape(z_mean)],
+            axis=0,
+        )
+        if seed is None:
+            epsilon = tf.random.normal(
+                shape=epsilon_shape,
+                dtype=z_mean.dtype,
+            )
+        else:
+            if isinstance(seed, int):
+                stateless_seed = tf.constant([seed, 0], dtype=tf.int32)
+            else:
+                if len(seed) != 2:
+                    raise ValueError("seed tuple must contain exactly two integers.")
+                stateless_seed = tf.constant(seed, dtype=tf.int32)
+            epsilon = tf.random.stateless_normal(
+                shape=epsilon_shape,
+                seed=stateless_seed,
+                dtype=z_mean.dtype,
+            )
+
+        z_std = tf.exp(0.5 * z_log_var)
+        z_samples = z_mean[tf.newaxis, ...] + z_std[tf.newaxis, ...] * epsilon
+
+        sample_shape = tf.shape(z_samples)
+        z_flat = tf.reshape(
+            z_samples,
+            [
+                sample_shape[0] * sample_shape[1],
+                sample_shape[2],
+                sample_shape[3],
+            ],
+        )
+        _classification_latent, logits_flat = self._classify_latent(
+            z_flat,
+            training=False,
+        )
+        probabilities_flat = tf.nn.softmax(logits_flat, axis=-1)
+        n_classes = tf.shape(probabilities_flat)[-1]
+        probability_samples = tf.reshape(
+            probabilities_flat,
+            [sample_shape[0], sample_shape[1], n_classes],
+        )
+
+        return {
+            "mean_probabilities": tf.reduce_mean(probability_samples, axis=0),
+            "probability_samples": probability_samples,
+            "z_mean": z_mean,
+            "z_log_var": z_log_var,
         }
 
     @staticmethod

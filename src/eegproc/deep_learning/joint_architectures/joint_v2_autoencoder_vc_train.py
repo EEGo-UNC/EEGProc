@@ -81,6 +81,8 @@ class JointV2TrainingConfig:
     selection_metric: str = "f1"
     selection_level: str = "trial"
     maximize_metric: bool | None = None
+    prediction_latent_samples: int = 0
+    latent_sampling_seed: int | None = None
     n_outer_subjects_to_leave_out: int = 2
     n_inner_subjects_to_leave_out: int = 1
     outer_verbose: int = 0
@@ -716,6 +718,8 @@ def train_joint_autoencoder_variational_classifier_v2(
         maximize_metric=training_config.maximize_metric,
         metrics=("accuracy", "f1", "precision", "recall"),
         log_predictions=True,
+        n_prediction_latent_samples=training_config.prediction_latent_samples,
+        latent_sampling_seed=training_config.latent_sampling_seed,
         verbose=training_config.outer_verbose,
         extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
         n_jobs=training_config.n_jobs,
@@ -861,6 +865,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("window", "trial"),
         default="trial",
         help="Prediction level used for hyperparameter selection (default: trial).",
+    )
+    parser.add_argument(
+        "--prediction-latent-samples",
+        type=int,
+        default=0,
+        help=(
+            "Number of q(z|x) samples averaged for every CV prediction. "
+            "Use 0 for deterministic z_mean inference, 1 for one random draw, "
+            "or values such as 5/30 for Monte Carlo averaging (default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--latent-sampling-seed",
+        type=int,
+        default=None,
+        help="Optional seed for reproducible Monte Carlo latent prediction.",
     )
     parser.add_argument("--outer-verbose", type=int, default=0)
     parser.add_argument("--inner-verbose", type=int, default=0)
@@ -1017,6 +1037,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not isinstance(parsed_hyperparameters, dict):
         raise ValueError("--hyperparameters-json must decode to a JSON object.")
+    if args.prediction_latent_samples < 0:
+        raise ValueError("--prediction-latent-samples must be >= 0.")
 
     config = JointV2TrainingConfig(
         output_dir=Path(args.out_dir),
@@ -1028,6 +1050,8 @@ def main(argv: list[str] | None = None) -> int:
         final_epochs=args.final_epochs,
         selection_metric=args.selection_metric,
         selection_level=args.selection_level,
+        prediction_latent_samples=args.prediction_latent_samples,
+        latent_sampling_seed=args.latent_sampling_seed,
         outer_verbose=args.outer_verbose,
         inner_verbose=args.inner_verbose,
         final_verbose=args.final_verbose,

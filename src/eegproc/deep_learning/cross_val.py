@@ -20,7 +20,10 @@ _CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
 
 # These values describe one encoder architecture and must therefore remain
 # intact when represented as a flat JSON list. A nested list represents several
-# candidate architectures.
+# candidate architectures. For example:
+#
+#   "conv_filters": [16, 32]                 -> one candidate
+#   "conv_filters": [[16, 32], [32, 64]]    -> two candidates
 _SEQUENCE_HYPERPARAMETER_KEYS = frozenset(
     {
         "conv_filters",
@@ -243,8 +246,100 @@ def _to_probabilities(model_output: np.ndarray) -> np.ndarray:
     return exp / np.sum(exp, axis=1, keepdims=True)
 
 
-def _predict_probabilities(model, X, batch_size=None):
-    """Return class probabilities for Keras and scikit-learn models."""
+def _predict_mc_probability_samples(
+    model,
+    X: np.ndarray,
+    n_samples: int,
+    batch_size: int | None = None,
+    seed: int | None = None,
+) -> np.ndarray:
+    """Return posterior-sampled probabilities shaped ``(S, N, C)``.
+
+    Joint VAE models can expose ``predict_mc_probabilities`` to encode each
+    input batch once and vectorize the recurrent/classifier work across latent
+    samples. A slower generic fallback is retained for compatible custom models.
+    """
+    if n_samples < 1:
+        raise ValueError("n_samples must be at least 1.")
+
+    X = np.asarray(X)
+    effective_batch_size = len(X) if batch_size is None else int(batch_size)
+    if effective_batch_size < 1:
+        raise ValueError("batch_size must be at least 1 when provided.")
+
+    sample_batches: list[np.ndarray] = []
+    for batch_index, start in enumerate(range(0, len(X), effective_batch_size)):
+        X_batch = X[start : start + effective_batch_size]
+        batch_seed = None if seed is None else (int(seed), int(batch_index))
+
+        if hasattr(model, "predict_mc_probabilities"):
+            mc_output = model.predict_mc_probabilities(
+                X_batch,
+                n_samples=n_samples,
+                seed=batch_seed,
+            )
+            probability_samples = mc_output["probability_samples"]
+            if hasattr(probability_samples, "numpy"):
+                probability_samples = probability_samples.numpy()
+            probability_samples = np.asarray(probability_samples, dtype=np.float64)
+        else:
+            probability_draws: list[np.ndarray] = []
+            for sample_index in range(n_samples):
+                if seed is not None:
+                    tf.random.set_seed(int(seed) + batch_index * n_samples + sample_index)
+                try:
+                    raw_output = model(
+                        tf.convert_to_tensor(X_batch, dtype=tf.float32),
+                        training=False,
+                        sample_latent=True,
+                    )
+                except TypeError as exc:
+                    raise TypeError(
+                        "Monte Carlo latent prediction requires the model to "
+                        "implement predict_mc_probabilities(...) or accept "
+                        "sample_latent=True in call(...)."
+                    ) from exc
+                raw_output = _extract_classifier_output(raw_output)
+                if hasattr(raw_output, "numpy"):
+                    raw_output = raw_output.numpy()
+                probability_draws.append(_to_probabilities(raw_output))
+            probability_samples = np.stack(probability_draws, axis=0)
+
+        if probability_samples.ndim != 3:
+            raise ValueError(
+                "Monte Carlo probabilities must have shape "
+                f"(n_samples, batch, n_classes); got {probability_samples.shape}."
+            )
+        sample_batches.append(probability_samples)
+
+    return np.concatenate(sample_batches, axis=1)
+
+
+def _predict_probabilities(
+    model,
+    X,
+    batch_size=None,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
+):
+    """Return class probabilities using posterior means or MC latent draws.
+
+    ``n_prediction_latent_samples=0`` preserves deterministic posterior-mean
+    inference. Positive values average that many samples from ``q(z|x)``;
+    ``1`` therefore means one random latent draw and one classifier pass.
+    """
+    if n_prediction_latent_samples < 0:
+        raise ValueError("n_prediction_latent_samples must be >= 0.")
+
+    if n_prediction_latent_samples > 0:
+        probability_samples = _predict_mc_probability_samples(
+            model=model,
+            X=X,
+            n_samples=n_prediction_latent_samples,
+            batch_size=batch_size,
+            seed=latent_sampling_seed,
+        )
+        return probability_samples.mean(axis=0)
 
     if hasattr(model, "predict_proba"):
         raw_pred = model.predict_proba(X)
@@ -256,8 +351,6 @@ def _predict_probabilities(model, X, batch_size=None):
 
         raw_pred = model.predict(X, **predict_kwargs)
 
-    # Joint and multi-output Keras models may return a dictionary.
-    # For classification evaluation, extract the classifier output.
     if isinstance(raw_pred, Mapping):
         if "probabilities" in raw_pred:
             raw_pred = raw_pred["probabilities"]
@@ -642,17 +735,13 @@ def _make_variational_interval_logs(
         )
 
     y_true = _as_numpy_1d(y_true).astype(np.int64)
-    X_tensor = tf.convert_to_tensor(X, dtype=tf.float32)
-
-    probability_samples: list[np.ndarray] = []
-
-    for _ in range(n_uncertainty_samples):
-        raw_output = _extract_classifier_output(model(X_tensor, training=True))
-        if hasattr(raw_output, "numpy"):
-            raw_output = raw_output.numpy()
-        probability_samples.append(_to_probabilities(raw_output))
-
-    window_samples = np.stack(probability_samples, axis=0)
+    window_samples = _predict_mc_probability_samples(
+        model=model,
+        X=X,
+        n_samples=n_uncertainty_samples,
+        batch_size=None,
+        seed=None,
+    )
     window_mean = window_samples.mean(axis=0)
 
     alpha = 1.0 - ci_level
@@ -818,6 +907,8 @@ def _evaluate_classification_fold(
     metrics: list[str] | tuple[str, ...],
     evaluation_level: Literal["window", "trial"] = "trial",
     batch_size: int | None = None,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
     n_uncertainty_samples: int = 30,
@@ -831,6 +922,8 @@ def _evaluate_classification_fold(
         model=model,
         X=X_test,
         batch_size=batch_size,
+        n_prediction_latent_samples=n_prediction_latent_samples,
+        latent_sampling_seed=latent_sampling_seed,
     )
     y_pred_window = _predict_labels(probabilities_window)
 
@@ -875,6 +968,7 @@ def _evaluate_classification_fold(
         "n_windows": int(len(y_true_window)),
         "n_trials": int(len(trial_aggregation["y_true"])),
         "keras_model_loss": float(keras_model_loss),
+        "prediction_latent_samples": int(n_prediction_latent_samples),
         **primary_scores,
         **_prefix_scores(window_scores, "window"),
         **_prefix_scores(trial_scores, "trial"),
@@ -988,11 +1082,19 @@ def _evaluate_inner_config(
     metrics: list[str] | tuple[str, ...],
     selection_level: Literal["window", "trial"] = "trial",
     batch_size: int | None = None,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
 ) -> dict:
     """Evaluate an inner fold at both levels and expose selection-level scores."""
     _validate_evaluation_level(selection_level, "selection_level")
     y_true_window = _as_numpy_1d(y_val).astype(np.int64)
-    probabilities_window = _predict_probabilities(model, X_val, batch_size=batch_size)
+    probabilities_window = _predict_probabilities(
+        model,
+        X_val,
+        batch_size=batch_size,
+        n_prediction_latent_samples=n_prediction_latent_samples,
+        latent_sampling_seed=latent_sampling_seed,
+    )
     y_pred_window = _predict_labels(probabilities_window)
 
     window_scores = _level_scores(
@@ -1425,6 +1527,8 @@ def _run_outer_fold(
     metrics: tuple[str, ...],
     log_predictions: bool,
     log_variational_intervals: bool,
+    n_prediction_latent_samples: int,
+    latent_sampling_seed: int | None,
     n_uncertainty_samples: int,
     ci_level: float,
     verbose: int,
@@ -1536,6 +1640,8 @@ def _run_outer_fold(
                     metrics=metrics,
                     selection_level=selection_level,
                     batch_size=current_batch_size,
+                    n_prediction_latent_samples=n_prediction_latent_samples,
+                    latent_sampling_seed=latent_sampling_seed,
                 )
 
                 config_result = {
@@ -1698,6 +1804,8 @@ def _run_outer_fold(
             metrics=metrics,
             evaluation_level=evaluation_level,
             batch_size=current_batch_size,
+            n_prediction_latent_samples=n_prediction_latent_samples,
+            latent_sampling_seed=latent_sampling_seed,
             log_predictions=log_predictions,
             log_variational_intervals=log_variational_intervals,
             n_uncertainty_samples=n_uncertainty_samples,
@@ -1771,6 +1879,8 @@ def nested_lnso_cv(
     metrics: list[str] | tuple[str, ...] = ("accuracy", "f1", "precision", "recall"),
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
     verbose: int = 0,
@@ -1867,6 +1977,9 @@ def nested_lnso_cv(
 
     if maximize_metric is None:
         maximize_metric = selection_metric != "loss"
+
+    if n_prediction_latent_samples < 0:
+        raise ValueError("n_prediction_latent_samples must be >= 0.")
 
     if not (0.0 < ci_level < 1.0):
         raise ValueError("ci_level must be between 0 and 1.")
@@ -1974,6 +2087,12 @@ def nested_lnso_cv(
     print(f"Primary reported metrics: {evaluation_level}-level")
     print(f"Prediction logging: {log_predictions}")
     print(f"Variational interval logging: {log_variational_intervals}")
+    prediction_mode = (
+        "posterior mean"
+        if n_prediction_latent_samples == 0
+        else f"MC average over {n_prediction_latent_samples} latent sample(s)"
+    )
+    print(f"Prediction latent mode: {prediction_mode}")
     print(f"Outer-fold workers: {effective_n_jobs}")
 
     if effective_n_jobs > 1 and normalized_gpu_ids is None:
@@ -2009,6 +2128,8 @@ def nested_lnso_cv(
         "metrics": metrics,
         "log_predictions": log_predictions,
         "log_variational_intervals": log_variational_intervals,
+        "n_prediction_latent_samples": n_prediction_latent_samples,
+        "latent_sampling_seed": latent_sampling_seed,
         "n_uncertainty_samples": n_uncertainty_samples,
         "ci_level": ci_level,
         "verbose": verbose,
@@ -2116,6 +2237,8 @@ def _run_loso_fold(
     metrics: tuple[str, ...],
     log_predictions: bool,
     log_variational_intervals: bool,
+    n_prediction_latent_samples: int,
+    latent_sampling_seed: int | None,
     n_uncertainty_samples: int,
     ci_level: float,
     verbose: int,
@@ -2212,6 +2335,8 @@ def _run_loso_fold(
             metrics=metrics,
             evaluation_level=evaluation_level,
             batch_size=current_batch_size,
+            n_prediction_latent_samples=n_prediction_latent_samples,
+            latent_sampling_seed=latent_sampling_seed,
             log_predictions=log_predictions,
             log_variational_intervals=log_variational_intervals,
             n_uncertainty_samples=n_uncertainty_samples,
@@ -2563,6 +2688,8 @@ def loso_cv(
     ),
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
     verbose: int = 0,
@@ -2683,6 +2810,9 @@ def loso_cv(
     if maximize_metric is None:
         maximize_metric = selection_metric != "loss"
 
+    if n_prediction_latent_samples < 0:
+        raise ValueError("n_prediction_latent_samples must be >= 0.")
+
     if not (0.0 < ci_level < 1.0):
         raise ValueError("ci_level must be between 0 and 1.")
 
@@ -2760,6 +2890,12 @@ def loso_cv(
     print(f"Primary reported metrics: {evaluation_level}-level")
     print(f"Prediction logging: {log_predictions}")
     print(f"Variational interval logging: {log_variational_intervals}")
+    prediction_mode = (
+        "posterior mean"
+        if n_prediction_latent_samples == 0
+        else f"MC average over {n_prediction_latent_samples} latent sample(s)"
+    )
+    print(f"Prediction latent mode: {prediction_mode}")
     print(f"Fold workers: {effective_n_jobs}")
 
     if effective_n_jobs > 1 and normalized_gpu_ids is None:
@@ -2787,6 +2923,8 @@ def loso_cv(
         "metrics": metrics,
         "log_predictions": log_predictions,
         "log_variational_intervals": log_variational_intervals,
+        "n_prediction_latent_samples": n_prediction_latent_samples,
+        "latent_sampling_seed": latent_sampling_seed,
         "n_uncertainty_samples": n_uncertainty_samples,
         "ci_level": ci_level,
         "verbose": verbose,
@@ -2906,6 +3044,8 @@ def loso_cv(
         "selection_metric": selection_metric,
         "selection_level": selection_level,
         "maximize_metric": bool(maximize_metric),
+        "n_prediction_latent_samples": int(n_prediction_latent_samples),
+        "latent_sampling_seed": latent_sampling_seed,
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,
