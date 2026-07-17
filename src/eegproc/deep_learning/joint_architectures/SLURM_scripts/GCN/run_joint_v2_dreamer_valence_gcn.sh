@@ -248,7 +248,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         ]
     ],
     "temporal_pool_sizes": [
-        2
+        [2]
     ],
     "activation": [
         "relu"
