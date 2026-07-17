@@ -1,0 +1,75 @@
+2026-07-17 15:46:04.441294: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-17 15:46:04.514824: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-17 15:46:17.672347: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1784317587.805793   17057 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 43489 MB memory:  -> device: 0, name: NVIDIA L40S, pci bus id: 0000:b3:00.0, compute capability: 8.9
+I0000 00:00:1784317587.807977   17057 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:1 with 43489 MB memory:  -> device: 1, name: NVIDIA L40S, pci bus id: 0000:b4:00.0, compute capability: 8.9
+2026-07-17 15:46:33.579091: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-17 15:46:33.655713: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-17 15:46:39.312614: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-17 15:46:46.283401: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-17 15:46:46.358715: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-17 15:46:51.154494: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1784317613.654971   17102 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 43489 MB memory:  -> device: 0, name: NVIDIA L40S, pci bus id: 0000:b3:00.0, compute capability: 8.9
+2026-07-17 15:46:57.626583: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-17 15:46:57.701433: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-17 15:47:03.312237: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1784317625.824383   17110 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 43489 MB memory:  -> device: 0, name: NVIDIA L40S, pci bus id: 0000:b4:00.0, compute capability: 8.9
+2026-07-17 15:47:20.583630: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:473] Loaded cuDNN version 91100
+2026-07-17 15:47:20.821830: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:473] Loaded cuDNN version 91100
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+2026-07-17 16:02:36.100546: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-17 16:02:36.175601: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-17 16:02:44.669723: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1784318568.820244   18281 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 43489 MB memory:  -> device: 0, name: NVIDIA L40S, pci bus id: 0000:b3:00.0, compute capability: 8.9
+2026-07-17 16:02:53.454177: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-17 16:02:53.533795: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-17 16:02:59.619879: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1784318582.186773   18299 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 43489 MB memory:  -> device: 0, name: NVIDIA L40S, pci bus id: 0000:b4:00.0, compute capability: 8.9
+2026-07-17 16:03:16.014516: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:473] Loaded cuDNN version 91100
+2026-07-17 16:03:17.093088: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:473] Loaded cuDNN version 91100
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+/nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/sklearn/metrics/_classification.py:259: UserWarning: The y_prob values do not sum to one. Make sure to pass probabilities.
+  warnings.warn(
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1784319602.698221   17088 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 43489 MB memory:  -> device: 0, name: NVIDIA L40S, pci bus id: 0000:b3:00.0, compute capability: 8.9
+I0000 00:00:1784319602.700089   17088 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:1 with 43489 MB memory:  -> device: 1, name: NVIDIA L40S, pci bus id: 0000:b4:00.0, compute capability: 8.9
+2026-07-17 16:20:17.630286: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:473] Loaded cuDNN version 91100

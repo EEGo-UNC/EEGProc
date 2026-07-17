@@ -1,0 +1,620 @@
+Requirement already satisfied: pip in ./venv312/lib/python3.12/site-packages (26.1.2)
+Requirement already satisfied: absl-py==2.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 1)) (2.4.0)
+Requirement already satisfied: alabaster==1.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 2)) (1.0.0)
+Requirement already satisfied: astunparse==1.6.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 3)) (1.6.3)
+Requirement already satisfied: babel==2.17.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 4)) (2.17.0)
+Requirement already satisfied: backports.tarfile==1.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 5)) (1.2.0)
+Requirement already satisfied: build==1.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 6)) (1.3.0)
+Requirement already satisfied: bumpver==2025.1131 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 7)) (2025.1131)
+Requirement already satisfied: certifi==2025.8.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 8)) (2025.8.3)
+Requirement already satisfied: charset-normalizer==3.4.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 9)) (3.4.3)
+Requirement already satisfied: click==8.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 10)) (8.3.0)
+Requirement already satisfied: colorama==0.4.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 11)) (0.4.6)
+Requirement already satisfied: contourpy==1.3.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 12)) (1.3.2)
+Requirement already satisfied: coverage==7.10.7 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 13)) (7.10.7)
+Requirement already satisfied: coverage-badge==1.1.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 14)) (1.1.2)
+Requirement already satisfied: cycler==0.12.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 15)) (0.12.1)
+Requirement already satisfied: decorator==5.2.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 16)) (5.2.1)
+Requirement already satisfied: dill==0.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 17)) (0.4.0)
+Requirement already satisfied: docutils==0.21.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 18)) (0.21.2)
+Requirement already satisfied: EMD-signal==1.6.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 19)) (1.6.4)
+Requirement already satisfied: exceptiongroup==1.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 20)) (1.3.0)
+Requirement already satisfied: flatbuffers==25.12.19 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 21)) (25.12.19)
+Requirement already satisfied: fonttools==4.60.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 22)) (4.60.1)
+Requirement already satisfied: gast==0.7.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 23)) (0.7.0)
+Requirement already satisfied: google-pasta==0.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 24)) (0.2.0)
+Requirement already satisfied: grpcio==1.78.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 25)) (1.78.0)
+Requirement already satisfied: h5py==3.15.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 26)) (3.15.1)
+Requirement already satisfied: id==1.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 27)) (1.5.0)
+Requirement already satisfied: idna==3.10 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 28)) (3.10)
+Requirement already satisfied: imagesize==1.4.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 29)) (1.4.1)
+Requirement already satisfied: importlib_metadata==8.7.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 30)) (8.7.0)
+Requirement already satisfied: iniconfig==2.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 31)) (2.1.0)
+Requirement already satisfied: jaraco.classes==3.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 32)) (3.4.0)
+Requirement already satisfied: jaraco.context==6.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 33)) (6.0.1)
+Requirement already satisfied: jaraco.functools==4.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 34)) (4.3.0)
+Requirement already satisfied: Jinja2==3.1.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 35)) (3.1.6)
+Requirement already satisfied: joblib==1.5.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 36)) (1.5.2)
+Requirement already satisfied: keras==3.12.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 37)) (3.12.1)
+Requirement already satisfied: keyring==25.6.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 38)) (25.6.0)
+Requirement already satisfied: kiwisolver==1.4.9 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 39)) (1.4.9)
+Requirement already satisfied: lazy_loader==0.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 40)) (0.4)
+Requirement already satisfied: lexid==2021.1006 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 41)) (2021.1006)
+Requirement already satisfied: libclang==18.1.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 42)) (18.1.1)
+Requirement already satisfied: Markdown==3.10.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 43)) (3.10.2)
+Requirement already satisfied: markdown-it-py==3.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 44)) (3.0.0)
+Requirement already satisfied: MarkupSafe==3.0.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 45)) (3.0.3)
+Requirement already satisfied: matplotlib==3.10.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 46)) (3.10.6)
+Requirement already satisfied: mdit-py-plugins==0.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 47)) (0.5.0)
+Requirement already satisfied: mdurl==0.1.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 48)) (0.1.2)
+Requirement already satisfied: ml_dtypes==0.5.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 49)) (0.5.4)
+Requirement already satisfied: mne==1.10.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 50)) (1.10.2)
+Requirement already satisfied: more-itertools==10.8.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 51)) (10.8.0)
+Requirement already satisfied: multiprocess==0.70.18 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 52)) (0.70.18)
+Requirement already satisfied: myst-parser==4.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 53)) (4.0.1)
+Requirement already satisfied: namex==0.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 54)) (0.1.0)
+Requirement already satisfied: nh3==0.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 55)) (0.3.0)
+Requirement already satisfied: numpy==2.2.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 56)) (2.2.6)
+Requirement already satisfied: opt_einsum==3.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 57)) (3.4.0)
+Requirement already satisfied: optree==0.18.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 58)) (0.18.0)
+Requirement already satisfied: packaging==25.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 59)) (25.0)
+Requirement already satisfied: pandas==2.3.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 60)) (2.3.2)
+Requirement already satisfied: pathos==0.3.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 61)) (0.3.4)
+Requirement already satisfied: pillow==11.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 62)) (11.3.0)
+Requirement already satisfied: pip-tools==7.5.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 63)) (7.5.1)
+Requirement already satisfied: platformdirs==4.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 64)) (4.5.0)
+Requirement already satisfied: pluggy==1.6.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 65)) (1.6.0)
+Requirement already satisfied: pockets==0.9.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 66)) (0.9.1)
+Requirement already satisfied: pooch==1.8.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 67)) (1.8.2)
+Requirement already satisfied: pox==0.3.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 68)) (0.3.6)
+Requirement already satisfied: ppft==1.7.7 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 69)) (1.7.7)
+Requirement already satisfied: protobuf==6.33.5 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 70)) (6.33.5)
+Requirement already satisfied: Pygments==2.19.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 71)) (2.19.2)
+Requirement already satisfied: pyparsing==3.2.5 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 72)) (3.2.5)
+Requirement already satisfied: pyproject_hooks==1.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 73)) (1.2.0)
+Requirement already satisfied: pytest==8.4.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 74)) (8.4.2)
+Requirement already satisfied: pytest-cov==7.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 75)) (7.0.0)
+Requirement already satisfied: python-dateutil==2.9.0.post0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 76)) (2.9.0.post0)
+Requirement already satisfied: pytz==2025.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 77)) (2025.2)
+Requirement already satisfied: PyWavelets==1.8.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 78)) (1.8.0)
+Requirement already satisfied: PyYAML==6.0.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 79)) (6.0.3)
+Requirement already satisfied: readme_renderer==44.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 80)) (44.0)
+Requirement already satisfied: requests==2.32.5 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 81)) (2.32.5)
+Requirement already satisfied: requests-toolbelt==1.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 82)) (1.0.0)
+Requirement already satisfied: rfc3986==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 83)) (2.0.0)
+Requirement already satisfied: rich==14.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 84)) (14.1.0)
+Requirement already satisfied: scikit-learn==1.7.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 85)) (1.7.2)
+Requirement already satisfied: scipy==1.15.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 86)) (1.15.3)
+Requirement already satisfied: six==1.17.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 87)) (1.17.0)
+Requirement already satisfied: snowballstemmer==3.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 88)) (3.0.1)
+Requirement already satisfied: Sphinx==8.1.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 89)) (8.1.3)
+Requirement already satisfied: sphinx-autodoc-typehints==3.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 90)) (3.0.1)
+Requirement already satisfied: sphinx-rtd-theme==3.0.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 91)) (3.0.2)
+Requirement already satisfied: sphinxcontrib-applehelp==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 92)) (2.0.0)
+Requirement already satisfied: sphinxcontrib-devhelp==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 93)) (2.0.0)
+Requirement already satisfied: sphinxcontrib-htmlhelp==2.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 94)) (2.1.0)
+Requirement already satisfied: sphinxcontrib-jquery==4.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 95)) (4.1)
+Requirement already satisfied: sphinxcontrib-jsmath==1.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 96)) (1.0.1)
+Requirement already satisfied: sphinxcontrib-napoleon==0.7 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 97)) (0.7)
+Requirement already satisfied: sphinxcontrib-qthelp==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 98)) (2.0.0)
+Requirement already satisfied: sphinxcontrib-serializinghtml==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 99)) (2.0.0)
+Requirement already satisfied: tensorboard==2.20.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 100)) (2.20.0)
+Requirement already satisfied: tensorboard-data-server==0.7.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 101)) (0.7.2)
+Requirement already satisfied: tensorflow==2.20.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 102)) (2.20.0)
+Requirement already satisfied: termcolor==3.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 103)) (3.3.0)
+Requirement already satisfied: threadpoolctl==3.6.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 104)) (3.6.0)
+Requirement already satisfied: toml==0.10.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 105)) (0.10.2)
+Requirement already satisfied: tomli==2.2.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 106)) (2.2.1)
+Requirement already satisfied: tqdm==4.67.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 107)) (4.67.1)
+Requirement already satisfied: twine==6.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 108)) (6.2.0)
+Requirement already satisfied: typing_extensions==4.15.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 109)) (4.15.0)
+Requirement already satisfied: tzdata==2025.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 110)) (2025.2)
+Requirement already satisfied: urllib3==2.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 111)) (2.5.0)
+Requirement already satisfied: Werkzeug==3.1.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 112)) (3.1.6)
+Requirement already satisfied: wrapt==2.1.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 113)) (2.1.1)
+Requirement already satisfied: zipp==3.23.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 114)) (3.23.0)
+Requirement already satisfied: wheel<1.0,>=0.23.0 in ./venv312/lib/python3.12/site-packages (from astunparse==1.6.3->-r requirements.txt (line 3)) (0.47.0)
+Requirement already satisfied: setuptools in ./venv312/lib/python3.12/site-packages (from coverage-badge==1.1.2->-r requirements.txt (line 14)) (83.0.0)
+Requirement already satisfied: SecretStorage>=3.2 in ./venv312/lib/python3.12/site-packages (from keyring==25.6.0->-r requirements.txt (line 38)) (3.5.0)
+Requirement already satisfied: jeepney>=0.4.2 in ./venv312/lib/python3.12/site-packages (from keyring==25.6.0->-r requirements.txt (line 38)) (0.9.0)
+Requirement already satisfied: pip>=22.2 in ./venv312/lib/python3.12/site-packages (from pip-tools==7.5.1->-r requirements.txt (line 63)) (26.1.2)
+Requirement already satisfied: cryptography>=2.0 in ./venv312/lib/python3.12/site-packages (from SecretStorage>=3.2->keyring==25.6.0->-r requirements.txt (line 38)) (49.0.0)
+Requirement already satisfied: cffi>=2.0.0 in ./venv312/lib/python3.12/site-packages (from cryptography>=2.0->SecretStorage>=3.2->keyring==25.6.0->-r requirements.txt (line 38)) (2.1.0)
+Requirement already satisfied: pycparser in ./venv312/lib/python3.12/site-packages (from cffi>=2.0.0->cryptography>=2.0->SecretStorage>=3.2->keyring==25.6.0->-r requirements.txt (line 38)) (3.0)
+Job ID: 59420550
+Node: g181011.ll.unc.edu
+Python: /nas/longleaf/home/inserra/EEGProc/venv312/bin/python
+Virtual environment: /nas/longleaf/home/inserra/EEGProc/venv312
+Module CUDA root: /nas/longleaf/rhel9/apps/cuda/12.9
+XLA CUDA root: /nas/longleaf/rhel9/apps/cuda/12.9
+libdevice: /nas/longleaf/rhel9/apps/cuda/12.9/nvvm/libdevice/libdevice.10.bc
+XLA_FLAGS: --xla_gpu_cuda_data_dir=/nas/longleaf/rhel9/apps/cuda/12.9
+Python 3.12.4
+Fri Jul 17 15:46:03 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 595.58.03              Driver Version: 595.58.03      CUDA Version: 13.2     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA L40S                    On  |   00000000:B3:00.0 Off |                    0 |
+| N/A   27C    P8             33W /  350W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA L40S                    On  |   00000000:B4:00.0 Off |                    0 |
+| N/A   28C    P8             32W /  350W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+Python executable: /nas/longleaf/home/inserra/EEGProc/venv312/bin/python
+Virtual environment: /nas/longleaf/home/inserra/EEGProc/venv312
+User site enabled: False
+TensorFlow version: 2.20.0
+TensorFlow location: /nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/tensorflow/__init__.py
+XLA_FLAGS: --xla_gpu_cuda_data_dir=/nas/longleaf/rhel9/apps/cuda/12.9
+Available GPUs: [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU'), PhysicalDevice(name='/physical_device:GPU:1', device_type='GPU')]
+Resolved libdevice: /nas/longleaf/rhel9/apps/cuda/12.9/nvvm/libdevice/libdevice.10.bc
+GPU exp-gradient test: [1.        2.7182817]
+2026-07-17 15:46:41,559 | INFO | Starting joint-model v2 training run in runs/joint_autoencoder_vc_v2/GCN/joint_v2_dreamer_arousal_gcn_20260717_154641
+2026-07-17 15:46:41,560 | INFO | Encoder type: gcn
+2026-07-17 15:46:41,560 | INFO | Feature shape: (6210, 512, 14)
+2026-07-17 15:46:41,560 | INFO | Channel-band grid: 14 channels x 1 bands
+2026-07-17 15:46:41,560 | INFO | Unique subjects: 23
+2026-07-17 15:46:41,561 | INFO | Unique subject/trial pairs: 414
+
+Flat LOSO hyperparameter search — 2 configurations, 4 folds each
+Total available subjects: 23
+Total LOSO model fits: 8
+Smoke-test fold limit: 4 of 23 subjects per configuration
+Requested metrics: ['accuracy', 'f1', 'precision', 'recall']
+Configuration selection: trial-level accuracy (maximize)
+Primary reported metrics: trial-level
+Prediction logging: True
+Variational interval logging: False
+Prediction latent mode: MC average over 5 latent sample(s)
+Fold workers: 2
+Worker devices: GPUs [0, 1]
+
+################################################################################
+Configuration 1 / 2 (4 LOSO fits)
+Configuration:
+{   'epochs': 5,
+    'batch_size': 64,
+    'learning_rate': 0.001,
+    'ae_loss_weight': 0.3,
+    'vc_loss_weight': 0.7,
+    'vae_beta': 1.0,
+    't_down': 2,
+    'emb_dim': 32,
+    'dropout': 0.2,
+    'gcn_units': [4, 8],
+    'temporal_pool_sizes': [2],
+    'activation': 'relu',
+    'use_batch_norm': False,
+    'bilstm_units': 128,
+    'bilstm_layers': 2,
+    'bilstm_dropout': 0.2}
+[LOSOConfig1Worker-1] initialized on GPU 0 (CUDA_VISIBLE_DEVICES=0)
+
+[Fold   1 / 4] LOSO test subject=0 (train=5940, test=270 windows)
+[LOSOConfig1Worker-2] initialized on GPU 1 (CUDA_VISIBLE_DEVICES=1)
+
+[Fold   2 / 4] LOSO test subject=1 (train=5940, test=270 windows)
+Epoch 1/5
+Epoch 1/5
+93/93 - 251s - 3s/step - accuracy: 0.7059 - autoencoder_loss: 23.5529 - kl_loss: 22.5045 - loss: 36.7294 - reconstruction_loss: 1.0483 - vc_loss: 42.3765 - weighted_kl_loss: 22.5045
+Epoch 2/5
+93/93 - 253s - 3s/step - accuracy: 0.7217 - autoencoder_loss: 23.3711 - kl_loss: 22.3466 - loss: 34.8515 - reconstruction_loss: 1.0245 - vc_loss: 39.7716 - weighted_kl_loss: 22.3466
+Epoch 2/5
+93/93 - 39s - 417ms/step - accuracy: 0.7298 - autoencoder_loss: 3.8393 - kl_loss: 2.8351 - loss: 8.8218 - reconstruction_loss: 1.0042 - vc_loss: 10.9571 - weighted_kl_loss: 2.8351
+Epoch 3/5
+93/93 - 39s - 417ms/step - accuracy: 0.7222 - autoencoder_loss: 3.6818 - kl_loss: 2.6791 - loss: 9.2520 - reconstruction_loss: 1.0027 - vc_loss: 11.6392 - weighted_kl_loss: 2.6791
+Epoch 3/5
+93/93 - 39s - 418ms/step - accuracy: 0.7298 - autoencoder_loss: 1.7446 - kl_loss: 0.7433 - loss: 5.3466 - reconstruction_loss: 1.0012 - vc_loss: 6.8904 - weighted_kl_loss: 0.7433
+Epoch 4/5
+93/93 - 39s - 418ms/step - accuracy: 0.7222 - autoencoder_loss: 2.3285 - kl_loss: 1.3277 - loss: 5.8147 - reconstruction_loss: 1.0008 - vc_loss: 7.3087 - weighted_kl_loss: 1.3277
+Epoch 4/5
+93/93 - 39s - 417ms/step - accuracy: 0.7298 - autoencoder_loss: 1.3622 - kl_loss: 0.3620 - loss: 4.4879 - reconstruction_loss: 1.0002 - vc_loss: 5.8275 - weighted_kl_loss: 0.3620
+Epoch 5/5
+93/93 - 39s - 417ms/step - accuracy: 0.7222 - autoencoder_loss: 1.8264 - kl_loss: 0.8263 - loss: 4.6844 - reconstruction_loss: 1.0001 - vc_loss: 5.9093 - weighted_kl_loss: 0.8263
+Epoch 5/5
+93/93 - 37s - 402ms/step - accuracy: 0.7298 - autoencoder_loss: 1.2146 - kl_loss: 0.2140 - loss: 4.3513 - reconstruction_loss: 1.0006 - vc_loss: 5.6955 - weighted_kl_loss: 0.2140
+93/93 - 38s - 406ms/step - accuracy: 0.7222 - autoencoder_loss: 1.3943 - kl_loss: 0.3938 - loss: 4.1004 - reconstruction_loss: 1.0005 - vc_loss: 5.2602 - weighted_kl_loss: 0.3938
+
+Fold 1 metrics (trial primary)
+------------------------------
+                    fold: 1
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 594.473145
+prediction_latent_samples: 5
+                    loss: 0.673490
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.673493
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.673490
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=1  subject=0  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.673490  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.673493  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.673490  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   3 / 4] LOSO test subject=2 (train=5940, test=270 windows)
+
+Fold 2 metrics (trial primary)
+------------------------------
+                    fold: 2
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 999.870728
+prediction_latent_samples: 5
+                    loss: 0.563676
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.563677
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.563676
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=2  subject=1  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.563676  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.563677  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.563676  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold   4 / 4] LOSO test subject=3 (train=5940, test=270 windows)
+Epoch 1/5
+Epoch 1/5
+93/93 - 252s - 3s/step - accuracy: 0.7256 - autoencoder_loss: 43.3768 - kl_loss: 42.3669 - loss: 35.4472 - reconstruction_loss: 1.0099 - vc_loss: 32.0487 - weighted_kl_loss: 42.3669
+Epoch 2/5
+93/93 - 254s - 3s/step - accuracy: 0.7195 - autoencoder_loss: 68.5770 - kl_loss: 67.5347 - loss: 46.5490 - reconstruction_loss: 1.0422 - vc_loss: 37.1084 - weighted_kl_loss: 67.5347
+Epoch 2/5
+93/93 - 39s - 419ms/step - accuracy: 0.7298 - autoencoder_loss: 2.7937 - kl_loss: 1.7930 - loss: 8.2369 - reconstruction_loss: 1.0007 - vc_loss: 10.5696 - weighted_kl_loss: 1.7930
+Epoch 3/5
+93/93 - 39s - 420ms/step - accuracy: 0.7273 - autoencoder_loss: 14.0785 - kl_loss: 13.0755 - loss: 11.8977 - reconstruction_loss: 1.0031 - vc_loss: 10.9631 - weighted_kl_loss: 13.0755
+Epoch 3/5
+93/93 - 41s - 443ms/step - accuracy: 0.7298 - autoencoder_loss: 1.2920 - kl_loss: 0.2908 - loss: 4.9199 - reconstruction_loss: 1.0012 - vc_loss: 6.4748 - weighted_kl_loss: 0.2908
+Epoch 4/5
+93/93 - 39s - 420ms/step - accuracy: 0.7273 - autoencoder_loss: 6.5798 - kl_loss: 5.5755 - loss: 7.1944 - reconstruction_loss: 1.0043 - vc_loss: 7.4578 - weighted_kl_loss: 5.5755
+Epoch 4/5
+93/93 - 39s - 421ms/step - accuracy: 0.7298 - autoencoder_loss: 1.0819 - kl_loss: 0.0823 - loss: 4.0696 - reconstruction_loss: 0.9996 - vc_loss: 5.3500 - weighted_kl_loss: 0.0823
+Epoch 5/5
+93/93 - 39s - 421ms/step - accuracy: 0.7273 - autoencoder_loss: 3.8038 - kl_loss: 2.8034 - loss: 5.7028 - reconstruction_loss: 1.0004 - vc_loss: 6.5167 - weighted_kl_loss: 2.8034
+Epoch 5/5
+93/93 - 39s - 422ms/step - accuracy: 0.7298 - autoencoder_loss: 1.4881 - kl_loss: 0.4882 - loss: 4.0513 - reconstruction_loss: 0.9999 - vc_loss: 5.1498 - weighted_kl_loss: 0.4882
+93/93 - 39s - 421ms/step - accuracy: 0.7273 - autoencoder_loss: 2.6043 - kl_loss: 1.6044 - loss: 6.6741 - reconstruction_loss: 1.0000 - vc_loss: 8.4183 - weighted_kl_loss: 1.6044
+
+Fold 3 metrics (trial primary)
+------------------------------
+                    fold: 3
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 843.751587
+prediction_latent_samples: 5
+                    loss: 0.673890
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.673892
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.673890
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=3  subject=2  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.673890  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.673892  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.673890  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+Fold 4 metrics (trial primary)
+------------------------------
+                    fold: 4
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1010.127930
+prediction_latent_samples: 5
+                    loss: 0.636660
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.636660
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.636660
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=4  subject=3  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.636660  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.636660  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.636660  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+Configuration 1 complete: mean trial_accuracy=0.666667 ± 0.068041
+
+################################################################################
+Configuration 2 / 2 (4 LOSO fits)
+Configuration:
+{   'epochs': 5,
+    'batch_size': 64,
+    'learning_rate': 0.001,
+    'ae_loss_weight': 0.3,
+    'vc_loss_weight': 0.7,
+    'vae_beta': 1.0,
+    't_down': 2,
+    'emb_dim': 32,
+    'dropout': 0.2,
+    'gcn_units': [8, 16],
+    'temporal_pool_sizes': [2],
+    'activation': 'relu',
+    'use_batch_norm': False,
+    'bilstm_units': 128,
+    'bilstm_layers': 2,
+    'bilstm_dropout': 0.2}
+[LOSOConfig2Worker-1] initialized on GPU 0 (CUDA_VISIBLE_DEVICES=0)
+
+[Fold   1 / 4] LOSO test subject=0 (train=5940, test=270 windows)
+[LOSOConfig2Worker-2] initialized on GPU 1 (CUDA_VISIBLE_DEVICES=1)
+
+[Fold   2 / 4] LOSO test subject=1 (train=5940, test=270 windows)
+Epoch 1/5
+Epoch 1/5
+93/93 - 255s - 3s/step - accuracy: 0.7291 - autoencoder_loss: 37.2234 - kl_loss: 36.2010 - loss: 37.9478 - reconstruction_loss: 1.0224 - vc_loss: 38.2583 - weighted_kl_loss: 36.2010
+Epoch 2/5
+93/93 - 258s - 3s/step - accuracy: 0.7209 - autoencoder_loss: 34.5554 - kl_loss: 33.5388 - loss: 40.7942 - reconstruction_loss: 1.0166 - vc_loss: 43.4680 - weighted_kl_loss: 33.5388
+Epoch 2/5
+93/93 - 40s - 433ms/step - accuracy: 0.7298 - autoencoder_loss: 5.4285 - kl_loss: 4.4284 - loss: 10.2162 - reconstruction_loss: 1.0001 - vc_loss: 12.2680 - weighted_kl_loss: 4.4284
+Epoch 3/5
+93/93 - 75s - 802ms/step - accuracy: 0.7222 - autoencoder_loss: 7.5894 - kl_loss: 6.5886 - loss: 9.9128 - reconstruction_loss: 1.0008 - vc_loss: 10.9085 - weighted_kl_loss: 6.5886
+Epoch 3/5
+93/93 - 42s - 450ms/step - accuracy: 0.7298 - autoencoder_loss: 3.1100 - kl_loss: 2.1094 - loss: 5.9239 - reconstruction_loss: 1.0006 - vc_loss: 7.1299 - weighted_kl_loss: 2.1094
+Epoch 4/5
+93/93 - 42s - 454ms/step - accuracy: 0.7222 - autoencoder_loss: 5.4082 - kl_loss: 4.4068 - loss: 7.1175 - reconstruction_loss: 1.0014 - vc_loss: 7.8501 - weighted_kl_loss: 4.4068
+Epoch 4/5
+93/93 - 42s - 451ms/step - accuracy: 0.7298 - autoencoder_loss: 3.0812 - kl_loss: 2.0808 - loss: 4.5541 - reconstruction_loss: 1.0004 - vc_loss: 5.1854 - weighted_kl_loss: 2.0808
+Epoch 5/5
+93/93 - 43s - 464ms/step - accuracy: 0.7222 - autoencoder_loss: 4.7119 - kl_loss: 3.7124 - loss: 5.9405 - reconstruction_loss: 0.9995 - vc_loss: 6.4671 - weighted_kl_loss: 3.7124
+Epoch 5/5
+93/93 - 43s - 465ms/step - accuracy: 0.7298 - autoencoder_loss: 2.4882 - kl_loss: 1.4888 - loss: 4.2782 - reconstruction_loss: 0.9994 - vc_loss: 5.0454 - weighted_kl_loss: 1.4888
+
+Fold 1 metrics (trial primary)
+------------------------------
+                    fold: 1
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1032.966553
+prediction_latent_samples: 5
+                    loss: 0.673598
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.673600
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.673598
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=1  subject=0  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.673598  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.673600  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.673598  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   3 / 4] LOSO test subject=2 (train=5940, test=270 windows)
+Epoch 1/5
+93/93 - 79s - 847ms/step - accuracy: 0.7222 - autoencoder_loss: 2.7521 - kl_loss: 1.7519 - loss: 3.8563 - reconstruction_loss: 1.0002 - vc_loss: 4.3296 - weighted_kl_loss: 1.7519
+
+Fold 2 metrics (trial primary)
+------------------------------
+                    fold: 2
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1140.456299
+prediction_latent_samples: 5
+                    loss: 0.563169
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.563172
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.563169
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=2  subject=1  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.563169  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.563172  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.563169  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold   4 / 4] LOSO test subject=3 (train=5940, test=270 windows)
+Epoch 1/5
+93/93 - 255s - 3s/step - accuracy: 0.7296 - autoencoder_loss: 25.4118 - kl_loss: 24.3888 - loss: 33.5343 - reconstruction_loss: 1.0230 - vc_loss: 37.0153 - weighted_kl_loss: 24.3888
+Epoch 2/5
+93/93 - 44s - 468ms/step - accuracy: 0.7298 - autoencoder_loss: 6.3827 - kl_loss: 5.3826 - loss: 9.0655 - reconstruction_loss: 1.0000 - vc_loss: 10.2153 - weighted_kl_loss: 5.3826
+Epoch 3/5
+93/93 - 257s - 3s/step - accuracy: 0.7237 - autoencoder_loss: 44.2415 - kl_loss: 43.2154 - loss: 36.9487 - reconstruction_loss: 1.0260 - vc_loss: 33.8232 - weighted_kl_loss: 43.2154
+Epoch 2/5
+93/93 - 43s - 459ms/step - accuracy: 0.7298 - autoencoder_loss: 2.9235 - kl_loss: 1.9234 - loss: 5.9129 - reconstruction_loss: 1.0001 - vc_loss: 7.1941 - weighted_kl_loss: 1.9234
+Epoch 4/5
+93/93 - 43s - 465ms/step - accuracy: 0.7249 - autoencoder_loss: 14.7043 - kl_loss: 13.7036 - loss: 13.4979 - reconstruction_loss: 1.0007 - vc_loss: 12.9809 - weighted_kl_loss: 13.7036
+Epoch 3/5
+93/93 - 43s - 466ms/step - accuracy: 0.7298 - autoencoder_loss: 2.0888 - kl_loss: 1.0883 - loss: 5.0821 - reconstruction_loss: 1.0005 - vc_loss: 6.3649 - weighted_kl_loss: 1.0883
+Epoch 5/5
+93/93 - 42s - 452ms/step - accuracy: 0.7273 - autoencoder_loss: 9.7329 - kl_loss: 8.7334 - loss: 9.4327 - reconstruction_loss: 0.9995 - vc_loss: 9.3040 - weighted_kl_loss: 8.7334
+Epoch 4/5
+93/93 - 42s - 454ms/step - accuracy: 0.7298 - autoencoder_loss: 1.6102 - kl_loss: 0.6104 - loss: 3.6567 - reconstruction_loss: 0.9998 - vc_loss: 4.5338 - weighted_kl_loss: 0.6104
+
+Fold 3 metrics (trial primary)
+------------------------------
+                    fold: 3
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 841.906616
+prediction_latent_samples: 5
+                    loss: 0.673586
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.673589
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.673586
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=3  subject=2  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.673586  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.673589  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.673586  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+93/93 - 41s - 442ms/step - accuracy: 0.7273 - autoencoder_loss: 6.9291 - kl_loss: 5.9281 - loss: 7.4181 - reconstruction_loss: 1.0010 - vc_loss: 7.6277 - weighted_kl_loss: 5.9281
+Epoch 5/5
+93/93 - 39s - 417ms/step - accuracy: 0.7273 - autoencoder_loss: 4.6839 - kl_loss: 3.6839 - loss: 5.1168 - reconstruction_loss: 1.0000 - vc_loss: 5.3024 - weighted_kl_loss: 3.6839
+
+Fold 4 metrics (trial primary)
+------------------------------
+                    fold: 4
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 836.127930
+prediction_latent_samples: 5
+                    loss: 0.636515
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.636550
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.636515
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=4  subject=3  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.636515  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.636550  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.636515  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+Configuration 2 complete: mean trial_accuracy=0.666667 ± 0.068041
+
+Flat LOSO hyperparameter search complete
+================================================================================
+Selected configuration 2 / 2 using trial-level accuracy.
+Best configuration:
+{   'epochs': 5,
+    'batch_size': 64,
+    'learning_rate': 0.001,
+    'ae_loss_weight': 0.3,
+    'vc_loss_weight': 0.7,
+    'vae_beta': 1.0,
+    't_down': 2,
+    'emb_dim': 32,
+    'dropout': 0.2,
+    'gcn_units': [8, 16],
+    'temporal_pool_sizes': [2],
+    'activation': 'relu',
+    'use_batch_norm': False,
+    'bilstm_units': 128,
+    'bilstm_layers': 2,
+    'bilstm_dropout': 0.2}
+Selection score: 0.666667 ± 0.068041
+Selected configuration primary mean scores:
+{   'loss': 0.636717121397276,
+    'accuracy': 0.6666666666666666,
+    'f1': 0.3990301724137931,
+    'precision': 0.3333333333333333,
+    'recall': 0.5}
+Selected configuration primary score standard deviations:
+{   'loss': 0.045080088002310656,
+    'accuracy': 0.06804138174397716,
+    'f1': 0.023762425171470335,
+    'precision': 0.03402069087198858,
+    'recall': 0.0}
+Selected configuration window-level mean scores:
+{   'loss': 0.6367279023101142,
+    'accuracy': 0.6666666666666666,
+    'f1': 0.3990301724137931,
+    'precision': 0.3333333333333333,
+    'recall': 0.5}
+Selected configuration trial-level mean scores:
+{   'loss': 0.636717121397276,
+    'accuracy': 0.6666666666666666,
+    'f1': 0.3990301724137931,
+    'precision': 0.3333333333333333,
+    'recall': 0.5}
+2026-07-17 16:20:02,135 | INFO | Selected final config: {'epochs': 5, 'batch_size': 64, 'learning_rate': 0.001, 'ae_loss_weight': 0.3, 'vc_loss_weight': 0.7, 'vae_beta': 1.0, 't_down': 2, 'emb_dim': 32, 'dropout': 0.2, 'gcn_units': [8, 16], 'temporal_pool_sizes': [2], 'activation': 'relu', 'use_batch_norm': False, 'bilstm_units': 128, 'bilstm_layers': 2, 'bilstm_dropout': 0.2}
+2026-07-17 16:20:02,137 | INFO | Selected 5 epochs for the final full-data fit.
+Epoch 1/5
+98/98 - 253s - 3s/step - accuracy: 0.7048 - autoencoder_loss: 28.2321 - kl_loss: 27.2276 - loss: 33.8804 - reconstruction_loss: 1.0045 - vc_loss: 36.3011 - weighted_kl_loss: 27.2276
+Epoch 2/5
+98/98 - 44s - 452ms/step - accuracy: 0.7246 - autoencoder_loss: 3.4679 - kl_loss: 2.4761 - loss: 9.8560 - reconstruction_loss: 0.9918 - vc_loss: 12.5937 - weighted_kl_loss: 2.4761
+Epoch 3/5
+98/98 - 44s - 447ms/step - accuracy: 0.7246 - autoencoder_loss: 1.9625 - kl_loss: 0.9711 - loss: 5.8779 - reconstruction_loss: 0.9914 - vc_loss: 7.5559 - weighted_kl_loss: 0.9711
+Epoch 4/5
+98/98 - 44s - 445ms/step - accuracy: 0.7246 - autoencoder_loss: 1.6675 - kl_loss: 0.6762 - loss: 9.1041 - reconstruction_loss: 0.9913 - vc_loss: 12.2913 - weighted_kl_loss: 0.6762
+Epoch 5/5
+98/98 - 44s - 448ms/step - accuracy: 0.7246 - autoencoder_loss: 1.9466 - kl_loss: 0.9553 - loss: 3.8211 - reconstruction_loss: 0.9912 - vc_loss: 4.6244 - weighted_kl_loss: 0.9553
+2026-07-17 16:28:03,239 | INFO | Final full-data metrics: {'accuracy': 0.7246376872062683, 'autoencoder_loss': 1.1655418872833252, 'kl_loss': 0.16811007261276245, 'loss': 1227.294189453125, 'reconstruction_loss': 0.9974315762519836, 'vc_loss': 1752.7767333984375, 'weighted_kl_loss': 0.16811007261276245}
+2026-07-17 16:28:03,248 | INFO | Saved run artifacts to runs/joint_autoencoder_vc_v2/GCN/joint_v2_dreamer_arousal_gcn_20260717_154641

@@ -1,0 +1,23 @@
+{
+  "epochs": 5,
+  "batch_size": 64,
+  "learning_rate": 0.001,
+  "ae_loss_weight": 0.3,
+  "vc_loss_weight": 0.7,
+  "vae_beta": 1.0,
+  "t_down": 2,
+  "emb_dim": 32,
+  "dropout": 0.2,
+  "gcn_units": [
+    8,
+    16
+  ],
+  "temporal_pool_sizes": [
+    2
+  ],
+  "activation": "relu",
+  "use_batch_norm": false,
+  "bilstm_units": 128,
+  "bilstm_layers": 2,
+  "bilstm_dropout": 0.2
+}
