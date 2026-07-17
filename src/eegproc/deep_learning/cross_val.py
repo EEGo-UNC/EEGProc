@@ -250,8 +250,14 @@ def _make_prediction_log(
     y_pred: np.ndarray,
     probabilities: np.ndarray,
     subject_ids: np.ndarray,
+    task_ids: np.ndarray | None = None,
 ) -> list[dict]:
-    """Create one prediction-log row per evaluated sample/window."""
+    """Create one prediction-log row per evaluated sample/window.
+
+    When ``task_ids`` is provided (e.g. a session/trial id per window), a
+    ``task_id`` field is added next to ``subject_id`` so downstream reporting
+    can break accuracy down per subject and per task.
+    """
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
 
@@ -263,10 +269,18 @@ def _make_prediction_log(
             "fold": int(fold_index),
             "sample_index": int(i),
             "subject_id": _python_scalar(subject_ids[i]),
-            "y_true": int(y_true[i]),
-            "y_pred": pred_class,
-            "p_pred": float(probabilities[i, pred_class]),
         }
+
+        if task_ids is not None:
+            row["task_id"] = _python_scalar(task_ids[i])
+
+        row.update(
+            {
+                "y_true": int(y_true[i]),
+                "y_pred": pred_class,
+                "p_pred": float(probabilities[i, pred_class]),
+            }
+        )
 
         for class_idx in range(probabilities.shape[1]):
             row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
@@ -284,6 +298,7 @@ def _make_variational_interval_log(
     fold_index: int,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    task_ids: np.ndarray | None = None,
 ) -> list[dict]:
     """Estimate predictive probability intervals with stochastic forward passes.
 
@@ -326,14 +341,22 @@ def _make_variational_interval_log(
             "fold": int(fold_index),
             "sample_index": int(i),
             "subject_id": _python_scalar(subject_ids[i]),
-            "y_true": int(y_true[i]),
-            "y_pred": pred_class,
-            "p_pred_mean": float(mean_probabilities[i, pred_class]),
-            "p_pred_ci_low": float(ci_low[i, pred_class]),
-            "p_pred_ci_high": float(ci_high[i, pred_class]),
-            "ci_level": float(ci_level),
-            "n_uncertainty_samples": int(n_uncertainty_samples),
         }
+
+        if task_ids is not None:
+            row["task_id"] = _python_scalar(task_ids[i])
+
+        row.update(
+            {
+                "y_true": int(y_true[i]),
+                "y_pred": pred_class,
+                "p_pred_mean": float(mean_probabilities[i, pred_class]),
+                "p_pred_ci_low": float(ci_low[i, pred_class]),
+                "p_pred_ci_high": float(ci_high[i, pred_class]),
+                "ci_level": float(ci_level),
+                "n_uncertainty_samples": int(n_uncertainty_samples),
+            }
+        )
 
         for class_idx in range(mean_probabilities.shape[1]):
             row[f"p_class_{class_idx}_mean"] = float(mean_probabilities[i, class_idx])
@@ -431,6 +454,7 @@ def _evaluate_classification_fold(
     log_variational_intervals: bool = False,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    task_ids_test: np.ndarray | None = None,
 ) -> dict:
     """Evaluate one outer fold and return all requested logs."""
     y_true = _as_numpy_1d(y_test).astype(np.int64)
@@ -492,6 +516,7 @@ def _evaluate_classification_fold(
             y_pred=y_pred,
             probabilities=probabilities,
             subject_ids=subject_ids_test,
+            task_ids=task_ids_test,
         )
 
     interval_rows: list[dict] = []
@@ -505,6 +530,7 @@ def _evaluate_classification_fold(
             fold_index=fold_index,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
+            task_ids=task_ids_test,
         )
 
     _print_metric_row(
@@ -549,6 +575,7 @@ def nested_lnso_cv(
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
+    task_id_array: np.ndarray | None = None,
     n_outer_subjects_to_leave_out: int = 1,
     n_inner_subjects_to_leave_out: int = 1,
     n_epochs: int = 50,
@@ -581,6 +608,11 @@ def nested_lnso_cv(
         - `prediction_log` stores one row per evaluated sample/window.
         - `variational_interval_log` optionally stores empirical predictive
           probability intervals from repeated stochastic forward passes.
+
+    `task_id_array` is optional. When supplied (one task/session/trial id per
+    window, aligned with `feature_array`), every prediction-log and
+    variational-interval-log row gains a `task_id` field so reporting can break
+    accuracy down per subject and per task.
 
     Returns
     -------
@@ -617,6 +649,15 @@ def nested_lnso_cv(
             f"first dimension. Got {len(feature_array)}, {len(label_array)}, "
             f"and {len(subject_id_array)}."
         )
+
+    if task_id_array is not None:
+        task_id_array = np.asarray(task_id_array)
+
+        if len(task_id_array) != len(feature_array):
+            raise ValueError(
+                "task_id_array must have the same first dimension as "
+                f"feature_array. Got {len(task_id_array)} and {len(feature_array)}."
+            )
 
     metrics = tuple(metrics)
 
@@ -895,6 +936,9 @@ def nested_lnso_cv(
         X_outer_test = feature_array[outer_test_indices]
         y_outer_test = label_array[outer_test_indices]
         subject_ids_outer_test = subject_id_array[outer_test_indices]
+        task_ids_outer_test = (
+            task_id_array[outer_test_indices] if task_id_array is not None else None
+        )
 
         (
             X_outer_train,
@@ -938,6 +982,7 @@ def nested_lnso_cv(
                 log_variational_intervals=log_variational_intervals,
                 n_uncertainty_samples=n_uncertainty_samples,
                 ci_level=ci_level,
+                task_ids_test=task_ids_outer_test,
             )
 
         finally:

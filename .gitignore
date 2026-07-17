@@ -210,4 +210,8 @@ DREAMER.CSV
 scripts/
 
 datasets/
+
+# Generated reporting artifacts (reproducible from the result JSONs)
+experiment_outputs/
 figures/
+figures_experiment/
