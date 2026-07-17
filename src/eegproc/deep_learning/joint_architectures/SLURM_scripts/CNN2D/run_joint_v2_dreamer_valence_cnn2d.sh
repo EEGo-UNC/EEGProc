@@ -248,8 +248,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         ]
     ],
     "kernel_sizes": [
-        3,
-        1
+        [
+            [3, 1],
+            [3, 1]
+        ]
     ],
     "temporal_pool_sizes": [
         [2]
