@@ -84,6 +84,7 @@ class DatasetBundle:
     X: np.ndarray
     y: np.ndarray
     subject_ids: np.ndarray
+    task_ids: np.ndarray
     subject_id_mapping: dict[int, Any]
     feature_cols: list[str]
     label_threshold: float
@@ -209,8 +210,9 @@ def prep_dataset(
     y = np.zeros((len(groups),), dtype=np.int64)
 
     original_subject_ids = []
+    original_task_ids = []
 
-    for i, ((subject_id, _session_id), group) in enumerate(groups):
+    for i, ((subject_id, session_id), group) in enumerate(groups):
         seq = group[feature_cols].to_numpy(dtype=np.float32)
         seq = np.clip(seq, 0.0, np.inf)
         seq = np.log1p(seq)
@@ -219,6 +221,7 @@ def prep_dataset(
         X[i, : len(seq), :] = seq
         y[i] = int(group["target"].iloc[0])
         original_subject_ids.append(subject_id)
+        original_task_ids.append(session_id)
 
     subject_codes, subject_uniques = pd.factorize(original_subject_ids, sort=True)
     subject_ids = subject_codes.astype(np.int64)
@@ -227,10 +230,15 @@ def prep_dataset(
         for code, original_id in enumerate(subject_uniques.tolist())
     }
 
+    # Tasks are the original session/trial ids (shared across subjects), so the
+    # raw value is the most meaningful label for per-task reporting.
+    task_ids = np.asarray(original_task_ids)
+
     return DatasetBundle(
         X=X,
         y=y,
         subject_ids=subject_ids,
+        task_ids=task_ids,
         subject_id_mapping=subject_id_mapping,
         feature_cols=feature_cols,
         label_threshold=threshold,
@@ -401,6 +409,7 @@ def run_nested_lnso_smoke_test(
         feature_array=dataset.X,
         label_array=dataset.y,
         subject_id_array=dataset.subject_ids,
+        task_id_array=dataset.task_ids,
         n_outer_subjects_to_leave_out=N_OUTER_SUBJECTS_TO_LEAVE_OUT,
         n_inner_subjects_to_leave_out=N_INNER_SUBJECTS_TO_LEAVE_OUT,
         n_epochs=N_EPOCHS,
@@ -415,6 +424,10 @@ def run_nested_lnso_smoke_test(
         ci_level=CI_LEVEL,
         verbose=0,
     )
+
+    # Persist the integer-code -> original-id mapping so reporting can label
+    # axes with the real DREAMER subject ids instead of 0..n-1 codes.
+    results["subject_id_mapping"] = dataset.subject_id_mapping
 
     print_cv_result_summary(name=name, results=results)
 

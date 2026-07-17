@@ -770,6 +770,7 @@ def _evaluate_classification_fold(
     log_variational_intervals: bool = False,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    task_ids_test: np.ndarray | None = None,
 ) -> dict:
     """Evaluate one outer fold at both window and trial levels."""
     _validate_evaluation_level(evaluation_level, "evaluation_level")
@@ -903,6 +904,7 @@ def _evaluate_classification_fold(
             fold_index=fold_index,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
+            task_ids=task_ids_test,
         )
 
     _print_metric_row(
