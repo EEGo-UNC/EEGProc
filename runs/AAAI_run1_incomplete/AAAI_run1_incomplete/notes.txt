@@ -1,0 +1,3 @@
+This was the first run of the joint VAE + VC pipeline for the AAAI publication. 
+- Achieved low accuracies of around 60% for valence and 72% for arousal.
+- Did not finish hyperparameter search due to small time allocation.

@@ -1,14 +1,13 @@
 """Training entry point for the joint VAE + BiLSTM + variational classifier.
 
 This module keeps the v2 model file focused on architecture only. It provides
-ordinary leave-one-subject-out cross-validation, structured logging, fixed
-hyperparameters, DREAMER-backed data loading (see ``joint_v2_data.py``), and
-final model saving.
+ordinary leave-one-subject-out cross-validation, flat hyperparameter search
+across the complete joint CNN-VAE/BiLSTM model, DREAMER-backed data loading
+(see ``joint_v2_data.py``), structured logging, and final model saving.
 """
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -79,6 +78,9 @@ class JointV2TrainingConfig:
     cv_max_epochs: int = 50
     final_epoch_strategy: str = "median"
     final_epochs: int | None = None
+    selection_metric: str = "f1"
+    selection_level: str = "trial"
+    maximize_metric: bool | None = None
     n_outer_subjects_to_leave_out: int = 2
     n_inner_subjects_to_leave_out: int = 1
     outer_verbose: int = 0
@@ -238,56 +240,136 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
 
-    fieldnames = list(rows[0].keys())
+    fieldnames = list(
+        dict.fromkeys(
+            key
+            for row in rows
+            for key in row
+        )
+    )
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def _select_final_epochs(
-    outer_fold_results: list[dict],
-    strategy: str = "median",
-    fixed_epochs: int | None = None,
-) -> int:
-    if fixed_epochs is not None:
-        return max(1, int(fixed_epochs))
 
-    candidate_epochs: list[int] = []
-    for fold in outer_fold_results:
-        if "best_inner_epochs" in fold:
-            candidate_epochs.append(int(fold["best_inner_epochs"]))
-        elif "best_config" in fold and "epochs" in fold["best_config"]:
-            candidate_epochs.append(int(fold["best_config"]["epochs"]))
+def _grid_summary_rows(cv_results: dict) -> list[dict]:
+    """Flatten configuration-level LOSO results for a compact CSV summary."""
+    rows: list[dict] = []
+    for config_result in cv_results.get("config_results", []):
+        row = {
+            "config_index": int(config_result["config_index"]),
+            "is_selected": int(
+                config_result["config_index"] == cv_results.get("best_config_index")
+            ),
+            "selection_level": config_result.get("selection_level"),
+            "selection_metric": config_result.get("selection_metric"),
+            "selection_score": config_result.get("selection_score"),
+            "selection_score_std": config_result.get("selection_score_std"),
+            "n_folds": config_result.get("n_folds"),
+            "config": json.dumps(
+                config_result.get("config", {}),
+                sort_keys=True,
+                default=_json_default,
+            ),
+        }
 
-    if not candidate_epochs:
-        return 1
+        for prefix in ("window", "trial"):
+            mean_scores = config_result.get(f"{prefix}_mean_scores", {})
+            std_scores = config_result.get(f"{prefix}_std_scores", {})
+            for metric_name, metric_value in mean_scores.items():
+                row[f"{prefix}_{metric_name}_mean"] = metric_value
+            for metric_name, metric_value in std_scores.items():
+                row[f"{prefix}_{metric_name}_std"] = metric_value
 
-    if strategy == "mean":
-        return max(1, int(round(float(np.mean(candidate_epochs)))))
-    if strategy == "max":
-        return max(1, int(max(candidate_epochs)))
-
-    return max(1, int(round(float(np.median(candidate_epochs)))))
+        rows.append(row)
+    return rows
 
 
-def _select_final_config(cv_results: dict) -> dict:
-    """Pick the most frequently selected best config across outer folds."""
-    best_configs = [
-        row["best_config"]
-        for row in cv_results.get("best_configs", [])
-        if "best_config" in row
-    ]
-    if not best_configs:
-        return {}
+def _positive_int_tuple(
+    name: str,
+    value,
+    *,
+    allow_empty: bool = False,
+) -> tuple[int, ...]:
+    """Normalize a sequence of positive integer layer settings."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{name} must be a list or tuple, got {value!r}.")
+    if not value and not allow_empty:
+        raise ValueError(f"{name} must be non-empty, got {value!r}.")
+    normalized = tuple(int(item) for item in value)
+    if any(item < 1 for item in normalized):
+        raise ValueError(f"{name} values must all be >= 1, got {normalized!r}.")
+    return normalized
 
-    encoded = [
-        json.dumps(config, sort_keys=True, default=_json_default)
-        for config in best_configs
-    ]
-    most_common_config_json = Counter(encoded).most_common(1)[0][0]
-    return json.loads(most_common_config_json)
 
+def _nonnegative_int_tuple(name: str, value) -> tuple[int, ...]:
+    """Normalize a sequence of non-negative integer layer indices."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{name} must be a list or tuple, got {value!r}.")
+    normalized = tuple(int(item) for item in value)
+    if any(item < 0 for item in normalized):
+        raise ValueError(f"{name} values must all be >= 0, got {normalized!r}.")
+    return normalized
+
+
+def _normalize_encoder_configuration(encoder_config: dict) -> dict:
+    """Validate and normalize one CNN encoder configuration from the grid."""
+    config = dict(encoder_config)
+    config["conv_filters"] = _positive_int_tuple(
+        "conv_filters", config["conv_filters"]
+    )
+    config["kernel_sizes"] = _positive_int_tuple(
+        "kernel_sizes", config["kernel_sizes"]
+    )
+    config["pool_after_layers"] = _nonnegative_int_tuple(
+        "pool_after_layers", config["pool_after_layers"]
+    )
+    config["pool_sizes"] = _positive_int_tuple(
+        "pool_sizes",
+        config["pool_sizes"],
+        allow_empty=True,
+    )
+
+    n_conv_layers = len(config["conv_filters"])
+    if len(config["kernel_sizes"]) != n_conv_layers:
+        raise ValueError(
+            "conv_filters and kernel_sizes must describe the same number of "
+            f"convolutional layers. Got {config['conv_filters']!r} and "
+            f"{config['kernel_sizes']!r}."
+        )
+    if len(config["pool_after_layers"]) != len(config["pool_sizes"]):
+        raise ValueError(
+            "pool_after_layers and pool_sizes must have the same length. Got "
+            f"{config['pool_after_layers']!r} and {config['pool_sizes']!r}."
+        )
+    if len(set(config["pool_after_layers"])) != len(config["pool_after_layers"]):
+        raise ValueError(
+            "pool_after_layers cannot contain duplicate layer indices: "
+            f"{config['pool_after_layers']!r}."
+        )
+    if any(index >= n_conv_layers for index in config["pool_after_layers"]):
+        raise ValueError(
+            "pool_after_layers contains an index outside the convolutional "
+            f"stack of length {n_conv_layers}: {config['pool_after_layers']!r}."
+        )
+
+    config["t_down"] = int(config["t_down"])
+    config["emb_dim"] = int(config["emb_dim"])
+    config["dropout"] = float(config["dropout"])
+    config["use_batch_norm"] = bool(config["use_batch_norm"])
+
+    if config["t_down"] < 1:
+        raise ValueError(f"t_down must be >= 1, got {config['t_down']}.")
+    if config["emb_dim"] < 1:
+        raise ValueError(f"emb_dim must be >= 1, got {config['emb_dim']}.")
+    if not 0.0 <= config["dropout"] < 1.0:
+        raise ValueError(
+            f"Encoder dropout must be in [0, 1), got {config['dropout']}."
+        )
+
+    return config
 
 def build_joint_autoencoder_variational_classifier_v2(
     input_shape: tuple[int, int],
@@ -316,9 +398,10 @@ def build_joint_autoencoder_variational_classifier_v2(
     sequences inside ``JointAutoencoderVariationalClassifierV2``. Training
     uses reparameterized samples; evaluation uses the posterior mean.
 
-    ``bilstm_units``, ``n_bilstm_layers``, and ``bilstm_dropout`` are exposed
-    directly so nested cross-validation can tune them. ``bilstm_kwargs`` is
-    available for less common ``BiLSTMClassifier`` constructor options.
+    Encoder settings supplied through ``encoder_kwargs`` and the BiLSTM
+    settings are all rebuilt for every grid configuration. This allows flat
+    LOSO search over convolution filters, kernels, pooling, embedding width,
+    encoder dropout, VAE beta, loss weights, and recurrent settings together.
     """
     timesteps, n_features = input_shape
 
@@ -336,6 +419,7 @@ def build_joint_autoencoder_variational_classifier_v2(
     }
     if encoder_kwargs:
         encoder_defaults.update(encoder_kwargs)
+    encoder_defaults = _normalize_encoder_configuration(encoder_defaults)
 
     classifier_defaults = {"n_classes": n_classes}
     if classifier_kwargs:
@@ -627,6 +711,9 @@ def train_joint_autoencoder_variational_classifier_v2(
         batch_size=training_config.batch_size,
         hyperparameters=training_config.hyperparameters,
         evaluation_level="trial",
+        selection_level=training_config.selection_level,
+        selection_metric=training_config.selection_metric,
+        maximize_metric=training_config.maximize_metric,
         metrics=("accuracy", "f1", "precision", "recall"),
         log_predictions=True,
         verbose=training_config.outer_verbose,
@@ -648,12 +735,29 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     _write_json(run_dir / "loso_cv_results.json", cv_results)
     _write_csv(run_dir / "loso_cv_folds.csv", fold_rows)
+    _write_csv(
+        run_dir / "grid_search_summary.csv",
+        _grid_summary_rows(cv_results),
+    )
 
-    selected_final_config = _select_final_config(cv_results)
-    selected_final_epochs = _select_final_epochs(
-        cv_results["outer_fold_results"],
-        strategy=training_config.final_epoch_strategy,
-        fixed_epochs=training_config.final_epochs,
+    if "best_config" not in cv_results:
+        raise RuntimeError(
+            "loso_cv did not return best_config; the final model cannot be built."
+        )
+    selected_final_config = dict(cv_results["best_config"])
+    _write_json(run_dir / "selected_config.json", selected_final_config)
+    selected_final_epochs = (
+        max(1, int(training_config.final_epochs))
+        if training_config.final_epochs is not None
+        else max(
+            1,
+            int(
+                selected_final_config.get(
+                    "epochs",
+                    training_config.cv_max_epochs,
+                )
+            ),
+        )
     )
     selected_final_batch_size = int(
         selected_final_config.get("batch_size", training_config.batch_size)
@@ -720,7 +824,10 @@ def train_joint_autoencoder_variational_classifier_v2(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train JointAutoencoderVariationalClassifierV2 with ordinary LOSO CV."
+        description=(
+            "Train JointAutoencoderVariationalClassifierV2 with flat LOSO "
+            "hyperparameter search over the CNN-VAE and classifier."
+        )
     )
     parser.add_argument("--out-dir", default="runs/joint_autoencoder_vc_v2")
     parser.add_argument("--run-name", default="joint_autoencoder_vc_v2")
@@ -743,6 +850,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="median",
     )
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--selection-metric",
+        choices=("loss", "accuracy", "f1", "precision", "recall"),
+        default="f1",
+        help="Metric used to rank complete LOSO configurations (default: f1).",
+    )
+    parser.add_argument(
+        "--selection-level",
+        choices=("window", "trial"),
+        default="trial",
+        help="Prediction level used for hyperparameter selection (default: trial).",
+    )
     parser.add_argument("--outer-verbose", type=int, default=0)
     parser.add_argument("--inner-verbose", type=int, default=0)
     parser.add_argument("--final-verbose", type=int, default=1)
@@ -790,10 +909,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hyperparameters-json",
         default=None,
         help=(
-            "One fixed hyperparameter configuration passed to cross_val.loso_cv. "
-            'Example: \'{"epochs":[3],"learning_rate":[0.001],'
-            '"vae_beta":[1.0],"bilstm_units":[32],'
-            '"bilstm_layers":[1],"bilstm_dropout":[0.1]}\'.'
+            "Cartesian hyperparameter grid passed to cross_val.loso_cv. Scalar "
+            "settings use candidate lists. Sequence-valued encoder settings use "
+            "a flat list for one architecture or a nested list for multiple "
+            "architectures. Example: "
+            '{"epochs":[300],"vae_beta":[0.1,1.0],'
+            '"conv_filters":[[16,32],[32,64]],"kernel_sizes":[5,3],'
+            '"emb_dim":[8,16],"bilstm_units":[128]}.'
         ),
     )
     parser.add_argument("--features-npy", default=None)
@@ -888,6 +1010,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
+    parsed_hyperparameters = (
+        json.loads(args.hyperparameters_json)
+        if args.hyperparameters_json
+        else {}
+    )
+    if not isinstance(parsed_hyperparameters, dict):
+        raise ValueError("--hyperparameters-json must decode to a JSON object.")
+
     config = JointV2TrainingConfig(
         output_dir=Path(args.out_dir),
         run_name=args.run_name,
@@ -896,6 +1026,8 @@ def main(argv: list[str] | None = None) -> int:
         cv_max_epochs=args.epochs,
         final_epoch_strategy=args.final_epoch_strategy,
         final_epochs=args.final_epochs,
+        selection_metric=args.selection_metric,
+        selection_level=args.selection_level,
         outer_verbose=args.outer_verbose,
         inner_verbose=args.inner_verbose,
         final_verbose=args.final_verbose,
@@ -919,9 +1051,7 @@ def main(argv: list[str] | None = None) -> int:
             "vc_lambda": args.vc_lambda,
             "update_discriminator": args.update_discriminator,
         },
-        hyperparameters=(
-            json.loads(args.hyperparameters_json) if args.hyperparameters_json else {}
-        ),
+        hyperparameters=parsed_hyperparameters,
         n_jobs=args.n_jobs,
         cpus_per_worker=args.cpus_per_worker,
         max_folds=args.max_folds,

@@ -4,10 +4,10 @@
 #SBATCH --error=joint_v2_dreamer_arousal_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
-#SBATCH --time=8:00:00
+#SBATCH --mem=128G
+#SBATCH --time=24:00:00
 
 set -euo pipefail
 
@@ -176,17 +176,31 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
     --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
     --label-dimension arousal \
-    --n-jobs 4 \
-    --cpus-per-worker 4 \
+    --n-jobs 8 \
+    --cpus-per-worker 2 \
+    --outer-verbose 2 \
+    --final-verbose 2 \
+    --selection-level trial \
+    --selection-metric accuracy \
+    --seed 42 \
     --hyperparameters-json '{
-        "epochs": [300],
-        "batch_size": [64],
+        "epochs": [200, 400],
+        "batch_size": [64, 128],
         "learning_rate": [0.0001],
         "ae_loss_weight": [0.3],
         "vc_loss_weight": [0.7],
-        "emb_dim": [16],
+        "vae_beta": [1.0],
+        "emb_dim": [16, 32],
         "dropout": [0.2],
+        "conv_filters": [
+            [16, 32],
+            [32, 64]
+        ],
+        "kernel_sizes": [5, 3],
+        "pool_after_layers": [0],
+        "pool_sizes": [2],
+        "use_batch_norm": [false, true],
         "bilstm_units": [128, 256],
-        "bilstm_layers": [2, 4],
-        "bilstm_dropout": [0.2]
+        "bilstm_layers": [2],
+        "bilstm_dropout": [0.2, 0.4]
     }'

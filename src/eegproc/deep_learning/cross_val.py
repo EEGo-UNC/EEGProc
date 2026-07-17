@@ -18,45 +18,97 @@ from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score,
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
 
+# These values describe one encoder architecture and must therefore remain
+# intact when represented as a flat JSON list. A nested list represents several
+# candidate architectures.
+_SEQUENCE_HYPERPARAMETER_KEYS = frozenset(
+    {
+        "conv_filters",
+        "kernel_sizes",
+        "pool_after_layers",
+        "pool_sizes",
+    }
+)
+_EMPTY_SEQUENCE_ALLOWED_KEYS = frozenset(
+    {
+        "pool_after_layers",
+        "pool_sizes",
+    }
+)
+
+
+def _hyperparameter_candidates(key: str, value) -> list:
+    """Return candidate values while preserving architecture sequences.
+
+    Ordinary scalar hyperparameters use a list/tuple to enumerate candidates.
+    Sequence-valued encoder parameters are different: a flat list describes
+    one architecture, while a nested list enumerates multiple architectures.
+
+    A list of dictionaries remains an ordinary candidate list, which supports
+    bundled ``encoder_kwargs`` configurations for architectures with different
+    numbers of convolutional layers.
+    """
+    if key not in _SEQUENCE_HYPERPARAMETER_KEYS:
+        if isinstance(value, (list, tuple)):
+            if not value:
+                raise ValueError(
+                    f"Hyperparameter {key!r} has an empty candidate list."
+                )
+            return list(value)
+        return [value]
+
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(
+            f"Sequence hyperparameter {key!r} must be a list or tuple, "
+            f"got {type(value).__name__}."
+        )
+    if not value:
+        if key in _EMPTY_SEQUENCE_ALLOWED_KEYS:
+            return [[]]
+        raise ValueError(f"Sequence hyperparameter {key!r} cannot be empty.")
+
+    nested_flags = [isinstance(item, (list, tuple)) for item in value]
+    if all(nested_flags):
+        candidates = [list(item) for item in value]
+        if (
+            key not in _EMPTY_SEQUENCE_ALLOWED_KEYS
+            and any(not candidate for candidate in candidates)
+        ):
+            raise ValueError(
+                f"Sequence hyperparameter {key!r} contains an empty candidate."
+            )
+        return candidates
+
+    if any(nested_flags):
+        raise ValueError(
+            f"Sequence hyperparameter {key!r} mixes scalar and sequence "
+            f"values: {value!r}. Use a flat sequence for one architecture or "
+            "a nested sequence for multiple architectures."
+        )
+
+    return [list(value)]
+
+
 def _expand_hyperparameter_grid(hp: dict | None) -> list[dict]:
-    """Expand a hyperparameter dict into a Cartesian-product grid."""
+    """Expand a hyperparameter dictionary into a Cartesian-product grid.
+
+    Scalar settings use the usual ``[candidate_1, candidate_2]`` syntax.
+    Encoder sequence settings listed in ``_SEQUENCE_HYPERPARAMETER_KEYS`` use
+    a flat list for one architecture and a nested list for multiple candidates.
+    """
     if not hp:
         return [{}]
 
-    keys = list(hp.keys())
-    values = [v if isinstance(v, (list, tuple)) else [v] for v in hp.values()]
-    return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
+    keys = list(hp)
+    candidate_values = [
+        _hyperparameter_candidates(key, hp[key])
+        for key in keys
+    ]
+    return [
+        dict(zip(keys, combination))
+        for combination in itertools.product(*candidate_values)
+    ]
 
-
-def _normalize_fixed_hyperparameters(hp: dict | None) -> dict:
-    """Normalize one fixed hyperparameter configuration.
-
-    Plain LOSO evaluates a configuration that has already been selected; it
-    does not perform an inner hyperparameter search. Scalar values are accepted
-    directly. Singleton lists/tuples are also accepted for compatibility with
-    JSON grids used by ``nested_lnso_cv``. Any parameter containing multiple
-    candidate values is rejected to prevent accidental tuning on the LOSO test
-    folds.
-    """
-    if not hp:
-        return {}
-
-    fixed: dict = {}
-
-    for key, value in hp.items():
-        if isinstance(value, (list, tuple)):
-            if len(value) != 1:
-                raise ValueError(
-                    "loso_cv evaluates one fixed hyperparameter configuration. "
-                    f"Parameter {key!r} contains {len(value)} candidates: "
-                    f"{value!r}. Tune the configuration separately, then pass "
-                    "one value per parameter."
-                )
-            fixed[key] = value[0]
-        else:
-            fixed[key] = value
-
-    return fixed
 
 
 def _split_config(config: dict) -> tuple[dict, dict]:
@@ -770,7 +822,6 @@ def _evaluate_classification_fold(
     log_variational_intervals: bool = False,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
-    task_ids_test: np.ndarray | None = None,
 ) -> dict:
     """Evaluate one outer fold at both window and trial levels."""
     _validate_evaluation_level(evaluation_level, "evaluation_level")
@@ -904,7 +955,6 @@ def _evaluate_classification_fold(
             fold_index=fold_index,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
-            task_ids=task_ids_test,
         )
 
     _print_metric_row(
@@ -2502,7 +2552,7 @@ def loso_cv(
     hyperparameters: dict | None = None,
     preprocessing_strategy: Callable | None = None,
     evaluation_level: Literal["window", "trial"] = "trial",
-    selection_metric: str = "accuracy",
+    selection_metric: str = "f1",
     selection_level: Literal["window", "trial"] = "trial",
     maximize_metric: bool | None = None,
     metrics: list[str] | tuple[str, ...] = (
@@ -2536,9 +2586,19 @@ def loso_cv(
 
     Hyperparameter grid
     -------------------
-    Values may be scalars or lists/tuples. Lists/tuples are expanded with a
-    Cartesian product. ``n_epochs`` and ``batch_size`` provide defaults and are
-    overridden when ``hyperparameters`` contains ``epochs`` or ``batch_size``.
+    Scalar values may be supplied directly or as candidate lists/tuples. The
+    Cartesian product is evaluated with a complete LOSO run per configuration.
+
+    Sequence-valued encoder settings use a flat list for one architecture and
+    a nested list for multiple candidates. For example, ``conv_filters=[16, 32]``
+    is one two-layer encoder, whereas
+    ``conv_filters=[[16, 32], [32, 64]]`` evaluates two encoders. The same rule
+    applies to ``kernel_sizes``, ``pool_after_layers``, and ``pool_sizes``.
+    Architectures with different layer counts can instead be bundled as a list
+    of complete ``encoder_kwargs`` dictionaries.
+
+    ``n_epochs`` and ``batch_size`` provide defaults and are overridden when
+    ``hyperparameters`` contains ``epochs`` or ``batch_size``.
 
     Selection
     ---------

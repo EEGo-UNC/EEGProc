@@ -5,7 +5,7 @@
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:2
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
 
@@ -178,16 +178,29 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --label-dimension arousal \
     --max-folds 4 \
     --n-jobs 2 \
-    --cpus-per-worker 4 \
+    --cpus-per-worker 2 \
+    --outer-verbose 2 \
+    --final-verbose 2 \
+    --selection-level trial \
+    --selection-metric accuracy \
+    --seed 42 \
     --hyperparameters-json '{
-        "epochs": [3],
-        "batch_size": [16],
-        "learning_rate": [0.001],
-        "ae_loss_weight": [0.3],
-        "vc_loss_weight": [0.7],
-        "emb_dim": [16],
-        "dropout": [0.2],
-        "bilstm_units": [16],
-        "bilstm_layers": [2],
-        "bilstm_dropout": [0.2]
+    "epochs": [5],
+    "batch_size": [64],
+    "learning_rate": [0.001],
+    "ae_loss_weight": [0.3],
+    "vc_loss_weight": [0.7],
+    "vae_beta": [1.0],
+    "emb_dim": [32],
+    "dropout": [0.2],
+    "conv_filters": [
+        [4, 8],
+    ],
+    "kernel_sizes": [5],
+    "pool_after_layers": [0],
+    "pool_sizes": [2],
+    "use_batch_norm": [true],
+    "bilstm_units": [128],
+    "bilstm_layers": [2],
+    "bilstm_dropout": [0.2]
     }'

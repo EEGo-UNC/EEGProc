@@ -162,6 +162,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
         )
+        self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
+        self.weighted_kl_loss_tracker = tf.keras.metrics.Mean(
+            name="weighted_kl_loss"
+        )
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
         self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
             name="accuracy"
@@ -174,6 +178,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             self.total_loss_tracker,
             self.autoencoder_loss_tracker,
             self.reconstruction_loss_tracker,
+            self.kl_loss_tracker,
+            self.weighted_kl_loss_tracker,
             self.vc_loss_tracker,
             self.accuracy_tracker,
         ]
@@ -310,6 +316,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         tf.Tensor,
         tf.Tensor,
         tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
         dict[str, tf.Tensor],
     ]:
         outputs = self(x, training=training)
@@ -334,6 +342,19 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         reconstruction_loss = vae_losses["reconstruction_loss"]
         autoencoder_loss = vae_losses["total_loss"]
 
+        # Track the unweighted Gaussian KL explicitly so VAE-beta and encoder
+        # architecture searches can be diagnosed independently of the weighted
+        # total autoencoder loss. This does not alter the optimized objective.
+        kl_per_sample = -0.5 * tf.reduce_sum(
+            1.0
+            + z_log_var_flat
+            - tf.square(z_mean_flat)
+            - tf.exp(z_log_var_flat),
+            axis=1,
+        )
+        kl_loss = tf.reduce_mean(kl_per_sample)
+        weighted_kl_loss = tf.cast(self.vae_beta, kl_loss.dtype) * kl_loss
+
         y_flat = self._flatten_labels(y)
         vc_loss = self.variational_classifier.vc_loss(
             mh=outputs["classification_latent"],
@@ -352,6 +373,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             total_loss,
             autoencoder_loss,
             reconstruction_loss,
+            kl_loss,
+            weighted_kl_loss,
             vc_loss,
             outputs,
         )
@@ -386,6 +409,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 total_loss,
                 autoencoder_loss,
                 reconstruction_loss,
+                kl_loss,
+                weighted_kl_loss,
                 vc_loss,
                 outputs,
             ) = self._compute_weighted_losses(
@@ -446,6 +471,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.total_loss_tracker.update_state(total_loss)
         self.autoencoder_loss_tracker.update_state(autoencoder_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.kl_loss_tracker.update_state(kl_loss)
+        self.weighted_kl_loss_tracker.update_state(weighted_kl_loss)
         self.vc_loss_tracker.update_state(vc_loss)
         self.accuracy_tracker.update_state(y_flat, outputs["logits"])
 
@@ -453,6 +480,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "loss": self.total_loss_tracker.result(),
             "autoencoder_loss": self.autoencoder_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
+            "kl_loss": self.kl_loss_tracker.result(),
+            "weighted_kl_loss": self.weighted_kl_loss_tracker.result(),
             "vc_loss": self.vc_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
@@ -466,6 +495,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             total_loss,
             autoencoder_loss,
             reconstruction_loss,
+            kl_loss,
+            weighted_kl_loss,
             vc_loss,
             outputs,
         ) = self._compute_weighted_losses(
@@ -477,6 +508,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.total_loss_tracker.update_state(total_loss)
         self.autoencoder_loss_tracker.update_state(autoencoder_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.kl_loss_tracker.update_state(kl_loss)
+        self.weighted_kl_loss_tracker.update_state(weighted_kl_loss)
         self.vc_loss_tracker.update_state(vc_loss)
         self.accuracy_tracker.update_state(y_flat, outputs["logits"])
 
@@ -484,6 +517,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "loss": self.total_loss_tracker.result(),
             "autoencoder_loss": self.autoencoder_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
+            "kl_loss": self.kl_loss_tracker.result(),
+            "weighted_kl_loss": self.weighted_kl_loss_tracker.result(),
             "vc_loss": self.vc_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
