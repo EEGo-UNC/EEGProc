@@ -200,7 +200,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "kernel_sizes": [5, 3],
         "pool_after_layers": [0],
         "pool_sizes": [2],
-        "use_batch_norm": [true],
+        "use_batch_norm": [false],
         "bilstm_units": [128],
         "bilstm_layers": [2],
         "bilstm_dropout": [0.2]

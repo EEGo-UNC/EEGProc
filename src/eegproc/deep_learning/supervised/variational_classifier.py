@@ -87,7 +87,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         # the log-likelihood scales with d (hundreds of dims), swamping the
         # class-prior term and producing near-identical extreme logits before
         # the priors have had time to learn anything useful.
-        return -0.5 * tf.reduce_sum(
+        return -0.5 * tf.reduce_mean(
             tf.math.log(2 * np.pi * sigma2) + diff**2 / sigma2,
             axis=-1,
         )
