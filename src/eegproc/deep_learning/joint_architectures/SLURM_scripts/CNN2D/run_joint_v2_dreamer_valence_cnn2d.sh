@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=joint_v2_dreamer_valence
-#SBATCH --output=joint_v2_dreamer_valence_%j.out
-#SBATCH --error=joint_v2_dreamer_valence_%j.err
+#SBATCH --job-name=joint_v2_dreamer_valence_cnn2d
+#SBATCH --output=joint_v2_dreamer_valence_cnn2d_%j.out
+#SBATCH --error=joint_v2_dreamer_valence_cnn2d_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:8
@@ -31,8 +31,18 @@ source "$VENV_DIR/bin/activate"
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+# Serialize environment updates so concurrent encoder/label jobs do not write
+# to the same virtual environment at the same time.
+if command -v flock >/dev/null 2>&1; then
+    (
+        flock -x 9
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt
+    ) 9>"$PROJECT_DIR/.venv312_install.lock"
+else
+    python -m pip install --upgrade pip
+    python -m pip install -r requirements.txt
+fi
 
 # Determine the CUDA toolkit root exposed by the Longleaf module.
 MODULE_CUDA_ROOT=""
@@ -83,7 +93,14 @@ LIBDEVICE_PATH="$(find_libdevice)"
 # CUDA NVCC support package only when the file is actually missing.
 if [[ -z "$LIBDEVICE_PATH" ]]; then
     echo "libdevice.10.bc was not found; installing nvidia-cuda-nvcc-cu12."
-    python -m pip install --upgrade nvidia-cuda-nvcc-cu12
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock -x 9
+            python -m pip install --upgrade nvidia-cuda-nvcc-cu12
+        ) 9>"$PROJECT_DIR/.venv312_install.lock"
+    else
+        python -m pip install --upgrade nvidia-cuda-nvcc-cu12
+    fi
     LIBDEVICE_PATH="$(find_libdevice)"
 fi
 
@@ -99,7 +116,6 @@ fi
 
 # XLA expects the directory that contains nvvm/, not nvvm/libdevice itself.
 CUDA_XLA_ROOT="${LIBDEVICE_PATH%/nvvm/libdevice/libdevice.10.bc}"
-
 export XLA_FLAGS="--xla_gpu_cuda_data_dir=${CUDA_XLA_ROOT}"
 
 # Preserve the module CUDA root for ordinary CUDA tools and libraries.
@@ -120,9 +136,9 @@ echo "XLA_FLAGS: $XLA_FLAGS"
 python --version
 nvidia-smi
 
-# Validate TensorFlow, GPU visibility, and the exact exp-gradient operation
-# that previously failed before starting the cross-validation run.
-python - <<'PY'
+# Validate TensorFlow, GPU visibility, and the exp-gradient operation that
+# previously exposed a missing-libdevice XLA failure.
+python - <<'TF_PY'
 import os
 import site
 import sys
@@ -170,37 +186,88 @@ with tf.device("/GPU:0"):
     gradient = tape.gradient(loss, x)
 
 print("GPU exp-gradient test:", gradient.numpy())
-PY
+TF_PY
 
+# Encoder-specific official LOSO grid run.
+# Monte Carlo prediction averages 10 posterior latent samples.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
     --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
     --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
     --label-dimension valence \
+    --encoder-type cnn2d \
+    --n-channels 14 \
+    --n-bands 1 \
+    --out-dir runs/joint_autoencoder_vc_v2/CNN2D \
+    --run-name joint_v2_dreamer_valence_cnn2d \
     --n-jobs 8 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric accuracy \
+    --prediction-latent-samples 10 \
+    --latent-sampling-seed 42 \
     --seed 42 \
     --hyperparameters-json '{
-        "epochs": [200, 400],
-        "batch_size": [64, 128],
-        "learning_rate": [0.0001],
-        "ae_loss_weight": [0.3],
-        "vc_loss_weight": [0.7],
-        "vae_beta": [1.0],
-        "emb_dim": [16, 32],
-        "dropout": [0.2],
-        "conv_filters": [
-            [16, 32],
-            [32, 64]
+    "epochs": [
+        200
+    ],
+    "batch_size": [
+        64
+    ],
+    "learning_rate": [
+        0.0001
+    ],
+    "ae_loss_weight": [
+        0.3
+    ],
+    "vc_loss_weight": [
+        0.7
+    ],
+    "vae_beta": [
+        1.0
+    ],
+    "t_down": [
+        2
+    ],
+    "emb_dim": [
+        16,
+        32
+    ],
+    "dropout": [
+        0.2
+    ],
+    "conv_filters": [
+        [
+            16,
+            32
         ],
-        "kernel_sizes": [5, 3],
-        "pool_after_layers": [0],
-        "pool_sizes": [2],
-        "use_batch_norm": [false, true],
-        "bilstm_units": [128, 256],
-        "bilstm_layers": [2],
-        "bilstm_dropout": [0.2, 0.4]
-    }'
+        [
+            32,
+            64
+        ]
+    ],
+    "kernel_sizes": [
+        3,
+        1
+    ],
+    "temporal_pool_sizes": [
+        2
+    ],
+    "activation": [
+        "relu"
+    ],
+    "use_batch_norm": [
+        false
+    ],
+    "bilstm_units": [
+        128,
+        256
+    ],
+    "bilstm_layers": [
+        2
+    ],
+    "bilstm_dropout": [
+        0.2
+    ]
+}'

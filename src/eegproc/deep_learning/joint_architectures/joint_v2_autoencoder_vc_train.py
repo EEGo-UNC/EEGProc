@@ -2,8 +2,9 @@
 
 This module keeps the v2 model file focused on architecture only. It provides
 ordinary leave-one-subject-out cross-validation, flat hyperparameter search
-across the complete joint CNN-VAE/BiLSTM model, DREAMER-backed data loading
-(see ``joint_v2_data.py``), structured logging, and final model saving.
+across the complete joint VAE/BiLSTM model, DREAMER-backed data loading
+(see ``joint_v2_data.py``), structured logging, and final model saving. The
+autoencoder can be selected with ``--encoder-type`` as CNN1D, CNN2D, or GCN.
 """
 
 from __future__ import annotations
@@ -49,6 +50,8 @@ try:
     from ..supervised.rnn_architectures import BiLSTMClassifier
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
+    from ..unsupervised.Convolutions.CNN2D import CNN2DDecoder, CNN2DEncoder
+    from ..unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
 except ImportError:
     SRC_ROOT = Path(__file__).resolve().parents[3]
     if str(SRC_ROOT) not in sys.path:
@@ -65,6 +68,14 @@ except ImportError:
         CNN1DDecoder,
         CNN1DEncoder,
     )
+    from eegproc.deep_learning.unsupervised.Convolutions.CNN2D import (
+        CNN2DDecoder,
+        CNN2DEncoder,
+    )
+    from eegproc.deep_learning.unsupervised.Convolutions.GCN import (
+        GCNDecoder,
+        GCNEncoder,
+    )
 
 
 @dataclass(slots=True)
@@ -73,6 +84,9 @@ class JointV2TrainingConfig:
 
     output_dir: Path = Path("runs") / "joint_autoencoder_vc_v2"
     run_name: str = "joint_autoencoder_vc_v2"
+    encoder_type: str = "cnn1d"
+    n_channels: int = 14
+    n_bands: int | None = None
     learning_rate: float = 1e-3
     batch_size: int = 32
     cv_max_epochs: int = 50
@@ -316,9 +330,31 @@ def _nonnegative_int_tuple(name: str, value) -> tuple[int, ...]:
     return normalized
 
 
-def _normalize_encoder_configuration(encoder_config: dict) -> dict:
-    """Validate and normalize one CNN encoder configuration from the grid."""
+def _normalize_common_encoder_configuration(encoder_config: dict) -> dict:
+    """Normalize settings shared by all supported encoder families."""
     config = dict(encoder_config)
+    config["t_down"] = int(config["t_down"])
+    config["emb_dim"] = int(config["emb_dim"])
+    config["dropout"] = float(config["dropout"])
+    config["use_batch_norm"] = bool(config["use_batch_norm"])
+    config["activation"] = str(config.get("activation", "relu"))
+
+    if config["t_down"] < 1:
+        raise ValueError(f"t_down must be >= 1, got {config['t_down']}.")
+    if config["emb_dim"] < 1:
+        raise ValueError(f"emb_dim must be >= 1, got {config['emb_dim']}.")
+    if not 0.0 <= config["dropout"] < 1.0:
+        raise ValueError(
+            f"Encoder dropout must be in [0, 1), got {config['dropout']}."
+        )
+
+    return config
+
+
+def _normalize_cnn1d_configuration(encoder_config: dict) -> dict:
+    """Validate and normalize one CNN1D encoder configuration."""
+    config = _normalize_common_encoder_configuration(encoder_config)
+    config.pop("activation", None)  # CNN1DEncoder currently owns its activations.
     config["conv_filters"] = _positive_int_tuple(
         "conv_filters", config["conv_filters"]
     )
@@ -329,16 +365,14 @@ def _normalize_encoder_configuration(encoder_config: dict) -> dict:
         "pool_after_layers", config["pool_after_layers"]
     )
     config["pool_sizes"] = _positive_int_tuple(
-        "pool_sizes",
-        config["pool_sizes"],
-        allow_empty=True,
+        "pool_sizes", config["pool_sizes"], allow_empty=True
     )
 
     n_conv_layers = len(config["conv_filters"])
     if len(config["kernel_sizes"]) != n_conv_layers:
         raise ValueError(
             "conv_filters and kernel_sizes must describe the same number of "
-            f"convolutional layers. Got {config['conv_filters']!r} and "
+            f"CNN1D layers. Got {config['conv_filters']!r} and "
             f"{config['kernel_sizes']!r}."
         )
     if len(config["pool_after_layers"]) != len(config["pool_sizes"]):
@@ -353,29 +387,222 @@ def _normalize_encoder_configuration(encoder_config: dict) -> dict:
         )
     if any(index >= n_conv_layers for index in config["pool_after_layers"]):
         raise ValueError(
-            "pool_after_layers contains an index outside the convolutional "
-            f"stack of length {n_conv_layers}: {config['pool_after_layers']!r}."
-        )
-
-    config["t_down"] = int(config["t_down"])
-    config["emb_dim"] = int(config["emb_dim"])
-    config["dropout"] = float(config["dropout"])
-    config["use_batch_norm"] = bool(config["use_batch_norm"])
-
-    if config["t_down"] < 1:
-        raise ValueError(f"t_down must be >= 1, got {config['t_down']}.")
-    if config["emb_dim"] < 1:
-        raise ValueError(f"emb_dim must be >= 1, got {config['emb_dim']}.")
-    if not 0.0 <= config["dropout"] < 1.0:
-        raise ValueError(
-            f"Encoder dropout must be in [0, 1), got {config['dropout']}."
+            "pool_after_layers contains an index outside the CNN1D stack of "
+            f"length {n_conv_layers}: {config['pool_after_layers']!r}."
         )
 
     return config
 
+
+def _normalize_2d_kernel_sizes(value, n_layers: int) -> tuple[tuple[int, int], ...]:
+    """Normalize one 2D kernel pair or one pair per Conv2D layer."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"kernel_sizes must be a list or tuple, got {value!r}.")
+
+    if len(value) == 2 and all(isinstance(item, (int, np.integer)) for item in value):
+        pair = tuple(int(item) for item in value)
+        if any(item < 1 for item in pair):
+            raise ValueError(f"2D kernel dimensions must be >= 1, got {pair!r}.")
+        return tuple(pair for _ in range(n_layers))
+
+    kernels: list[tuple[int, int]] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError(
+                "Each CNN2D kernel must contain exactly two integers. "
+                f"Got {item!r} in {value!r}."
+            )
+        pair = tuple(int(dimension) for dimension in item)
+        if any(dimension < 1 for dimension in pair):
+            raise ValueError(f"2D kernel dimensions must be >= 1, got {pair!r}.")
+        kernels.append(pair)
+
+    if len(kernels) != n_layers:
+        raise ValueError(
+            f"CNN2D kernel_sizes must contain one pair or {n_layers} pairs; "
+            f"got {len(kernels)} pairs."
+        )
+    return tuple(kernels)
+
+
+def _validate_temporal_pooling(config: dict) -> dict:
+    """Validate temporal pooling shared by CNN2D and GCN encoders."""
+    config["temporal_pool_sizes"] = _positive_int_tuple(
+        "temporal_pool_sizes", config["temporal_pool_sizes"], allow_empty=True
+    )
+    effective_t_down = int(np.prod(config["temporal_pool_sizes"], dtype=np.int64))
+    if effective_t_down != config["t_down"]:
+        raise ValueError(
+            f"t_down={config['t_down']}, but temporal_pool_sizes="
+            f"{config['temporal_pool_sizes']!r} produces {effective_t_down}."
+        )
+    return config
+
+
+def _normalize_cnn2d_configuration(encoder_config: dict) -> dict:
+    """Validate and normalize one CNN2D encoder configuration."""
+    config = _normalize_common_encoder_configuration(encoder_config)
+    config["n_channels"] = int(config["n_channels"])
+    config["n_bands"] = int(config["n_bands"])
+    config["conv_filters"] = _positive_int_tuple(
+        "conv_filters", config["conv_filters"]
+    )
+    config["kernel_sizes"] = _normalize_2d_kernel_sizes(
+        config["kernel_sizes"], len(config["conv_filters"])
+    )
+    if config["n_channels"] < 1 or config["n_bands"] < 1:
+        raise ValueError(
+            "n_channels and n_bands must both be positive; got "
+            f"{config['n_channels']} and {config['n_bands']}."
+        )
+    return _validate_temporal_pooling(config)
+
+
+def _normalize_gcn_configuration(encoder_config: dict) -> dict:
+    """Validate and normalize one GCN encoder configuration."""
+    config = _normalize_common_encoder_configuration(encoder_config)
+    config["n_channels"] = int(config["n_channels"])
+    config["n_bands"] = int(config["n_bands"])
+    config["gcn_units"] = _positive_int_tuple("gcn_units", config["gcn_units"])
+    if config["n_channels"] < 1 or config["n_bands"] < 1:
+        raise ValueError(
+            "n_channels and n_bands must both be positive; got "
+            f"{config['n_channels']} and {config['n_bands']}."
+        )
+    return _validate_temporal_pooling(config)
+
+
+def _resolve_channel_band_shape(
+    n_features: int,
+    n_channels: int,
+    n_bands: int | None,
+) -> tuple[int, int]:
+    """Resolve the flattened feature dimension into channels x bands."""
+    n_features = int(n_features)
+    n_channels = int(n_channels)
+    if n_features < 1 or n_channels < 1:
+        raise ValueError(
+            f"n_features and n_channels must be positive; got {n_features}, "
+            f"{n_channels}."
+        )
+
+    if n_bands is None:
+        if n_features % n_channels != 0:
+            raise ValueError(
+                f"Cannot infer n_bands: input has {n_features} features, which "
+                f"is not divisible by n_channels={n_channels}. Pass --n-bands "
+                "and --n-channels explicitly or reshape the input."
+            )
+        n_bands = n_features // n_channels
+    else:
+        n_bands = int(n_bands)
+
+    if n_bands < 1 or n_channels * n_bands != n_features:
+        raise ValueError(
+            "CNN2D/GCN input must satisfy n_features = n_channels * n_bands. "
+            f"Got {n_features} != {n_channels} * {n_bands}."
+        )
+    return n_channels, n_bands
+
+
+
+def _build_encoder_decoder(
+    encoder_type: str,
+    timesteps: int,
+    n_features: int,
+    n_channels: int,
+    n_bands: int | None,
+    encoder_kwargs: dict | None,
+    decoder_kwargs: dict | None,
+) -> tuple[tf.keras.Model, tf.keras.Model]:
+    """Build a matched encoder-decoder pair for the selected architecture."""
+    encoder_type = encoder_type.lower()
+    supplied = dict(encoder_kwargs or {})
+    decoder_kwargs = dict(decoder_kwargs or {})
+
+    if encoder_type == "cnn1d":
+        defaults = {
+            "timesteps": timesteps,
+            "n_features": n_features,
+            "t_down": 2,
+            "conv_filters": (16, 32),
+            "kernel_sizes": (5, 3),
+            "pool_after_layers": (0,),
+            "pool_sizes": (2,),
+            "emb_dim": 16,
+            "dropout": 0.1,
+            "use_batch_norm": False,
+            "activation": "relu",
+        }
+        defaults.update(supplied)
+        encoder = CNN1DEncoder(**_normalize_cnn1d_configuration(defaults))
+        decoder = CNN1DDecoder.from_encoder(encoder, **decoder_kwargs)
+        return encoder, decoder
+
+    unsupported_decoder_keys = set(decoder_kwargs) - {"name"}
+    if unsupported_decoder_keys:
+        raise ValueError(
+            "CNN2D/GCN decoder_kwargs supports only an optional model name; got "
+            f"{sorted(unsupported_decoder_keys)}."
+        )
+
+    requested_channels = int(supplied.get("n_channels", n_channels))
+    requested_bands = supplied.get("n_bands", n_bands)
+    resolved_channels, resolved_bands = _resolve_channel_band_shape(
+        n_features=n_features,
+        n_channels=requested_channels,
+        n_bands=requested_bands,
+    )
+
+    if encoder_type == "cnn2d":
+        band_kernel = min(3, resolved_bands)
+        defaults = {
+            "timesteps": timesteps,
+            "t_down": 2,
+            "n_channels": resolved_channels,
+            "n_bands": resolved_bands,
+            "conv_filters": (16, 32),
+            "kernel_sizes": ((3, band_kernel), (3, band_kernel)),
+            "temporal_pool_sizes": (2,),
+            "emb_dim": 16,
+            "dropout": 0.1,
+            "activation": "relu",
+            "use_batch_norm": False,
+        }
+        defaults.update(supplied)
+        encoder = CNN2DEncoder(**_normalize_cnn2d_configuration(defaults))
+        decoder = CNN2DDecoder.from_encoder(encoder, **decoder_kwargs)
+        return encoder, decoder
+
+    if encoder_type == "gcn":
+        defaults = {
+            "timesteps": timesteps,
+            "t_down": 2,
+            "n_channels": resolved_channels,
+            "n_bands": resolved_bands,
+            "gcn_units": (16, 32),
+            "temporal_pool_sizes": (2,),
+            "emb_dim": 16,
+            "dropout": 0.1,
+            "activation": "relu",
+            "use_batch_norm": False,
+        }
+        defaults.update(supplied)
+        encoder = GCNEncoder(**_normalize_gcn_configuration(defaults))
+        decoder = GCNDecoder.from_encoder(encoder, **decoder_kwargs)
+        return encoder, decoder
+
+    raise ValueError(
+        f"Unknown encoder_type={encoder_type!r}; expected cnn1d, cnn2d, or gcn."
+    )
+
+
 def build_joint_autoencoder_variational_classifier_v2(
     input_shape: tuple[int, int],
     n_classes: int = 2,
+    encoder_type: str = "cnn1d",
+    n_channels: int = 14,
+    n_bands: int | None = None,
     learning_rate: float = 1e-3,
     ae_loss_weight: float = 0.5,
     vc_loss_weight: float = 0.5,
@@ -392,52 +619,31 @@ def build_joint_autoencoder_variational_classifier_v2(
     encoder_kwargs: dict | None = None,
     decoder_kwargs: dict | None = None,
     classifier_kwargs: dict | None = None,
-    model_name: str = "joint_autoencoder_variational_classifier_v2",
+    model_name: str | None = None,
 ) -> JointAutoencoderVariationalClassifierV2:
-    """Build and compile the CNN-VAE + BiLSTM + VC model.
+    """Build and compile a CNN1D/CNN2D/GCN VAE + BiLSTM + VC model."""
+    timesteps, n_features = map(int, input_shape)
+    encoder_type = encoder_type.lower()
 
-    The CNN output is projected to learned ``z_mean`` and ``z_log_var``
-    sequences inside ``JointAutoencoderVariationalClassifierV2``. Training
-    uses reparameterized samples; evaluation uses the posterior mean.
-
-    Encoder settings supplied through ``encoder_kwargs`` and the BiLSTM
-    settings are all rebuilt for every grid configuration. This allows flat
-    LOSO search over convolution filters, kernels, pooling, embedding width,
-    encoder dropout, VAE beta, loss weights, and recurrent settings together.
-    """
-    timesteps, n_features = input_shape
-
-    encoder_defaults = {
-        "timesteps": timesteps,
-        "n_features": n_features,
-        "t_down": 2,
-        "conv_filters": (16, 32),
-        "kernel_sizes": (5, 3),
-        "pool_after_layers": (0,),
-        "pool_sizes": (2,),
-        "emb_dim": 16,
-        "dropout": 0.1,
-        "use_batch_norm": False,
-    }
-    if encoder_kwargs:
-        encoder_defaults.update(encoder_kwargs)
-    encoder_defaults = _normalize_encoder_configuration(encoder_defaults)
+    encoder, decoder = _build_encoder_decoder(
+        encoder_type=encoder_type,
+        timesteps=timesteps,
+        n_features=n_features,
+        n_channels=n_channels,
+        n_bands=n_bands,
+        encoder_kwargs=encoder_kwargs,
+        decoder_kwargs=decoder_kwargs,
+    )
 
     classifier_defaults = {"n_classes": n_classes}
     if classifier_kwargs:
         classifier_defaults.update(classifier_kwargs)
 
-    encoder = CNN1DEncoder(**encoder_defaults)
-
-    # Build the encoder once so the recurrent input dimensions are known.
-    dummy_input = tf.zeros(
-        shape=(1, timesteps, n_features),
-        dtype=tf.float32,
-    )
+    dummy_input = tf.zeros((1, timesteps, n_features), dtype=tf.float32)
     latent_sequence = encoder(dummy_input, training=False)
     if latent_sequence.shape.rank != 3:
         raise ValueError(
-            "CNN1DEncoder must return a rank-3 sequence shaped "
+            f"{type(encoder).__name__} must return a rank-3 sequence shaped "
             "(batch, latent_timesteps, latent_features); got "
             f"{latent_sequence.shape}."
         )
@@ -446,20 +652,15 @@ def build_joint_autoencoder_variational_classifier_v2(
     latent_features = latent_sequence.shape[2]
     if latent_timesteps is None or latent_features is None:
         raise ValueError(
-            "The CNN encoder must expose static latent timestep and feature "
-            "dimensions so the BiLSTM feature extractor can be built."
+            "The encoder must expose static latent timestep and feature "
+            "dimensions so the BiLSTM can be built."
         )
-
-    decoder = CNN1DDecoder.from_encoder(
-        encoder,
-        **(decoder_kwargs or {}),
-    )
 
     recurrent_defaults = {
         "lstm_units": int(bilstm_units),
         "n_bilstm_layers": int(n_bilstm_layers),
         "dropout": float(bilstm_dropout),
-        "name": "joint_bilstm",
+        "name": f"joint_{encoder_type}_bilstm",
     }
     if bilstm_kwargs:
         reserved = {"timesteps", "n_features", "n_classes"}
@@ -479,7 +680,6 @@ def build_joint_autoencoder_variational_classifier_v2(
     ).build_feature_extractor()
 
     variational_classifier = VariationalClassifier(**classifier_defaults)
-
     model = JointAutoencoderVariationalClassifierV2(
         encoder=encoder,
         decoder=decoder,
@@ -494,12 +694,10 @@ def build_joint_autoencoder_variational_classifier_v2(
         vc_gamma=vc_gamma,
         vc_lambda=vc_lambda,
         update_discriminator=update_discriminator,
-        name=model_name,
+        name=model_name or f"joint_{encoder_type}_vae_bilstm_vc_v2",
     )
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(
-            learning_rate=learning_rate,
-        )
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate)
     )
     return model
 
@@ -519,8 +717,17 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     training_config = training_config or JointV2TrainingConfig()
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    encoder_type = training_config.encoder_type.lower()
+    if encoder_type not in {"cnn1d", "cnn2d", "gcn"}:
+        raise ValueError(
+            f"Unknown encoder_type={training_config.encoder_type!r}; expected "
+            "cnn1d, cnn2d, or gcn."
+        )
+    run_name = training_config.run_name
+    if not run_name.lower().endswith(f"_{encoder_type}"):
+        run_name = f"{run_name}_{encoder_type}"
     run_dir = _ensure_path(
-        training_config.output_dir / f"{training_config.run_name}_{run_timestamp}"
+        training_config.output_dir / f"{run_name}_{run_timestamp}"
     )
     logger = _configure_run_logger(run_dir)
 
@@ -551,6 +758,15 @@ def train_joint_autoencoder_variational_classifier_v2(
             f"feature_array must have shape (n_windows, timesteps, n_features); got {feature_array.shape}."
         )
 
+    if encoder_type in {"cnn2d", "gcn"}:
+        resolved_channels, resolved_bands = _resolve_channel_band_shape(
+            n_features=feature_array.shape[2],
+            n_channels=training_config.n_channels,
+            n_bands=training_config.n_bands,
+        )
+        training_config.n_channels = resolved_channels
+        training_config.n_bands = resolved_bands
+
     input_lengths = (
         len(feature_array),
         len(label_array),
@@ -564,16 +780,34 @@ def train_joint_autoencoder_variational_classifier_v2(
         )
 
     if model_builder_function is None:
-        encoder_hparam_keys = {
+        common_encoder_hparam_keys = {
             "t_down",
-            "conv_filters",
-            "kernel_sizes",
-            "pool_after_layers",
-            "pool_sizes",
             "emb_dim",
             "dropout",
             "use_batch_norm",
         }
+        architecture_hparam_keys = {
+            "cnn1d": {
+                "conv_filters",
+                "kernel_sizes",
+                "pool_after_layers",
+                "pool_sizes",
+            },
+            "cnn2d": {
+                "activation",
+                "conv_filters",
+                "kernel_sizes",
+                "temporal_pool_sizes",
+            },
+            "gcn": {
+                "activation",
+                "gcn_units",
+                "temporal_pool_sizes",
+            },
+        }
+        encoder_hparam_keys = (
+            common_encoder_hparam_keys | architecture_hparam_keys[encoder_type]
+        )
         bilstm_hparam_keys = {
             "bilstm_units",
             "bilstm_layers",
@@ -601,7 +835,8 @@ def train_joint_autoencoder_variational_classifier_v2(
             unknown_hparams = set(hparams) - model_hparam_keys
             if unknown_hparams:
                 raise ValueError(
-                    f"Unknown hyperparameter(s): {sorted(unknown_hparams)}"
+                    f"Unknown {encoder_type} hyperparameter(s): "
+                    f"{sorted(unknown_hparams)}"
                 )
 
             bilstm_kwargs = dict(training_config.bilstm_kwargs)
@@ -622,6 +857,9 @@ def train_joint_autoencoder_variational_classifier_v2(
             return build_joint_autoencoder_variational_classifier_v2(
                 input_shape=tuple(feature_array.shape[1:]),
                 n_classes=int(np.max(label_array)) + 1,
+                encoder_type=encoder_type,
+                n_channels=training_config.n_channels,
+                n_bands=training_config.n_bands,
                 learning_rate=float(
                     hparams.get("learning_rate", training_config.learning_rate)
                 ),
@@ -677,16 +915,10 @@ def train_joint_autoencoder_variational_classifier_v2(
                     hparams.get("bilstm_units", training_config.bilstm_units)
                 ),
                 n_bilstm_layers=int(
-                    hparams.get(
-                        "bilstm_layers",
-                        training_config.n_bilstm_layers,
-                    )
+                    hparams.get("bilstm_layers", training_config.n_bilstm_layers)
                 ),
                 bilstm_dropout=float(
-                    hparams.get(
-                        "bilstm_dropout",
-                        training_config.bilstm_dropout,
-                    )
+                    hparams.get("bilstm_dropout", training_config.bilstm_dropout)
                 ),
                 bilstm_kwargs=bilstm_kwargs,
                 encoder_kwargs=encoder_kwargs,
@@ -695,7 +927,20 @@ def train_joint_autoencoder_variational_classifier_v2(
             )
 
     logger.info("Starting joint-model v2 training run in %s", run_dir)
+    logger.info("Encoder type: %s", encoder_type)
     logger.info("Feature shape: %s", feature_array.shape)
+    if encoder_type in {"cnn2d", "gcn"}:
+        logger.info(
+            "Channel-band grid: %d channels x %d bands",
+            training_config.n_channels,
+            training_config.n_bands,
+        )
+        if encoder_type == "cnn2d" and training_config.n_bands == 1:
+            logger.warning(
+                "CNN2D is running on a channels x 1 raw-signal grid. This is "
+                "valid, but a channels x frequency-bands representation gives "
+                "the second spatial dimension more meaning."
+            )
     logger.info("Unique subjects: %d", len(np.unique(subject_id_array)))
     logger.info(
         "Unique subject/trial pairs: %d",
@@ -811,6 +1056,9 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     final_summary = {
         "run_dir": str(run_dir),
+        "encoder_type": encoder_type,
+        "n_channels": training_config.n_channels,
+        "n_bands": training_config.n_bands,
         "selected_final_config": selected_final_config,
         "selected_final_epochs": selected_final_epochs,
         "selected_final_batch_size": selected_final_batch_size,
@@ -829,12 +1077,36 @@ def train_joint_autoencoder_variational_classifier_v2(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train JointAutoencoderVariationalClassifierV2 with flat LOSO "
-            "hyperparameter search over the CNN-VAE and classifier."
+            "Train JointAutoencoderVariationalClassifierV2 with a CNN1D, "
+            "CNN2D, or GCN autoencoder and flat LOSO hyperparameter search."
         )
     )
     parser.add_argument("--out-dir", default="runs/joint_autoencoder_vc_v2")
     parser.add_argument("--run-name", default="joint_autoencoder_vc_v2")
+    parser.add_argument(
+        "--encoder-type",
+        choices=("cnn1d", "cnn2d", "gcn"),
+        default="cnn1d",
+        help="Autoencoder family to use for this complete run (default: cnn1d).",
+    )
+    parser.add_argument(
+        "--n-channels",
+        type=int,
+        default=14,
+        help=(
+            "Number of electrode channels for CNN2D/GCN reshaping "
+            "(default: 14)."
+        ),
+    )
+    parser.add_argument(
+        "--n-bands",
+        type=int,
+        default=None,
+        help=(
+            "Features per channel for CNN2D/GCN. If omitted, infer as "
+            "input_features / n_channels; raw DREAMER therefore becomes 14x1."
+        ),
+    )
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
@@ -929,13 +1201,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hyperparameters-json",
         default=None,
         help=(
-            "Cartesian hyperparameter grid passed to cross_val.loso_cv. Scalar "
-            "settings use candidate lists. Sequence-valued encoder settings use "
-            "a flat list for one architecture or a nested list for multiple "
-            "architectures. Example: "
-            '{"epochs":[300],"vae_beta":[0.1,1.0],'
-            '"conv_filters":[[16,32],[32,64]],"kernel_sizes":[5,3],'
-            '"emb_dim":[8,16],"bilstm_units":[128]}.'
+            "Cartesian grid passed to cross_val.loso_cv. Use only keys valid "
+            "for the selected --encoder-type. CNN1D uses conv_filters, "
+            "kernel_sizes, pool_after_layers, and pool_sizes; CNN2D uses "
+            "conv_filters, 2D kernel_sizes, and temporal_pool_sizes; GCN uses "
+            "gcn_units and temporal_pool_sizes. Common keys include t_down, "
+            "emb_dim, dropout, use_batch_norm, and the BiLSTM/loss settings."
         ),
     )
     parser.add_argument("--features-npy", default=None)
@@ -1039,10 +1310,17 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--hyperparameters-json must decode to a JSON object.")
     if args.prediction_latent_samples < 0:
         raise ValueError("--prediction-latent-samples must be >= 0.")
+    if args.n_channels < 1:
+        raise ValueError("--n-channels must be >= 1.")
+    if args.n_bands is not None and args.n_bands < 1:
+        raise ValueError("--n-bands must be >= 1 when supplied.")
 
     config = JointV2TrainingConfig(
         output_dir=Path(args.out_dir),
         run_name=args.run_name,
+        encoder_type=args.encoder_type,
+        n_channels=args.n_channels,
+        n_bands=args.n_bands,
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
         cv_max_epochs=args.epochs,

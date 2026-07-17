@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 from ..BaseEncoder import BaseEncoder
-from .GraphConv import GraphConv
+from ..GraphConv import GraphConv
 from ..utils import _product
 
 
@@ -20,7 +20,7 @@ class GCNEncoder(BaseEncoder):
     For example, ``gcn_units=(32, 64)`` creates two graph-convolution layers,
     while ``gcn_units=(32, 64, 128)`` creates three.
 
-    Each ``GraphConv`` layer learns its own adjacency matrix, allowing the
+    Each ``GCN`` layer learns its own adjacency matrix, allowing the
     encoder to discover functional relationships among EEG channels. After
     graph feature extraction, the node dimension is pooled by averaging across
     channels. Temporal downsampling is then controlled by
@@ -39,7 +39,7 @@ class GCNEncoder(BaseEncoder):
     n_bands : int, default=6
         Number of frequency-band features per EEG channel.
     gcn_units : tuple[int, ...], default=(32, 64)
-        Output dimensionality of each successive ``GraphConv`` layer. The
+        Output dimensionality of each successive ``GCN`` layer. The
         length of this tuple determines the number of graph-convolution layers.
     temporal_pool_sizes : tuple[int, ...], default=(2, 2)
         Temporal pooling operations applied after graph node pooling. For
@@ -50,7 +50,7 @@ class GCNEncoder(BaseEncoder):
         Dropout rate applied after each graph-convolution block and after each
         temporal pooling layer.
     activation : str, default="relu"
-        Activation function used inside each ``GraphConv`` layer.
+        Activation function used inside each ``GCN`` layer.
     use_batch_norm : bool, default=True
         Whether to apply batch normalization after each graph-convolution
         layer.
@@ -73,7 +73,7 @@ class GCNEncoder(BaseEncoder):
 
     ``encoder.gcn_layers[i].layer.A_theta``
 
-    because each ``GraphConv`` layer is wrapped inside ``TimeDistributed``.
+    because each ``GCN`` layer is wrapped inside ``TimeDistributed``.
     """
 
     def __init__(
