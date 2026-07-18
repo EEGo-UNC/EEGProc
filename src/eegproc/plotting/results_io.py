@@ -72,14 +72,43 @@ def class_probability_columns(df: pd.DataFrame) -> list[str]:
 
 def _normalize_models(raw: dict) -> dict[str, dict]:
     """Return a ``{model_name: result_dict}`` mapping for either JSON shape."""
+    if not isinstance(raw, dict):
+        return {}
+
     if _RESULT_KEYS & raw.keys():
         return {"model": raw}
+
+    if "loso_cv" in raw and isinstance(raw.get("loso_cv"), dict):
+        training_summary = dict(raw)
+        loso_cv = dict(raw["loso_cv"])
+        loso_cv.setdefault("selected_final_config", raw.get("selected_final_config"))
+        loso_cv.setdefault("selected_final_epochs", raw.get("selected_final_epochs"))
+        loso_cv.setdefault("selected_final_batch_size", raw.get("selected_final_batch_size"))
+        loso_cv.setdefault("final_full_dataset_metrics", raw.get("final_full_dataset_metrics"))
+        loso_cv.setdefault("run_dir", raw.get("run_dir"))
+        loso_cv.setdefault("encoder_type", raw.get("encoder_type"))
+        loso_cv.setdefault("n_channels", raw.get("n_channels"))
+        loso_cv.setdefault("n_bands", raw.get("n_bands"))
+        loso_cv.setdefault("training_summary", training_summary)
+        return {"model": loso_cv}
+
     return {name: result for name, result in raw.items() if isinstance(result, dict)}
+
+
+def _normalize_value(value):
+    """Convert nested containers to JSON-safe scalars for pandas plotting tables."""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True)
+    return value
 
 
 def _rows_to_frame(rows: list[dict], model: str) -> pd.DataFrame:
     """Build a DataFrame from a list of log rows, prepending a ``model`` column."""
-    frame = pd.DataFrame(rows)
+    if not rows:
+        return pd.DataFrame()
+
+    normalized_rows = [{k: _normalize_value(v) for k, v in row.items()} for row in rows]
+    frame = pd.DataFrame(normalized_rows)
     frame.insert(0, "model", model)
     return frame
 
@@ -95,11 +124,29 @@ def _flatten_configs(records: list[dict], model: str, config_key: str) -> pd.Dat
     for record in records:
         config = record.get(config_key, {}) or {}
         row = {"model": model}
-        row.update({k: v for k, v in record.items() if k != config_key})
-        row.update(config)
+        row.update({k: _normalize_value(v) for k, v in record.items() if k != config_key})
+        row.update({k: _normalize_value(v) for k, v in config.items()})
         flat_rows.append(row)
 
     return pd.DataFrame(flat_rows)
+
+
+def _flatten_config_results(result: dict, model: str) -> pd.DataFrame:
+    """Flatten ``config_results`` from the flat LOSO JSON into sweepable rows."""
+    rows: list[dict] = []
+
+    for item in result.get("config_results", []) or []:
+        config = item.get("config", {}) or {}
+        row = {"model": model, "config_index": item.get("config_index")}
+        row.update({k: _normalize_value(v) for k, v in item.items() if k not in {"config", "config_index"}})
+
+        metrics = item.get("mean_scores") or item.get("trial_mean_scores") or item.get("window_mean_scores") or {}
+        row.update({k: _normalize_value(v) for k, v in metrics.items()})
+        row.update({k: _normalize_value(v) for k, v in config.items()})
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
 
 
 def _inner_cv_frame(result: dict, model: str) -> pd.DataFrame:
@@ -112,6 +159,10 @@ def _inner_cv_frame(result: dict, model: str) -> pd.DataFrame:
     """
     rows: list[dict] = []
 
+    config_results = _flatten_config_results(result, model)
+    if not config_results.empty:
+        return config_results
+
     for outer in result.get("inner_cv_results", []):
         outer_fold = outer.get("outer_fold")
         for config_scores in outer.get("inner_mean_scores", []):
@@ -119,12 +170,12 @@ def _inner_cv_frame(result: dict, model: str) -> pd.DataFrame:
             row = {"model": model, "outer_fold": outer_fold}
             row.update(
                 {
-                    k: v
+                    k: _normalize_value(v)
                     for k, v in config_scores.items()
                     if k != "config"
                 }
             )
-            row.update(config)
+            row.update({k: _normalize_value(v) for k, v in config.items()})
             rows.append(row)
 
     return pd.DataFrame(rows)
@@ -132,8 +183,15 @@ def _inner_cv_frame(result: dict, model: str) -> pd.DataFrame:
 
 def _summary_frame(result: dict, model: str) -> pd.DataFrame:
     """Combine ``mean_scores`` / ``std_scores`` into a long mean±std table."""
-    mean_scores = result.get("mean_scores", {}) or {}
-    std_scores = result.get("std_scores", {}) or {}
+    if result.get("mean_scores"):
+        mean_scores = result.get("mean_scores", {}) or {}
+        std_scores = result.get("std_scores", {}) or {}
+    elif result.get("final_full_dataset_metrics"):
+        mean_scores = result.get("final_full_dataset_metrics", {}) or {}
+        std_scores = {}
+    else:
+        mean_scores = result.get("trial_mean_scores") or result.get("window_mean_scores") or {}
+        std_scores = result.get("trial_std_scores") or result.get("window_std_scores") or {}
 
     rows = [
         {
