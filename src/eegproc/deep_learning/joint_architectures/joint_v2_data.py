@@ -98,6 +98,11 @@ class DatasetConfig:
         Threshold used for the median split in ``binarize_labels``. Scores
         ``>= median_label`` map to class 1 ("high"); scores ``< median_label``
         map to class 0 ("low").
+    label_mode : {"median_split", "identity"}
+        How to turn the stored labels into training targets. ``median_split``
+        applies ``binarize_labels`` to one label dimension. ``identity`` keeps
+        the stored label vectors unchanged, which is what the EEGEmotions 27-way
+        emotion labels need.
     eeg_path, labels_path : Path
         Default locations of this dataset's pre-converted ``*_eeg.npy`` /
         ``*_labels.npy`` arrays.
@@ -109,6 +114,7 @@ class DatasetConfig:
     median_label: float
     eeg_path: Path
     labels_path: Path
+    label_mode: Literal["median_split", "identity"] = "median_split"
 
 
 DREAMER_CONFIG = DatasetConfig(
@@ -140,9 +146,23 @@ AMIGOS_CONFIG = DatasetConfig(
     labels_path=_DEFAULT_DATA_DIR / "amigos_labels.npy",
 )
 
+EEGEMOTIONS_27_CONFIG = DatasetConfig(
+    name="eegemotions_27",
+    fs=128,
+    # EEGEmotions can be used either as 27-way one-hot labels or via the
+    # Cowen valence/arousal projection. This config preserves the raw 27-way
+    # label vectors produced by prepare_datasets.py.
+    label_dims={},
+    median_label=0,
+    label_mode="identity",
+    eeg_path=_DEFAULT_DATA_DIR / "eegemotions_eeg.npy",
+    labels_path=_DEFAULT_DATA_DIR / "eegemotions_labels.npy",
+)
+
 _DATASET_REGISTRY: dict[str, DatasetConfig] = {
     DREAMER_CONFIG.name: DREAMER_CONFIG,
     AMIGOS_CONFIG.name: AMIGOS_CONFIG,
+    EEGEMOTIONS_27_CONFIG.name: EEGEMOTIONS_27_CONFIG,
 }
 
 
@@ -481,8 +501,8 @@ def build_dataset(
         (see ``load_raw_eeg_and_labels``). Default to ``dataset``'s
         configured paths if not given.
     label_dimension : str, default="valence"
-        Which label dimension to classify (must be a key in the resolved
-        dataset's ``label_dims``, e.g. ``"valence"`` or ``"arousal"``).
+        Which label dimension to classify when ``dataset.label_mode`` is
+        ``"median_split"``. Ignored for ``"identity"`` datasets.
     window_size_sec : float, default=4.0
         Window length in seconds. With ``fs=128`` this gives 512-sample
         windows, matching STSNet's DREAMER config (15 windows per 60 s
@@ -505,7 +525,7 @@ def build_dataset(
     Returns
     -------
     feature_array : np.ndarray, shape (n_windows_total, timesteps, n_channels)
-    label_array : np.ndarray, shape (n_windows_total,)
+    label_array : np.ndarray, shape (n_windows_total,) or (n_windows_total, n_classes)
     subject_id_array : np.ndarray, shape (n_windows_total,)
 
     Raises
@@ -521,9 +541,12 @@ def build_dataset(
     fs = fs if fs is not None else config.fs
 
     eeg, raw_labels = load_raw_eeg_and_labels(eeg_path, labels_path)
-    trial_labels = binarize_labels(
-        raw_labels, label_dimension, dataset=config, median=median_label
-    )
+    if config.label_mode == "identity":
+        trial_labels = raw_labels.astype(np.float32)
+    else:
+        trial_labels = binarize_labels(
+            raw_labels, label_dimension, dataset=config, median=median_label
+        )
 
     window_size = int(round(window_size_sec * fs))
     n_subjects, n_trials = eeg.shape[0], eeg.shape[1]
@@ -544,15 +567,22 @@ def build_dataset(
                 overlap=overlap,
             )
             n_windows_this_trial = trial_windows.shape[0]
+            trial_label = trial_labels[subject_idx, trial_idx]
 
             feature_chunks.append(trial_windows)
-            label_chunks.append(
-                np.full(
-                    n_windows_this_trial,
-                    trial_labels[subject_idx, trial_idx],
-                    dtype=np.int32,
+            if np.ndim(trial_label) == 0:
+                label_chunks.append(
+                    np.full(
+                        n_windows_this_trial,
+                        trial_label,
+                        dtype=np.int32,
+                    )
                 )
-            )
+            else:
+                label_vector = np.asarray(trial_label, dtype=np.float32)
+                label_chunks.append(
+                    np.repeat(label_vector[None, :], n_windows_this_trial, axis=0)
+                )
             subject_chunks.append(
                 np.full(n_windows_this_trial, subject_idx, dtype=np.int64)
             )
@@ -573,6 +603,7 @@ def build_joint_v2_dataset(
     overlap: float = 0.0,
     median_label: float = DREAMER_MEDIAN_LABEL,
     zscore: bool = True,
+    dataset: str | DatasetConfig = DREAMER_CONFIG,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Deprecated DREAMER-only alias for ``build_dataset``.
 
@@ -583,7 +614,7 @@ def build_joint_v2_dataset(
     going forward.
     """
     return build_dataset(
-        dataset=DREAMER_CONFIG,
+        dataset=dataset,
         eeg_path=eeg_path,
         labels_path=labels_path,
         label_dimension=label_dimension,
