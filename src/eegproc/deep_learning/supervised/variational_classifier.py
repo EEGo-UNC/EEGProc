@@ -208,7 +208,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
                 #   ||
                 #   N(mu_p, diag(var_p))
                 # )
-                kl_c = 0.5 * tf.reduce_sum(
+                kl_c = 0.5 * tf.reduce_mean(
                     tf.math.log(var_p)
                     - tf.math.log(var_q)
                     + (var_q + tf.square(mu_q - mu_p)) / var_p
@@ -292,7 +292,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         T_true_class = tf.reduce_sum(y_onehot * T_vals, axis=1)
         kl_disc = gamma * tf.reduce_mean(tf.nn.relu(T_true_class))
 
-        # Term 2b: gamma * E_{p(y)}[
+        # Term 2b: beta * E_{p(y)}[
         #     KL(q_phi(z | y) || p_theta(z | y))
         # ]
         latent_posterior_kl = self._gaussian_kl_latent_posterior(

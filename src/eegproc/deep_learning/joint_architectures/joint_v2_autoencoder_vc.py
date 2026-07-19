@@ -157,16 +157,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.update_discriminator = bool(update_discriminator)
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
-        self.autoencoder_loss_tracker = tf.keras.metrics.Mean(
-            name="autoencoder_loss"
-        )
+        self.autoencoder_loss_tracker = tf.keras.metrics.Mean(name="autoencoder_loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
         )
         self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
-        self.weighted_kl_loss_tracker = tf.keras.metrics.Mean(
-            name="weighted_kl_loss"
-        )
+        self.weighted_kl_loss_tracker = tf.keras.metrics.Mean(name="weighted_kl_loss")
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
         self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
             name="accuracy"
@@ -238,9 +234,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             )
 
         return (
-            self._reparameterize(z_mean, z_log_var)
-            if bool(sample_latent)
-            else z_mean
+            self._reparameterize(z_mean, z_log_var) if bool(sample_latent) else z_mean
         )
 
     def _posterior_parameters(
@@ -455,13 +449,11 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         # Track the unweighted Gaussian KL explicitly so VAE-beta and encoder
         # architecture searches can be diagnosed independently of the weighted
         # total autoencoder loss. This does not alter the optimized objective.
-        kl_per_sample = -0.5 * tf.reduce_sum(
-            1.0
-            + z_log_var_flat
-            - tf.square(z_mean_flat)
-            - tf.exp(z_log_var_flat),
+        kl_per_sample = -0.5 * tf.reduce_mean(
+            1.0 + z_log_var_flat - tf.square(z_mean_flat) - tf.exp(z_log_var_flat),
             axis=1,
         )
+
         kl_loss = tf.reduce_mean(kl_per_sample)
         weighted_kl_loss = tf.cast(self.vae_beta, kl_loss.dtype) * kl_loss
 
@@ -476,8 +468,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
 
         total_loss = (
-            self.ae_loss_weight * autoencoder_loss
-            + self.vc_loss_weight * vc_loss
+            self.ae_loss_weight * autoencoder_loss + self.vc_loss_weight * vc_loss
         )
         return (
             total_loss,
@@ -561,11 +552,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 )
 
             with tf.GradientTape() as discriminator_tape:
-                discriminator_loss = (
-                    self.variational_classifier.discriminator_loss(
-                        tf.stop_gradient(outputs["classification_latent"]),
-                        y_flat,
-                    )
+                discriminator_loss = self.variational_classifier.discriminator_loss(
+                    tf.stop_gradient(outputs["classification_latent"]),
+                    y_flat,
                 )
 
             discriminator_gradients = discriminator_tape.gradient(
