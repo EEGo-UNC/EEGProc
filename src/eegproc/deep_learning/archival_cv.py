@@ -82,6 +82,7 @@ Example::
 from __future__ import annotations
 
 import itertools
+from collections.abc import Callable, Mapping
 
 import numpy as np
 import tensorflow as tf
@@ -90,9 +91,29 @@ from sklearn.model_selection import (
     LeavePGroupsOut,  # used for LKOCV (leave k subjects out)
     LeaveOneOut,  # used for LOO   (leave one sample out)
 )
-from typing import Callable, Literal
+from typing import Literal
 
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
+
+
+def _is_label_mapping(label_array) -> bool:
+    return isinstance(label_array, Mapping)
+
+
+def _get_split_labels(label_array):
+    if _is_label_mapping(label_array):
+        first_value = next(iter(label_array.values()))
+        return np.asarray(first_value)
+    return np.asarray(label_array)
+
+
+def _slice_labels(label_array, indices):
+    if _is_label_mapping(label_array):
+        return {
+            key: np.asarray(values)[indices]
+            for key, values in label_array.items()
+        }
+    return np.asarray(label_array)[indices]
 
 
 def _expand_hyperparameter_grid(hp: dict | None) -> list[dict]:
@@ -162,7 +183,7 @@ def _print_fold_header(fold_number: int, total_folds: int, description: str) -> 
 def loso_cv(
     model_builder_function: Callable[..., tf.keras.Model],
     feature_array: np.ndarray,
-    label_array: np.ndarray,
+    label_array: np.ndarray | Mapping[str, np.ndarray],
     subject_id_array: np.ndarray,
     hyperparameters: dict | None = None,
     validation_n_users: int | None = None,
@@ -202,8 +223,10 @@ def loso_cv(
 
     feature_array : np.ndarray, shape (n_windows, timesteps, n_features)
         Preprocessed EEG feature windows. Each row is one sliding window.
-    label_array : np.ndarray, shape (n_windows,)
-        Integer class label for each window.
+    label_array : np.ndarray or mapping[str, np.ndarray]
+        Labels for each window. Use a 1D/2D array for single-output models,
+        or a mapping such as ``{"valence": y_valence, "arousal": y_arousal}``
+        for multi-output models.
     subject_id_array : np.ndarray, shape (n_windows,)
         Subject identifier for each window. Windows from the same recording
         session/person should share the same identifier.
@@ -274,12 +297,13 @@ def loso_cv(
 
     grid_configs = _expand_hyperparameter_grid(hyperparameters)
     is_grid = len(grid_configs) > 1
+    split_labels = _get_split_labels(label_array)
 
     # sklearn's LeaveOneGroupOut treats subject IDs as "groups" and yields
     # splits that hold out one group (subject) at a time.
     leave_one_subject_out_splitter = LeaveOneGroupOut()
     total_number_of_folds = leave_one_subject_out_splitter.get_n_splits(
-        feature_array, label_array, subject_id_array
+        feature_array, split_labels, subject_id_array
     )
 
     all_fold_results: list[dict] = []
@@ -295,7 +319,7 @@ def loso_cv(
 
     for fold_number, (pool_indices, test_indices) in enumerate(
         leave_one_subject_out_splitter.split(
-            feature_array, label_array, subject_id_array
+            feature_array, split_labels, subject_id_array
         ),
         start=1,
     ):
@@ -323,11 +347,14 @@ def loso_cv(
             val_indices = np.array([], dtype=int)
 
         X_train = feature_array[train_indices]
-        y_train = label_array[train_indices]
+        y_train = _slice_labels(label_array, train_indices)
         X_test = feature_array[test_indices]
-        y_test = label_array[test_indices]
+        y_test = _slice_labels(label_array, test_indices)
         if len(val_indices) > 0:
-            validation_data = (feature_array[val_indices], label_array[val_indices])
+            validation_data = (
+                feature_array[val_indices],
+                _slice_labels(label_array, val_indices),
+            )
         else:
             validation_data = None
 
