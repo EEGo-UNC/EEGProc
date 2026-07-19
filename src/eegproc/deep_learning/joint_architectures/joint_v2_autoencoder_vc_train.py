@@ -25,11 +25,13 @@ import tensorflow as tf
 try:
     from .joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
     from .joint_v2_data import (
+        DatasetConfig,
         DEFAULT_DREAMER_EEG_PATH,
         DEFAULT_DREAMER_LABELS_PATH,
         DREAMER_FS,
         DREAMER_MEDIAN_LABEL,
         build_joint_v2_dataset,
+        get_dataset_config,
     )
 except ImportError:
     CURRENT_DIR = Path(__file__).resolve().parent
@@ -38,11 +40,13 @@ except ImportError:
 
     from joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
     from joint_v2_data import (
+        DatasetConfig,
         DEFAULT_DREAMER_EEG_PATH,
         DEFAULT_DREAMER_LABELS_PATH,
         DREAMER_FS,
         DREAMER_MEDIAN_LABEL,
         build_joint_v2_dataset,
+        get_dataset_config,
     )
 
 try:
@@ -84,6 +88,7 @@ class JointV2TrainingConfig:
 
     output_dir: Path = Path("runs") / "joint_autoencoder_vc_v2"
     run_name: str = "joint_autoencoder_vc_v2"
+    dataset: str = "dreamer"
     encoder_type: str = "cnn1d"
     n_channels: int = 14
     n_bands: int | None = None
@@ -132,6 +137,7 @@ def load_joint_v2_training_data(
     overlap: float = 0.0,
     median_label: float = DREAMER_MEDIAN_LABEL,
     zscore: bool = True,
+    dataset: str | DatasetConfig = "dreamer",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load windowed data plus aligned subject and trial identifiers.
 
@@ -150,6 +156,7 @@ def load_joint_v2_training_data(
         overlap=overlap,
         median_label=median_label,
         zscore=zscore,
+        dataset=dataset,
     )
 
     if len(dataset_arrays) == 4:
@@ -214,6 +221,19 @@ def _ensure_path(path_like: str | Path) -> Path:
     path = Path(path_like)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _infer_n_classes(label_array: np.ndarray) -> int:
+    labels = np.asarray(label_array)
+
+    if labels.ndim == 2 and labels.shape[1] > 1:
+        return int(labels.shape[1])
+
+    flattened = labels.reshape(-1)
+    if flattened.size == 0:
+        raise ValueError("label_array must not be empty.")
+
+    return int(np.max(flattened)) + 1
 
 
 def _configure_run_logger(run_dir: Path) -> logging.Logger:
@@ -746,7 +766,7 @@ def train_joint_autoencoder_variational_classifier_v2(
             label_array,
             subject_id_array,
             trial_id_array,
-        ) = load_joint_v2_training_data()
+        ) = load_joint_v2_training_data(dataset=training_config.dataset)
 
     feature_array = np.asarray(feature_array, dtype=np.float32)
     label_array = np.asarray(label_array)
@@ -856,7 +876,7 @@ def train_joint_autoencoder_variational_classifier_v2(
 
             return build_joint_autoencoder_variational_classifier_v2(
                 input_shape=tuple(feature_array.shape[1:]),
-                n_classes=int(np.max(label_array)) + 1,
+                n_classes=_infer_n_classes(label_array),
                 encoder_type=encoder_type,
                 n_channels=training_config.n_channels,
                 n_bands=training_config.n_bands,
@@ -1090,6 +1110,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Autoencoder family to use for this complete run (default: cnn1d).",
     )
     parser.add_argument(
+        "--dataset",
+        choices=("dreamer", "amigos", "eegemotions_27"),
+        default="dreamer",
+        help=(
+            "Dataset config to use. eegemotions_27 preserves the raw 27-way "
+            "Cowen labels instead of mapping them to valence/arousal."
+        ),
+    )
+    parser.add_argument(
         "--n-channels",
         type=int,
         default=14,
@@ -1318,6 +1347,7 @@ def main(argv: list[str] | None = None) -> int:
     config = JointV2TrainingConfig(
         output_dir=Path(args.out_dir),
         run_name=args.run_name,
+        dataset=args.dataset,
         encoder_type=args.encoder_type,
         n_channels=args.n_channels,
         n_bands=args.n_bands,
@@ -1381,8 +1411,9 @@ def main(argv: list[str] | None = None) -> int:
         trial_id_array = _load_numpy_array(args.trials_npy)
         data_loader = None
     else:
-        eeg_path = args.raw_eeg_npy or DEFAULT_DREAMER_EEG_PATH
-        labels_path = args.raw_labels_npy or DEFAULT_DREAMER_LABELS_PATH
+        dataset_config = get_dataset_config(args.dataset)
+        eeg_path = args.raw_eeg_npy or dataset_config.eeg_path
+        labels_path = args.raw_labels_npy or dataset_config.labels_path
         data_loader = lambda: load_joint_v2_training_data(
             eeg_path=eeg_path,
             labels_path=labels_path,
@@ -1392,6 +1423,7 @@ def main(argv: list[str] | None = None) -> int:
             overlap=args.window_overlap,
             median_label=args.median_label,
             zscore=not args.no_zscore,
+            dataset=dataset_config,
         )
 
     train_joint_autoencoder_variational_classifier_v2(

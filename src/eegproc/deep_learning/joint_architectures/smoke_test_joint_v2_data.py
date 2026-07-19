@@ -15,11 +15,14 @@ import numpy as np
 
 try:
     from .joint_v2_data import (
+        DatasetConfig,
         DEFAULT_DREAMER_EEG_PATH,
         DEFAULT_DREAMER_LABELS_PATH,
         DREAMER_FS,
+        EEGEMOTIONS_27_CONFIG,
         binarize_dreamer_labels,
         build_joint_v2_dataset,
+        build_dataset,
         load_raw_eeg_and_labels,
         window_trial_signal,
         zscore_subject_eeg,
@@ -30,11 +33,14 @@ except ImportError:
         sys.path.insert(0, str(CURRENT_DIR))
 
     from joint_v2_data import (
+        DatasetConfig,
         DEFAULT_DREAMER_EEG_PATH,
         DEFAULT_DREAMER_LABELS_PATH,
         DREAMER_FS,
+        EEGEMOTIONS_27_CONFIG,
         binarize_dreamer_labels,
         build_joint_v2_dataset,
+        build_dataset,
         load_raw_eeg_and_labels,
         window_trial_signal,
         zscore_subject_eeg,
@@ -136,6 +142,45 @@ def smoke_test_build_joint_v2_dataset_end_to_end_shapes() -> None:
     assert len(np.unique(subject_id_array)) == 23
 
     assert np.all(np.isfinite(feature_array))
+
+
+def smoke_test_build_dataset_preserves_raw_27_way_labels(tmp_path) -> None:
+    """Raw-label configs should keep the full 27-way trial vectors intact."""
+    assert EEGEMOTIONS_27_CONFIG.name == "eegemotions_27"
+    assert EEGEMOTIONS_27_CONFIG.label_mode == "identity"
+
+    eeg_path = tmp_path / "eeg.npy"
+    labels_path = tmp_path / "labels.npy"
+
+    eeg = np.arange(16, dtype=np.float32).reshape(1, 1, 2, 8)
+    labels = np.eye(27, dtype=np.float32).reshape(1, 1, 27)
+    np.save(eeg_path, eeg)
+    np.save(labels_path, labels)
+
+    config = DatasetConfig(
+        name="eegemotions_27_test",
+        fs=2,
+        label_dims={},
+        median_label=0,
+        label_mode="identity",
+        eeg_path=eeg_path,
+        labels_path=labels_path,
+    )
+
+    feature_array, label_array, subject_id_array = build_dataset(
+        dataset=config,
+        eeg_path=eeg_path,
+        labels_path=labels_path,
+        window_size_sec=4.0,
+        fs=2,
+        overlap=0.0,
+        zscore=False,
+    )
+
+    assert feature_array.shape == (2, 4, 2)
+    assert label_array.shape == (2, 27)
+    np.testing.assert_array_equal(label_array[0], np.eye(27, dtype=np.float32)[0])
+    assert subject_id_array.shape == (2,)
 
 
 if __name__ == "__main__":

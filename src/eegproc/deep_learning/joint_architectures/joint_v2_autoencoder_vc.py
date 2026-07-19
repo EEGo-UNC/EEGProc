@@ -407,8 +407,13 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
 
     @staticmethod
     def _flatten_labels(y) -> tf.Tensor:
-        """Convert integer labels shaped ``(batch,)`` or ``(batch, 1)`` to 1D."""
-        return tf.cast(tf.reshape(y, [-1]), tf.int32)
+        """Convert sparse labels or one-hot labels into class-id vectors."""
+        y_tensor = tf.convert_to_tensor(y)
+
+        if y_tensor.shape.rank == 2 and y_tensor.shape[-1] is not None and y_tensor.shape[-1] > 1:
+            return tf.argmax(y_tensor, axis=-1, output_type=tf.int32)
+
+        return tf.cast(tf.reshape(y_tensor, [-1]), tf.int32)
 
     def _compute_weighted_losses(
         self,

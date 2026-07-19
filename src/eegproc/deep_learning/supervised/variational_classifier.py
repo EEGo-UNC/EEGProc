@@ -92,6 +92,15 @@ class VariationalClassifier(tf.keras.layers.Layer):
             axis=-1,
         )
 
+    @staticmethod
+    def _class_ids(y: tf.Tensor) -> tf.Tensor:
+        y_tensor = tf.convert_to_tensor(y)
+
+        if y_tensor.shape.rank == 2 and y_tensor.shape[-1] is not None and y_tensor.shape[-1] > 1:
+            return tf.cast(tf.argmax(y_tensor, axis=-1), tf.int32)
+
+        return tf.cast(tf.reshape(y_tensor, [-1]), tf.int32)
+
     def call(self, mh: tf.Tensor, training: bool = False) -> tf.Tensor:
         """
         Classify latent features using learned Gaussian class priors.
@@ -167,7 +176,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
             class distribution p(y).
         """
         mh = tf.convert_to_tensor(mh)
-        y = tf.cast(tf.reshape(y, [-1]), tf.int32)
+        y = self._class_ids(y)
 
         dtype = mh.dtype
         eps = tf.cast(1e-6, dtype)
@@ -265,6 +274,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         gamma   : NLL weight for Gaussian analytic term  (0 = disabled)
         lambda_ : KL weight for class-prior alignment    (0 = disabled)
         """
+        y = self._class_ids(y)
         y_onehot = tf.one_hot(y, self.n_classes)
 
         # Term 1: cross-entropy
@@ -335,7 +345,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
                     "Make sure the model output comes from this classifier head."
                 )
 
-            y_true = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+            y_true = self._class_ids(y_true)
 
             return self.vc_loss(
                 mh=self._last_mh,
@@ -355,6 +365,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         Trains T_psi to separate q_phi(z|y) (actual latents) from
         p_theta(z|y) (Gaussian prior samples) using binary cross-entropy.
         """
+        y = self._class_ids(y)
         total = 0.0
         for c in range(self.n_classes):
             mask = tf.equal(y, c)
