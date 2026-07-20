@@ -206,10 +206,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 6 \
+    --validation-subjects 4 \
     --validation-seed 42 \
-    --early-stopping-patience 50 \
-    --early-stopping-min-delta 0.0 \
+    --early-stopping-patience 20 \
+    --early-stopping-min-delta 0.001 \
     --early-stopping-monitor val_vc_cross_entropy \
     --early-stopping-mode min \
     --final-epoch-strategy median \
@@ -230,13 +230,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "vc_gamma": [0.0],
     "vc_lambda": [0.0],
     "vae_beta": [
-        10
+        1.0
     ],
     "t_down": [
         2
     ],
     "emb_dim": [
-        16
+        8
     ],
     "dropout": [
         0.2
@@ -258,7 +258,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         2
     ],
     "use_batch_norm": [
-        false
+        true
     ],
     "bilstm_units": [
         128,
@@ -268,6 +268,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         2
     ],
     "bilstm_dropout": [
-        0.3
+        0.4
     ]
 }'
