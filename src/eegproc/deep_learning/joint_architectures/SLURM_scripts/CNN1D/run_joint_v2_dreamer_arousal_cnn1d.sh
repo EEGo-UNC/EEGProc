@@ -4,10 +4,10 @@
 #SBATCH --error=joint_v2_dreamer_arousal_cnn1d_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:8
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
-#SBATCH --time=32:00:00
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
 
 set -euo pipefail
 
@@ -197,13 +197,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --encoder-type cnn1d \
     --out-dir runs/joint_autoencoder_vc_v2/CNN1D \
     --run-name joint_v2_dreamer_arousal_cnn1d \
-    --n-jobs 8 \
+    --n-jobs 4 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
-    --prediction-latent-samples 10 \
+    --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
     --validation-subjects 2 \
