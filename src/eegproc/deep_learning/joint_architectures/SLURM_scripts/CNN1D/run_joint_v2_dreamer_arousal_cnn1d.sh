@@ -206,7 +206,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 2 \
+    --validation-subjects 6 \
     --validation-seed 42 \
     --early-stopping-patience 50 \
     --early-stopping-min-delta 0.0 \
