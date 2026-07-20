@@ -196,7 +196,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --label-dimension arousal \
     --encoder-type cnn1d \
     --out-dir runs/joint_autoencoder_vc_v2/CNN1D \
-    --run-name joint_v2_dreamer_arousal_cnn1d \
+    --run-name dreamer_arousal_vaevc_cnn1d \
     --n-jobs 4 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
@@ -258,10 +258,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         2
     ],
     "use_batch_norm": [
-        false, true
+        false
     ],
     "bilstm_units": [
-        128,
+        128
     ],
     "bilstm_layers": [
         1
