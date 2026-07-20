@@ -202,7 +202,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --outer-verbose 2 \
     --final-verbose 2 \
     --selection-level trial \
-    --selection-metric accuracy \
+    --selection-metric f1 \
     --prediction-latent-samples 10 \
     --latent-sampling-seed 42 \
     --seed 42 \
@@ -223,7 +223,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         0.7
     ],
     "vae_beta": [
-        1.0
+        50, 100
     ],
     "t_down": [
         2

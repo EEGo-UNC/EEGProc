@@ -236,6 +236,21 @@ def _infer_n_classes(label_array: np.ndarray) -> int:
     return int(np.max(flattened)) + 1
 
 
+def _as_class_ids(label_array: np.ndarray) -> np.ndarray:
+    """Convert sparse, column-vector, or one-hot labels to integer IDs."""
+    labels = np.asarray(label_array)
+    if labels.ndim == 1:
+        return labels.astype(np.int64, copy=False)
+    if labels.ndim == 2 and labels.shape[1] == 1:
+        return labels[:, 0].astype(np.int64, copy=False)
+    if labels.ndim == 2 and labels.shape[1] > 1:
+        return np.argmax(labels, axis=1).astype(np.int64, copy=False)
+    raise ValueError(
+        "Labels must have shape (n,), (n, 1), or (n, n_classes); "
+        f"got {labels.shape}."
+    )
+
+
 def _configure_run_logger(run_dir: Path) -> logging.Logger:
     logger = logging.getLogger(f"eegproc.joint_v2.{run_dir.name}")
     logger.setLevel(logging.INFO)
@@ -966,6 +981,25 @@ def train_joint_autoencoder_variational_classifier_v2(
         "Unique subject/trial pairs: %d",
         len(set(zip(subject_id_array.tolist(), trial_id_array.tolist()))),
     )
+
+    class_ids = _as_class_ids(label_array)
+    class_values, class_counts = np.unique(class_ids, return_counts=True)
+    class_distribution = {
+        int(class_value): int(class_count)
+        for class_value, class_count in zip(class_values, class_counts)
+    }
+    majority_baseline = float(np.max(class_counts) / np.sum(class_counts))
+    logger.info("Global class counts: %s", class_distribution)
+    logger.info("Global majority-class accuracy baseline: %.6f", majority_baseline)
+    if majority_baseline >= 0.60:
+        logger.warning(
+            "The dataset is imbalanced (majority baseline %.4f). Compare each "
+            "epoch's predicted_class_*_fraction metrics with the corresponding "
+            "true_class_*_fraction metrics; matching a single majority class "
+            "indicates classifier collapse.",
+            majority_baseline,
+        )
+
     _write_json(run_dir / "training_config.json", asdict(training_config))
 
     cv_results = loso_cv(

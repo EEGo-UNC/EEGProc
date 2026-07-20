@@ -1,61 +1,47 @@
 """
-variational_classifier.py
-=========================
 Variational Classification fusion head for neural networks.
 
 Maintains learned Gaussian class priors and classifies via Bayes' rule,
-with an optional auxiliary discriminator for improved latent space alignment.
-
-References
-----------
-Li et al., "STSNet ...", HISS 2023.
+with an optional auxiliary discriminator for latent-space alignment.
 """
 
-import tensorflow as tf
+from __future__ import annotations
+
 import numpy as np
+import tensorflow as tf
 
 
 class VariationalClassifier(tf.keras.layers.Layer):
-    """
-    Variational Classification fusion head.
+    """Variational classification head with separately reportable loss terms."""
 
-    Maintains learned Gaussian class priors p_theta(z|y) = N(mu_y, Sigma_y)
-    and classifies via Bayes' rule (generalised softmax, Eq. 6).
-
-    The training objective (Eq. 7) has four independently controllable terms:
-      Term 1 -- cross-entropy:           scaled by `alpha` (set 0 to disable)
-      Term 2 -- KL (encoder/prior):      scaled by `beta`  (set 0 to disable)
-      Term 2b -- NLL (Gaussian, analytic): scaled by `gamma` (set 0 to disable)
-      Term 3 -- KL (class prior):        scaled by `lambda_` (set 0 to disable)
-
-    An auxiliary discriminator (Eq. 9) can be updated separately or skipped
-    entirely via the `training_mode` flag on the parent model.
-
-    Parameters
-    ----------
-    n_classes  : int   -- number of classes (2 for binary valence/arousal)
-    latent_dim : int   -- set automatically by build()
-    """
-
-    def __init__(self, n_classes: int = 2, latent_dim: int = None, **kwargs):
+    def __init__(
+        self,
+        n_classes: int = 2,
+        latent_dim: int | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self.n_classes = n_classes
+        if n_classes < 2:
+            raise ValueError("n_classes must be at least 2.")
+        self.n_classes = int(n_classes)
         self.latent_dim = latent_dim
         self._last_mh = None
 
-    def build(self, input_shape):
-        d = input_shape[-1]
-        self.latent_dim = d
+    def build(self, input_shape) -> None:
+        latent_dim = input_shape[-1]
+        if latent_dim is None:
+            raise ValueError("The classifier input must have a static last dimension.")
+        self.latent_dim = int(latent_dim)
 
         self.prior_mu = self.add_weight(
             name="prior_mu",
-            shape=(self.n_classes, d),
+            shape=(self.n_classes, self.latent_dim),
             initializer="glorot_normal",
             trainable=True,
         )
         self.prior_log_sigma = self.add_weight(
             name="prior_log_sigma",
-            shape=(self.n_classes, d),
+            shape=(self.n_classes, self.latent_dim),
             initializer="zeros",
             trainable=True,
         )
@@ -67,7 +53,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         )
         self.disc_w = self.add_weight(
             name="disc_w",
-            shape=(self.n_classes, d),
+            shape=(self.n_classes, self.latent_dim),
             initializer="glorot_normal",
             trainable=True,
         )
@@ -79,46 +65,59 @@ class VariationalClassifier(tf.keras.layers.Layer):
         )
         super().build(input_shape)
 
-    def _log_gaussian(self, z, mu, log_sigma):
-        sigma2 = tf.exp(2.0 * log_sigma)
-        diff = z - mu[tf.newaxis, :]
-        # Use reduce_mean (not reduce_sum) over the latent dimension so that
-        # logit magnitudes are O(1) regardless of latent_dim.  With reduce_sum
-        # the log-likelihood scales with d (hundreds of dims), swamping the
-        # class-prior term and producing near-identical extreme logits before
-        # the priors have had time to learn anything useful.
-        return -0.5 * tf.reduce_mean(
-            tf.math.log(2 * np.pi * sigma2) + diff**2 / sigma2,
-            axis=-1,
-        )
-
     @staticmethod
     def _class_ids(y: tf.Tensor) -> tf.Tensor:
         y_tensor = tf.convert_to_tensor(y)
-
-        if y_tensor.shape.rank == 2 and y_tensor.shape[-1] is not None and y_tensor.shape[-1] > 1:
-            return tf.cast(tf.argmax(y_tensor, axis=-1), tf.int32)
-
+        if (
+            y_tensor.shape.rank == 2
+            and y_tensor.shape[-1] is not None
+            and y_tensor.shape[-1] > 1
+        ):
+            return tf.argmax(y_tensor, axis=-1, output_type=tf.int32)
         return tf.cast(tf.reshape(y_tensor, [-1]), tf.int32)
 
+    @staticmethod
+    def _weighted_mean(
+        values: tf.Tensor,
+        sample_weight: tf.Tensor | None = None,
+    ) -> tf.Tensor:
+        values = tf.convert_to_tensor(values)
+        if sample_weight is None:
+            return tf.reduce_mean(values)
+
+        weights = tf.cast(tf.reshape(sample_weight, [-1]), values.dtype)
+        values = tf.reshape(values, [-1])
+        tf.debugging.assert_equal(
+            tf.shape(values)[0],
+            tf.shape(weights)[0],
+            message="sample_weight must align with the batch.",
+        )
+        denominator = tf.maximum(
+            tf.reduce_sum(weights),
+            tf.cast(tf.keras.backend.epsilon(), values.dtype),
+        )
+        return tf.reduce_sum(values * weights) / denominator
+
+    def _log_gaussian(
+        self,
+        z: tf.Tensor,
+        mu: tf.Tensor,
+        log_sigma: tf.Tensor,
+    ) -> tf.Tensor:
+        sigma2 = tf.exp(2.0 * log_sigma)
+        diff = z - mu[tf.newaxis, :]
+        # Mean over latent dimensions keeps the classifier-logit scale stable
+        # when the BiLSTM feature width changes.
+        return -0.5 * tf.reduce_mean(
+            tf.math.log(2.0 * np.pi * sigma2) + tf.square(diff) / sigma2,
+            axis=-1,
+        )
+
     def call(self, mh: tf.Tensor, training: bool = False) -> tf.Tensor:
-        """
-        Classify latent features using learned Gaussian class priors.
-
-        Parameters
-        ----------
-        mh : tf.Tensor
-            Latent feature vectors with shape (batch, latent_dim).
-
-        Returns
-        -------
-        tf.Tensor
-            Class logits with shape (batch, n_classes).
-        """
+        del training  # This head currently has no training/inference-only layers.
         self._last_mh = mh
 
         log_class_prior = tf.nn.log_softmax(self.log_class_prior)
-
         log_likelihoods = tf.stack(
             [
                 self._log_gaussian(
@@ -130,195 +129,204 @@ class VariationalClassifier(tf.keras.layers.Layer):
             ],
             axis=1,
         )
-
         return log_likelihoods + log_class_prior[tf.newaxis, :]
 
     def discriminator(self, z: tf.Tensor, y: int) -> tf.Tensor:
-        """T_psi^y(z) = w_y^T z + b_y"""
+        """Return the trainable discriminator score T_psi^y(z)."""
         return tf.linalg.matvec(z, self.disc_w[y]) + self.disc_b[y]
+
+    def _discriminator_for_encoder(self, z: tf.Tensor, y: int) -> tf.Tensor:
+        """Score z while freezing discriminator parameters, not z itself.
+
+        Stopping gradients on the complete score would also stop the gradient
+        into the encoder. Freezing only ``disc_w`` and ``disc_b`` preserves the
+        intended representation-learning signal from the discriminator term.
+        """
+        frozen_w = tf.stop_gradient(self.disc_w[y])
+        frozen_b = tf.stop_gradient(self.disc_b[y])
+        return tf.linalg.matvec(z, frozen_w) + frozen_b
 
     def _gaussian_kl_latent_posterior(
         self,
         mh: tf.Tensor,
         y: tf.Tensor,
     ) -> tf.Tensor:
-        """
-        Compute the expected class-conditional KL divergence
-
-            E_{p(y)} [
-                KL(
-                    q_phi(z | y)
-                    ||
-                    p_theta(z | y)
-                )
-            ]
-
-        q_phi(z | y=c) is approximated as a diagonal Gaussian fitted
-        to the latent embeddings belonging to class c in the current batch.
-
-        p_theta(z | y=c) is the learned diagonal Gaussian represented by:
-
-            self.prior_mu[c]
-            self.prior_log_sigma[c]
-
-        Parameters
-        ----------
-        mh : tf.Tensor
-            Latent embeddings with shape (batch_size, latent_dim).
-
-        y : tf.Tensor
-            Integer class labels with shape (batch_size,).
-
-        Returns
-        -------
-        tf.Tensor
-            Scalar expected KL divergence over the empirical batch
-            class distribution p(y).
-        """
+        """Estimate mean class-conditional KL(q_phi(z|y) || p_theta(z|y))."""
         mh = tf.convert_to_tensor(mh)
         y = self._class_ids(y)
 
         dtype = mh.dtype
         eps = tf.cast(1e-6, dtype)
-
         batch_size = tf.cast(tf.shape(mh)[0], dtype)
-
         expected_kl = tf.zeros((), dtype=dtype)
         valid_probability_mass = tf.zeros((), dtype=dtype)
 
-        for c in range(self.n_classes):
-            mask = tf.equal(y, c)
-            z_c = tf.boolean_mask(mh, mask)
-            n_c = tf.shape(z_c)[0]
+        for class_index in range(self.n_classes):
+            mask = tf.equal(y, class_index)
+            z_class = tf.boolean_mask(mh, mask)
+            n_class = tf.shape(z_class)[0]
 
             def compute_class_kl():
-                # Empirical q_phi(z | y=c)
-                mu_q = tf.reduce_mean(z_c, axis=0)
-
-                centered = z_c - mu_q[tf.newaxis, :]
-
-                # Maximum-likelihood diagonal variance estimate.
-                var_q = tf.reduce_mean(
-                    tf.square(centered),
-                    axis=0,
+                mean_q = tf.reduce_mean(z_class, axis=0)
+                centered = z_class - mean_q[tf.newaxis, :]
+                variance_q = tf.maximum(
+                    tf.reduce_mean(tf.square(centered), axis=0),
+                    eps,
                 )
-                var_q = tf.maximum(var_q, eps)
 
-                # Learned p_theta(z | y=c)
-                mu_p = tf.cast(self.prior_mu[c], dtype)
+                mean_p = tf.cast(self.prior_mu[class_index], dtype)
+                variance_p = tf.maximum(
+                    tf.exp(
+                        2.0
+                        * tf.cast(self.prior_log_sigma[class_index], dtype)
+                    ),
+                    eps,
+                )
 
-                # prior_log_sigma stores log standard deviation,
-                # therefore variance = exp(2 * log_sigma).
-                var_p = tf.exp(2.0 * tf.cast(self.prior_log_sigma[c], dtype))
-                var_p = tf.maximum(var_p, eps)
-
-                # KL(
-                #   N(mu_q, diag(var_q))
-                #   ||
-                #   N(mu_p, diag(var_p))
-                # )
-                kl_c = 0.5 * tf.reduce_mean(
-                    tf.math.log(var_p)
-                    - tf.math.log(var_q)
-                    + (var_q + tf.square(mu_q - mu_p)) / var_p
+                class_kl = 0.5 * tf.reduce_mean(
+                    tf.math.log(variance_p)
+                    - tf.math.log(variance_q)
+                    + (
+                        variance_q + tf.square(mean_q - mean_p)
+                    )
+                    / variance_p
                     - 1.0
                 )
+                class_probability = tf.cast(n_class, dtype) / batch_size
+                return class_probability * class_kl, class_probability
 
-                # Empirical p(y=c) from the current batch.
-                p_c = tf.cast(n_c, dtype) / batch_size
-
-                return p_c * kl_c, p_c
-
-            weighted_kl_c, probability_c = tf.cond(
-                tf.greater_equal(n_c, 2),
+            weighted_class_kl, class_probability = tf.cond(
+                tf.greater_equal(n_class, 2),
                 true_fn=compute_class_kl,
                 false_fn=lambda: (
                     tf.zeros((), dtype=dtype),
                     tf.zeros((), dtype=dtype),
                 ),
             )
+            expected_kl += weighted_class_kl
+            valid_probability_mass += class_probability
 
-            expected_kl += weighted_kl_c
-            valid_probability_mass += probability_c
-
-        # Renormalize if any classes had fewer than two samples and were skipped.
         return tf.cond(
             tf.greater(valid_probability_mass, 0.0),
             true_fn=lambda: expected_kl / valid_probability_mass,
             false_fn=lambda: tf.zeros((), dtype=dtype),
         )
 
+    def vc_loss_components(
+        self,
+        mh: tf.Tensor,
+        y: tf.Tensor,
+        alpha: float = 1.0,
+        beta: float = 1.0,
+        gamma: float = 0.0,
+        lambda_: float = 0.0,
+        logits: tf.Tensor | None = None,
+        sample_weight: tf.Tensor | None = None,
+    ) -> dict[str, tf.Tensor]:
+        """Return every raw and weighted component of the VC objective.
+
+        The returned ``total_loss`` is exactly the sum of the four weighted
+        terms. Passing the logits already produced by the joint model avoids a
+        duplicate classifier call and guarantees that the logged cross-entropy
+        corresponds to the logits used for the accuracy metric.
+        """
+        y = self._class_ids(y)
+        y_onehot = tf.one_hot(y, self.n_classes, dtype=mh.dtype)
+        if logits is None:
+            logits = self(mh, training=True)
+
+        cross_entropy_per_sample = (
+            tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=y,
+                logits=logits,
+            )
+        )
+        cross_entropy = self._weighted_mean(
+            cross_entropy_per_sample,
+            sample_weight=sample_weight,
+        )
+        weighted_cross_entropy = (
+            tf.cast(alpha, cross_entropy.dtype) * cross_entropy
+        )
+
+        latent_posterior_kl = self._gaussian_kl_latent_posterior(mh, y)
+        weighted_latent_posterior_kl = (
+            tf.cast(beta, latent_posterior_kl.dtype) * latent_posterior_kl
+        )
+
+        discriminator_scores = tf.stack(
+            [
+                self._discriminator_for_encoder(mh, class_index)
+                for class_index in range(self.n_classes)
+            ],
+            axis=1,
+        )
+        true_class_scores = tf.reduce_sum(
+            y_onehot * discriminator_scores,
+            axis=1,
+        )
+        discriminator_kl = self._weighted_mean(
+            tf.nn.relu(true_class_scores),
+            sample_weight=sample_weight,
+        )
+        weighted_discriminator_kl = (
+            tf.cast(gamma, discriminator_kl.dtype) * discriminator_kl
+        )
+
+        empirical_class_prior = tf.reduce_mean(y_onehot, axis=0)
+        learned_log_class_prior = tf.nn.log_softmax(self.log_class_prior)
+        class_prior_kl = tf.reduce_sum(
+            empirical_class_prior
+            * (
+                tf.math.log(empirical_class_prior + 1e-8)
+                - learned_log_class_prior
+            )
+        )
+        weighted_class_prior_kl = (
+            tf.cast(lambda_, class_prior_kl.dtype) * class_prior_kl
+        )
+
+        total_loss = (
+            weighted_cross_entropy
+            + weighted_latent_posterior_kl
+            + weighted_discriminator_kl
+            + weighted_class_prior_kl
+        )
+
+        return {
+            "total_loss": total_loss,
+            "cross_entropy": cross_entropy,
+            "weighted_cross_entropy": weighted_cross_entropy,
+            "latent_posterior_kl": latent_posterior_kl,
+            "weighted_latent_posterior_kl": weighted_latent_posterior_kl,
+            "discriminator_kl": discriminator_kl,
+            "weighted_discriminator_kl": weighted_discriminator_kl,
+            "class_prior_kl": class_prior_kl,
+            "weighted_class_prior_kl": weighted_class_prior_kl,
+        }
+
     def vc_loss(
         self,
         mh: tf.Tensor,
         y: tf.Tensor,
         alpha: float = 1.0,
-        beta: float = 1.0,  # gaussian assumptionterm
-        gamma: float = 0.0,  # discriminator term
+        beta: float = 1.0,
+        gamma: float = 0.0,
         lambda_: float = 0.0,
+        logits: tf.Tensor | None = None,
+        sample_weight: tf.Tensor | None = None,
     ) -> tf.Tensor:
-        """
-        VC objective (Eq. 7).
-
-        L_VC = alpha * xent  +  beta * KL(encoder||prior)  +  lambda_ * KL(class prior) -
-
-        Setting beta=0 and lambda_=0 reduces this to plain cross-entropy,
-        which is the "disc_only" ablation signal seen by the encoder.
-
-        Parameters
-        ----------
-        mh      : (batch, d)
-        y       : (batch,) int32
-        alpha   : weight for cross-entropy               (0 = disabled)
-        beta    : KL weight for encoder/prior alignment  (0 = disabled)
-        gamma   : NLL weight for Gaussian analytic term  (0 = disabled)
-        lambda_ : KL weight for class-prior alignment    (0 = disabled)
-        """
-        y = self._class_ids(y)
-        y_onehot = tf.one_hot(y, self.n_classes)
-
-        # Term 1: cross-entropy
-        logits = self(mh, training=True)
-        xent = alpha * tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
-        )
-
-        # Term 2: beta * E_y[KL(q_phi(z|y) || p_theta(z|y))] via discriminator scores
-        #
-        # The discriminator T_psi^y is trained to satisfy the variational
-        # lower bound  KL(q||p) >= E_q[T(z)] - log E_p[exp(T(z))]  (Eq. 8).
-        # Here we use the simpler density-ratio trick: T_psi^y(z) approximates
-        # log q(z|y) - log p(z|y), so E_q[T] is a (positive) KL proxy.
-        #
-        # Two safeguards keep this term well-behaved:
-        #   1. stop_gradient: the discriminator weights are updated by
-        #      discriminator_loss; here T is a fixed signal to the encoder.
-        #   2. tf.nn.relu: clamps the estimate to >= 0 so a poorly-initialised
-        #      or collapsing discriminator cannot make the total loss negative.
-        T_vals = tf.stack(
-            [self.discriminator(mh, c) for c in range(self.n_classes)], axis=1
-        )
-        T_vals = tf.stop_gradient(T_vals)
-        T_true_class = tf.reduce_sum(y_onehot * T_vals, axis=1)
-        kl_disc = gamma * tf.reduce_mean(tf.nn.relu(T_true_class))
-
-        # Term 2b: beta * E_{p(y)}[
-        #     KL(q_phi(z | y) || p_theta(z | y))
-        # ]
-        latent_posterior_kl = self._gaussian_kl_latent_posterior(
-            mh,
-            y,
-        )
-
-        kl_term = beta * latent_posterior_kl
-
-        # Term 3: lambda_ * KL(p(y) || p_pi(y))
-        p_y = tf.reduce_mean(y_onehot, axis=0)
-        log_p_pi = tf.nn.log_softmax(self.log_class_prior)
-        kl_class_prior = tf.reduce_sum(p_y * (tf.math.log(p_y + 1e-8) - log_p_pi))
-        prior_term = lambda_ * kl_class_prior
-
-        return xent + kl_term + kl_disc + prior_term
+        """Return the complete VC objective while preserving the old API."""
+        return self.vc_loss_components(
+            mh=mh,
+            y=y,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            lambda_=lambda_,
+            logits=logits,
+            sample_weight=sample_weight,
+        )["total_loss"]
 
     def keras_loss(
         self,
@@ -327,16 +335,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         gamma: float = 0.0,
         lambda_: float = 0.0,
     ):
-        """
-        Return a Keras-compatible loss function that uses the latest latent features
-        seen by this classifier head.
-
-        This lets models compile with:
-
-            loss=vc_head.keras_loss(...)
-
-        while still allowing vc_loss to use mh internally.
-        """
+        """Return a Keras-compatible wrapper around :meth:`vc_loss`."""
 
         def loss_fn(y_true, y_pred):
             if self._last_mh is None:
@@ -344,9 +343,6 @@ class VariationalClassifier(tf.keras.layers.Layer):
                     "VariationalClassifier has no stored latent features. "
                     "Make sure the model output comes from this classifier head."
                 )
-
-            y_true = self._class_ids(y_true)
-
             return self.vc_loss(
                 mh=self._last_mh,
                 y=y_true,
@@ -354,37 +350,64 @@ class VariationalClassifier(tf.keras.layers.Layer):
                 beta=beta,
                 gamma=gamma,
                 lambda_=lambda_,
+                logits=y_pred,
             )
 
         return loss_fn
 
     def discriminator_loss(self, mh: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
-        """
-        Auxiliary discriminator objective (Eq. 9).
-
-        Trains T_psi to separate q_phi(z|y) (actual latents) from
-        p_theta(z|y) (Gaussian prior samples) using binary cross-entropy.
-        """
+        """Train T_psi to distinguish q_phi(z|y) from prior samples."""
         y = self._class_ids(y)
-        total = 0.0
-        for c in range(self.n_classes):
-            mask = tf.equal(y, c)
-            if tf.reduce_sum(tf.cast(mask, tf.int32)) == 0:
-                continue
+        dtype = mh.dtype
+        total_loss = tf.zeros((), dtype=dtype)
+        valid_classes = tf.zeros((), dtype=dtype)
+
+        for class_index in range(self.n_classes):
+            mask = tf.equal(y, class_index)
             z_q = tf.boolean_mask(mh, mask)
-            sigma_c = tf.exp(self.prior_log_sigma[c])
-            z_p = tf.random.normal(tf.shape(z_q)) * sigma_c + self.prior_mu[c]
+            n_class = tf.shape(z_q)[0]
 
-            T_q = self.discriminator(z_q, c)
-            T_p = self.discriminator(z_p, c)
+            def compute_class_loss():
+                sigma_class = tf.exp(self.prior_log_sigma[class_index])
+                z_p = (
+                    tf.random.normal(tf.shape(z_q), dtype=z_q.dtype)
+                    * sigma_class
+                    + self.prior_mu[class_index]
+                )
+                logits_q = self.discriminator(z_q, class_index)
+                logits_p = self.discriminator(z_p, class_index)
+                loss_q = tf.reduce_mean(
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                        labels=tf.ones_like(logits_q),
+                        logits=logits_q,
+                    )
+                )
+                loss_p = tf.reduce_mean(
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                        labels=tf.zeros_like(logits_p),
+                        logits=logits_p,
+                    )
+                )
+                return loss_q + loss_p, tf.ones((), dtype=dtype)
 
-            loss_q = tf.reduce_mean(tf.math.log(tf.sigmoid(T_q) + 1e-8))
-            loss_p = tf.reduce_mean(tf.math.log(1.0 - tf.sigmoid(T_p) + 1e-8))
-            total += -(loss_q + loss_p)
+            class_loss, is_valid = tf.cond(
+                tf.greater(n_class, 0),
+                true_fn=compute_class_loss,
+                false_fn=lambda: (
+                    tf.zeros((), dtype=dtype),
+                    tf.zeros((), dtype=dtype),
+                ),
+            )
+            total_loss += class_loss
+            valid_classes += is_valid
 
-        return total / self.n_classes
+        return tf.cond(
+            tf.greater(valid_classes, 0.0),
+            true_fn=lambda: total_loss / valid_classes,
+            false_fn=lambda: tf.zeros((), dtype=dtype),
+        )
 
-    def get_config(self):
-        cfg = super().get_config()
-        cfg.update({"n_classes": self.n_classes})
-        return cfg
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config.update({"n_classes": self.n_classes})
+        return config
