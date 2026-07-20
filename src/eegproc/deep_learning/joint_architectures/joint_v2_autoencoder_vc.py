@@ -448,19 +448,11 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             z_mean=z_mean_flat,
             z_log_var=z_log_var_flat,
         )
-        reconstruction_loss = vae_losses["reconstruction_loss"]
+        
         autoencoder_loss = vae_losses["total_loss"]
-
-        # Track the unweighted Gaussian KL explicitly so VAE-beta and encoder
-        # architecture searches can be diagnosed independently of the weighted
-        # total autoencoder loss. This does not alter the optimized objective.
-        kl_per_sample = -0.5 * tf.reduce_mean(
-            1.0 + z_log_var_flat - tf.square(z_mean_flat) - tf.exp(z_log_var_flat),
-            axis=1,
-        )
-
-        kl_loss = tf.reduce_mean(kl_per_sample)
-        weighted_kl_loss = tf.cast(self.vae_beta, kl_loss.dtype) * kl_loss
+        reconstruction_loss = vae_losses["reconstruction_loss"]
+        kl_loss = vae_losses["kl_loss"]
+        weighted_kl_loss = vae_losses["weighted_kl_loss"]
 
         y_flat = self._flatten_labels(y)
         vc_loss = self.variational_classifier.vc_loss(

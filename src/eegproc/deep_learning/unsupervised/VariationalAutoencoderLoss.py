@@ -87,12 +87,14 @@ class VariationalAutoencoderLoss:
             z_log_var=z_log_var,
         )
 
-        total_loss_per_sample = reconstruction_loss + self.beta * kl_loss
+        weighted_kl_loss = tf.cast(self.beta, kl_loss.dtype) * kl_loss
+        total_loss_per_sample = reconstruction_loss + weighted_kl_loss
 
         return {
             "total_loss": tf.reduce_mean(total_loss_per_sample),
             "reconstruction_loss": tf.reduce_mean(reconstruction_loss),
             "kl_loss": tf.reduce_mean(kl_loss),
+            "weighted_kl_loss": tf.reduce_mean(weighted_kl_loss),
         }
 
     def compute_reconstruction_loss(
@@ -153,7 +155,7 @@ class VariationalAutoencoderLoss:
         and p(z) = N(0, I).
         """
 
-        return -0.5 * tf.reduce_sum(
+        return -0.5 * tf.reduce_mean(
             1.0 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var),
             axis=-1,
         )

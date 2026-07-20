@@ -223,7 +223,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         0.7
     ],
     "vae_beta": [
-        1.0
+        1000, 2000
     ],
     "t_down": [
         2
