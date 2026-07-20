@@ -4,9 +4,9 @@
 #SBATCH --error=joint_v2_dreamer_arousal_cnn1d_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --gres=gpu:8
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
 #SBATCH --time=32:00:00
 
 set -euo pipefail
@@ -197,7 +197,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --encoder-type cnn1d \
     --out-dir runs/joint_autoencoder_vc_v2/CNN1D \
     --run-name joint_v2_dreamer_arousal_cnn1d \
-    --n-jobs 4 \
+    --n-jobs 8 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
@@ -206,6 +206,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --prediction-latent-samples 10 \
     --latent-sampling-seed 42 \
     --seed 42 \
+    --validation-subjects 2 \
+    --validation-seed 42 \
+    --early-stopping-patience 50 \
+    --early-stopping-min-delta 0.0 \
+    --early-stopping-monitor val_vc_cross_entropy \
+    --early-stopping-mode min \
+    --final-epoch-strategy median \
     --hyperparameters-json '{
     "epochs": [
         200
@@ -216,14 +223,14 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "learning_rate": [
         0.0001
     ],
-    "ae_loss_weight": [0.05],
+    "ae_loss_weight": [0.0],
     "vc_loss_weight": [1.0],
     "vc_alpha": [1.0],
-    "vc_beta": [0.5],
+    "vc_beta": [0.0],
     "vc_gamma": [0.0],
     "vc_lambda": [0.0],
     "vae_beta": [
-        50, 100
+        10
     ],
     "t_down": [
         2

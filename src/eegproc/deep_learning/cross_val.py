@@ -2259,60 +2259,136 @@ def _run_loso_fold(
     latent_sampling_seed: int | None,
     n_uncertainty_samples: int,
     ci_level: float,
+    validation_subjects_per_fold: int,
+    validation_seed: int | None,
+    early_stopping_patience: int | None,
+    early_stopping_min_delta: float,
+    early_stopping_monitor: str,
+    early_stopping_mode: Literal["auto", "min", "max"],
+    restore_best_weights: bool,
     verbose: int,
     extra_fit_kwargs: dict,
 ) -> dict:
-    """Train and evaluate one ordinary LOSO fold.
+    """Train and evaluate one LOSO fold with optional seeded validation.
 
-    No inner folds or hyperparameter selection occur here. ``fixed_config`` is
-    applied unchanged in every fold.
+    The LOSO test subject is never used by ``model.fit``. When
+    ``validation_subjects_per_fold`` is positive, that many subjects are drawn
+    deterministically from the outer-training pool and excluded from gradient
+    updates. They provide ``validation_data`` for early stopping without adding
+    another model fit.
     """
     test_mask = subject_id_array == test_subject
-    train_mask = ~test_mask
+    outer_train_mask = ~test_mask
 
-    train_indices = np.where(train_mask)[0]
+    outer_train_indices = np.where(outer_train_mask)[0]
     test_indices = np.where(test_mask)[0]
 
-    if len(train_indices) == 0 or len(test_indices) == 0:
+    if len(outer_train_indices) == 0 or len(test_indices) == 0:
         raise ValueError(
             f"Invalid LOSO split for subject {test_subject!r}: "
-            f"train={len(train_indices)}, test={len(test_indices)} windows."
+            f"train={len(outer_train_indices)}, test={len(test_indices)} windows."
         )
+
+    outer_train_subjects = np.sort(
+        np.unique(subject_id_array[outer_train_indices])
+    )
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if validation_subjects_per_fold >= len(outer_train_subjects):
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one subject for "
+            f"gradient training. Got {validation_subjects_per_fold} validation "
+            f"subjects from {len(outer_train_subjects)} outer-training subjects."
+        )
+
+    if validation_subjects_per_fold > 0:
+        base_seed = 0 if validation_seed is None else int(validation_seed)
+        fold_seed = np.random.SeedSequence([base_seed, int(fold_number)])
+        rng = np.random.default_rng(fold_seed)
+        validation_subjects = np.sort(
+            rng.choice(
+                outer_train_subjects,
+                size=validation_subjects_per_fold,
+                replace=False,
+            )
+        )
+        validation_mask_relative = np.isin(
+            subject_id_array[outer_train_indices],
+            validation_subjects,
+        )
+        validation_indices = outer_train_indices[validation_mask_relative]
+        fit_train_indices = outer_train_indices[~validation_mask_relative]
+    else:
+        validation_subjects = np.asarray([], dtype=outer_train_subjects.dtype)
+        validation_indices = np.asarray([], dtype=np.int64)
+        fit_train_indices = outer_train_indices
 
     _print_fold_header(
         fold_number,
         total_folds,
         f"LOSO test subject={_python_scalar(test_subject)!r} "
-        f"(train={len(train_indices)}, test={len(test_indices)} windows)",
+        f"(fit_train={len(fit_train_indices)}, "
+        f"validation={len(validation_indices)}, "
+        f"test={len(test_indices)} windows)",
     )
+    if len(validation_subjects):
+        print(
+            "Seeded validation subjects: "
+            f"{[_python_scalar(value) for value in validation_subjects]}",
+            flush=True,
+        )
 
-    X_train = feature_array[train_indices]
-    y_train = label_array[train_indices]
+    # The current preprocessing callback API supports only one train/eval pair.
+    # Refuse an ambiguous three-way fit rather than leaking validation subjects
+    # into a fitted transform or fitting inconsistent transforms for val/test.
+    if validation_subjects_per_fold > 0 and preprocessing_strategy is not None:
+        raise ValueError(
+            "Seeded subject-level validation currently requires "
+            "preprocessing_strategy=None. Preprocess before loso_cv or extend "
+            "the strategy API to transform train/validation/test from one "
+            "fold-local fitted state."
+        )
+
+    X_fit_train = feature_array[fit_train_indices]
+    y_fit_train = label_array[fit_train_indices]
+    X_validation = feature_array[validation_indices]
+    y_validation = label_array[validation_indices]
     X_test = feature_array[test_indices]
     y_test = label_array[test_indices]
 
-    subject_ids_train = subject_id_array[train_indices]
+    subject_ids_fit_train = subject_id_array[fit_train_indices]
+    subject_ids_validation = subject_id_array[validation_indices]
     subject_ids_test = subject_id_array[test_indices]
-    trial_ids_train = trial_id_array[train_indices]
+    trial_ids_fit_train = trial_id_array[fit_train_indices]
+    trial_ids_validation = trial_id_array[validation_indices]
     trial_ids_test = trial_id_array[test_indices]
 
-    X_train, y_train, X_test, y_test = _apply_preprocessing_strategy(
-        preprocessing_strategy=preprocessing_strategy,
-        X_train=X_train,
-        y_train=y_train,
-        X_eval=X_test,
-        y_eval=y_test,
-        train_indices=train_indices,
-        eval_indices=test_indices,
-    )
+    if validation_subjects_per_fold == 0:
+        X_fit_train, y_fit_train, X_test, y_test = _apply_preprocessing_strategy(
+            preprocessing_strategy=preprocessing_strategy,
+            X_train=X_fit_train,
+            y_train=y_fit_train,
+            X_eval=X_test,
+            y_eval=y_test,
+            train_indices=fit_train_indices,
+            eval_indices=test_indices,
+        )
 
     _validate_processed_alignment(
-        X_train,
-        y_train,
-        subject_ids_train,
-        trial_ids_train,
-        "LOSO-training",
+        X_fit_train,
+        y_fit_train,
+        subject_ids_fit_train,
+        trial_ids_fit_train,
+        "LOSO-fit-training",
     )
+    if validation_subjects_per_fold > 0:
+        _validate_processed_alignment(
+            X_validation,
+            y_validation,
+            subject_ids_validation,
+            trial_ids_validation,
+            "LOSO-validation",
+        )
     _validate_processed_alignment(
         X_test,
         y_test,
@@ -2331,26 +2407,87 @@ def _run_loso_fold(
             f"configuration and extra_fit_kwargs: {sorted(duplicate_fit_keys)}"
         )
 
+    fit_call_kwargs = dict(extra_fit_kwargs)
+    callbacks = list(fit_call_kwargs.pop("callbacks", []))
+    if validation_subjects_per_fold > 0 and early_stopping_patience is not None:
+        callbacks.append(
+            tf.keras.callbacks.EarlyStopping(
+                monitor=early_stopping_monitor,
+                patience=int(early_stopping_patience),
+                min_delta=float(early_stopping_min_delta),
+                mode=early_stopping_mode,
+                restore_best_weights=bool(restore_best_weights),
+                verbose=1 if verbose else 0,
+            )
+        )
+    if callbacks:
+        fit_call_kwargs["callbacks"] = callbacks
+
     tf.keras.backend.clear_session()
     model = model_builder_function(**model_hp)
 
+    epochs_ran = 0
+    best_epoch: int | None = None
+    best_monitored_value: float | None = None
+    stopped_early = False
+
     try:
-        y_train_ids = _as_numpy_1d(y_train)
-        classes, counts = np.unique(y_train_ids, return_counts=True)
+        y_fit_train_ids = _as_numpy_1d(y_fit_train)
+        classes, counts = np.unique(y_fit_train_ids, return_counts=True)
 
         class_weight = {
-            int(class_id): len(y_train_ids) / (len(classes) * count)
+            int(class_id): len(y_fit_train_ids) / (len(classes) * count)
             for class_id, count in zip(classes, counts)
         }
 
-        model.fit(
-            X_train,
-            y_train,
+        validation_data = (
+            (X_validation, y_validation)
+            if validation_subjects_per_fold > 0
+            else None
+        )
+        history = model.fit(
+            X_fit_train,
+            y_fit_train,
+            validation_data=validation_data,
             class_weight=class_weight,
             verbose=verbose,
             **fit_hp,
-            **extra_fit_kwargs,
+            **fit_call_kwargs,
         )
+
+        epochs_ran = int(len(history.history.get("loss", [])))
+        requested_epochs = int(fit_hp.get("epochs", epochs_ran))
+        stopped_early = bool(epochs_ran < requested_epochs)
+
+        monitored_history = history.history.get(early_stopping_monitor)
+        if monitored_history:
+            monitored_values = np.asarray(monitored_history, dtype=np.float64)
+            finite_mask = np.isfinite(monitored_values)
+            if np.any(finite_mask):
+                candidate_indices = np.where(finite_mask)[0]
+                candidate_values = monitored_values[finite_mask]
+                if early_stopping_mode == "max":
+                    local_best = int(np.argmax(candidate_values))
+                elif early_stopping_mode == "min":
+                    local_best = int(np.argmin(candidate_values))
+                else:
+                    maximize_tokens = (
+                        "acc", "auc", "f1", "precision", "recall"
+                    )
+                    maximize = any(
+                        token in early_stopping_monitor.lower()
+                        for token in maximize_tokens
+                    )
+                    local_best = int(
+                        np.argmax(candidate_values)
+                        if maximize
+                        else np.argmin(candidate_values)
+                    )
+                best_index = int(candidate_indices[local_best])
+                best_epoch = best_index + 1
+                best_monitored_value = float(monitored_values[best_index])
+        if best_epoch is None and epochs_ran > 0:
+            best_epoch = epochs_ran
 
         evaluation = _evaluate_classification_fold(
             model=model,
@@ -2374,57 +2511,63 @@ def _run_loso_fold(
         gc.collect()
         tf.keras.backend.clear_session()
 
+    def count_trials(subject_ids: np.ndarray, trial_ids: np.ndarray) -> int:
+        return int(len(set(zip(subject_ids.tolist(), trial_ids.tolist()))))
+
+    subject_ids_outer_train = subject_id_array[outer_train_indices]
+    trial_ids_outer_train = trial_id_array[outer_train_indices]
+
     fold_record = {
         "fold_number": int(fold_number),
         "outer_fold_number": int(fold_number),
         "left_out_subject": _python_scalar(test_subject),
         "left_out_subjects": [_python_scalar(test_subject)],
         "outer_test_subjects": [_python_scalar(test_subject)],
-        "n_train_windows": int(len(train_indices)),
+        "validation_subjects": [
+            _python_scalar(value) for value in validation_subjects.tolist()
+        ],
+        "validation_seed": validation_seed,
+        "n_train_windows": int(len(outer_train_indices)),
+        "n_fit_train_windows": int(len(fit_train_indices)),
+        "n_validation_windows": int(len(validation_indices)),
         "n_test_windows": int(len(test_indices)),
         # Compatibility aliases for code that previously consumed nested CV.
-        "n_outer_train_windows": int(len(train_indices)),
+        "n_outer_train_windows": int(len(outer_train_indices)),
         "n_outer_test_windows": int(len(test_indices)),
-        "n_train_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_train.tolist(),
-                        trial_ids_train.tolist(),
-                    )
-                )
-            )
+        "n_train_trials": count_trials(
+            subject_ids_outer_train, trial_ids_outer_train
         ),
-        "n_test_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_test.tolist(),
-                        trial_ids_test.tolist(),
-                    )
-                )
-            )
+        "n_fit_train_trials": count_trials(
+            subject_ids_fit_train, trial_ids_fit_train
         ),
-        "n_outer_train_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_train.tolist(),
-                        trial_ids_train.tolist(),
-                    )
-                )
-            )
+        "n_validation_trials": count_trials(
+            subject_ids_validation, trial_ids_validation
         ),
-        "n_outer_test_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_test.tolist(),
-                        trial_ids_test.tolist(),
-                    )
-                )
-            )
+        "n_test_trials": count_trials(subject_ids_test, trial_ids_test),
+        "n_outer_train_trials": count_trials(
+            subject_ids_outer_train, trial_ids_outer_train
         ),
+        "n_outer_test_trials": count_trials(subject_ids_test, trial_ids_test),
+        "early_stopping_monitor": (
+            early_stopping_monitor if validation_subjects_per_fold > 0 else None
+        ),
+        "early_stopping_patience": (
+            early_stopping_patience if validation_subjects_per_fold > 0 else None
+        ),
+        "early_stopping_min_delta": (
+            float(early_stopping_min_delta)
+            if validation_subjects_per_fold > 0
+            else None
+        ),
+        "restore_best_weights": (
+            bool(restore_best_weights)
+            if validation_subjects_per_fold > 0
+            else None
+        ),
+        "epochs_ran": int(epochs_ran),
+        "best_epoch": None if best_epoch is None else int(best_epoch),
+        "best_monitored_value": best_monitored_value,
+        "stopped_early": bool(stopped_early),
         "evaluation_level": evaluation_level,
         "selection_level": None,
         "fixed_config": dict(fixed_config),
@@ -2476,7 +2619,6 @@ def _run_loso_fold(
         **evaluation,
     }
 
-
 def _loso_fold_process_main(
     worker_state_payload: bytes,
     task_queue,
@@ -2526,14 +2668,7 @@ def _loso_fold_process_main(
         gc.collect()
 
 def _compact_loso_fold_result(fold_output: dict) -> dict:
-    """Return one LOSO fold record without large prediction logs.
-
-    Every hyperparameter configuration retains its per-subject metrics so the
-    complete grid search can be inspected later. Window/trial prediction rows
-    are retained only for the globally selected configuration at the top level
-    of the ``loso_cv`` result, preventing the result JSON from growing by one
-    full prediction log per configuration.
-    """
+    """Return one LOSO fold record without large prediction logs."""
     fold_record = fold_output["fold_record"]
     return {
         "fold_number": int(fold_record["fold_number"]),
@@ -2541,17 +2676,30 @@ def _compact_loso_fold_result(fold_output: dict) -> dict:
         "left_out_subject": fold_record["left_out_subject"],
         "left_out_subjects": list(fold_record["left_out_subjects"]),
         "outer_test_subjects": list(fold_record["outer_test_subjects"]),
+        "validation_subjects": list(fold_record["validation_subjects"]),
+        "validation_seed": fold_record["validation_seed"],
         "n_train_windows": int(fold_record["n_train_windows"]),
+        "n_fit_train_windows": int(fold_record["n_fit_train_windows"]),
+        "n_validation_windows": int(fold_record["n_validation_windows"]),
         "n_test_windows": int(fold_record["n_test_windows"]),
         "n_train_trials": int(fold_record["n_train_trials"]),
+        "n_fit_train_trials": int(fold_record["n_fit_train_trials"]),
+        "n_validation_trials": int(fold_record["n_validation_trials"]),
         "n_test_trials": int(fold_record["n_test_trials"]),
+        "early_stopping_monitor": fold_record["early_stopping_monitor"],
+        "early_stopping_patience": fold_record["early_stopping_patience"],
+        "early_stopping_min_delta": fold_record["early_stopping_min_delta"],
+        "restore_best_weights": fold_record["restore_best_weights"],
+        "epochs_ran": int(fold_record["epochs_ran"]),
+        "best_epoch": fold_record["best_epoch"],
+        "best_monitored_value": fold_record["best_monitored_value"],
+        "stopped_early": bool(fold_record["stopped_early"]),
         "evaluation_level": fold_record["evaluation_level"],
         "fold_metrics": dict(fold_output["fold_metrics"]),
         "window_fold_metrics": dict(fold_output["window_fold_metrics"]),
         "trial_fold_metrics": dict(fold_output["trial_fold_metrics"]),
         "user_metrics": [dict(row) for row in fold_output["user_metrics"]],
     }
-
 
 def _aggregate_loso_config_result(
     config_index: int,
@@ -2719,6 +2867,13 @@ def loso_cv(
     latent_sampling_seed: int | None = None,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    validation_subjects_per_fold: int = 0,
+    validation_seed: int | None = 42,
+    early_stopping_patience: int | None = 5,
+    early_stopping_min_delta: float = 0.0,
+    early_stopping_monitor: str = "val_loss",
+    early_stopping_mode: Literal["auto", "min", "max"] = "min",
+    restore_best_weights: bool = True,
     verbose: int = 0,
     extra_fit_kwargs: dict | None = None,
     n_jobs: int = 1,
@@ -2753,6 +2908,15 @@ def loso_cv(
 
     ``n_epochs`` and ``batch_size`` provide defaults and are overridden when
     ``hyperparameters`` contains ``epochs`` or ``batch_size``.
+
+    Seeded validation and early stopping
+    ------------------------------------
+    When ``validation_subjects_per_fold`` is positive, that many subjects are
+    sampled deterministically from each outer-training pool. They are excluded
+    from gradient updates and passed to ``model.fit`` as ``validation_data``.
+    The same fold-local validation subjects are reused for every hyperparameter
+    configuration, while the LOSO test subject remains untouched. This adds no
+    extra fits; it only changes each fit from train/test to train/validation/test.
 
     Selection
     ---------
@@ -2849,11 +3013,33 @@ def loso_cv(
     if cpus_per_worker is not None and cpus_per_worker < 1:
         raise ValueError("cpus_per_worker must be >= 1 when provided.")
 
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if validation_seed is not None and validation_seed < 0:
+        raise ValueError("validation_seed must be >= 0 or None.")
+    if early_stopping_patience is not None and early_stopping_patience < 0:
+        raise ValueError("early_stopping_patience must be >= 0 or None.")
+    if early_stopping_min_delta < 0.0:
+        raise ValueError("early_stopping_min_delta must be >= 0.")
+    if early_stopping_mode not in {"auto", "min", "max"}:
+        raise ValueError(
+            "early_stopping_mode must be 'auto', 'min', or 'max'."
+        )
+    if not early_stopping_monitor:
+        raise ValueError("early_stopping_monitor must be a non-empty string.")
+
     unique_subjects = np.sort(np.unique(subject_id_array))
     if len(unique_subjects) < 2:
         raise ValueError(
             "LOSO CV requires at least two unique subjects. "
             f"Got {len(unique_subjects)}."
+        )
+    if validation_subjects_per_fold >= len(unique_subjects) - 1:
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one gradient-"
+            "training subject after the LOSO test subject is removed. Got "
+            f"{validation_subjects_per_fold} validation subjects for "
+            f"{len(unique_subjects)} total subjects."
         )
 
     if max_folds is not None:
@@ -2923,6 +3109,16 @@ def loso_cv(
         else f"MC average over {n_prediction_latent_samples} latent sample(s)"
     )
     print(f"Prediction latent mode: {prediction_mode}")
+    if validation_subjects_per_fold > 0:
+        print(
+            "Per-fold validation: "
+            f"{validation_subjects_per_fold} seeded subject(s), "
+            f"seed={validation_seed}, monitor={early_stopping_monitor}, "
+            f"patience={early_stopping_patience}, "
+            f"restore_best_weights={restore_best_weights}"
+        )
+    else:
+        print("Per-fold validation: disabled")
     print(f"Fold workers: {effective_n_jobs}")
 
     if effective_n_jobs > 1 and normalized_gpu_ids is None:
@@ -2954,6 +3150,13 @@ def loso_cv(
         "latent_sampling_seed": latent_sampling_seed,
         "n_uncertainty_samples": n_uncertainty_samples,
         "ci_level": ci_level,
+        "validation_subjects_per_fold": validation_subjects_per_fold,
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": early_stopping_min_delta,
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": restore_best_weights,
         "verbose": verbose,
         "extra_fit_kwargs": extra_fit_kwargs,
     }
@@ -3073,6 +3276,13 @@ def loso_cv(
         "maximize_metric": bool(maximize_metric),
         "n_prediction_latent_samples": int(n_prediction_latent_samples),
         "latent_sampling_seed": latent_sampling_seed,
+        "validation_subjects_per_fold": int(validation_subjects_per_fold),
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": float(early_stopping_min_delta),
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": bool(restore_best_weights),
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,

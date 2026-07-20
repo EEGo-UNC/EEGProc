@@ -1,7 +1,7 @@
 """Training entry point for the joint VAE + BiLSTM + variational classifier.
 
 This module keeps the v2 model file focused on architecture only. It provides
-ordinary leave-one-subject-out cross-validation, flat hyperparameter search
+leave-one-subject-out cross-validation with seeded subject-level validation, flat hyperparameter search
 across the complete joint VAE/BiLSTM model, DREAMER-backed data loading
 (see ``joint_v2_data.py``), structured logging, and final model saving. The
 autoencoder can be selected with ``--encoder-type`` as CNN1D, CNN2D, or GCN.
@@ -102,14 +102,15 @@ class JointV2TrainingConfig:
     maximize_metric: bool | None = None
     prediction_latent_samples: int = 0
     latent_sampling_seed: int | None = None
-    n_outer_subjects_to_leave_out: int = 2
-    n_inner_subjects_to_leave_out: int = 1
+    validation_subjects_per_fold: int = 2
+    validation_seed: int | None = 42
     outer_verbose: int = 0
-    inner_verbose: int = 0
     final_verbose: int = 1
-    inner_early_stopping_patience: int = 5
-    inner_early_stopping_min_delta: float = 0.0
-    use_inner_early_stopping: bool = True
+    early_stopping_patience: int = 5
+    early_stopping_min_delta: float = 0.0
+    early_stopping_monitor: str = "val_loss"
+    early_stopping_mode: str = "min"
+    use_early_stopping: bool = True
     save_full_model: bool = True
     save_weights: bool = True
     save_final_history_csv: bool = True
@@ -336,6 +337,35 @@ def _grid_summary_rows(cv_results: dict) -> list[dict]:
 
         rows.append(row)
     return rows
+
+
+def _select_final_epochs_from_cv(
+    cv_results: dict,
+    strategy: str,
+    fallback_epochs: int,
+) -> tuple[int, list[int]]:
+    """Choose a full-data epoch count from fold-local best validation epochs."""
+    fold_rows = cv_results.get("best_config_result", {}).get("fold_results", [])
+    best_epochs = [
+        int(row["best_epoch"])
+        for row in fold_rows
+        if row.get("best_epoch") is not None and int(row["best_epoch"]) >= 1
+    ]
+    if not best_epochs:
+        return max(1, int(fallback_epochs)), []
+
+    if strategy == "median":
+        selected = int(np.rint(np.median(best_epochs)))
+    elif strategy == "mean":
+        selected = int(np.rint(np.mean(best_epochs)))
+    elif strategy == "max":
+        selected = int(np.max(best_epochs))
+    else:
+        raise ValueError(
+            f"Unknown final_epoch_strategy={strategy!r}; expected median, mean, or max."
+        )
+
+    return max(1, selected), best_epochs
 
 
 def _positive_int_tuple(
@@ -748,7 +778,7 @@ def train_joint_autoencoder_variational_classifier_v2(
     training_config: JointV2TrainingConfig | None = None,
     model_builder_function: Callable[[], tf.keras.Model] | None = None,
 ) -> dict:
-    """Train the joint v2 model with ordinary LOSO CV and final saving."""
+    """Train with flat LOSO, seeded validation subjects, and early stopping."""
 
     training_config = training_config or JointV2TrainingConfig()
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1019,6 +1049,21 @@ def train_joint_autoencoder_variational_classifier_v2(
         log_predictions=True,
         n_prediction_latent_samples=training_config.prediction_latent_samples,
         latent_sampling_seed=training_config.latent_sampling_seed,
+        validation_subjects_per_fold=(
+            training_config.validation_subjects_per_fold
+            if training_config.use_early_stopping
+            else 0
+        ),
+        validation_seed=training_config.validation_seed,
+        early_stopping_patience=(
+            training_config.early_stopping_patience
+            if training_config.use_early_stopping
+            else None
+        ),
+        early_stopping_min_delta=training_config.early_stopping_min_delta,
+        early_stopping_monitor=training_config.early_stopping_monitor,
+        early_stopping_mode=training_config.early_stopping_mode,
+        restore_best_weights=True,
         verbose=training_config.outer_verbose,
         extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
         n_jobs=training_config.n_jobs,
@@ -1031,6 +1076,10 @@ def train_joint_autoencoder_variational_classifier_v2(
         row = dict(fold_result)
         test_subjects = row.pop("outer_test_subjects", row.pop("left_out_subjects", []))
         row["outer_test_subjects"] = ",".join(map(str, test_subjects))
+        if "validation_subjects" in row:
+            row["validation_subjects"] = ",".join(
+                map(str, row["validation_subjects"])
+            )
         row["inner_fold_results"] = json.dumps(
             row["inner_fold_results"], default=_json_default
         )
@@ -1049,19 +1098,20 @@ def train_joint_autoencoder_variational_classifier_v2(
         )
     selected_final_config = dict(cv_results["best_config"])
     _write_json(run_dir / "selected_config.json", selected_final_config)
-    selected_final_epochs = (
-        max(1, int(training_config.final_epochs))
-        if training_config.final_epochs is not None
-        else max(
-            1,
-            int(
-                selected_final_config.get(
-                    "epochs",
-                    training_config.cv_max_epochs,
-                )
-            ),
-        )
+    configured_epoch_cap = int(
+        selected_final_config.get("epochs", training_config.cv_max_epochs)
     )
+    cv_best_epochs: list[int] = []
+    if training_config.final_epochs is not None:
+        selected_final_epochs = max(1, int(training_config.final_epochs))
+    elif training_config.use_early_stopping:
+        selected_final_epochs, cv_best_epochs = _select_final_epochs_from_cv(
+            cv_results=cv_results,
+            strategy=training_config.final_epoch_strategy,
+            fallback_epochs=configured_epoch_cap,
+        )
+    else:
+        selected_final_epochs = max(1, configured_epoch_cap)
     selected_final_batch_size = int(
         selected_final_config.get("batch_size", training_config.batch_size)
     )
@@ -1072,9 +1122,21 @@ def train_joint_autoencoder_variational_classifier_v2(
     }
 
     logger.info("Selected final config: %s", selected_final_config)
-    logger.info(
-        "Selected %d epochs for the final full-data fit.", selected_final_epochs
-    )
+    if cv_best_epochs:
+        logger.info(
+            "Fold-local best epochs for selected config: %s",
+            cv_best_epochs,
+        )
+        logger.info(
+            "Selected %d final epochs using the %s strategy.",
+            selected_final_epochs,
+            training_config.final_epoch_strategy,
+        )
+    else:
+        logger.info(
+            "Selected %d epochs for the final full-data fit.",
+            selected_final_epochs,
+        )
 
     final_model = model_builder_function(**selected_final_model_hparams)
     final_callbacks: list[tf.keras.callbacks.Callback] = [
@@ -1116,6 +1178,8 @@ def train_joint_autoencoder_variational_classifier_v2(
         "selected_final_config": selected_final_config,
         "selected_final_epochs": selected_final_epochs,
         "selected_final_batch_size": selected_final_batch_size,
+        "cv_best_epochs": cv_best_epochs,
+        "final_epoch_strategy": training_config.final_epoch_strategy,
         "loso_cv": cv_results,
         "final_fit_history": final_history.history,
         "final_full_dataset_metrics": final_eval,
@@ -1132,7 +1196,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Train JointAutoencoderVariationalClassifierV2 with a CNN1D, "
-            "CNN2D, or GCN autoencoder and flat LOSO hyperparameter search."
+            "CNN2D, or GCN autoencoder, seeded validation, and flat LOSO search."
         )
     )
     parser.add_argument("--out-dir", default="runs/joint_autoencoder_vc_v2")
@@ -1218,11 +1282,55 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional seed for reproducible Monte Carlo latent prediction.",
     )
     parser.add_argument("--outer-verbose", type=int, default=0)
-    parser.add_argument("--inner-verbose", type=int, default=0)
     parser.add_argument("--final-verbose", type=int, default=1)
-    parser.add_argument("--no-inner-early-stopping", action="store_true")
-    parser.add_argument("--inner-patience", type=int, default=5)
-    parser.add_argument("--inner-min-delta", type=float, default=0.0)
+    parser.add_argument(
+        "--validation-subjects",
+        type=int,
+        default=2,
+        help=(
+            "Number of seeded subjects reserved for validation inside every "
+            "LOSO fold (default: 2)."
+        ),
+    )
+    parser.add_argument(
+        "--validation-seed",
+        type=int,
+        default=None,
+        help="Validation split seed; defaults to --seed or 42.",
+    )
+    parser.add_argument(
+        "--no-early-stopping",
+        "--no-inner-early-stopping",
+        action="store_true",
+        help="Disable seeded validation and early stopping in LOSO fits.",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        "--inner-patience",
+        type=int,
+        default=5,
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        "--inner-min-delta",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--early-stopping-monitor",
+        default="val_loss",
+        help=(
+            "Validation metric monitored by early stopping. The joint model "
+            "exposes val_loss, val_vc_cross_entropy, and val_accuracy, among "
+            "other component metrics (default: val_loss)."
+        ),
+    )
+    parser.add_argument(
+        "--early-stopping-mode",
+        choices=("auto", "min", "max"),
+        default="min",
+        help="Whether the monitored metric should decrease or increase.",
+    )
     parser.add_argument("--no-save-full-model", action="store_true")
     parser.add_argument("--no-save-weights", action="store_true")
     parser.add_argument("--no-save-final-history-csv", action="store_true")
@@ -1377,6 +1485,18 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--n-channels must be >= 1.")
     if args.n_bands is not None and args.n_bands < 1:
         raise ValueError("--n-bands must be >= 1 when supplied.")
+    if args.validation_subjects < 0:
+        raise ValueError("--validation-subjects must be >= 0.")
+    if args.early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience must be >= 0.")
+    if args.early_stopping_min_delta < 0.0:
+        raise ValueError("--early-stopping-min-delta must be >= 0.")
+
+    validation_seed = (
+        args.validation_seed
+        if args.validation_seed is not None
+        else (args.seed if args.seed is not None else 42)
+    )
 
     config = JointV2TrainingConfig(
         output_dir=Path(args.out_dir),
@@ -1394,12 +1514,15 @@ def main(argv: list[str] | None = None) -> int:
         selection_level=args.selection_level,
         prediction_latent_samples=args.prediction_latent_samples,
         latent_sampling_seed=args.latent_sampling_seed,
+        validation_subjects_per_fold=args.validation_subjects,
+        validation_seed=validation_seed,
         outer_verbose=args.outer_verbose,
-        inner_verbose=args.inner_verbose,
         final_verbose=args.final_verbose,
-        inner_early_stopping_patience=args.inner_patience,
-        inner_early_stopping_min_delta=args.inner_min_delta,
-        use_inner_early_stopping=not args.no_inner_early_stopping,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
+        early_stopping_monitor=args.early_stopping_monitor,
+        early_stopping_mode=args.early_stopping_mode,
+        use_early_stopping=not args.no_early_stopping,
         save_full_model=not args.no_save_full_model,
         save_weights=not args.no_save_weights,
         save_final_history_csv=not args.no_save_final_history_csv,
