@@ -156,6 +156,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.vc_lambda = float(vc_lambda)
         self.update_discriminator = bool(update_discriminator)
 
+        if self.vc_gamma > 0.0 and not self.update_discriminator:
+            raise ValueError(
+                "vc_gamma is positive, but update_discriminator=False. "
+                "A discriminator KL term requires a trained discriminator."
+            )
+
         self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
         self.autoencoder_loss_tracker = tf.keras.metrics.Mean(name="autoencoder_loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
@@ -163,10 +169,45 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
         self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
         self.weighted_kl_loss_tracker = tf.keras.metrics.Mean(name="weighted_kl_loss")
+
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
+        self.vc_cross_entropy_tracker = tf.keras.metrics.Mean(
+            name="vc_cross_entropy"
+        )
+        self.weighted_vc_cross_entropy_tracker = tf.keras.metrics.Mean(
+            name="weighted_vc_cross_entropy"
+        )
+        self.vc_latent_kl_tracker = tf.keras.metrics.Mean(name="vc_latent_kl")
+        self.weighted_vc_latent_kl_tracker = tf.keras.metrics.Mean(
+            name="weighted_vc_latent_kl"
+        )
+        self.vc_discriminator_kl_tracker = tf.keras.metrics.Mean(
+            name="vc_discriminator_kl"
+        )
+        self.weighted_vc_discriminator_kl_tracker = tf.keras.metrics.Mean(
+            name="weighted_vc_discriminator_kl"
+        )
+        self.vc_class_prior_kl_tracker = tf.keras.metrics.Mean(
+            name="vc_class_prior_kl"
+        )
+        self.weighted_vc_class_prior_kl_tracker = tf.keras.metrics.Mean(
+            name="weighted_vc_class_prior_kl"
+        )
+        self.vc_discriminator_loss_tracker = tf.keras.metrics.Mean(
+            name="vc_discriminator_loss"
+        )
+
         self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
             name="accuracy"
         )
+        self.true_class_fraction_trackers = [
+            tf.keras.metrics.Mean(name=f"true_class_{class_index}_fraction")
+            for class_index in range(self.variational_classifier.n_classes)
+        ]
+        self.predicted_class_fraction_trackers = [
+            tf.keras.metrics.Mean(name=f"predicted_class_{class_index}_fraction")
+            for class_index in range(self.variational_classifier.n_classes)
+        ]
 
     @property
     def metrics(self) -> list[tf.keras.metrics.Metric]:
@@ -178,7 +219,18 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             self.kl_loss_tracker,
             self.weighted_kl_loss_tracker,
             self.vc_loss_tracker,
+            self.vc_cross_entropy_tracker,
+            self.weighted_vc_cross_entropy_tracker,
+            self.vc_latent_kl_tracker,
+            self.weighted_vc_latent_kl_tracker,
+            self.vc_discriminator_kl_tracker,
+            self.weighted_vc_discriminator_kl_tracker,
+            self.vc_class_prior_kl_tracker,
+            self.weighted_vc_class_prior_kl_tracker,
+            self.vc_discriminator_loss_tracker,
             self.accuracy_tracker,
+            *self.true_class_fraction_trackers,
+            *self.predicted_class_fraction_trackers,
         ]
 
     def compile(
@@ -395,24 +447,25 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
 
     @staticmethod
     def _unpack_data(data):
-        """Return ``x`` and ``y`` from Keras two- or three-item batches."""
+        """Return x, y, and optional sample weights from a Keras batch."""
         if not isinstance(data, tuple):
             raise ValueError("Expected data as an (x, y) tuple.")
         if len(data) == 2:
-            return data[0], data[1]
+            return data[0], data[1], None
         if len(data) == 3:
-            x, y, _sample_weight = data
-            return x, y
+            return data[0], data[1], data[2]
         raise ValueError("Expected (x, y) or (x, y, sample_weight).")
 
     @staticmethod
     def _flatten_labels(y) -> tf.Tensor:
         """Convert sparse labels or one-hot labels into class-id vectors."""
         y_tensor = tf.convert_to_tensor(y)
-
-        if y_tensor.shape.rank == 2 and y_tensor.shape[-1] is not None and y_tensor.shape[-1] > 1:
+        if (
+            y_tensor.shape.rank == 2
+            and y_tensor.shape[-1] is not None
+            and y_tensor.shape[-1] > 1
+        ):
             return tf.argmax(y_tensor, axis=-1, output_type=tf.int32)
-
         return tf.cast(tf.reshape(y_tensor, [-1]), tf.int32)
 
     def _compute_weighted_losses(
@@ -420,19 +473,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         x,
         y,
         training: bool,
-    ) -> tuple[
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        dict[str, tf.Tensor],
-    ]:
+        sample_weight=None,
+    ) -> tuple[dict[str, tf.Tensor], dict[str, tf.Tensor]]:
         outputs = self(x, training=training)
 
-        # Flatten the latent timestep and feature axes only for the analytic KL
-        # calculation. The decoder and BiLSTM still consume the 3D sequence.
+        # Flatten latent timesteps and features so the VAE loss computes one
+        # mean KL value over every latent coordinate in each sample.
         z_mean_flat = tf.reshape(
             outputs["z_mean"],
             [tf.shape(outputs["z_mean"])[0], -1],
@@ -448,34 +494,49 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             z_mean=z_mean_flat,
             z_log_var=z_log_var_flat,
         )
-        
-        autoencoder_loss = vae_losses["total_loss"]
-        reconstruction_loss = vae_losses["reconstruction_loss"]
-        kl_loss = vae_losses["kl_loss"]
-        weighted_kl_loss = vae_losses["weighted_kl_loss"]
 
         y_flat = self._flatten_labels(y)
-        vc_loss = self.variational_classifier.vc_loss(
+        vc_losses = self.variational_classifier.vc_loss_components(
             mh=outputs["classification_latent"],
             y=y_flat,
             alpha=self.vc_alpha,
             beta=self.vc_beta,
             gamma=self.vc_gamma,
             lambda_=self.vc_lambda,
+            logits=outputs["logits"],
+            sample_weight=sample_weight,
         )
 
         total_loss = (
-            self.ae_loss_weight * autoencoder_loss + self.vc_loss_weight * vc_loss
+            self.ae_loss_weight * vae_losses["total_loss"]
+            + self.vc_loss_weight * vc_losses["total_loss"]
         )
-        return (
-            total_loss,
-            autoencoder_loss,
-            reconstruction_loss,
-            kl_loss,
-            weighted_kl_loss,
-            vc_loss,
-            outputs,
-        )
+
+        losses = {
+            "total_loss": total_loss,
+            "autoencoder_loss": vae_losses["total_loss"],
+            "reconstruction_loss": vae_losses["reconstruction_loss"],
+            "kl_loss": vae_losses["kl_loss"],
+            "weighted_kl_loss": vae_losses["weighted_kl_loss"],
+            "vc_loss": vc_losses["total_loss"],
+            "vc_cross_entropy": vc_losses["cross_entropy"],
+            "weighted_vc_cross_entropy": vc_losses[
+                "weighted_cross_entropy"
+            ],
+            "vc_latent_kl": vc_losses["latent_posterior_kl"],
+            "weighted_vc_latent_kl": vc_losses[
+                "weighted_latent_posterior_kl"
+            ],
+            "vc_discriminator_kl": vc_losses["discriminator_kl"],
+            "weighted_vc_discriminator_kl": vc_losses[
+                "weighted_discriminator_kl"
+            ],
+            "vc_class_prior_kl": vc_losses["class_prior_kl"],
+            "weighted_vc_class_prior_kl": vc_losses[
+                "weighted_class_prior_kl"
+            ],
+        }
+        return losses, outputs
 
     def _discriminator_variables(self) -> list[tf.Variable]:
         """Return discriminator variables when the VC head defines them."""
@@ -497,28 +558,83 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         if gradient_variable_pairs:
             optimizer.apply_gradients(gradient_variable_pairs)
 
+    def _update_trackers(
+        self,
+        losses: dict[str, tf.Tensor],
+        outputs: dict[str, tf.Tensor],
+        y_flat: tf.Tensor,
+        sample_weight,
+        discriminator_loss: tf.Tensor,
+    ) -> None:
+        self.total_loss_tracker.update_state(losses["total_loss"])
+        self.autoencoder_loss_tracker.update_state(losses["autoencoder_loss"])
+        self.reconstruction_loss_tracker.update_state(
+            losses["reconstruction_loss"]
+        )
+        self.kl_loss_tracker.update_state(losses["kl_loss"])
+        self.weighted_kl_loss_tracker.update_state(losses["weighted_kl_loss"])
+        self.vc_loss_tracker.update_state(losses["vc_loss"])
+        self.vc_cross_entropy_tracker.update_state(losses["vc_cross_entropy"])
+        self.weighted_vc_cross_entropy_tracker.update_state(
+            losses["weighted_vc_cross_entropy"]
+        )
+        self.vc_latent_kl_tracker.update_state(losses["vc_latent_kl"])
+        self.weighted_vc_latent_kl_tracker.update_state(
+            losses["weighted_vc_latent_kl"]
+        )
+        self.vc_discriminator_kl_tracker.update_state(
+            losses["vc_discriminator_kl"]
+        )
+        self.weighted_vc_discriminator_kl_tracker.update_state(
+            losses["weighted_vc_discriminator_kl"]
+        )
+        self.vc_class_prior_kl_tracker.update_state(
+            losses["vc_class_prior_kl"]
+        )
+        self.weighted_vc_class_prior_kl_tracker.update_state(
+            losses["weighted_vc_class_prior_kl"]
+        )
+        self.vc_discriminator_loss_tracker.update_state(discriminator_loss)
+
+        self.accuracy_tracker.update_state(
+            y_flat,
+            outputs["logits"],
+            sample_weight=sample_weight,
+        )
+        predicted_classes = tf.argmax(
+            outputs["logits"],
+            axis=-1,
+            output_type=tf.int32,
+        )
+        for class_index, tracker in enumerate(
+            self.true_class_fraction_trackers
+        ):
+            tracker.update_state(
+                tf.cast(tf.equal(y_flat, class_index), tf.float32)
+            )
+        for class_index, tracker in enumerate(
+            self.predicted_class_fraction_trackers
+        ):
+            tracker.update_state(
+                tf.cast(tf.equal(predicted_classes, class_index), tf.float32)
+            )
+
+    def _metric_results(self) -> dict[str, tf.Tensor]:
+        return {metric.name: metric.result() for metric in self.metrics}
+
     def train_step(self, data) -> dict[str, tf.Tensor]:
         """Run one joint update and an optional discriminator-only update."""
-        x, y = self._unpack_data(data)
+        x, y, sample_weight = self._unpack_data(data)
         y_flat = self._flatten_labels(y)
 
         with tf.GradientTape() as tape:
-            (
-                total_loss,
-                autoencoder_loss,
-                reconstruction_loss,
-                kl_loss,
-                weighted_kl_loss,
-                vc_loss,
-                outputs,
-            ) = self._compute_weighted_losses(
+            losses, outputs = self._compute_weighted_losses(
                 x=x,
                 y=y_flat,
                 training=True,
+                sample_weight=sample_weight,
             )
 
-        # The first forward call creates all lazily built variables, including
-        # the z_mean and z_log_var projections, before variables are collected.
         discriminator_variables = self._discriminator_variables()
         discriminator_variable_ids = {
             id(variable) for variable in discriminator_variables
@@ -528,14 +644,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             for variable in self.trainable_variables
             if id(variable) not in discriminator_variable_ids
         ]
+        main_gradients = tape.gradient(losses["total_loss"], main_variables)
+        self._apply_gradients(self.optimizer, main_gradients, main_variables)
 
-        main_gradients = tape.gradient(total_loss, main_variables)
-        self._apply_gradients(
-            self.optimizer,
-            main_gradients,
-            main_variables,
-        )
-
+        discriminator_loss = tf.zeros((), dtype=losses["total_loss"].dtype)
         if self.update_discriminator and discriminator_variables:
             discriminator_optimizer = getattr(
                 self,
@@ -549,11 +661,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 )
 
             with tf.GradientTape() as discriminator_tape:
-                discriminator_loss = self.variational_classifier.discriminator_loss(
-                    tf.stop_gradient(outputs["classification_latent"]),
-                    y_flat,
+                discriminator_loss = (
+                    self.variational_classifier.discriminator_loss(
+                        tf.stop_gradient(outputs["classification_latent"]),
+                        y_flat,
+                    )
                 )
-
             discriminator_gradients = discriminator_tape.gradient(
                 discriminator_loss,
                 discriminator_variables,
@@ -564,60 +677,34 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 discriminator_variables,
             )
 
-        self.total_loss_tracker.update_state(total_loss)
-        self.autoencoder_loss_tracker.update_state(autoencoder_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-        self.weighted_kl_loss_tracker.update_state(weighted_kl_loss)
-        self.vc_loss_tracker.update_state(vc_loss)
-        self.accuracy_tracker.update_state(y_flat, outputs["logits"])
-
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "autoencoder_loss": self.autoencoder_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-            "weighted_kl_loss": self.weighted_kl_loss_tracker.result(),
-            "vc_loss": self.vc_loss_tracker.result(),
-            "accuracy": self.accuracy_tracker.result(),
-        }
+        self._update_trackers(
+            losses=losses,
+            outputs=outputs,
+            y_flat=y_flat,
+            sample_weight=sample_weight,
+            discriminator_loss=discriminator_loss,
+        )
+        return self._metric_results()
 
     def test_step(self, data) -> dict[str, tf.Tensor]:
         """Evaluate with the posterior mean and without updating weights."""
-        x, y = self._unpack_data(data)
+        x, y, sample_weight = self._unpack_data(data)
         y_flat = self._flatten_labels(y)
-
-        (
-            total_loss,
-            autoencoder_loss,
-            reconstruction_loss,
-            kl_loss,
-            weighted_kl_loss,
-            vc_loss,
-            outputs,
-        ) = self._compute_weighted_losses(
+        losses, outputs = self._compute_weighted_losses(
             x=x,
             y=y_flat,
             training=False,
+            sample_weight=sample_weight,
         )
-
-        self.total_loss_tracker.update_state(total_loss)
-        self.autoencoder_loss_tracker.update_state(autoencoder_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-        self.weighted_kl_loss_tracker.update_state(weighted_kl_loss)
-        self.vc_loss_tracker.update_state(vc_loss)
-        self.accuracy_tracker.update_state(y_flat, outputs["logits"])
-
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "autoencoder_loss": self.autoencoder_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-            "weighted_kl_loss": self.weighted_kl_loss_tracker.result(),
-            "vc_loss": self.vc_loss_tracker.result(),
-            "accuracy": self.accuracy_tracker.result(),
-        }
+        discriminator_loss = tf.zeros((), dtype=losses["total_loss"].dtype)
+        self._update_trackers(
+            losses=losses,
+            outputs=outputs,
+            y_flat=y_flat,
+            sample_weight=sample_weight,
+            discriminator_loss=discriminator_loss,
+        )
+        return self._metric_results()
 
     def get_config(self) -> dict:
         """Return scalar settings used by this subclassed model."""
