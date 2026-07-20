@@ -216,10 +216,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "learning_rate": [
         0.0001
     ],
-    "ae_loss_weight": [0.1],
+    "ae_loss_weight": [0.05],
     "vc_loss_weight": [1.0],
     "vc_alpha": [1.0],
-    "vc_beta": [0.0],
+    "vc_beta": [0.5],
     "vc_gamma": [0.0],
     "vc_lambda": [0.0],
     "vae_beta": [
