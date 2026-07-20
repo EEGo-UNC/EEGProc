@@ -1623,9 +1623,18 @@ def _run_outer_fold(
                 fit_kwargs = dict(fit_hp)
                 fit_kwargs["validation_data"] = (X_inner_val, y_inner_val)
 
+                y_inner_train_ids = _as_numpy_1d(y_inner_train)
+                classes, counts = np.unique(y_inner_train_ids, return_counts=True)
+
+                class_weight = {
+                    int(class_id): len(y_inner_train_ids) / (len(classes) * count)
+                    for class_id, count in zip(classes, counts)
+                }
+
                 model.fit(
                     X_inner_train,
                     y_inner_train,
+                    class_weight=class_weight,
                     verbose=verbose,
                     **fit_kwargs,
                     **extra_fit_kwargs,
@@ -1786,9 +1795,18 @@ def _run_outer_fold(
     final_model = model_builder_function(**model_hp)
 
     try:
+        y_outer_train_ids = _as_numpy_1d(y_outer_train)
+        classes, counts = np.unique(y_outer_train_ids, return_counts=True)
+
+        class_weight = {
+            int(class_id): len(y_outer_train_ids) / (len(classes) * count)
+            for class_id, count in zip(classes, counts)
+        }
+
         final_model.fit(
             X_outer_train,
             y_outer_train,
+            class_weight=class_weight,
             verbose=verbose,
             **fit_hp,
             **extra_fit_kwargs,
@@ -2317,9 +2335,18 @@ def _run_loso_fold(
     model = model_builder_function(**model_hp)
 
     try:
+        y_train_ids = _as_numpy_1d(y_train)
+        classes, counts = np.unique(y_train_ids, return_counts=True)
+
+        class_weight = {
+            int(class_id): len(y_train_ids) / (len(classes) * count)
+            for class_id, count in zip(classes, counts)
+        }
+
         model.fit(
             X_train,
             y_train,
+            class_weight=class_weight,
             verbose=verbose,
             **fit_hp,
             **extra_fit_kwargs,

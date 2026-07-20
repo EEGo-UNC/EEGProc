@@ -114,10 +114,10 @@ class VariationalClassifier(tf.keras.layers.Layer):
         )
 
     def call(self, mh: tf.Tensor, training: bool = False) -> tf.Tensor:
-        del training  # This head currently has no training/inference-only layers.
         self._last_mh = mh
 
         log_class_prior = tf.nn.log_softmax(self.log_class_prior)
+
         log_likelihoods = tf.stack(
             [
                 self._log_gaussian(
@@ -129,8 +129,12 @@ class VariationalClassifier(tf.keras.layers.Layer):
             ],
             axis=1,
         )
-        return log_likelihoods + log_class_prior[tf.newaxis, :]
 
+        latent_dim = tf.cast(tf.shape(mh)[-1], mh.dtype)
+        normalized_log_prior = log_class_prior / latent_dim
+
+        return log_likelihoods + normalized_log_prior[tf.newaxis, :]
+    
     def discriminator(self, z: tf.Tensor, y: int) -> tf.Tensor:
         """Return the trainable discriminator score T_psi^y(z)."""
         return tf.linalg.matvec(z, self.disc_w[y]) + self.disc_b[y]
