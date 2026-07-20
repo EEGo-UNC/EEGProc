@@ -229,17 +229,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         2
     ],
     "emb_dim": [
-        16,
-        32
+        16
     ],
     "dropout": [
         0.2
     ],
     "conv_filters": [
-        [
-            16,
-            32
-        ],
         [
             32,
             64

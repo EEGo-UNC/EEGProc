@@ -208,64 +208,59 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --seed 42 \
     --hyperparameters-json '{
     "epochs": [
-        200
-    ],
-    "batch_size": [
-        64
-    ],
-    "learning_rate": [
-        0.0001
-    ],
-    "ae_loss_weight": [
-        0.3
-    ],
-    "vc_loss_weight": [
-        0.7
-    ],
-    "vae_beta": [
-        50, 100
-    ],
-    "t_down": [
-        2
-    ],
-    "emb_dim": [
-        16,
-        32
-    ],
-    "dropout": [
-        0.2
-    ],
-    "conv_filters": [
-        [
-            16,
-            32
+            200
         ],
-        [
-            32,
+        "batch_size": [
             64
+        ],
+        "learning_rate": [
+            0.0001
+        ],
+        "ae_loss_weight": [
+            0.3
+        ],
+        "vc_loss_weight": [
+            0.7
+        ],
+        "vae_beta": [
+            50, 100
+        ],
+        "t_down": [
+            2
+        ],
+        "emb_dim": [
+            16
+        ],
+        "dropout": [
+            0.2
+        ],
+        "conv_filters": [
+            [
+                32,
+                64
+            ]
+        ],
+        "kernel_sizes": [
+            5,
+            3
+        ],
+        "pool_after_layers": [
+            0
+        ],
+        "pool_sizes": [
+            2
+        ],
+        "use_batch_norm": [
+            false
+        ],
+        "bilstm_units": [
+            128,
+            256
+        ],
+        "bilstm_layers": [
+            2
+        ],
+        "bilstm_dropout": [
+            0.3
         ]
-    ],
-    "kernel_sizes": [
-        5,
-        3
-    ],
-    "pool_after_layers": [
-        0
-    ],
-    "pool_sizes": [
-        2
-    ],
-    "use_batch_norm": [
-        false
-    ],
-    "bilstm_units": [
-        128,
-        256
-    ],
-    "bilstm_layers": [
-        2
-    ],
-    "bilstm_dropout": [
-        0.3
-    ]
-}'
+    }'
