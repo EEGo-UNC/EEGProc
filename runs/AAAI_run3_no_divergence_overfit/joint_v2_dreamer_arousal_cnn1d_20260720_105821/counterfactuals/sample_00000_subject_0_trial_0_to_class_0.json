@@ -1,0 +1,161 @@
+{
+  "run_dir": "/Users/tolas/Documents/coding/EEGProc/runs/AAAI_run3_no_divergence_overfit/joint_v2_dreamer_arousal_cnn1d_20260720_105821",
+  "checkpoint": "final_model.keras",
+  "sample_index": 0,
+  "subject_id": 0,
+  "trial_id": 0,
+  "true_label": 1,
+  "predicted_class": 1,
+  "target_class": 0,
+  "original_probabilities": [
+    0.25650081038475037,
+    0.743499219417572
+  ],
+  "optimizer_config": {
+    "learning_rate": 0.01,
+    "max_steps": 5,
+    "validity_weight": 1.0,
+    "signal_proximity_weight": 0.1,
+    "target_probability": 0.8,
+    "seed": 42
+  },
+  "result": {
+    "mode": "deterministic_reconstructed_space",
+    "success": false,
+    "success_mask": [
+      false
+    ],
+    "stop_reason": "maximum_steps_reached",
+    "steps_completed": 5,
+    "target_class": 0,
+    "original_predicted_class": 1,
+    "counterfactual_predicted_class": 1,
+    "original_target_probability": 0.25650081038475037,
+    "counterfactual_target_probability": 0.2907186448574066,
+    "original_probabilities": [
+      [
+        0.25650081038475037,
+        0.743499219417572
+      ]
+    ],
+    "counterfactual_probabilities": [
+      [
+        0.2907186448574066,
+        0.709281325340271
+      ]
+    ],
+    "counterfactual_latent": {
+      "shape": [
+        1,
+        256,
+        16
+      ],
+      "dtype": "float32"
+    },
+    "original_reconstruction": {
+      "shape": [
+        1,
+        512,
+        14
+      ],
+      "dtype": "float32"
+    },
+    "counterfactual_reconstruction": {
+      "shape": [
+        1,
+        512,
+        14
+      ],
+      "dtype": "float32"
+    },
+    "counterfactual_minus_input": {
+      "shape": [
+        1,
+        512,
+        14
+      ],
+      "dtype": "float32"
+    },
+    "original_reconstruction_distance_to_input": 0.39841604232788086,
+    "counterfactual_reconstruction_distance_to_input": 0.39831504225730896,
+    "reconstruction_change": 1.4270172869146336e-05,
+    "final_losses": {
+      "total": 1.0520873069763184,
+      "validity": 1.0122557878494263,
+      "reconstructed_input_proximity": 0.39831504225730896,
+      "weighted_validity": 1.0122557878494263,
+      "weighted_reconstructed_input_proximity": 0.039831504225730896
+    },
+    "history": {
+      "step": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "total_loss": [
+        1.1773215532302856,
+        1.139286756515503,
+        1.1052789688110352,
+        1.0710564851760864,
+        1.0317996740341187,
+        1.0520873069763184
+      ],
+      "validity_loss": [
+        1.1374799013137817,
+        1.099449872970581,
+        1.0654438734054565,
+        1.0312225818634033,
+        0.9919667840003967,
+        1.0122557878494263
+      ],
+      "reconstructed_input_proximity_loss": [
+        0.39841604232788086,
+        0.39836883544921875,
+        0.39835140109062195,
+        0.39833864569664,
+        0.3983284533023834,
+        0.39831504225730896
+      ],
+      "target_probability": [
+        0.25650081038475037,
+        0.2664433717727661,
+        0.2756598889827728,
+        0.285256564617157,
+        0.29667729139328003,
+        0.2907186448574066
+      ],
+      "predicted_class": [
+        [
+          1
+        ],
+        [
+          1
+        ],
+        [
+          1
+        ],
+        [
+          1
+        ],
+        [
+          1
+        ],
+        [
+          1
+        ]
+      ],
+      "gradient_norm": [
+        0.8540737628936768,
+        0.8548824787139893,
+        0.7113880515098572,
+        0.7607388496398926,
+        0.6226997375488281,
+        0.8834582567214966
+      ]
+    }
+  },
+  "arrays_file": "/Users/tolas/Documents/coding/EEGProc/runs/AAAI_run3_no_divergence_overfit/joint_v2_dreamer_arousal_cnn1d_20260720_105821/counterfactuals/sample_00000_subject_0_trial_0_to_class_0.npz"
+}

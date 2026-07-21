@@ -6,4 +6,4 @@
     - AE term >1.0 impedes the model from learning, so it does not predict better than random.
     - Divergence terms are collapsing the model. With added terms, they ovveride deterministic loss terms and destroy learning. Model predicts basically random.
 - 07/20/2066:
-    - AE + CE classifier is overfitting. reduce model complexity
+    - AE + CE classifier is overfitting, predicts random. Reduce model complexity
