@@ -194,20 +194,25 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
     --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
     --label-dimension valence \
-    --encoder-type cnn1d \
-    --out-dir runs/joint_autoencoder_vc_v2/CNN1D \
-    --run-name joint_v2_dreamer_valence_cnn1d \
+    --run-name dreamer_valence_vaevc_cnn1d \
     --n-jobs 4 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
-    --prediction-latent-samples 10 \
+    --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
+    --validation-subjects 4 \
+    --validation-seed 42 \
+    --early-stopping-patience 20 \
+    --early-stopping-min-delta 0.001 \
+    --early-stopping-monitor val_vc_cross_entropy \
+    --early-stopping-mode min \
+    --final-epoch-strategy median \
     --hyperparameters-json '{
-    "epochs": [
+        "epochs": [
             200
         ],
         "batch_size": [
@@ -216,28 +221,28 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "learning_rate": [
             0.0001
         ],
-        "ae_loss_weight": [0.0],
+        "ae_loss_weight": [0.3],
         "vc_loss_weight": [1.0],
         "vc_alpha": [1.0],
-        "vc_beta": [0.0],
+        "vc_beta": [0.3],
         "vc_gamma": [0.0],
-        "vc_lambda": [0.0],
+        "vc_lambda": [0.1],
         "vae_beta": [
-            10
+            0.1
         ],
         "t_down": [
             2
         ],
         "emb_dim": [
-            16
+            8
         ],
         "dropout": [
-            0.2
+            0.3
         ],
         "conv_filters": [
             [
-                32,
-                64
+                16,
+                32
             ]
         ],
         "kernel_sizes": [
@@ -254,13 +259,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            128,
-            256
+            128
         ],
         "bilstm_layers": [
-            2
+            1
         ],
         "bilstm_dropout": [
-            0.3
+            0.4
         ]
     }'

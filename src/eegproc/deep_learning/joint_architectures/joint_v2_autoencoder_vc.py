@@ -39,6 +39,87 @@ import tensorflow as tf
 
 from ..unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
 
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
+class DecoderReconstructionAccuracy(tf.keras.metrics.Metric):
+    """Global reconstruction R² reported as ``decoder_accuracy``.
+
+    The decoder predicts continuous EEG values, so categorical accuracy is not
+    defined. This metric accumulates sufficient statistics across all batches
+    and reports the coefficient of determination::
+
+        1 - sum((x - x_hat)^2) / sum((x - mean(x))^2)
+
+    A value of 1.0 is a perfect reconstruction, 0.0 matches predicting the
+    global target mean, and negative values indicate a worse reconstruction.
+    """
+
+    def __init__(
+        self,
+        name: str = "decoder_accuracy",
+        dtype=None,
+        **kwargs,
+    ) -> None:
+        super().__init__(name=name, dtype=dtype, **kwargs)
+        metric_dtype = self.dtype or tf.keras.backend.floatx()
+        self.squared_error_sum = self.add_weight(
+            name="squared_error_sum",
+            initializer="zeros",
+            dtype=metric_dtype,
+        )
+        self.target_sum = self.add_weight(
+            name="target_sum",
+            initializer="zeros",
+            dtype=metric_dtype,
+        )
+        self.target_squared_sum = self.add_weight(
+            name="target_squared_sum",
+            initializer="zeros",
+            dtype=metric_dtype,
+        )
+        self.target_count = self.add_weight(
+            name="target_count",
+            initializer="zeros",
+            dtype=metric_dtype,
+        )
+
+    def update_state(self, y_true, y_pred, sample_weight=None) -> None:
+        del sample_weight  # Reconstruction loss is currently unweighted too.
+        y_true = tf.cast(y_true, self.dtype)
+        y_pred = tf.cast(y_pred, self.dtype)
+        error = y_true - y_pred
+
+        self.squared_error_sum.assign_add(tf.reduce_sum(tf.square(error)))
+        self.target_sum.assign_add(tf.reduce_sum(y_true))
+        self.target_squared_sum.assign_add(tf.reduce_sum(tf.square(y_true)))
+        self.target_count.assign_add(tf.cast(tf.size(y_true), self.dtype))
+
+    def result(self):
+        target_total_sum_of_squares = (
+            self.target_squared_sum
+            - tf.math.divide_no_nan(
+                tf.square(self.target_sum),
+                self.target_count,
+            )
+        )
+        epsilon = tf.cast(tf.keras.backend.epsilon(), self.dtype)
+        ordinary_r2 = 1.0 - tf.math.divide_no_nan(
+            self.squared_error_sum,
+            target_total_sum_of_squares,
+        )
+        perfect_constant_reconstruction = tf.cast(
+            self.squared_error_sum <= epsilon,
+            self.dtype,
+        )
+        return tf.where(
+            target_total_sum_of_squares > epsilon,
+            ordinary_r2,
+            perfect_constant_reconstruction,
+        )
+
+    def reset_state(self) -> None:
+        for variable in self.variables:
+            variable.assign(tf.zeros_like(variable))
+
 
 class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
     """Combine a sequence VAE with recurrent variational classification.
@@ -169,6 +250,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
         self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
         self.weighted_kl_loss_tracker = tf.keras.metrics.Mean(name="weighted_kl_loss")
+        self.decoder_accuracy_tracker = DecoderReconstructionAccuracy(
+            name="decoder_accuracy"
+        )
 
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
         self.vc_cross_entropy_tracker = tf.keras.metrics.Mean(
@@ -218,6 +302,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             self.reconstruction_loss_tracker,
             self.kl_loss_tracker,
             self.weighted_kl_loss_tracker,
+            self.decoder_accuracy_tracker,
             self.vc_loss_tracker,
             self.vc_cross_entropy_tracker,
             self.weighted_vc_cross_entropy_tracker,
@@ -562,6 +647,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self,
         losses: dict[str, tf.Tensor],
         outputs: dict[str, tf.Tensor],
+        x_true: tf.Tensor,
         y_flat: tf.Tensor,
         sample_weight,
         discriminator_loss: tf.Tensor,
@@ -573,6 +659,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
         self.kl_loss_tracker.update_state(losses["kl_loss"])
         self.weighted_kl_loss_tracker.update_state(losses["weighted_kl_loss"])
+        self.decoder_accuracy_tracker.update_state(
+            x_true,
+            outputs["reconstruction"],
+        )
         self.vc_loss_tracker.update_state(losses["vc_loss"])
         self.vc_cross_entropy_tracker.update_state(losses["vc_cross_entropy"])
         self.weighted_vc_cross_entropy_tracker.update_state(
@@ -680,6 +770,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self._update_trackers(
             losses=losses,
             outputs=outputs,
+            x_true=x,
             y_flat=y_flat,
             sample_weight=sample_weight,
             discriminator_loss=discriminator_loss,
@@ -700,6 +791,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self._update_trackers(
             losses=losses,
             outputs=outputs,
+            x_true=x,
             y_flat=y_flat,
             sample_weight=sample_weight,
             discriminator_loss=discriminator_loss,

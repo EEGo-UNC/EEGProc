@@ -2,7 +2,8 @@
 
 This module keeps the v2 model file focused on architecture only. It provides
 leave-one-subject-out cross-validation with seeded subject-level validation, flat hyperparameter search
-across the complete joint VAE/BiLSTM model, DREAMER-backed data loading
+across the complete joint VAE/BiLSTM model, decoder reconstruction-accuracy
+reporting, DREAMER-backed data loading
 (see ``joint_v2_data.py``), structured logging, and final model saving. The
 autoencoder can be selected with ``--encoder-type`` as CNN1D, CNN2D, or GCN.
 """
@@ -1321,8 +1322,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="val_loss",
         help=(
             "Validation metric monitored by early stopping. The joint model "
-            "exposes val_loss, val_vc_cross_entropy, and val_accuracy, among "
-            "other component metrics (default: val_loss)."
+            "exposes val_loss, val_decoder_accuracy, val_vc_cross_entropy, "
+            "and val_accuracy, among other component metrics. Decoder accuracy "
+            "is reconstruction R² and should use --early-stopping-mode max "
+            "if selected (default monitor: val_loss)."
         ),
     )
     parser.add_argument(

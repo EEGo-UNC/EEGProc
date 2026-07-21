@@ -605,13 +605,13 @@ def _validate_processed_alignment(
         )
 
 
-def _keras_loss_value(
+def _keras_evaluation_results(
     model: tf.keras.Model,
     X: np.ndarray,
     y: np.ndarray,
     batch_size: int | None = None,
-) -> float:
-    """Evaluate and return the Keras loss value."""
+) -> dict[str, float]:
+    """Evaluate once and return all scalar Keras metrics as Python floats."""
     eval_output = model.evaluate(
         X,
         y,
@@ -625,7 +625,32 @@ def _keras_loss_value(
             f"model.evaluate(..., return_dict=True) did not return 'loss': {eval_output}"
         )
 
-    return float(eval_output["loss"])
+    scalar_results: dict[str, float] = {}
+    for metric_name, metric_value in eval_output.items():
+        value_array = np.asarray(metric_value)
+        if value_array.ndim != 0:
+            raise ValueError(
+                "Keras evaluation metrics must be scalar. "
+                f"Metric {metric_name!r} returned shape {value_array.shape}."
+            )
+        scalar_results[str(metric_name)] = float(value_array)
+
+    return scalar_results
+
+
+def _keras_loss_value(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    y: np.ndarray,
+    batch_size: int | None = None,
+) -> float:
+    """Evaluate and return the Keras loss value."""
+    return _keras_evaluation_results(
+        model=model,
+        X=X,
+        y=y,
+        batch_size=batch_size,
+    )["loss"]
 
 
 def _make_prediction_log(
@@ -929,12 +954,15 @@ def _evaluate_classification_fold(
 
     # model.evaluate() is retained as a diagnostic because joint Keras models
     # may include reconstruction/regularization terms beyond classification.
-    keras_model_loss = _keras_loss_value(
+    # It also exposes decoder_accuracy for continuous reconstruction quality.
+    keras_evaluation = _keras_evaluation_results(
         model=model,
         X=X_test,
         y=y_test,
         batch_size=batch_size,
     )
+    keras_model_loss = keras_evaluation["loss"]
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
 
     window_scores = _level_scores(
         y_true=y_true_window,
@@ -942,6 +970,8 @@ def _evaluate_classification_fold(
         probabilities=probabilities_window,
         metrics=metrics,
     )
+    if decoder_accuracy is not None:
+        window_scores["decoder_accuracy"] = float(decoder_accuracy)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
@@ -968,6 +998,11 @@ def _evaluate_classification_fold(
         "n_windows": int(len(y_true_window)),
         "n_trials": int(len(trial_aggregation["y_true"])),
         "keras_model_loss": float(keras_model_loss),
+        **(
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
+            else {}
+        ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
         **primary_scores,
         **_prefix_scores(window_scores, "window"),
@@ -1103,9 +1138,13 @@ def _evaluate_inner_config(
         probabilities=probabilities_window,
         metrics=metrics,
     )
-    window_scores["keras_model_loss"] = _keras_loss_value(
+    keras_evaluation = _keras_evaluation_results(
         model, X_val, y_val, batch_size=batch_size
     )
+    window_scores["keras_model_loss"] = keras_evaluation["loss"]
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+    if decoder_accuracy is not None:
+        window_scores["decoder_accuracy"] = float(decoder_accuracy)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
@@ -1123,6 +1162,11 @@ def _evaluate_inner_config(
     primary_scores = trial_scores if selection_level == "trial" else window_scores
     return {
         **{key: primary_scores[key] for key in ["loss", *metrics]},
+        **(
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
+            else {}
+        ),
         **_prefix_scores(window_scores, "window"),
         **_prefix_scores(trial_scores, "trial"),
         "selection_level": selection_level,
@@ -1693,7 +1737,8 @@ def _run_outer_fold(
     inner_mean_scores: list[dict] = []
     inner_std_scores: list[dict] = []
     score_metric_names = [
-        "loss", *metrics, "window_loss", "window_keras_model_loss",
+        "loss", *metrics, "decoder_accuracy",
+        "window_loss", "window_keras_model_loss", "window_decoder_accuracy",
         *[f"window_{metric}" for metric in metrics],
         "trial_loss", *[f"trial_{metric}" for metric in metrics],
     ]
@@ -2203,14 +2248,15 @@ def nested_lnso_cv(
 
     mean_scores, std_scores = _mean_std_rows(
         results["fold_metrics"],
-        ["loss", *metrics],
+        ["loss", *metrics, "decoder_accuracy"],
     )
 
     results["mean_scores"] = mean_scores
     results["std_scores"] = std_scores
 
     window_mean_scores, window_std_scores = _mean_std_rows(
-        results["window_fold_metrics"], ["loss", *metrics]
+        results["window_fold_metrics"],
+        ["loss", *metrics, "decoder_accuracy"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
         results["trial_fold_metrics"], ["loss", *metrics]
@@ -2725,11 +2771,11 @@ def _aggregate_loso_config_result(
 
     mean_scores, std_scores = _mean_std_rows(
         fold_metrics,
-        ["loss", *metrics],
+        ["loss", *metrics, "decoder_accuracy"],
     )
     window_mean_scores, window_std_scores = _mean_std_rows(
         window_fold_metrics,
-        ["loss", *metrics],
+        ["loss", *metrics, "decoder_accuracy"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
         trial_fold_metrics,
