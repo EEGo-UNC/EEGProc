@@ -186,8 +186,8 @@ TF_PY
 # Fast end-to-end smoke test matching the official GCN run configuration.
 # One fold, one hyperparameter configuration, and two latent samples keep it quick.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
-    --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
-    --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
+    --raw-eeg-npy datasets/dreamer_eeg.npy \
+    --raw-labels-npy datasets/dreamer_labels.npy \
     --label-dimension arousal \
     --encoder-type gcn \
     --n-channels 14 \

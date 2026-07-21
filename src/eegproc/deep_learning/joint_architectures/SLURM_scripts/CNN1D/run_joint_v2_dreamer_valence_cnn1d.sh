@@ -191,8 +191,8 @@ TF_PY
 # Encoder-specific official LOSO grid run.
 # Monte Carlo prediction averages 10 posterior latent samples.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
-    --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
-    --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
+    --raw-eeg-npy datasets/dreamer_eeg.npy \
+    --raw-labels-npy datasets/dreamer_labels.npy \
     --label-dimension valence \
     --run-name dreamer_valence_vaevc_cnn1d \
     --n-jobs 4 \
