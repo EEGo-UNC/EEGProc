@@ -198,16 +198,23 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --n-channels 14 \
     --n-bands 1 \
     --out-dir runs/joint_autoencoder_vc_v2/GCN \
-    --run-name joint_v2_dreamer_arousal_gcn \
-    --n-jobs 4 \
+    --run-name dreamer_arousal_vaevc_gcn \
+    --n-jobs 8 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
     --selection-level trial \
-    --selection-metric accuracy \
-    --prediction-latent-samples 10 \
+    --selection-metric f1 \
+    --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
+    --validation-subjects 4 \
+    --validation-seed 42 \
+    --early-stopping-patience 20 \
+    --early-stopping-min-delta 0.001 \
+    --early-stopping-monitor val_vc_cross_entropy \
+    --early-stopping-mode min \
+    --final-epoch-strategy median \
     --hyperparameters-json '{
     "epochs": [
         200
@@ -222,33 +229,42 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         0.3
     ],
     "vc_loss_weight": [
-        0.7
+        1.0
+    ],
+    "vc_alpha": [
+        1.0
+    ],
+    "vc_beta": [
+        0.1, 0.3
+    ],
+    "vc_gamma": [
+        0.0
+    ],
+    "vc_lambda": [
+        0.1
     ],
     "vae_beta": [
-        1.0
+        0.1, 0.4
     ],
     "t_down": [
         2
     ],
     "emb_dim": [
-        16,
-        32
+        8
     ],
     "dropout": [
-        0.2
+        0.3
     ],
     "gcn_units": [
         [
             16,
             32
-        ],
-        [
-            32,
-            64
         ]
     ],
     "temporal_pool_sizes": [
-        [2]
+        [
+            2
+        ]
     ],
     "activation": [
         "relu"
@@ -257,13 +273,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         false
     ],
     "bilstm_units": [
-        128,
-        256
+        128
     ],
     "bilstm_layers": [
-        2
+        1
     ],
     "bilstm_dropout": [
-        0.2
+        0.4
     ]
 }'

@@ -5,5 +5,9 @@
 - 07/19/2026: 
     - AE term >1.0 impedes the model from learning, so it does not predict better than random.
     - Divergence terms are collapsing the model. With added terms, they ovveride deterministic loss terms and destroy learning. Model predicts basically random.
-- 07/20/2066:
+- 07/20/2026:
     - AE + CE classifier is overfitting, predicts random. Reduce model complexity
+- 07/21/2026
+    - Adding VC terms has helped enhance accuracies when using AE with it. If we remove variational terms from classifier, the AE reduces the accuracy. GOOD FOR VC!!
+    - JUST FOUND OUT THE NPY FILES ARE NOT BANDPASS FILTERED. Raw EEG will not be enough, we need to divvy it up into bands probably. Let's try!
+    
