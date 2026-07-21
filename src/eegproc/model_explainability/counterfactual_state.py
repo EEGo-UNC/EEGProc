@@ -1,4 +1,4 @@
-"""Internal structures for counterfactual optimization."""
+"""State containers used during counterfactual optimization."""
 
 from __future__ import annotations
 
@@ -28,14 +28,18 @@ class OptimizationHistory:
     target_probability: list[float] = field(default_factory=list)
     predicted_class: list[np.ndarray] = field(default_factory=list)
     gradient_norm: list[float] = field(default_factory=list)
+    feature_steps: list[int] = field(default_factory=list)
+    counterfactual_features: list[np.ndarray] = field(default_factory=list)
 
     def add(
         self,
+        *,
         step: int,
         losses: dict[str, tf.Tensor],
         target_probability: tf.Tensor,
         predicted_class: tf.Tensor,
         gradient: tf.Tensor,
+        reconstruction: tf.Tensor | None = None,
     ) -> None:
         self.steps.append(step)
         self.total.append(float(losses["total"].numpy()))
@@ -51,8 +55,14 @@ class OptimizationHistory:
             float(tf.linalg.global_norm([gradient]).numpy())
         )
 
+        if reconstruction is not None:
+            self.feature_steps.append(step)
+            self.counterfactual_features.append(
+                reconstruction.numpy().astype(np.float32, copy=False)
+            )
+
     def to_arrays(self) -> dict[str, np.ndarray]:
-        return {
+        history = {
             "step": np.asarray(self.steps, dtype=np.int32),
             "total_loss": np.asarray(self.total, dtype=np.float32),
             "validity_loss": np.asarray(self.validity, dtype=np.float32),
@@ -72,7 +82,24 @@ class OptimizationHistory:
                 self.gradient_norm,
                 dtype=np.float32,
             ),
+            "feature_step": np.asarray(
+                self.feature_steps,
+                dtype=np.int32,
+            ),
         }
+
+        if self.counterfactual_features:
+            history["counterfactual_features"] = np.stack(
+                self.counterfactual_features,
+                axis=0,
+            )
+        else:
+            history["counterfactual_features"] = np.empty(
+                (0,),
+                dtype=np.float32,
+            )
+
+        return history
 
 
 def scalar_or_array(value: np.ndarray) -> int | float | np.ndarray:

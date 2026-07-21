@@ -58,6 +58,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
+
 from eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train import (
     build_joint_autoencoder_variational_classifier_v2,
     load_joint_v2_training_data,
@@ -69,6 +70,15 @@ from eegproc.model_explainability.counterfactual_optimizer import (
 
 
 LOGGER = logging.getLogger("eegproc.run_counterfactuals")
+
+DREAMER_CHANNELS = np.asarray(
+    [
+        "AF3", "F7", "F3", "FC5", "T7", "P7", "O1",
+        "O2", "P8", "T8", "FC6", "F4", "F8", "AF4",
+    ],
+    dtype=str,
+)
+
 
 DEFAULT_RUN_DIR = (
     PROJECT_ROOT
@@ -588,6 +598,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validity-weight", type=float, default=1.0)
     parser.add_argument("--signal-proximity-weight", type=float, default=0.10)
     parser.add_argument("--target-probability", type=float, default=0.80)
+    parser.add_argument(
+        "--feature-log-interval",
+        type=int,
+        default=1,
+        help=(
+            "Save reconstructed counterfactual features every N steps. "
+            "Use 0 to disable feature logging."
+        ),
+    )
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--verbose", type=int, default=1)
@@ -667,6 +686,7 @@ def main(argv: list[str] | None = None) -> int:
         validity_weight=args.validity_weight,
         signal_proximity_weight=args.signal_proximity_weight,
         target_probability=args.target_probability,
+        feature_log_interval=args.feature_log_interval,
         seed=args.seed,
         verbose=args.verbose,
     )
@@ -701,8 +721,27 @@ def main(argv: list[str] | None = None) -> int:
             f"Output already exists for {stem}; pass --overwrite to replace it."
         )
 
+    sampling_rate_hz = float(training_config.get("fs", 128.0))
+    channel_names = (
+        DREAMER_CHANNELS
+        if x_numpy.shape[-1] == len(DREAMER_CHANNELS)
+        else np.asarray(
+            [f"channel_{index}" for index in range(x_numpy.shape[-1])],
+            dtype=str,
+        )
+    )
+
     arrays: dict[str, np.ndarray] = {
         "input_eeg": x_numpy,
+        "time_seconds": np.arange(
+            x_numpy.shape[1],
+            dtype=np.float32,
+        ) / sampling_rate_hz,
+        "channel_names": channel_names,
+        "sampling_rate_hz": np.asarray(
+            sampling_rate_hz,
+            dtype=np.float32,
+        ),
         "original_probabilities": original_probabilities,
         "original_z_mean": original["z_mean"].numpy(),
         "original_z_log_var": original["z_log_var"].numpy(),
@@ -721,12 +760,15 @@ def main(argv: list[str] | None = None) -> int:
         "predicted_class": predicted_class,
         "target_class": target_class,
         "original_probabilities": original_probabilities,
+        "sampling_rate_hz": sampling_rate_hz,
+        "channel_names": channel_names,
         "optimizer_config": {
             "learning_rate": args.learning_rate,
             "max_steps": args.max_steps,
             "validity_weight": args.validity_weight,
             "signal_proximity_weight": args.signal_proximity_weight,
             "target_probability": args.target_probability,
+            "feature_log_interval": args.feature_log_interval,
             "seed": args.seed,
         },
         "result": result,

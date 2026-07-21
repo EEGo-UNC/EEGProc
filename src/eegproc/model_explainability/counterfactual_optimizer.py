@@ -44,6 +44,7 @@ class CounterfactualOptimizer:
         verbose: int = 1,
         gradient_clip_norm: float | None = 5.0,
         signal_metric: DistanceMetric = "mse",
+        feature_log_interval: int = 1,
         stop_on_success: bool = False,
     ) -> None:
         self._validate_config(
@@ -54,6 +55,7 @@ class CounterfactualOptimizer:
             verbose,
             gradient_clip_norm,
             signal_metric,
+            feature_log_interval,
         )
         self.model = model
         self.learning_rate = float(learning_rate)
@@ -63,6 +65,7 @@ class CounterfactualOptimizer:
         self.verbose = int(verbose)
         self.gradient_clip_norm = gradient_clip_norm
         self.signal_metric = signal_metric
+        self.feature_log_interval = int(feature_log_interval)
         self.stop_on_success = bool(stop_on_success)
         self.loss_weights = CounterfactualLossWeights(
             validity=float(validity_weight),
@@ -119,11 +122,16 @@ class CounterfactualOptimizer:
             success = self._is_success(target_probability)
 
             history.add(
-                step,
-                losses,
-                target_probability,
-                prediction,
-                gradient,
+                step=step,
+                losses=losses,
+                target_probability=target_probability,
+                predicted_class=prediction,
+                gradient=gradient,
+                reconstruction=(
+                    current.reconstruction
+                    if self._should_log_features(step)
+                    else None
+                ),
             )
             self._log(step, history, success)
 
@@ -374,6 +382,12 @@ class CounterfactualOptimizer:
             success,
         )
 
+    def _should_log_features(self, step: int) -> bool:
+        return (
+            self.feature_log_interval > 0
+            and step % self.feature_log_interval == 0
+        )
+
     def _set_seed(self) -> None:
         if self.seed is not None:
             tf.keras.utils.set_random_seed(self.seed)
@@ -416,6 +430,7 @@ class CounterfactualOptimizer:
         verbose: int,
         gradient_clip_norm: float | None,
         signal_metric: str,
+        feature_log_interval: int,
     ) -> None:
         required = (
             "decoder",
@@ -440,4 +455,8 @@ class CounterfactualOptimizer:
         if signal_metric not in ("mse", "mae", "rmse"):
             raise ValueError(
                 "signal_metric must be 'mse', 'mae', or 'rmse'."
+            )
+        if feature_log_interval < 0:
+            raise ValueError(
+                "feature_log_interval must be zero or positive."
             )
