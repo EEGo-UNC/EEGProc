@@ -4,8 +4,8 @@
 #SBATCH --error=joint_v2_dreamer_valence_cnn1d_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:8
-#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=32:00:00
 

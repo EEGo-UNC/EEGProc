@@ -196,10 +196,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --label-dimension arousal \
     --encoder-type gcn \
     --n-channels 14 \
-    --n-bands 1 \
+    --n-bands 4 \
     --out-dir runs/joint_autoencoder_vc_v2/GCN \
     --run-name dreamer_arousal_vaevc_gcn \
-    --n-jobs 8 \
+    --n-jobs 4 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \

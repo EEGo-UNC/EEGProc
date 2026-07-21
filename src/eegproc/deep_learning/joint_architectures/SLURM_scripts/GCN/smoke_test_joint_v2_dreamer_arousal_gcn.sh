@@ -191,7 +191,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --label-dimension arousal \
     --encoder-type gcn \
     --n-channels 14 \
-    --n-bands 1 \
+    --n-bands 4 \
     --out-dir runs/joint_autoencoder_vc_v2/GCN/smoke \
     --run-name smoke_dreamer_arousal_vaevc_gcn \
     --max-folds 1 \
