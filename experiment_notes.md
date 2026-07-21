@@ -9,5 +9,5 @@
     - AE + CE classifier is overfitting, predicts random. Reduce model complexity
 - 07/21/2026
     - Adding VC terms has helped enhance accuracies when using AE with it. If we remove variational terms from classifier, the AE reduces the accuracy. GOOD FOR VC!!
-    - JUST FOUND OUT THE NPY FILES ARE NOT BANDPASS FILTERED. Raw EEG will not be enough, we need to divvy it up into bands probably. Let's try!
-    
+    - NPY FILES ARE NOT BANDPASS FILTERED. Raw EEG will not be enough, we need to divvy it up into bands probably.
+    - CNN1D did not provide improvement after band filtering
