@@ -31,11 +31,21 @@ The counterfactual optimizer is expected to expose this interface::
 ``result`` should be a dictionary. TensorFlow tensors and NumPy arrays are
 stored automatically.
 
-Run from the EEGProc repository root::
+How to run
+----------
+From the EEGProc repository root, run:
 
     python -m src.eegproc.model_explainability.run_counterfactuals \
-        --run-dir runs/joint_v2_dreamer_arousal_cnn1d_20260720_102820 \
-        --sample-index 0
+    --run-dir runs/AAAI_run3_no_divergence_overfit/joint_v2_dreamer_arousal_cnn1d_20260720_105821 \
+    --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
+    --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
+    --sample-index 0 \
+    --learning-rate 0.005 \
+    --max-steps 200 \
+    --target-probability 0.80 \
+    --feature-log-interval 1 \
+    --verbose 1 \
+    --overwrite
 """
 
 from __future__ import annotations

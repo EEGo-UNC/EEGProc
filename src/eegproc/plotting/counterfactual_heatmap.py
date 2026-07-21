@@ -1,3 +1,17 @@
+"""Plot a counterfactual heatmap from a saved NPZ result file.
+
+How to run
+----------
+From the EEGProc repository root, run:
+
+    python -m src.eegproc.plotting.report \
+    --results runs/smoke_test4_all_encoders/GCN/joint_v2_dreamer_arousal_gcn_20260717_154641/loso_cv_results.json \
+    --out figures/
+
+Use ``--delta`` to plot the change relative to the original reconstruction,
+which is often easier to inspect.
+"""
+
 from __future__ import annotations
 
 import argparse
