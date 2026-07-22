@@ -13,4 +13,5 @@
     - CNN1D did not provide improvement after band filtering probably due to underfitting. Model classifies random.
     - Methodology for finding best loss terms: run CNN1D models because they are fast. Then find the rest.
         - After CNN1D finishes, rerun GCN with the new hp combo (best loss terms and increased BiLSTM complexity)
-        
+- 07/22/2026
+    - Better results now, mdoel is learning even with added vc terms. Let's push for further complexity.

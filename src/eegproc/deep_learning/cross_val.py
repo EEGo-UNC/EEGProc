@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# Joint-loss variant: early stopping may monitor ``val_loss`` and flat/nested
+# hyperparameter search may rank configurations by ``joint_loss``, the complete
+# weighted Keras VAE + variational-classifier objective.
+
 import gc
 import itertools
 import multiprocessing as mp
@@ -38,6 +42,50 @@ _EMPTY_SEQUENCE_ALLOWED_KEYS = frozenset(
         "pool_sizes",
     }
 )
+
+# Changing these coefficients changes the numerical scale and definition of
+# the complete joint objective. Direct joint-loss comparisons are therefore
+# most interpretable when these values remain fixed across configurations.
+_JOINT_LOSS_WEIGHT_KEYS = frozenset(
+    {
+        "ae_loss_weight",
+        "vc_loss_weight",
+        "vae_beta",
+        "vc_alpha",
+        "vc_beta",
+        "vc_gamma",
+        "vc_lambda",
+    }
+)
+
+
+def _warn_if_joint_loss_weights_vary(
+    grid_configs: list[dict],
+    selection_metric: str,
+) -> None:
+    """Warn when direct joint-loss comparisons change the objective itself."""
+    if selection_metric != "joint_loss" or len(grid_configs) < 2:
+        return
+
+    varying_keys: list[str] = []
+    for key in sorted(_JOINT_LOSS_WEIGHT_KEYS):
+        explicit_values = {
+            repr(config[key])
+            for config in grid_configs
+            if key in config
+        }
+        if len(explicit_values) > 1:
+            varying_keys.append(key)
+
+    if varying_keys:
+        print(
+            "Warning: selecting hyperparameters by joint_loss while varying "
+            f"{varying_keys} compares differently weighted objectives. Lower "
+            "scores may reflect smaller penalty coefficients rather than a "
+            "better model. Keep these weights fixed for an apples-to-apples "
+            "joint-loss search, or treat the result as exploratory.",
+            flush=True,
+        )
 
 
 def _hyperparameter_candidates(key: str, value) -> list:
@@ -553,6 +601,71 @@ def _probability_log_loss(
     )
 
 
+class TrialValidationMetrics(tf.keras.callbacks.Callback):
+    """Compute deterministic trial-level validation metrics each epoch.
+
+    Window probabilities are averaged within each (subject_id, trial_id) pair
+    before macro-F1 and log loss are calculated. The resulting values are added
+    to the Keras epoch logs as ``val_trial_f1`` and ``val_trial_loss`` so that
+    callbacks such as EarlyStopping can monitor them.
+    """
+
+    def __init__(
+        self,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        subject_ids_val: np.ndarray,
+        trial_ids_val: np.ndarray,
+        batch_size: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.X_val = np.asarray(X_val)
+        self.y_val = np.asarray(y_val)
+        self.subject_ids_val = np.asarray(subject_ids_val)
+        self.trial_ids_val = np.asarray(trial_ids_val)
+        self.batch_size = batch_size
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        if logs is None:
+            return
+
+        # Use posterior-mean inference here. It is deterministic, inexpensive,
+        # and avoids Monte Carlo sampling noise in the stopping decision.
+        probabilities_window = _predict_probabilities(
+            model=self.model,
+            X=self.X_val,
+            batch_size=self.batch_size,
+            n_prediction_latent_samples=0,
+            latent_sampling_seed=None,
+        )
+
+        trial_aggregation = _aggregate_window_probabilities_by_trial(
+            probabilities=probabilities_window,
+            y_true=self.y_val,
+            subject_ids=self.subject_ids_val,
+            trial_ids=self.trial_ids_val,
+        )
+
+        probabilities_trial = trial_aggregation["probabilities"]
+        y_true_trial = trial_aggregation["y_true"]
+        y_pred_trial = trial_aggregation["y_pred"]
+        expected_labels = list(range(probabilities_trial.shape[1]))
+
+        logs["val_trial_f1"] = float(
+            f1_score(
+                y_true_trial,
+                y_pred_trial,
+                average="macro",
+                labels=expected_labels,
+                zero_division=0,
+            )
+        )
+        logs["val_trial_loss"] = _probability_log_loss(
+            y_true=y_true_trial,
+            probabilities=probabilities_trial,
+        )
+
+
 def _level_scores(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -970,6 +1083,9 @@ def _evaluate_classification_fold(
         probabilities=probabilities_window,
         metrics=metrics,
     )
+    # ``loss`` above is classifier probability log loss. ``joint_loss`` is
+    # the model's complete weighted VAE + VC objective returned by Keras.
+    window_scores["joint_loss"] = float(keras_model_loss)
     if decoder_accuracy is not None:
         window_scores["decoder_accuracy"] = float(decoder_accuracy)
 
@@ -998,6 +1114,7 @@ def _evaluate_classification_fold(
         "n_windows": int(len(y_true_window)),
         "n_trials": int(len(trial_aggregation["y_true"])),
         "keras_model_loss": float(keras_model_loss),
+        "joint_loss": float(keras_model_loss),
         **(
             {"decoder_accuracy": float(decoder_accuracy)}
             if decoder_accuracy is not None
@@ -1013,6 +1130,7 @@ def _evaluate_classification_fold(
         "fold": int(fold_index),
         "n_windows": int(len(y_true_window)),
         "keras_model_loss": float(keras_model_loss),
+        "joint_loss": float(keras_model_loss),
         **window_scores,
     }
     trial_fold_metrics = {
@@ -1142,6 +1260,7 @@ def _evaluate_inner_config(
         model, X_val, y_val, batch_size=batch_size
     )
     window_scores["keras_model_loss"] = keras_evaluation["loss"]
+    window_scores["joint_loss"] = keras_evaluation["loss"]
     decoder_accuracy = keras_evaluation.get("decoder_accuracy")
     if decoder_accuracy is not None:
         window_scores["decoder_accuracy"] = float(decoder_accuracy)
@@ -1160,8 +1279,12 @@ def _evaluate_inner_config(
     )
 
     primary_scores = trial_scores if selection_level == "trial" else window_scores
+    primary_metric_keys = ["loss", *metrics]
+    if "joint_loss" in primary_scores:
+        primary_metric_keys.append("joint_loss")
+
     return {
-        **{key: primary_scores[key] for key in ["loss", *metrics]},
+        **{key: primary_scores[key] for key in primary_metric_keys},
         **(
             {"decoder_accuracy": float(decoder_accuracy)}
             if decoder_accuracy is not None
@@ -1737,8 +1860,8 @@ def _run_outer_fold(
     inner_mean_scores: list[dict] = []
     inner_std_scores: list[dict] = []
     score_metric_names = [
-        "loss", *metrics, "decoder_accuracy",
-        "window_loss", "window_keras_model_loss", "window_decoder_accuracy",
+        "loss", "joint_loss", *metrics, "decoder_accuracy",
+        "window_loss", "window_joint_loss", "window_keras_model_loss", "window_decoder_accuracy",
         *[f"window_{metric}" for metric in metrics],
         "trial_loss", *[f"trial_{metric}" for metric in metrics],
     ]
@@ -1935,8 +2058,8 @@ def nested_lnso_cv(
     batch_size: int = 32,
     hyperparameters: dict | None = None,
     preprocessing_strategy: Callable | None = None,
-    selection_metric: str = "loss",
-    selection_level: Literal["window", "trial"] = "trial",
+    selection_metric: str = "joint_loss",
+    selection_level: Literal["window", "trial"] = "window",
     evaluation_level: Literal["window", "trial"] = "trial",
     maximize_metric: bool | None = None,
     metrics: list[str] | tuple[str, ...] = ("accuracy", "f1", "precision", "recall"),
@@ -2030,16 +2153,23 @@ def nested_lnso_cv(
                 f"{sorted(_CLASSIFICATION_METRICS)}"
             )
 
-    allowed_selection_metrics = {"loss", *metrics}
+    allowed_selection_metrics = {"loss", "joint_loss", *metrics}
 
     if selection_metric not in allowed_selection_metrics:
         raise ValueError(
             f"selection_metric='{selection_metric}' is not available. "
-            f"Use 'loss' or one of metrics={list(metrics)}."
+            f"Use 'loss', 'joint_loss', or one of metrics={list(metrics)}."
+        )
+
+    if selection_metric == "joint_loss" and selection_level != "window":
+        raise ValueError(
+            "selection_metric='joint_loss' requires selection_level='window' "
+            "because the complete Keras VAE+VC objective is evaluated over "
+            "validation/test windows, before trial aggregation."
         )
 
     if maximize_metric is None:
-        maximize_metric = selection_metric != "loss"
+        maximize_metric = selection_metric not in {"loss", "joint_loss"}
 
     if n_prediction_latent_samples < 0:
         raise ValueError("n_prediction_latent_samples must be >= 0.")
@@ -2088,6 +2218,7 @@ def nested_lnso_cv(
     }
 
     grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
     outer_subject_splits = list(
         combinations(unique_subjects, n_outer_subjects_to_leave_out)
     )
@@ -2455,17 +2586,33 @@ def _run_loso_fold(
 
     fit_call_kwargs = dict(extra_fit_kwargs)
     callbacks = list(fit_call_kwargs.pop("callbacks", []))
-    if validation_subjects_per_fold > 0 and early_stopping_patience is not None:
-        callbacks.append(
-            tf.keras.callbacks.EarlyStopping(
-                monitor=early_stopping_monitor,
-                patience=int(early_stopping_patience),
-                min_delta=float(early_stopping_min_delta),
-                mode=early_stopping_mode,
-                restore_best_weights=bool(restore_best_weights),
-                verbose=1 if verbose else 0,
+
+    if validation_subjects_per_fold > 0:
+        if early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}:
+            # This callback must run before EarlyStopping so the custom metric
+            # is present in the shared epoch logs when EarlyStopping inspects it.
+            callbacks.append(
+                TrialValidationMetrics(
+                    X_val=X_validation,
+                    y_val=y_validation,
+                    subject_ids_val=subject_ids_validation,
+                    trial_ids_val=trial_ids_validation,
+                    batch_size=current_batch_size,
+                )
             )
-        )
+
+        if early_stopping_patience is not None:
+            callbacks.append(
+                tf.keras.callbacks.EarlyStopping(
+                    monitor=early_stopping_monitor,
+                    patience=int(early_stopping_patience),
+                    min_delta=float(early_stopping_min_delta),
+                    mode=early_stopping_mode,
+                    restore_best_weights=bool(restore_best_weights),
+                    verbose=1 if verbose else 0,
+                )
+            )
+
     if callbacks:
         fit_call_kwargs["callbacks"] = callbacks
 
@@ -2771,11 +2918,11 @@ def _aggregate_loso_config_result(
 
     mean_scores, std_scores = _mean_std_rows(
         fold_metrics,
-        ["loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     window_mean_scores, window_std_scores = _mean_std_rows(
         window_fold_metrics,
-        ["loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
         trial_fold_metrics,
@@ -2898,8 +3045,8 @@ def loso_cv(
     hyperparameters: dict | None = None,
     preprocessing_strategy: Callable | None = None,
     evaluation_level: Literal["window", "trial"] = "trial",
-    selection_metric: str = "f1",
-    selection_level: Literal["window", "trial"] = "trial",
+    selection_metric: str = "joint_loss",
+    selection_level: Literal["window", "trial"] = "window",
     maximize_metric: bool | None = None,
     metrics: list[str] | tuple[str, ...] = (
         "accuracy",
@@ -2967,8 +3114,8 @@ def loso_cv(
     Selection
     ---------
     ``selection_level`` determines whether configurations are ranked using
-    window- or trial-level scores. ``selection_metric`` defaults to macro-F1.
-    Classification metrics are maximized and loss is minimized unless
+    window- or trial-level scores. ``selection_metric`` defaults to the complete weighted joint VAE+VC loss.
+    Classification metrics are maximized; probability loss and joint loss are minimized unless
     ``maximize_metric`` is explicitly supplied. Ties use lower between-subject
     standard deviation, lower mean log loss, then the earlier grid index.
 
@@ -3037,15 +3184,22 @@ def loso_cv(
                 f"{sorted(_CLASSIFICATION_METRICS)}"
             )
 
-    allowed_selection_metrics = {"loss", *metrics}
+    allowed_selection_metrics = {"loss", "joint_loss", *metrics}
     if selection_metric not in allowed_selection_metrics:
         raise ValueError(
             f"selection_metric={selection_metric!r} is unavailable. "
-            f"Use 'loss' or one of metrics={list(metrics)}."
+            f"Use 'loss', 'joint_loss', or one of metrics={list(metrics)}."
+        )
+
+    if selection_metric == "joint_loss" and selection_level != "window":
+        raise ValueError(
+            "selection_metric='joint_loss' requires selection_level='window' "
+            "because the complete Keras VAE+VC objective is evaluated over "
+            "validation/test windows, before trial aggregation."
         )
 
     if maximize_metric is None:
-        maximize_metric = selection_metric != "loss"
+        maximize_metric = selection_metric not in {"loss", "joint_loss"}
 
     if n_prediction_latent_samples < 0:
         raise ValueError("n_prediction_latent_samples must be >= 0.")
@@ -3073,6 +3227,15 @@ def loso_cv(
         )
     if not early_stopping_monitor:
         raise ValueError("early_stopping_monitor must be a non-empty string.")
+    if (
+        early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
+        and validation_subjects_per_fold == 0
+        and early_stopping_patience is not None
+    ):
+        raise ValueError(
+            f"{early_stopping_monitor} requires at least one fold-local "
+            "validation subject. Set validation_subjects_per_fold >= 1."
+        )
 
     unique_subjects = np.sort(np.unique(subject_id_array))
     if len(unique_subjects) < 2:
@@ -3101,6 +3264,7 @@ def loso_cv(
         **(hyperparameters or {}),
     }
     grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
     if not grid_configs:
         raise ValueError("The hyperparameter grid produced no configurations.")
 

@@ -10,6 +10,10 @@ autoencoder can be selected with ``--encoder-type`` as CNN1D, CNN2D, or GCN.
 
 from __future__ import annotations
 
+# Joint-loss variant: defaults to early stopping on the complete validation
+# VAE+VC objective and selects the global flat-LOSO configuration by mean
+# held-out joint loss.
+
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -51,7 +55,12 @@ except ImportError:
     )
 
 try:
-    from ..cross_val import loso_cv
+    try:
+        from ..cross_val_joint_loss import loso_cv
+    except ImportError:
+        # Supports replacing the repository's ordinary cross_val.py with this
+        # variant while retaining the standard module name.
+        from ..cross_val import loso_cv
     from ..supervised.rnn_architectures import BiLSTMClassifier
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
@@ -62,7 +71,10 @@ except ImportError:
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
 
-    from eegproc.deep_learning.cross_val import loso_cv
+    try:
+        from eegproc.deep_learning.cross_val_joint_loss import loso_cv
+    except ImportError:
+        from eegproc.deep_learning.cross_val import loso_cv
     from eegproc.deep_learning.supervised.rnn_architectures import (
         BiLSTMClassifier,
     )
@@ -98,8 +110,8 @@ class JointV2TrainingConfig:
     cv_max_epochs: int = 50
     final_epoch_strategy: str = "median"
     final_epochs: int | None = None
-    selection_metric: str = "f1"
-    selection_level: str = "trial"
+    selection_metric: str = "joint_loss"
+    selection_level: str = "window"
     maximize_metric: bool | None = None
     prediction_latent_samples: int = 0
     latent_sampling_seed: int | None = None
@@ -1256,15 +1268,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--selection-metric",
-        choices=("loss", "accuracy", "f1", "precision", "recall"),
-        default="f1",
-        help="Metric used to rank complete LOSO configurations (default: f1).",
+        choices=("loss", "joint_loss", "accuracy", "f1", "precision", "recall"),
+        default="joint_loss",
+        help=(
+            "Metric used to rank complete LOSO configurations. 'loss' is "
+            "classification probability log loss; 'joint_loss' is the complete "
+            "weighted Keras VAE+VC objective (default: joint_loss)."
+        ),
     )
     parser.add_argument(
         "--selection-level",
         choices=("window", "trial"),
-        default="trial",
-        help="Prediction level used for hyperparameter selection (default: trial).",
+        default="window",
+        help=(
+            "Evaluation level used for hyperparameter selection. joint_loss "
+            "requires window because the full Keras objective is evaluated "
+            "before trial aggregation (default: window)."
+        ),
     )
     parser.add_argument(
         "--prediction-latent-samples",
@@ -1321,18 +1341,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--early-stopping-monitor",
         default="val_loss",
         help=(
-            "Validation metric monitored by early stopping. The joint model "
-            "exposes val_loss, val_decoder_accuracy, val_vc_cross_entropy, "
-            "and val_accuracy, among other component metrics. Decoder accuracy "
-            "is reconstruction R² and should use --early-stopping-mode max "
-            "if selected (default monitor: val_loss)."
+            "Validation metric monitored by early stopping. val_loss is the "
+            "complete weighted joint VAE+VC objective and should use "
+            "--early-stopping-mode min. Other available metrics include "
+            "val_trial_f1, val_trial_loss, val_decoder_accuracy, "
+            "val_vc_cross_entropy, and val_accuracy "
+            "(default monitor: val_loss)."
         ),
     )
     parser.add_argument(
         "--early-stopping-mode",
         choices=("auto", "min", "max"),
         default="min",
-        help="Whether the monitored metric should decrease or increase.",
+        help=(
+            "Whether the monitored metric should decrease or increase "
+            "(default: min for the complete val_loss objective)."
+        ),
     )
     parser.add_argument("--no-save-full-model", action="store_true")
     parser.add_argument("--no-save-weights", action="store_true")
@@ -1494,6 +1518,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--early-stopping-patience must be >= 0.")
     if args.early_stopping_min_delta < 0.0:
         raise ValueError("--early-stopping-min-delta must be >= 0.")
+    if args.selection_metric == "joint_loss" and args.selection_level != "window":
+        raise ValueError(
+            "--selection-metric joint_loss requires --selection-level window."
+        )
 
     validation_seed = (
         args.validation_seed

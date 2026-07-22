@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=joint_v2_dreamer_arousal_gcn
-#SBATCH --output=joint_v2_dreamer_arousal_gcn_%j.out
-#SBATCH --error=joint_v2_dreamer_arousal_gcn_%j.err
+#SBATCH --job-name=joint_v2_dreamer_arousal_cnn1d
+#SBATCH --output=joint_v2_dreamer_arousal_cnn1d_%j.out
+#SBATCH --error=joint_v2_dreamer_arousal_cnn1d_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=36:00:00
+#SBATCH --time=32:00:00
 
 set -euo pipefail
 
@@ -194,86 +194,71 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --raw-eeg-npy datasets/dreamer_eeg.npy \
     --raw-labels-npy datasets/dreamer_labels.npy \
     --label-dimension arousal \
-    --encoder-type gcn \
-    --n-channels 14 \
-    --n-bands 4 \
-    --out-dir runs/joint_autoencoder_vc_v2/GCN \
-    --run-name dreamer_arousal_vaevc_gcn \
+    --encoder-type cnn1d \
+    --out-dir runs/joint_autoencoder_vc_v2/CNN1D \
+    --run-name dreamer_arousal_vaevc_cnn1d \
     --n-jobs 4 \
     --cpus-per-worker 2 \
     --outer-verbose 0 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
-    --prediction-latent-samples 15 \
+    --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
     --validation-subjects 4 \
     --validation-seed 42 \
-    --early-stopping-patience 20 \
+    --early-stopping-patience 50 \
     --early-stopping-min-delta 0.001 \
-    --early-stopping-monitor val_vc_cross_entropy \
+    --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode min \
     --final-epoch-strategy median \
     --hyperparameters-json '{
     "epochs": [
-        200
+        300
     ],
     "batch_size": [
-        32
+        64
     ],
     "learning_rate": [
         0.0001
     ],
-    "ae_loss_weight": [
-        0.3
-    ],
-    "vc_loss_weight": [
-        1.0
-    ],
-    "vc_alpha": [
-        1.0
-    ],
-    "vc_beta": [
-        0.3
-    ],
-    "vc_gamma": [
-        0.0
-    ],
-    "vc_lambda": [
-        0.1
-    ],
+    "ae_loss_weight": [0.3, 0.7],
+    "vc_loss_weight": [1.0],
+    "vc_alpha": [1.0],
+    "vc_beta": [0.5, 0.8],
+    "vc_gamma": [0.0],
+    "vc_lambda": [0.1],
     "vae_beta": [
-        0.3
+        0.2
     ],
     "t_down": [
         2
     ],
     "emb_dim": [
-        16, 32, 64
+        32
     ],
     "dropout": [
         0.3
     ],
-    "gcn_units": [
-        [
-            32,
-            64
-        ]
+    "conv_filters": [
+        [32, 64]
     ],
-    "temporal_pool_sizes": [
-        [
-            2
-        ]
+    "kernel_sizes": [
+        [31, 15],
+        [15, 7]
     ],
-    "activation": [
-        "relu"
+    "pool_after_layers": [
+        0
+    ],
+    "pool_sizes": [
+        2
     ],
     "use_batch_norm": [
         false
     ],
     "bilstm_units": [
-        256, 512
+        256
     ],
     "bilstm_layers": [
         1
@@ -282,3 +267,4 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         0.4
     ]
 }'
+

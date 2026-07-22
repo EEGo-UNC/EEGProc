@@ -150,8 +150,8 @@ class GCNEncoder(BaseEncoder):
             )
 
             self.dropout_layers.append(
-                layers.TimeDistributed(
-                    layers.Dropout(dropout),
+                layers.Dropout(
+                    dropout,
                     name=f"gcn_do_{i}",
                 )
             )
@@ -320,9 +320,7 @@ class GCNDecoder(tf.keras.Model):
         ]
 
         self.bn_layers = [
-            layers.BatchNormalization(name=f"dec_bn1d_{i}")
-            if use_batch_norm
-            else None
+            layers.BatchNormalization(name=f"dec_bn1d_{i}") if use_batch_norm else None
             for i, _ in enumerate(reversed_units)
         ]
 

@@ -53,19 +53,13 @@ DREAMER (dreamer_joined.csv):
         subject_id, trial_id, segment, sample_idx,
         AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4,
         ECG1, ECG2, valence, arousal, dominance
-    This script groups by subject_id/trial_id, keeps the 14 EEG channels, and
-    applies EEGProc's preprocessing.bandpass_filter to each complete trial.
-    The retained waveforms are theta (4–8 Hz), alpha (8–13 Hz),
-    beta (13–30 Hz), and gamma (30–45 Hz); delta is omitted. A 50 Hz notch
-    is applied before the band-pass filters. The 14 x 4 channel-band outputs
-    are flattened channel-major, for example AF3_theta, AF3_alpha,
-    AF3_beta, AF3_gamma, F7_theta, ... .
-    Trial lengths vary; filtering is performed before taking the middle
-    60 s (7680 samples), which reduces boundary artifacts in the retained data.
-    If the supplied CSV was itself created from signals already low-pass filtered
-    at 30 Hz, the gamma output cannot restore the removed 30–45 Hz information.
-    NOTE: even though the CSV includes dominance, this converter writes labels
-    with shape (n_subjects, 18, 2) using [valence, arousal] only.
+    This script currently uses subject_id/trial_id for grouping,
+    the 14 EEG channels listed above for signals, and valence/arousal for labels.
+    Extra columns (segment, sample_idx, ECG1, ECG2, dominance) are ignored.
+    Signals are already at 128 Hz and filtered 4–30 Hz.
+    Trial lengths vary; we take 60 s from the middle (7680 samples).
+    NOTE: even though the CSV includes dominance, this converter currently writes
+    labels with shape (n_subjects, 18, 2) using [valence, arousal] only.
 
 AMIGOS (joined CSV or legacy preprocessed Matlab version):
     ``amigos_joined.csv`` is a long-form table with one row per EEG sample.
@@ -103,21 +97,9 @@ import argparse
 import csv
 import os
 import pickle
-import sys
 from pathlib import Path
 
 import numpy as np
-
-try:
-    from eegproc.preprocessing import bandpass_filter
-except ImportError:
-    # Support direct execution from inside src/eegproc/.../data without
-    # requiring the package to have been installed into the active environment.
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "eegproc" / "preprocessing.py").is_file():
-            sys.path.insert(0, str(parent))
-            break
-    from eegproc.preprocessing import bandpass_filter
 
 
 # ---------------------------------------------------------------------------
@@ -137,21 +119,6 @@ DREAMER_N_CHANNELS  = 14
 DREAMER_FS          = 128
 DREAMER_TRIAL_SECS  = 60
 DREAMER_TRIAL_SAMPLES = DREAMER_TRIAL_SECS * DREAMER_FS  # 7680
-
-# Four waveform bands per electrode. Dictionary insertion order is preserved
-# by bandpass_filter, so the flattened feature order is channel-major and then
-# theta, alpha, beta, gamma within each channel.
-DREAMER_FREQUENCY_BANDS = {
-    "theta": (4.0, 8.0),
-    "alpha": (8.0, 13.0),
-    "beta": (13.0, 30.0),
-    "gamma": (30.0, 43.0),
-}
-DREAMER_N_BANDS = len(DREAMER_FREQUENCY_BANDS)
-DREAMER_N_FEATURES = DREAMER_N_CHANNELS * DREAMER_N_BANDS
-DREAMER_BANDPASS_ORDER = 4
-DREAMER_NOTCH_HZ = 50.0
-DREAMER_NOTCH_Q = 30.0
 
 AMIGOS_N_SUBJECTS_TOTAL = 40
 # Participant IDs with known-invalid data in the public preprocessed
@@ -263,58 +230,6 @@ def prepare_deap(input_dir: str, output_dir: str) -> None:
 
 DREAMER_EEG_COLS = ["AF3", "F7", "F3", "FC5", "T7", "P7",
                     "O1", "O2", "P8", "T8", "FC6", "F4", "F8", "AF4"]
-
-DREAMER_BANDED_COLS = [
-    f"{channel}_{band}"
-    for channel in DREAMER_EEG_COLS
-    for band in DREAMER_FREQUENCY_BANDS
-]
-
-
-def _filter_dreamer_trial(eeg_raw: np.ndarray) -> np.ndarray:
-    """Filter one DREAMER trial into channel-major band waveforms.
-
-    Parameters
-    ----------
-    eeg_raw
-        Array shaped ``(n_samples, 14)`` in ``DREAMER_EEG_COLS`` order.
-
-    Returns
-    -------
-    np.ndarray
-        Float32 array shaped ``(n_samples, 56)`` ordered as
-        ``channel x [theta, alpha, beta, gamma]``.
-
-    Notes
-    -----
-    EEGProc's bandpass_filter applies the 50 Hz notch once before generating
-    the four zero-phase Butterworth band-pass outputs. Common-average
-    rereferencing is disabled here so this conversion changes only the
-    requested temporal filtering, rather than silently changing the reference.
-    """
-    import pandas as pd
-
-    eeg_frame = pd.DataFrame(eeg_raw, columns=DREAMER_EEG_COLS)
-    filtered = bandpass_filter(
-        eeg_frame,
-        fs=DREAMER_FS,
-        bands=DREAMER_FREQUENCY_BANDS,
-        order=DREAMER_BANDPASS_ORDER,
-        notch_hz=DREAMER_NOTCH_HZ,
-        notch_q=DREAMER_NOTCH_Q,
-        reref=False,
-        detrend=True,
-    )
-
-    missing = [column for column in DREAMER_BANDED_COLS if column not in filtered]
-    if missing:
-        raise RuntimeError(
-            "EEGProc bandpass_filter did not return the expected DREAMER "
-            f"channel-band columns. Missing: {missing}"
-        )
-
-    return filtered[DREAMER_BANDED_COLS].to_numpy(dtype=np.float32, copy=False)
-
 
 AMIGOS_SHORT_TRIALS = 16
 
@@ -651,50 +566,31 @@ def load_eegemotions_joined_csv(filepath: str, label_mode: str = "emotion_27") -
 
 
 def prepare_dreamer(input_dir: str, output_dir: str) -> None:
-    """Convert dreamer_joined.csv to channel-band waveform arrays.
+    """Convert dreamer_joined.csv to a single pair of .npy arrays.
 
     Parameters
     ----------
-    input_dir
-        Folder containing dreamer_joined.csv.
-    output_dir
-        Destination for dreamer_eeg.npy and dreamer_labels.npy.
+    input_dir  : str — folder containing dreamer_joined.csv
+    output_dir : str — where to write dreamer_eeg.npy and dreamer_labels.npy
 
     Output shapes
     -------------
-    dreamer_eeg.npy
-        float32 ``(n_subjects, 18, 56, 7680)``. The feature dimension is
-        ``14 electrodes x 4 bands`` in channel-major order.
-    dreamer_labels.npy
-        float32 ``(n_subjects, 18, 2)`` containing [valence, arousal].
+    dreamer_eeg.npy    : float32 (n_subjects, 18, 14, 7680)
+    dreamer_labels.npy : float32 (n_subjects, 18, 2)  [valence, arousal]
     """
     try:
         import pandas as pd
-    except ImportError as exc:
-        raise ImportError("pandas is required to read the CSV: pip install pandas") from exc
+    except ImportError:
+        raise ImportError("pandas is required to read the CSV: pip install pandas")
 
     csv_path = os.path.join(input_dir, "dreamer_joined.csv")
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(
             f"dreamer_joined.csv not found in {input_dir}.\n"
-            "Make sure --dreamer_dir points to the folder containing "
-            "dreamer_joined.csv."
+            f"Make sure --dreamer_dir points to the folder containing dreamer_joined.csv."
         )
 
     print(f"  Loading {csv_path} (this may take a moment)…")
-    print(
-        "  DREAMER preprocessing: "
-        f"bands={DREAMER_FREQUENCY_BANDS}, "
-        f"notch={DREAMER_NOTCH_HZ:g} Hz, "
-        f"order={DREAMER_BANDPASS_ORDER}, "
-        "reref=False, detrend=True"
-    )
-    print(f"  Feature order: {DREAMER_BANDED_COLS}")
-    print(
-        "  NOTE: gamma is meaningful only if dreamer_joined.csv retains "
-        "signal content above 30 Hz."
-    )
-
     df = pd.read_csv(csv_path)
 
     # Some exports store labels like '[3]'; strip brackets and cast.
@@ -703,60 +599,45 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
         df[col] = df[col].astype(str).str.strip("[]").astype(np.float32)
 
     subjects = sorted(df["subject_id"].unique())
-    trials = sorted(df["trial_id"].unique())
+    trials   = sorted(df["trial_id"].unique())
 
     all_eeg, all_labels = [], []
 
     for subj_idx, subj_id in enumerate(subjects):
-        subj_df = df[df["subject_id"] == subj_id]
-        subj_eeg = []
+        subj_df  = df[df["subject_id"] == subj_id]
+        subj_eeg    = []
         subj_labels = []
 
         for trial_id in trials:
             trial_df = subj_df[subj_df["trial_id"] == trial_id]
-            if trial_df.empty:
-                raise ValueError(
-                    f"DREAMER subject {subj_id} is missing trial {trial_id}."
-                )
 
-            # Preserve chronological sample order when the CSV contains a
-            # sample_idx column, then filter the complete trial before cropping.
-            if "sample_idx" in trial_df.columns:
-                trial_df = trial_df.sort_values("sample_idx", kind="stable")
+            eeg_raw = trial_df[DREAMER_EEG_COLS].values.astype(np.float32)  # (n_samples, 14)
+            eeg     = _extract_centre(eeg_raw, DREAMER_TRIAL_SAMPLES).T      # (14, 7680)
 
-            eeg_raw = trial_df[DREAMER_EEG_COLS].to_numpy(dtype=np.float32)
-            eeg_bands = _filter_dreamer_trial(eeg_raw)  # (n_samples, 56)
-            eeg = _extract_centre(
-                eeg_bands,
-                DREAMER_TRIAL_SAMPLES,
-            ).T  # (56, 7680)
-
-            # Labels are constant within a trial.
+            # Label is constant within a trial — take the first row
             valence = trial_df["valence"].iloc[0]
             arousal = trial_df["arousal"].iloc[0]
 
             subj_eeg.append(eeg)
             subj_labels.append([valence, arousal])
 
-        subj_eeg_arr = np.stack(subj_eeg, axis=0).astype(np.float32, copy=False)
-        subj_labels_arr = np.asarray(subj_labels, dtype=np.float32)
+        subj_eeg_arr    = np.stack(subj_eeg,    axis=0)  # (18, 14, 7680)
+        subj_labels_arr = np.array(subj_labels, dtype=np.float32)  # (18, 2)
 
         all_eeg.append(subj_eeg_arr)
         all_labels.append(subj_labels_arr)
-        print(
-            f"  DREAMER subject {subj_idx + 1:02d}/{len(subjects)}  "
-            f"eeg={subj_eeg_arr.shape}  labels={subj_labels_arr.shape}"
-        )
+        print(f"  DREAMER subject {subj_idx+1:02d}/{len(subjects)}  "
+              f"eeg={subj_eeg_arr.shape}  labels={subj_labels_arr.shape}")
 
-    eeg_arr = np.stack(all_eeg, axis=0)
-    labels_arr = np.stack(all_labels, axis=0)
+    eeg_arr    = np.stack(all_eeg,    axis=0)  # (n_subjects, 18, 14, 7680)
+    labels_arr = np.stack(all_labels, axis=0)  # (n_subjects, 18, 2)
 
-    eeg_path = os.path.join(output_dir, "dreamer_eeg.npy")
+    eeg_path    = os.path.join(output_dir, "dreamer_eeg.npy")
     labels_path = os.path.join(output_dir, "dreamer_labels.npy")
-    np.save(eeg_path, eeg_arr)
+    np.save(eeg_path,    eeg_arr)
     np.save(labels_path, labels_arr)
 
-    print("\nDREAMER saved:")
+    print(f"\nDREAMER saved:")
     print(f"  {eeg_path}    {eeg_arr.shape}  {eeg_arr.dtype}")
     print(f"  {labels_path} {labels_arr.shape}  {labels_arr.dtype}")
     _print_label_stats("DREAMER", labels_arr)
@@ -1021,7 +902,7 @@ def verify_npy(output_dir: str, dataset: str, label_mode: str | None = None) -> 
 
     expected_shapes = {
         "deap":    {"eeg": (32, 40, 32, 7680), "labels": (32, 40, 4)},
-        "dreamer": {"eeg": (23, 18, DREAMER_N_FEATURES, 7680), "labels": (23, 18, 2)},  # 14 channels x 4 bands
+        "dreamer": {"eeg": (23, 18, 14, 7680), "labels": (23, 18, 2)},  # labels: valence, arousal
         "amigos":  [
             {"eeg": (15, AMIGOS_SHORT_TRIALS, AMIGOS_N_CHANNELS, AMIGOS_TRIAL_SAMPLES), "labels": (15, AMIGOS_SHORT_TRIALS, 2)},
             {"eeg": (AMIGOS_N_SUBJECTS, AMIGOS_N_TRIALS, AMIGOS_N_CHANNELS, AMIGOS_TRIAL_SAMPLES),
