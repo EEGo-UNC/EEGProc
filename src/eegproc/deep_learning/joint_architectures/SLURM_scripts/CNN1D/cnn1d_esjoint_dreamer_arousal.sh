@@ -195,8 +195,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --raw-labels-npy datasets/dreamer_labels.npy \
     --label-dimension arousal \
     --encoder-type cnn1d \
-    --out-dir runs/joint_autoencoder_vc_v2/CNN1D \
-    --run-name dreamer_arousal_vaevc_cnn1d \
+    --out-dir runs/joint_ae_vc/CNN1D_val_loss \
+    --run-name dreamer_arousal_vaevc_cnn1d_val_loss \
     --n-jobs 4 \
     --cpus-per-worker 2 \
     --outer-verbose 0 \
