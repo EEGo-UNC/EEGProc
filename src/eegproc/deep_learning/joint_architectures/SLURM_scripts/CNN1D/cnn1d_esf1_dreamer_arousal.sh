@@ -223,26 +223,27 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "learning_rate": [
         0.0001
     ],
-    "ae_loss_weight": [0.3, 0.7],
+    "ae_loss_weight": [0.0, 0.4],
     "vc_loss_weight": [1.0],
     "vc_alpha": [1.0],
-    "vc_beta": [0.5, 0.8],
+    "vc_beta": [0.0, 0.5],
     "vc_gamma": [0.0],
-    "vc_lambda": [0.1],
+    "vc_lambda": [0.0, 0.1],
     "vae_beta": [
-        0.2
+        0.0, 0.2
     ],
     "t_down": [
         2
     ],
     "emb_dim": [
-        32
+        32, 64
     ],
     "dropout": [
-        0.3
+        0.1
     ],
     "conv_filters": [
         [64, 32]
+        [128, 64]
     ],
     "kernel_sizes": [
         [31, 15],
@@ -261,10 +262,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         256
     ],
     "bilstm_layers": [
-        1
+        2
     ],
     "bilstm_dropout": [
-        0.4
+        0.1
     ]
 }'
 

@@ -204,72 +204,52 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --outer-verbose 2 \
     --final-verbose 2 \
     --selection-level trial \
-    --selection-metric accuracy \
-    --prediction-latent-samples 10 \
+    --selection-metric f1 \
+    --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
+    --validation-subjects 4 \
+    --validation-seed 42 \
+    --early-stopping-patience 50 \
+    --early-stopping-min-delta 0.001 \
+    --early-stopping-monitor val_trial_f1 \
+    --early-stopping-mode max \
+    --final-epoch-strategy median \
     --hyperparameters-json '{
-    "epochs": [
-        200
-    ],
-    "batch_size": [
-        64
-    ],
-    "learning_rate": [
-        0.0001
-    ],
-    "ae_loss_weight": [
-        0.3
-    ],
-    "vc_loss_weight": [
-        0.7
-    ],
-    "vae_beta": [
-        1.0
-    ],
-    "t_down": [
-        2
-    ],
-    "emb_dim": [
-        16,
-        32
-    ],
-    "dropout": [
-        0.2
-    ],
+    "epochs": [300],
+    "batch_size": [64],
+    "learning_rate": [0.0001],
+
+    "ae_loss_weight": [0.0, 0.4],
+    "vc_loss_weight": [1.0],
+
+    "vc_alpha": [1.0],
+    "vc_beta": [0.0, 0.5],
+    "vc_gamma": [0.0],
+    "vc_lambda": [0.0, 0.1],
+    "vae_beta": [0.2],
+
+    "t_down": [2],
+    "emb_dim": [32, 64],
+    "dropout": [0.1],
+
     "conv_filters": [
-        [
-            16,
-            32
-        ],
-        [
-            32,
-            64
-        ]
+        [64, 32],
+        [128, 64]
     ],
+
     "kernel_sizes": [
-        [
-            [3, 1],
-            [3, 1]
-        ]
+        [[3, 3], [3, 3]],
+        [[5, 3], [3, 3]]
     ],
+
     "temporal_pool_sizes": [
         [2]
     ],
-    "activation": [
-        "relu"
-    ],
-    "use_batch_norm": [
-        false
-    ],
-    "bilstm_units": [
-        128,
-        256
-    ],
-    "bilstm_layers": [
-        2
-    ],
-    "bilstm_dropout": [
-        0.2
-    ]
-}'
+
+    "use_batch_norm": [false],
+
+    "bilstm_units": [256],
+    "bilstm_layers": [2],
+    "bilstm_dropout": [0.1]
+    }'
