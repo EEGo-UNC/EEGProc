@@ -199,7 +199,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --run-name dreamer_arousal_vaevc_cnn1d \
     --n-jobs 4 \
     --cpus-per-worker 2 \
-    --outer-verbose 2 \
+    --outer-verbose 0 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
@@ -264,9 +264,9 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         256, 512
     ],
     "bilstm_layers": [
-        1
+        2
     ],
     "bilstm_dropout": [
-        0.3
+        0.4
     ]
 }'

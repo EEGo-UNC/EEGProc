@@ -10,4 +10,7 @@
 - 07/21/2026
     - Adding VC terms has helped enhance accuracies when using AE with it. If we remove variational terms from classifier, the AE reduces the accuracy. GOOD FOR VC!!
     - NPY FILES ARE NOT BANDPASS FILTERED. Raw EEG will not be enough, we need to divvy it up into bands probably.
-    - CNN1D did not provide improvement after band filtering
+    - CNN1D did not provide improvement after band filtering probably due to underfitting. Model classifies random.
+    - Methodology for finding best loss terms: run CNN1D models because they are fast. Then find the rest.
+        - After CNN1D finishes, rerun GCN with the new hp combo (best loss terms and increased BiLSTM complexity)
+        

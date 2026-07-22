@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=32:00:00
+#SBATCH --time=36:00:00
 
 set -euo pipefail
 
@@ -201,7 +201,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --run-name dreamer_arousal_vaevc_gcn \
     --n-jobs 4 \
     --cpus-per-worker 2 \
-    --outer-verbose 2 \
+    --outer-verbose 0 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
@@ -244,21 +244,21 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         0.1
     ],
     "vae_beta": [
-        0.1, 0.4
+        0.3
     ],
     "t_down": [
         2
     ],
     "emb_dim": [
-        8
+        16, 32, 64
     ],
     "dropout": [
         0.3
     ],
     "gcn_units": [
         [
-            16,
-            32
+            32,
+            64
         ]
     ],
     "temporal_pool_sizes": [
@@ -273,7 +273,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         false
     ],
     "bilstm_units": [
-        128
+        256
     ],
     "bilstm_layers": [
         1
