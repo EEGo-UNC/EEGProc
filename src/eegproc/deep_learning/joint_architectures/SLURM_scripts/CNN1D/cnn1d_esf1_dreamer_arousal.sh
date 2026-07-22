@@ -211,7 +211,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-patience 50 \
     --early-stopping-min-delta 0.001 \
     --early-stopping-monitor val_trial_f1 \
-    --early-stopping-mode min \
+    --early-stopping-mode max \
     --final-epoch-strategy median \
     --hyperparameters-json '{
     "epochs": [
@@ -242,7 +242,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         0.3
     ],
     "conv_filters": [
-        [32, 64]
+        [64, 32]
     ],
     "kernel_sizes": [
         [31, 15],

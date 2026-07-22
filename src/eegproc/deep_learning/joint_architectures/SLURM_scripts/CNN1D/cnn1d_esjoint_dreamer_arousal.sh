@@ -242,7 +242,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         0.3
     ],
     "conv_filters": [
-        [32, 64]
+        [64, 32]
     ],
     "kernel_sizes": [
         [31, 15],
