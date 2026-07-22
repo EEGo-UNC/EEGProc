@@ -210,7 +210,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --validation-seed 42 \
     --early-stopping-patience 50 \
     --early-stopping-min-delta 0.001 \
-    --early-stopping-monitor val_trial_f1 \
+    --early-stopping-monitor val_loss \
     --early-stopping-mode min \
     --final-epoch-strategy median \
     --hyperparameters-json '{
