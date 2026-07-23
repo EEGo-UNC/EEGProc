@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=joint_v2_dreamer_arousal_cnn1d
-#SBATCH --output=joint_v2_dreamer_arousal_cnn1d_%j.out
-#SBATCH --error=joint_v2_dreamer_arousal_cnn1d_%j.err
+#SBATCH --job-name=joint_v2_dreamer_arousal_gcn
+#SBATCH --output=joint_v2_dreamer_arousal_gcn_%j.out
+#SBATCH --error=joint_v2_dreamer_arousal_gcn_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=32:00:00
+#SBATCH --mem=128G
+#SBATCH --time=36:00:00
 
 set -euo pipefail
 
@@ -194,16 +194,18 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --raw-eeg-npy datasets/dreamer_eeg.npy \
     --raw-labels-npy datasets/dreamer_labels.npy \
     --label-dimension arousal \
-    --encoder-type cnn1d \
-    --out-dir runs/joint_ae_vc/CNN1D_val_trial_f1 \
-    --run-name dreamer_arousal_vaevc_cnn1d_trial_f1 \
+    --encoder-type gcn \
+    --n-channels 14 \
+    --n-bands 4 \
+    --out-dir runs/joint_autoencoder_vc_v2/GCN \
+    --run-name dreamer_arousal_vaevc_gcn \
     --n-jobs 4 \
     --cpus-per-worker 2 \
     --outer-verbose 0 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
-    --prediction-latent-samples 20 \
+    --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
     --validation-subjects 4 \
@@ -215,7 +217,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --final-epoch-strategy median \
     --hyperparameters-json '{
     "epochs": [
-        300
+        200
     ],
     "batch_size": [
         32
@@ -223,14 +225,14 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "learning_rate": [
         0.0001
     ],
-    "ae_loss_weight": [0.0, 0.5],
+    "ae_loss_weight": [0.0],
     "vc_loss_weight": [1.0],
     "vc_alpha": [1.0],
     "vc_beta": [0.0, 0.5],
     "vc_gamma": [0.0],
     "vc_lambda": [0.0, 0.1],
     "vae_beta": [
-        0.3
+        0.0
     ],
     "t_down": [
         2
@@ -241,29 +243,30 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "dropout": [
         0.1
     ],
-    "conv_filters": [
-        [64, 32],
+    "gcn_units": [
+        [
+            64,
+            32
+        ]
     ],
-    "kernel_sizes": [
-        [15, 7]
+    "temporal_pool_sizes": [
+        [
+            2
+        ]
     ],
-    "pool_after_layers": [
-        0
-    ],
-    "pool_sizes": [
-        2
+    "activation": [
+        "relu"
     ],
     "use_batch_norm": [
         true
     ],
     "bilstm_units": [
-        256, 512
+        512
     ],
     "bilstm_layers": [
-        2
+        1
     ],
     "bilstm_dropout": [
-        0.1
+        0.2
     ]
 }'
-
