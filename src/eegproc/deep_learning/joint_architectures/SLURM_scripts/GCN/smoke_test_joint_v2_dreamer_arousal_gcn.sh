@@ -195,7 +195,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --out-dir runs/joint_autoencoder_vc_v2/GCN \
     --run-name dreamer_arousal_vaevc_gcn \
     --max-folds 2 \
-    --n-jobs 4 \
+    --n-jobs 1 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
