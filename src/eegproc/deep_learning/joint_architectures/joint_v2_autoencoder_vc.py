@@ -22,11 +22,18 @@ Training objective
 ------------------
 The main gradient step minimizes::
 
-    autoencoder_loss = reconstruction_loss
-                     + vae_beta * KL(q(z|x) || N(0, I))
+    autoencoder_loss = mean_reconstruction_loss
+                     + vae_beta * mean_latent_coordinate_kl
 
-    total_loss = ae_loss_weight * autoencoder_loss
-               + vc_loss_weight * variational_classifier_loss
+    base_total_loss = ae_loss_weight * autoencoder_loss
+                    + vc_loss_weight * variational_classifier_loss
+
+    total_loss = base_total_loss + keras_layer_regularization_losses
+
+The default autoencoder objective is dimension-normalized (mean/mean), not the
+standard summed ELBO. This keeps it on a practical scale when combined with the
+classifier objective. Graph adjacency and other Keras ``add_loss`` penalties
+are explicitly included in the custom training objective.
 
 When ``update_discriminator=True``, the variational classifier's optional
 discriminator receives a separate gradient step using the recurrent
@@ -185,7 +192,11 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         Non-negative multiplier on ``KL(q(z|x) || N(0, I))``.
     reconstruction_loss_fn : VariationalAutoencoderLoss | None
         Optional preconfigured VAE loss object. When omitted, one is created
-        with mean-squared reconstruction and ``beta=vae_beta``.
+        with mean-squared reconstruction, mean reconstruction reduction, mean
+        KL-coordinate reduction, and ``beta=vae_beta``.
+    z_log_var_clip_min, z_log_var_clip_max : float
+        Bounds applied to the posterior log variance before sampling and loss
+        computation to prevent exponential overflow.
     vc_alpha, vc_beta, vc_gamma, vc_lambda : float
         Coefficients forwarded to ``variational_classifier.vc_loss``.
     update_discriminator : bool, default=False
@@ -204,6 +215,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         vc_loss_weight: float = 0.5,
         vae_beta: float = 1.0,
         reconstruction_loss_fn: VariationalAutoencoderLoss | None = None,
+        z_log_var_clip_min: float = -20.0,
+        z_log_var_clip_max: float = 20.0,
         vc_alpha: float = 1.0,
         vc_beta: float = 1.0,
         vc_gamma: float = 0.0,
@@ -232,6 +245,11 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             raise ValueError("At least one loss weight must be greater than 0.")
         if vae_beta < 0.0:
             raise ValueError("vae_beta must be non-negative.")
+        if z_log_var_clip_min >= z_log_var_clip_max:
+            raise ValueError(
+                "z_log_var_clip_min must be smaller than "
+                "z_log_var_clip_max."
+            )
 
         self.encoder = encoder
         self.decoder = decoder
@@ -242,6 +260,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.ae_loss_weight = float(ae_loss_weight)
         self.vc_loss_weight = float(vc_loss_weight)
         self.vae_beta = float(vae_beta)
+        self.z_log_var_clip_min = float(z_log_var_clip_min)
+        self.z_log_var_clip_max = float(z_log_var_clip_max)
 
         # These two trainable projections turn the deterministic CNN output
         # into a true diagonal-Gaussian posterior q(z|x).
@@ -263,6 +283,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 reconstruction="mse",
                 beta=self.vae_beta,
                 feature_reduction="mean",
+                kl_reduction="mean",
+                log_var_clip_min=self.z_log_var_clip_min,
+                log_var_clip_max=self.z_log_var_clip_max,
             )
         )
 
@@ -279,6 +302,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             )
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
+        self.base_total_loss_tracker = tf.keras.metrics.Mean(
+            name="base_total_loss"
+        )
+        self.regularization_loss_tracker = tf.keras.metrics.Mean(
+            name="regularization_loss"
+        )
         self.autoencoder_loss_tracker = tf.keras.metrics.Mean(name="autoencoder_loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
@@ -331,7 +360,11 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
     @property
     def metrics(self) -> list[tf.keras.metrics.Metric]:
         """Metrics reset automatically by Keras each epoch/evaluation."""
-        metrics: list[tf.keras.metrics.Metric] = [self.total_loss_tracker]
+        metrics: list[tf.keras.metrics.Metric] = [
+            self.total_loss_tracker,
+            self.base_total_loss_tracker,
+            self.regularization_loss_tracker,
+        ]
         if self.ae_loss_weight > 0.0:
             metrics.extend(
                 [
@@ -433,7 +466,27 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             )
 
         z_mean = self.z_mean_projection(encoder_output)
-        z_log_var = self.z_log_var_projection(encoder_output)
+        raw_z_log_var = self.z_log_var_projection(encoder_output)
+
+        tf.debugging.assert_equal(
+            tf.shape(z_mean),
+            tf.shape(raw_z_log_var),
+            message="z_mean and z_log_var projections must have identical shapes.",
+        )
+        tf.debugging.assert_all_finite(
+            z_mean,
+            "z_mean contains NaN or Inf values.",
+        )
+        tf.debugging.assert_all_finite(
+            raw_z_log_var,
+            "Unclipped z_log_var contains NaN or Inf values.",
+        )
+
+        z_log_var = tf.clip_by_value(
+            raw_z_log_var,
+            tf.cast(self.z_log_var_clip_min, raw_z_log_var.dtype),
+            tf.cast(self.z_log_var_clip_max, raw_z_log_var.dtype),
+        )
         return encoder_output, z_mean, z_log_var
 
     def _classify_latent(
@@ -652,13 +705,31 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             sample_weight=sample_weight,
         )
 
-        total_loss = (
+        base_total_loss = (
             self.ae_loss_weight * vae_losses["total_loss"]
             + self.vc_loss_weight * vc_losses["total_loss"]
         )
 
+        # Custom train_step bypasses Keras' compiled-loss machinery, so layer
+        # penalties created with add_loss() must be included explicitly. This
+        # activates GraphConv adjacency regularization and any kernel/activity
+        # regularizers attached to nested layers.
+        if self.losses:
+            regularization_loss = tf.add_n(
+                [
+                    tf.cast(layer_loss, base_total_loss.dtype)
+                    for layer_loss in self.losses
+                ]
+            )
+        else:
+            regularization_loss = tf.zeros_like(base_total_loss)
+
+        total_loss = base_total_loss + regularization_loss
+
         losses = {
             "total_loss": total_loss,
+            "base_total_loss": base_total_loss,
+            "regularization_loss": regularization_loss,
             "autoencoder_loss": vae_losses["total_loss"],
             "reconstruction_loss": vae_losses["reconstruction_loss"],
             "kl_loss": vae_losses["kl_loss"],
@@ -713,6 +784,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         discriminator_loss: tf.Tensor,
     ) -> None:
         self.total_loss_tracker.update_state(losses["total_loss"])
+        self.base_total_loss_tracker.update_state(losses["base_total_loss"])
+        self.regularization_loss_tracker.update_state(
+            losses["regularization_loss"]
+        )
         if self.ae_loss_weight > 0.0:
             self.autoencoder_loss_tracker.update_state(losses["autoencoder_loss"])
             self.reconstruction_loss_tracker.update_state(
@@ -876,6 +951,11 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 "ae_loss_weight": self.ae_loss_weight,
                 "vc_loss_weight": self.vc_loss_weight,
                 "vae_beta": self.vae_beta,
+                "reconstruction_loss_fn": _serialize_keras_component(
+                    self.reconstruction_loss_fn
+                ),
+                "z_log_var_clip_min": self.z_log_var_clip_min,
+                "z_log_var_clip_max": self.z_log_var_clip_max,
                 "vc_alpha": self.vc_alpha,
                 "vc_beta": self.vc_beta,
                 "vc_gamma": self.vc_gamma,
@@ -894,7 +974,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "decoder",
             "classification_model",
             "variational_classifier",
+            "reconstruction_loss_fn",
         ):
-            config[key] = _deserialize_keras_component(config[key])
+            if key in config:
+                config[key] = _deserialize_keras_component(config[key])
         return cls(**config)
 

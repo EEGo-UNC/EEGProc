@@ -22,24 +22,25 @@ from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score,
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
 
-# These values describe one encoder architecture and must therefore remain
-# intact when represented as a flat JSON list. A nested list represents several
-# candidate architectures. For example:
-#
-#   "conv_filters": [16, 32]                 -> one candidate
-#   "conv_filters": [[16, 32], [32, 64]]    -> two candidates
-_SEQUENCE_HYPERPARAMETER_KEYS = frozenset(
-    {
-        "conv_filters",
-        "kernel_sizes",
-        "pool_after_layers",
-        "pool_sizes",
-    }
-)
+# Sequence-valued encoder settings need architecture-aware nesting rules.
+# The integer is the nesting depth of one architecture value:
+#   depth 1: [16, 32] or [2, 2]
+#   depth 2: [[3, 3], [3, 3]]
+# One additional outer level enumerates multiple candidate architectures.
+_DEFAULT_SEQUENCE_HYPERPARAMETER_DEPTHS = {
+    "conv_filters": 1,
+    "kernel_sizes": 1,
+    "pool_after_layers": 1,
+    "pool_sizes": 1,
+    "gcn_units": 1,
+    "temporal_pool_sizes": 1,
+    "spatial_pool_sizes": 2,
+}
 _EMPTY_SEQUENCE_ALLOWED_KEYS = frozenset(
     {
         "pool_after_layers",
         "pool_sizes",
+        "spatial_pool_sizes",
     }
 )
 
@@ -88,18 +89,46 @@ def _warn_if_joint_loss_weights_vary(
         )
 
 
-def _hyperparameter_candidates(key: str, value) -> list:
+def _sequence_structure_depth(value) -> int:
+    """Return the maximum list/tuple nesting depth of one value."""
+    if not isinstance(value, (list, tuple)):
+        return 0
+    if not value:
+        return 1
+    return 1 + max(_sequence_structure_depth(item) for item in value)
+
+
+def _copy_sequence_value(value):
+    """Copy nested list/tuple values into JSON-friendly lists."""
+    if isinstance(value, (list, tuple)):
+        return [_copy_sequence_value(item) for item in value]
+    return value
+
+
+def _hyperparameter_candidates(
+    key: str,
+    value,
+    sequence_hyperparameter_depths: Mapping[str, int] | None = None,
+) -> list:
     """Return candidate values while preserving architecture sequences.
 
-    Ordinary scalar hyperparameters use a list/tuple to enumerate candidates.
-    Sequence-valued encoder parameters are different: a flat list describes
-    one architecture, while a nested list enumerates multiple architectures.
-
-    A list of dictionaries remains an ordinary candidate list, which supports
-    bundled ``encoder_kwargs`` configurations for architectures with different
-    numbers of convolutional layers.
+    ``sequence_hyperparameter_depths`` resolves otherwise ambiguous nested
+    values. For CNN2D, for example, one ``kernel_sizes`` architecture has
+    depth two (``[[3, 3], [3, 3]]``), while a depth-three value enumerates
+    several kernel schedules. For CNN1D the same key has depth one.
     """
-    if key not in _SEQUENCE_HYPERPARAMETER_KEYS:
+    sequence_depths = dict(_DEFAULT_SEQUENCE_HYPERPARAMETER_DEPTHS)
+    if sequence_hyperparameter_depths:
+        for sequence_key, expected_depth in sequence_hyperparameter_depths.items():
+            expected_depth = int(expected_depth)
+            if expected_depth < 1:
+                raise ValueError(
+                    "Sequence hyperparameter depths must be >= 1; got "
+                    f"{sequence_key!r}: {expected_depth}."
+                )
+            sequence_depths[str(sequence_key)] = expected_depth
+
+    if key not in sequence_depths:
         if isinstance(value, (list, tuple)):
             if not value:
                 raise ValueError(
@@ -118,41 +147,48 @@ def _hyperparameter_candidates(key: str, value) -> list:
             return [[]]
         raise ValueError(f"Sequence hyperparameter {key!r} cannot be empty.")
 
-    nested_flags = [isinstance(item, (list, tuple)) for item in value]
-    if all(nested_flags):
-        candidates = [list(item) for item in value]
+    expected_depth = sequence_depths[key]
+    actual_depth = _sequence_structure_depth(value)
+
+    # A shallower representation is accepted for reusable atomic settings,
+    # such as CNN2D kernel_sizes=[3, 3] or spatial_pool_sizes=[2, 2].
+    if actual_depth <= expected_depth:
+        return [_copy_sequence_value(value)]
+
+    if actual_depth == expected_depth + 1:
+        candidates = [_copy_sequence_value(item) for item in value]
         if (
             key not in _EMPTY_SEQUENCE_ALLOWED_KEYS
-            and any(not candidate for candidate in candidates)
+            and any(isinstance(candidate, list) and not candidate for candidate in candidates)
         ):
             raise ValueError(
                 f"Sequence hyperparameter {key!r} contains an empty candidate."
             )
         return candidates
 
-    if any(nested_flags):
-        raise ValueError(
-            f"Sequence hyperparameter {key!r} mixes scalar and sequence "
-            f"values: {value!r}. Use a flat sequence for one architecture or "
-            "a nested sequence for multiple architectures."
-        )
-
-    return [list(value)]
+    raise ValueError(
+        f"Sequence hyperparameter {key!r} has nesting depth {actual_depth}, "
+        f"but one architecture expects depth {expected_depth}. Use depth "
+        f"{expected_depth} for one architecture or {expected_depth + 1} "
+        "to enumerate candidates."
+    )
 
 
-def _expand_hyperparameter_grid(hp: dict | None) -> list[dict]:
-    """Expand a hyperparameter dictionary into a Cartesian-product grid.
-
-    Scalar settings use the usual ``[candidate_1, candidate_2]`` syntax.
-    Encoder sequence settings listed in ``_SEQUENCE_HYPERPARAMETER_KEYS`` use
-    a flat list for one architecture and a nested list for multiple candidates.
-    """
+def _expand_hyperparameter_grid(
+    hp: dict | None,
+    sequence_hyperparameter_depths: Mapping[str, int] | None = None,
+) -> list[dict]:
+    """Expand a hyperparameter dictionary into a Cartesian-product grid."""
     if not hp:
         return [{}]
 
     keys = list(hp)
     candidate_values = [
-        _hyperparameter_candidates(key, hp[key])
+        _hyperparameter_candidates(
+            key,
+            hp[key],
+            sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+        )
         for key in keys
     ]
     return [
@@ -2217,7 +2253,15 @@ def nested_lnso_cv(
         **hyperparameters,
     }
 
-    grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    sequence_hyperparameter_depths = getattr(
+        model_builder_function,
+        "_sequence_hyperparameter_depths",
+        None,
+    )
+    grid_configs = _expand_hyperparameter_grid(
+        effective_hyperparameters,
+        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+    )
     _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
     outer_subject_splits = list(
         combinations(unique_subjects, n_outer_subjects_to_leave_out)
@@ -3091,13 +3135,12 @@ def loso_cv(
     Scalar values may be supplied directly or as candidate lists/tuples. The
     Cartesian product is evaluated with a complete LOSO run per configuration.
 
-    Sequence-valued encoder settings use a flat list for one architecture and
-    a nested list for multiple candidates. For example, ``conv_filters=[16, 32]``
-    is one two-layer encoder, whereas
-    ``conv_filters=[[16, 32], [32, 64]]`` evaluates two encoders. The same rule
-    applies to ``kernel_sizes``, ``pool_after_layers``, and ``pool_sizes``.
-    Architectures with different layer counts can instead be bundled as a list
-    of complete ``encoder_kwargs`` dictionaries.
+    Sequence-valued encoder settings preserve one complete architecture before
+    the Cartesian product is expanded. ``sequence_hyperparameter_depths``
+    specifies the nesting depth of one value, resolving CNN1D/CNN2D ambiguity
+    for keys such as ``kernel_sizes``. GCN ``gcn_units`` and temporal/spatial
+    pooling schedules are preserved in the same way. One additional outer list
+    level enumerates multiple architecture candidates.
 
     ``n_epochs`` and ``batch_size`` provide defaults and are overridden when
     ``hyperparameters`` contains ``epochs`` or ``batch_size``.
@@ -3263,7 +3306,15 @@ def loso_cv(
         "batch_size": batch_size,
         **(hyperparameters or {}),
     }
-    grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    sequence_hyperparameter_depths = getattr(
+        model_builder_function,
+        "_sequence_hyperparameter_depths",
+        None,
+    )
+    grid_configs = _expand_hyperparameter_grid(
+        effective_hyperparameters,
+        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+    )
     _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
     if not grid_configs:
         raise ValueError("The hyperparameter grid produced no configurations.")

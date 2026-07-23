@@ -197,7 +197,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --max-folds 2 \
     --n-jobs 4 \
     --cpus-per-worker 2 \
-    --outer-verbose 0 \
+    --outer-verbose 2 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
