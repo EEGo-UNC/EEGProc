@@ -18,4 +18,6 @@
     - Reverted convolutional layers [32, 64] -> [64, 32]. Changed early stopping from val_vc_cross_entropy to val_trial_f1 or joint_loss.
     - val_trial_f1 has to be maximized!!
     - Model continues to collapse. Decoder is at mean, trial prediction is random or predicts same class.
-
+- 07/23/2026
+    - Fixed preprocessing and dreamer preparation. Rerunning models.
+    
