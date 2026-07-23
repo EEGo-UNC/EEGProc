@@ -6,13 +6,16 @@ from ..GraphConv import GraphConv
 from ..utils import _product
 
 
+@tf.keras.utils.register_keras_serializable(package="eegproc")
 class GCNEncoder(BaseEncoder):
     """Residual, node-preserving GCN encoder for EEG sequence data.
 
     The input is a sequence of flattened channel-band vectors with shape
     ``(batch, timesteps, n_channels * n_bands)``. At each timestep, the vector
     is reshaped to ``(n_channels, n_bands)`` so that electrodes are graph nodes
-    and frequency bands are node features.
+    and frequency bands are node features. A single electrode adjacency is
+    shared across theta, alpha, beta, and gamma; the feature projection can
+    subsequently learn interactions among those four band features.
 
     Unlike a global-average graph readout, this encoder retains every node's
     representation by concatenating the node embeddings in the fixed electrode
@@ -32,11 +35,14 @@ class GCNEncoder(BaseEncoder):
         n_channels: int = 14,
         n_bands: int = 4,
         gcn_units: tuple[int, ...] = (64, 32),
-        temporal_pool_sizes: tuple[int, ...] = (2, 2),
+        temporal_pool_sizes: tuple[int, ...] | None = None,
         emb_dim: int = 128,
         dropout: float = 0.10,
         activation: str = "relu",
         use_batch_norm: bool = True,
+        graph_self_loop_bias: float = 2.0,
+        graph_identity_mix: float = 0.0,
+        graph_adjacency_reg_weight: float = 1e-4,
         name: str = "encoder_gcn",
         **kwargs,
     ):
@@ -60,22 +66,35 @@ class GCNEncoder(BaseEncoder):
             raise ValueError(f"All gcn_units must be positive, got {gcn_units}.")
         if not 0.0 <= dropout < 1.0:
             raise ValueError(f"dropout must be in [0, 1), got {dropout}.")
+        if graph_self_loop_bias < 0.0:
+            raise ValueError(
+                "graph_self_loop_bias must be non-negative, "
+                f"got {graph_self_loop_bias}."
+            )
+        if not 0.0 <= graph_identity_mix <= 1.0:
+            raise ValueError(
+                "graph_identity_mix must be in [0, 1], "
+                f"got {graph_identity_mix}."
+            )
+        if graph_adjacency_reg_weight < 0.0:
+            raise ValueError(
+                "graph_adjacency_reg_weight must be non-negative, "
+                f"got {graph_adjacency_reg_weight}."
+            )
 
         self.n_channels = n_channels
         self.n_bands = n_bands
         self.gcn_units = tuple(gcn_units)
-        self.temporal_pool_sizes = tuple(temporal_pool_sizes)
+        self.temporal_pool_sizes = self._normalize_temporal_pool_sizes(
+            temporal_pool_sizes,
+            self.t_down,
+        )
         self.dropout_rate = dropout
         self.activation = activation
         self.use_batch_norm = use_batch_norm
-
-        effective_t_down = _product(self.temporal_pool_sizes)
-        if effective_t_down != self.t_down:
-            raise ValueError(
-                f"t_down={self.t_down}, but temporal_pool_sizes produces "
-                f"a downsampling factor of {effective_t_down}. "
-                "Set t_down equal to product(temporal_pool_sizes)."
-            )
+        self.graph_self_loop_bias = float(graph_self_loop_bias)
+        self.graph_identity_mix = float(graph_identity_mix)
+        self.graph_adjacency_reg_weight = float(graph_adjacency_reg_weight)
 
         self.to_nodes = layers.Reshape(
             (timesteps, n_channels, n_bands),
@@ -98,6 +117,9 @@ class GCNEncoder(BaseEncoder):
                         units=units,
                         n_nodes=n_channels,
                         activation=None,
+                        self_loop_bias=self.graph_self_loop_bias,
+                        identity_mix=self.graph_identity_mix,
+                        adjacency_reg_weight=self.graph_adjacency_reg_weight,
                         name=f"graph_conv_{i}",
                     ),
                     name=f"gcn_{i}",
@@ -170,6 +192,33 @@ class GCNEncoder(BaseEncoder):
             name="seq_emb",
         )
 
+    @staticmethod
+    def _normalize_temporal_pool_sizes(
+        pool_sizes: tuple[int, ...] | None,
+        t_down: int,
+    ) -> tuple[int, ...]:
+        """Normalize temporal pooling and ensure it matches ``t_down``."""
+        if pool_sizes is None:
+            normalized = () if t_down == 1 else (int(t_down),)
+        else:
+            normalized = tuple(int(value) for value in pool_sizes)
+
+        if any(value < 1 for value in normalized):
+            raise ValueError(
+                "All temporal pool sizes must be >= 1, "
+                f"got {normalized}."
+            )
+
+        effective_t_down = _product(normalized) if normalized else 1
+        if effective_t_down != t_down:
+            raise ValueError(
+                f"t_down={t_down}, but temporal_pool_sizes produces "
+                f"a downsampling factor of {effective_t_down}. "
+                "Set t_down equal to product(temporal_pool_sizes)."
+            )
+
+        return normalized
+
     @property
     def n_features(self) -> int:
         """Flattened number of channel-band features per timestep."""
@@ -209,6 +258,13 @@ class GCNEncoder(BaseEncoder):
 
         return self.seq_emb(x)
 
+    def get_adjacency_matrices(self) -> dict[str, tf.Tensor]:
+        """Return normalized electrode adjacency matrices for diagnostics."""
+        return {
+            wrapper.name: wrapper.layer.normalized_adjacency()
+            for wrapper in self.gcn_layers
+        }
+
     def get_config(self) -> dict:
         """Return serializable configuration for the encoder."""
         config = super().get_config()
@@ -221,11 +277,15 @@ class GCNEncoder(BaseEncoder):
                 "dropout": self.dropout_rate,
                 "activation": self.activation,
                 "use_batch_norm": self.use_batch_norm,
+                "graph_self_loop_bias": self.graph_self_loop_bias,
+                "graph_identity_mix": self.graph_identity_mix,
+                "graph_adjacency_reg_weight": self.graph_adjacency_reg_weight,
             }
         )
         return config
 
 
+@tf.keras.utils.register_keras_serializable(package="eegproc")
 class GCNDecoder(tf.keras.Model):
     """Graph-aware decoder for :class:`GCNEncoder` latent sequences.
 
@@ -246,11 +306,14 @@ class GCNDecoder(tf.keras.Model):
         n_bands: int,
         t_down: int,
         gcn_units: tuple[int, ...],
-        temporal_pool_sizes: tuple[int, ...],
+        temporal_pool_sizes: tuple[int, ...] | None,
         emb_dim: int = 128,
         dropout: float = 0.10,
         activation: str = "relu",
         use_batch_norm: bool = True,
+        graph_self_loop_bias: float = 2.0,
+        graph_identity_mix: float = 0.0,
+        graph_adjacency_reg_weight: float = 1e-4,
         name: str = "decoder_gcn",
         **kwargs,
     ):
@@ -270,25 +333,38 @@ class GCNDecoder(tf.keras.Model):
             raise ValueError(f"All gcn_units must be positive, got {gcn_units}.")
         if not 0.0 <= dropout < 1.0:
             raise ValueError(f"dropout must be in [0, 1), got {dropout}.")
+        if graph_self_loop_bias < 0.0:
+            raise ValueError(
+                "graph_self_loop_bias must be non-negative, "
+                f"got {graph_self_loop_bias}."
+            )
+        if not 0.0 <= graph_identity_mix <= 1.0:
+            raise ValueError(
+                "graph_identity_mix must be in [0, 1], "
+                f"got {graph_identity_mix}."
+            )
+        if graph_adjacency_reg_weight < 0.0:
+            raise ValueError(
+                "graph_adjacency_reg_weight must be non-negative, "
+                f"got {graph_adjacency_reg_weight}."
+            )
 
         self.timesteps = timesteps
         self.n_channels = n_channels
         self.n_bands = n_bands
         self.t_down = t_down
         self.gcn_units = tuple(gcn_units)
-        self.temporal_pool_sizes = tuple(temporal_pool_sizes)
+        self.temporal_pool_sizes = GCNEncoder._normalize_temporal_pool_sizes(
+            temporal_pool_sizes,
+            self.t_down,
+        )
         self.emb_dim = emb_dim
         self.dropout_rate = dropout
         self.activation = activation
         self.use_batch_norm = use_batch_norm
-
-        effective_t_down = _product(self.temporal_pool_sizes)
-        if effective_t_down != self.t_down:
-            raise ValueError(
-                f"t_down={self.t_down}, but temporal_pool_sizes produces "
-                f"a downsampling factor of {effective_t_down}. "
-                "Set t_down equal to product(temporal_pool_sizes)."
-            )
+        self.graph_self_loop_bias = float(graph_self_loop_bias)
+        self.graph_identity_mix = float(graph_identity_mix)
+        self.graph_adjacency_reg_weight = float(graph_adjacency_reg_weight)
 
         graph_seed_units = self.gcn_units[-1]
 
@@ -296,8 +372,17 @@ class GCNDecoder(tf.keras.Model):
             graph_seed_units,
             kernel_size=1,
             padding="same",
-            activation=activation,
+            activation=None,
             name="dec_input_projection",
+        )
+        self.input_bn = (
+            layers.BatchNormalization(name="dec_input_bn")
+            if use_batch_norm
+            else None
+        )
+        self.input_activation = layers.Activation(
+            activation,
+            name="dec_input_activation",
         )
 
         self.upsample_layers = []
@@ -360,6 +445,9 @@ class GCNDecoder(tf.keras.Model):
                         units=units,
                         n_nodes=n_channels,
                         activation=None,
+                        self_loop_bias=self.graph_self_loop_bias,
+                        identity_mix=self.graph_identity_mix,
+                        adjacency_reg_weight=self.graph_adjacency_reg_weight,
                         name=f"dec_graph_conv_{i}",
                     ),
                     name=f"dec_gcn_{i}",
@@ -400,6 +488,9 @@ class GCNDecoder(tf.keras.Model):
                 units=n_bands,
                 n_nodes=n_channels,
                 activation=None,
+                self_loop_bias=self.graph_self_loop_bias,
+                identity_mix=self.graph_identity_mix,
+                adjacency_reg_weight=self.graph_adjacency_reg_weight,
                 name="dec_output_graph_conv",
             ),
             name="dec_output_graph",
@@ -439,6 +530,9 @@ class GCNDecoder(tf.keras.Model):
             dropout=encoder.dropout_rate,
             activation=encoder.activation,
             use_batch_norm=encoder.use_batch_norm,
+            graph_self_loop_bias=encoder.graph_self_loop_bias,
+            graph_identity_mix=encoder.graph_identity_mix,
+            graph_adjacency_reg_weight=encoder.graph_adjacency_reg_weight,
             name=name,
         )
 
@@ -457,6 +551,11 @@ class GCNDecoder(tf.keras.Model):
     def call(self, inputs, training: bool = False):
         """Decode latent sequences into channel-specific EEG graph signals."""
         x = self.input_projection(inputs)
+
+        if self.input_bn is not None:
+            x = self.input_bn(x, training=training)
+
+        x = self.input_activation(x)
 
         for upsample, conv, bn, activation, dropout in zip(
             self.upsample_layers,
@@ -510,6 +609,17 @@ class GCNDecoder(tf.keras.Model):
 
         return self.fix_length(x)
 
+    def get_adjacency_matrices(self) -> dict[str, tf.Tensor]:
+        """Return normalized decoder electrode graphs for diagnostics."""
+        matrices = {
+            wrapper.name: wrapper.layer.normalized_adjacency()
+            for wrapper in self.graph_layers
+        }
+        matrices[self.output_graph.name] = (
+            self.output_graph.layer.normalized_adjacency()
+        )
+        return matrices
+
     def compute_output_shape(self, input_shape):
         """Return the decoder output shape."""
         return (input_shape[0], self.timesteps, self.n_features)
@@ -529,6 +639,9 @@ class GCNDecoder(tf.keras.Model):
                 "dropout": self.dropout_rate,
                 "activation": self.activation,
                 "use_batch_norm": self.use_batch_norm,
+                "graph_self_loop_bias": self.graph_self_loop_bias,
+                "graph_identity_mix": self.graph_identity_mix,
+                "graph_adjacency_reg_weight": self.graph_adjacency_reg_weight,
                 "name": self.name,
             }
         )

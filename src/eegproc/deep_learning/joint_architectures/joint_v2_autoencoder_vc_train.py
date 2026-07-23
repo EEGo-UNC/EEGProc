@@ -56,7 +56,7 @@ except ImportError:
 
 try:
     try:
-        from ..cross_val_joint_loss import loso_cv
+        from ..cross_val import loso_cv
     except ImportError:
         # Supports replacing the repository's ordinary cross_val.py with this
         # variant while retaining the standard module name.
@@ -72,7 +72,7 @@ except ImportError:
         sys.path.insert(0, str(SRC_ROOT))
 
     try:
-        from eegproc.deep_learning.cross_val_joint_loss import loso_cv
+        from eegproc.deep_learning.cross_val import loso_cv
     except ImportError:
         from eegproc.deep_learning.cross_val import loso_cv
     from eegproc.deep_learning.supervised.rnn_architectures import (
@@ -503,6 +503,56 @@ def _normalize_2d_kernel_sizes(value, n_layers: int) -> tuple[tuple[int, int], .
     return tuple(kernels)
 
 
+def _normalize_2d_pool_sizes(
+    value,
+    n_layers: int,
+) -> tuple[tuple[int, int] | None, ...]:
+    """Normalize optional spatial pooling to one setting per Conv2D layer."""
+    if value is None:
+        return tuple(None for _ in range(n_layers))
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(
+            f"spatial_pool_sizes must be a list, tuple, or None; got {value!r}."
+        )
+    if not value:
+        return tuple(None for _ in range(n_layers))
+
+    if len(value) == 2 and all(
+        isinstance(item, (int, np.integer)) for item in value
+    ):
+        pair = tuple(int(item) for item in value)
+        if any(item < 1 for item in pair):
+            raise ValueError(
+                f"Spatial pool dimensions must be >= 1, got {pair!r}."
+            )
+        return tuple(pair for _ in range(n_layers))
+
+    if len(value) != n_layers:
+        raise ValueError(
+            "spatial_pool_sizes must contain one pair or one entry per Conv2D "
+            f"layer ({n_layers}); got {value!r}."
+        )
+
+    normalized: list[tuple[int, int] | None] = []
+    for item in value:
+        if item is None:
+            normalized.append(None)
+            continue
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError(
+                "Each spatial_pool_sizes entry must be None or two integers; "
+                f"got {item!r}."
+            )
+        pair = tuple(int(dimension) for dimension in item)
+        if any(dimension < 1 for dimension in pair):
+            raise ValueError(
+                f"Spatial pool dimensions must be >= 1, got {pair!r}."
+            )
+        normalized.append(pair)
+
+    return tuple(normalized)
+
+
 def _validate_temporal_pooling(config: dict) -> dict:
     """Validate temporal pooling shared by CNN2D and GCN encoders."""
     config["temporal_pool_sizes"] = _positive_int_tuple(
@@ -525,8 +575,13 @@ def _normalize_cnn2d_configuration(encoder_config: dict) -> dict:
     config["conv_filters"] = _positive_int_tuple(
         "conv_filters", config["conv_filters"]
     )
+    n_conv_layers = len(config["conv_filters"])
     config["kernel_sizes"] = _normalize_2d_kernel_sizes(
-        config["kernel_sizes"], len(config["conv_filters"])
+        config["kernel_sizes"], n_conv_layers
+    )
+    config["spatial_pool_sizes"] = _normalize_2d_pool_sizes(
+        config.get("spatial_pool_sizes", (2, 2)),
+        n_conv_layers,
     )
     if config["n_channels"] < 1 or config["n_bands"] < 1:
         raise ValueError(
@@ -641,6 +696,9 @@ def _build_encoder_decoder(
             "n_bands": resolved_bands,
             "conv_filters": (16, 32),
             "kernel_sizes": ((3, band_kernel), (3, band_kernel)),
+            # Pool the channel-band grid after each Conv2D block so the second
+            # convolution does not retain a full 14 x 4 activation map.
+            "spatial_pool_sizes": (2, 2),
             "temporal_pool_sizes": (2,),
             "emb_dim": 16,
             "dropout": 0.1,
@@ -875,6 +933,7 @@ def train_joint_autoencoder_variational_classifier_v2(
                 "activation",
                 "conv_filters",
                 "kernel_sizes",
+                "spatial_pool_sizes",
                 "temporal_pool_sizes",
             },
             "gcn": {
@@ -1045,6 +1104,25 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     _write_json(run_dir / "training_config.json", asdict(training_config))
 
+    sequence_hyperparameter_depths = {
+        "cnn1d": {
+            "conv_filters": 1,
+            "kernel_sizes": 1,
+            "pool_after_layers": 1,
+            "pool_sizes": 1,
+        },
+        "cnn2d": {
+            "conv_filters": 1,
+            "kernel_sizes": 2,
+            "spatial_pool_sizes": 2,
+            "temporal_pool_sizes": 1,
+        },
+        "gcn": {
+            "gcn_units": 1,
+            "temporal_pool_sizes": 1,
+        },
+    }[encoder_type]
+
     cv_results = loso_cv(
         model_builder_function=model_builder_function,
         feature_array=feature_array,
@@ -1054,6 +1132,7 @@ def train_joint_autoencoder_variational_classifier_v2(
         n_epochs=training_config.cv_max_epochs,
         batch_size=training_config.batch_size,
         hyperparameters=training_config.hyperparameters,
+        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
         evaluation_level="trial",
         selection_level=training_config.selection_level,
         selection_metric=training_config.selection_metric,
@@ -1161,9 +1240,18 @@ def train_joint_autoencoder_variational_classifier_v2(
             tf.keras.callbacks.CSVLogger(str(run_dir / "final_training_history.csv")),
         )
 
+    final_class_ids = _as_class_ids(label_array)
+    final_classes, final_counts = np.unique(final_class_ids, return_counts=True)
+    final_class_weight = {
+        int(class_id): len(final_class_ids) / (len(final_classes) * count)
+        for class_id, count in zip(final_classes, final_counts)
+    }
+    logger.info("Final-fit class weights: %s", final_class_weight)
+
     final_history = final_model.fit(
         feature_array,
         label_array,
+        class_weight=final_class_weight,
         epochs=selected_final_epochs,
         batch_size=selected_final_batch_size,
         verbose=training_config.final_verbose,
@@ -1402,7 +1490,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Cartesian grid passed to cross_val.loso_cv. Use only keys valid "
             "for the selected --encoder-type. CNN1D uses conv_filters, "
             "kernel_sizes, pool_after_layers, and pool_sizes; CNN2D uses "
-            "conv_filters, 2D kernel_sizes, and temporal_pool_sizes; GCN uses "
+            "conv_filters, 2D kernel_sizes, spatial_pool_sizes, and "
+            "temporal_pool_sizes; GCN uses "
             "gcn_units and temporal_pool_sizes. Common keys include t_down, "
             "emb_dim, dropout, use_batch_norm, and the BiLSTM/loss settings."
         ),

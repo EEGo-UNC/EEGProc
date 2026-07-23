@@ -192,68 +192,56 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --encoder-type gcn \
     --n-channels 14 \
     --n-bands 4 \
-    --out-dir runs/joint_autoencoder_vc_v2/GCN/smoke \
-    --run-name smoke_dreamer_arousal_vaevc_gcn \
-    --max-folds 1 \
-    --n-jobs 1 \
+    --out-dir runs/joint_autoencoder_vc_v2/GCN \
+    --run-name dreamer_arousal_vaevc_gcn \
+    --max-folds 2 \
+    --n-jobs 4 \
     --cpus-per-worker 2 \
-    --outer-verbose 2 \
+    --outer-verbose 0 \
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
-    --prediction-latent-samples 2 \
+    --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
     --validation-subjects 4 \
     --validation-seed 42 \
-    --early-stopping-patience 2 \
+    --early-stopping-patience 50 \
     --early-stopping-min-delta 0.001 \
-    --early-stopping-monitor val_vc_cross_entropy \
-    --early-stopping-mode min \
+    --early-stopping-monitor val_trial_f1 \
+    --early-stopping-mode max \
     --final-epoch-strategy median \
     --hyperparameters-json '{
     "epochs": [
-        2
+        200
     ],
     "batch_size": [
-        64
+        32
     ],
     "learning_rate": [
         0.0001
     ],
-    "ae_loss_weight": [
-        0.3
-    ],
-    "vc_loss_weight": [
-        1.0
-    ],
-    "vc_alpha": [
-        1.0
-    ],
-    "vc_beta": [
-        0.1
-    ],
-    "vc_gamma": [
-        0.0
-    ],
-    "vc_lambda": [
-        0.1
-    ],
+    "ae_loss_weight": [0.5],
+    "vc_loss_weight": [1.0],
+    "vc_alpha": [1.0],
+    "vc_beta": [0.0, 0.4],
+    "vc_gamma": [0.0],
+    "vc_lambda": [0.0, 0.1],
     "vae_beta": [
-        0.1
+        0.0
     ],
     "t_down": [
         2
     ],
     "emb_dim": [
-        8
+        32
     ],
     "dropout": [
-        0.3
+        0.1
     ],
     "gcn_units": [
         [
-            16,
+            64,
             32
         ]
     ],
@@ -266,15 +254,15 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "relu"
     ],
     "use_batch_norm": [
-        false
+        true
     ],
     "bilstm_units": [
-        128
+        256
     ],
     "bilstm_layers": [
         1
     ],
     "bilstm_dropout": [
-        0.4
+        0.3
     ]
 }'

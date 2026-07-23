@@ -1,5 +1,3 @@
-from collections.abc import Sequence
-
 import tensorflow as tf
 from tensorflow.keras import layers
 
@@ -7,6 +5,7 @@ from ..BaseEncoder import BaseEncoder
 from ..utils import _ensure_tuple, _product
 
 
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
 class CNN1DEncoder(BaseEncoder):
     """Configurable-depth 1D convolutional encoder for EEG sequence data.
 
@@ -32,10 +31,11 @@ class CNN1DEncoder(BaseEncoder):
     kernel_sizes : int or tuple[int, ...], default=(7, 5, 3)
         Kernel size for each Conv1D layer. If an int is given, the same kernel
         size is used for every layer.
-    pool_after_layers : tuple[int, ...], default=(0, 1)
+    pool_after_layers : tuple[int, ...] or None, default=None
         Zero-indexed convolutional layer indices after which ``MaxPool1D`` is
-        applied.
-    pool_sizes : int or tuple[int, ...], default=2
+        applied. When both pooling arguments are omitted, one pooling operation
+        with size ``t_down`` is placed after the first convolution.
+    pool_sizes : int, tuple[int, ...], or None, default=None
         Pool size for each pooling operation. If an int is given, the same pool
         size is used after every layer listed in ``pool_after_layers``.
     emb_dim : int, default=128
@@ -67,8 +67,8 @@ class CNN1DEncoder(BaseEncoder):
         t_down: int,
         conv_filters: tuple[int, ...] = (64, 128, 256),
         kernel_sizes: int | tuple[int, ...] = (7, 5, 3),
-        pool_after_layers: tuple[int, ...] = (0, 1),
-        pool_sizes: int | tuple[int, ...] = 3,
+        pool_after_layers: tuple[int, ...] | None = None,
+        pool_sizes: int | tuple[int, ...] | None = None,
         emb_dim: int = 128,
         dropout: float = 0.10,
         activation: str = "relu",
@@ -94,12 +94,34 @@ class CNN1DEncoder(BaseEncoder):
             len(self.conv_filters),
             "kernel_sizes",
         )
-        self.pool_after_layers = tuple(pool_after_layers)
-        self.pool_sizes = _ensure_tuple(
-            pool_sizes,
-            len(self.pool_after_layers),
-            "pool_sizes",
-        )
+        if pool_after_layers is None and pool_sizes is None:
+            if self.t_down == 1:
+                self.pool_after_layers = ()
+                self.pool_sizes = ()
+            else:
+                self.pool_after_layers = (0,)
+                self.pool_sizes = (self.t_down,)
+        elif pool_after_layers is None:
+            normalized_pool_sizes = (
+                (pool_sizes,) if isinstance(pool_sizes, int) else tuple(pool_sizes)
+            )
+            self.pool_after_layers = tuple(range(len(normalized_pool_sizes)))
+            self.pool_sizes = normalized_pool_sizes
+        elif pool_sizes is None:
+            self.pool_after_layers = tuple(pool_after_layers)
+            if len(self.pool_after_layers) != 1:
+                raise ValueError(
+                    "pool_sizes may be omitted only when exactly one pooling "
+                    "layer is configured."
+                )
+            self.pool_sizes = (self.t_down,)
+        else:
+            self.pool_after_layers = tuple(pool_after_layers)
+            self.pool_sizes = _ensure_tuple(
+                pool_sizes,
+                len(self.pool_after_layers),
+                "pool_sizes",
+            )
         self.dropout_rate = dropout
         self.activation = activation
         self.use_batch_norm = use_batch_norm
@@ -109,8 +131,12 @@ class CNN1DEncoder(BaseEncoder):
                 "pool_after_layers contains an invalid layer index. "
                 f"Valid indices are 0 to {len(self.conv_filters) - 1}."
             )
+        if len(set(self.pool_after_layers)) != len(self.pool_after_layers):
+            raise ValueError("pool_after_layers must not contain duplicates.")
+        if any(size < 1 for size in self.pool_sizes):
+            raise ValueError(f"All pool_sizes must be >= 1, got {self.pool_sizes}.")
 
-        effective_t_down = _product(self.pool_sizes)
+        effective_t_down = _product(self.pool_sizes) if self.pool_sizes else 1
         if effective_t_down != self.t_down:
             raise ValueError(
                 f"t_down={self.t_down}, but the configured pooling produces "
@@ -122,6 +148,7 @@ class CNN1DEncoder(BaseEncoder):
 
         self.conv_layers = []
         self.bn_layers = []
+        self.activation_layers = []
         self.pool_layers = []
         self.dropout_layers = []
 
@@ -133,7 +160,7 @@ class CNN1DEncoder(BaseEncoder):
                     filters,
                     kernel_size,
                     padding="same",
-                    activation=activation,
+                    activation=None,
                     name=f"enc_conv1d_{i}",
                 )
             )
@@ -142,6 +169,9 @@ class CNN1DEncoder(BaseEncoder):
                 layers.BatchNormalization(name=f"enc_bn1d_{i}")
                 if use_batch_norm
                 else None
+            )
+            self.activation_layers.append(
+                layers.Activation(activation, name=f"enc_activation1d_{i}")
             )
 
             self.pool_layers.append(
@@ -173,9 +203,10 @@ class CNN1DEncoder(BaseEncoder):
         """Run the configurable-depth 1D CNN encoder forward pass."""
         x = inputs
 
-        for conv, bn, pool, dropout in zip(
+        for conv, bn, activation, pool, dropout in zip(
             self.conv_layers,
             self.bn_layers,
+            self.activation_layers,
             self.pool_layers,
             self.dropout_layers,
         ):
@@ -183,6 +214,8 @@ class CNN1DEncoder(BaseEncoder):
 
             if bn is not None:
                 x = bn(x, training=training)
+
+            x = activation(x)
 
             if pool is not None:
                 x = pool(x)
@@ -209,6 +242,7 @@ class CNN1DEncoder(BaseEncoder):
         return config
 
 
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
 class CNN1DDecoder(tf.keras.Model):
     """Mirror decoder for ``CNN1DEncoder``.
 
@@ -267,7 +301,12 @@ class CNN1DDecoder(tf.keras.Model):
         self.activation = activation
         self.use_batch_norm = use_batch_norm
 
-        effective_t_down = _product(self.pool_sizes)
+        if len(set(self.pool_after_layers)) != len(self.pool_after_layers):
+            raise ValueError("pool_after_layers must not contain duplicates.")
+        if any(size < 1 for size in self.pool_sizes):
+            raise ValueError(f"All pool_sizes must be >= 1, got {self.pool_sizes}.")
+
+        effective_t_down = _product(self.pool_sizes) if self.pool_sizes else 1
         if effective_t_down != self.t_down:
             raise ValueError(
                 f"t_down={self.t_down}, but the configured pooling produces "
@@ -279,8 +318,17 @@ class CNN1DDecoder(tf.keras.Model):
             self.conv_filters[-1],
             1,
             padding="same",
-            activation=activation,
+            activation=None,
             name="dec_input_projection",
+        )
+
+        self.input_bn = (
+            layers.BatchNormalization(name="dec_input_bn")
+            if use_batch_norm
+            else None
+        )
+        self.input_activation = layers.Activation(
+            activation, name="dec_input_activation"
         )
 
         self.upsample_layers = {
@@ -296,7 +344,7 @@ class CNN1DDecoder(tf.keras.Model):
                 filters,
                 kernel_size,
                 padding="same",
-                activation=activation,
+                activation=None,
                 name=f"dec_conv1d_{i}",
             )
             for i, (filters, kernel_size) in enumerate(
@@ -306,6 +354,11 @@ class CNN1DDecoder(tf.keras.Model):
 
         self.bn_layers = [
             layers.BatchNormalization(name=f"dec_bn1d_{i}") if use_batch_norm else None
+            for i, _ in enumerate(self.conv_filters)
+        ]
+
+        self.activation_layers = [
+            layers.Activation(activation, name=f"dec_activation1d_{i}")
             for i, _ in enumerate(self.conv_filters)
         ]
 
@@ -334,7 +387,11 @@ class CNN1DDecoder(tf.keras.Model):
         name: str = "decoder_mirror",
     ):
         """Create a mirror decoder from a configured ``CNN1DEncoder``."""
-        pool_sizes = getattr(encoder, "pool_sizes")
+        if not isinstance(encoder, CNN1DEncoder):
+            raise TypeError(
+                "CNN1DDecoder.from_encoder only supports CNN1DEncoder. "
+                f"Got {type(encoder).__name__}."
+            )
 
         return cls(
             timesteps=encoder.timesteps,
@@ -343,7 +400,7 @@ class CNN1DDecoder(tf.keras.Model):
             conv_filters=encoder.conv_filters,
             kernel_sizes=encoder.kernel_sizes,
             pool_after_layers=encoder.pool_after_layers,
-            pool_sizes=pool_sizes,
+            pool_sizes=encoder.pool_sizes,
             emb_dim=encoder.emb_dim,
             dropout=encoder.dropout_rate,
             activation=encoder.activation,
@@ -364,6 +421,9 @@ class CNN1DDecoder(tf.keras.Model):
 
     def call(self, inputs, training: bool = False):
         x = self.input_projection(inputs)
+        if self.input_bn is not None:
+            x = self.input_bn(x, training=training)
+        x = self.input_activation(x)
 
         for i in reversed(range(len(self.conv_filters))):
             if i in self.upsample_layers:
@@ -374,6 +434,7 @@ class CNN1DDecoder(tf.keras.Model):
             if self.bn_layers[i] is not None:
                 x = self.bn_layers[i](x, training=training)
 
+            x = self.activation_layers[i](x)
             x = self.dropout_layers[i](x, training=training)
 
         x = self.x_hat(x)
