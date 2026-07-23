@@ -1104,7 +1104,11 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     _write_json(run_dir / "training_config.json", asdict(training_config))
 
-    sequence_hyperparameter_depths = {
+    # Attach architecture-specific sequence metadata to the builder instead of
+    # changing loso_cv's public API. cross_val reads this attribute before
+    # expanding the hyperparameter grid; older compatible loso_cv signatures
+    # therefore do not receive an unexpected keyword argument.
+    model_builder_function._sequence_hyperparameter_depths = {
         "cnn1d": {
             "conv_filters": 1,
             "kernel_sizes": 1,
@@ -1132,7 +1136,6 @@ def train_joint_autoencoder_variational_classifier_v2(
         n_epochs=training_config.cv_max_epochs,
         batch_size=training_config.batch_size,
         hyperparameters=training_config.hyperparameters,
-        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
         evaluation_level="trial",
         selection_level=training_config.selection_level,
         selection_metric=training_config.selection_metric,

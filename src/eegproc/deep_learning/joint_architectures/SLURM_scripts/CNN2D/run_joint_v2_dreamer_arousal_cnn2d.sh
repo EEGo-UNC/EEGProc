@@ -246,7 +246,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         [2]
     ],
 
-    "use_batch_norm": [false],
+    "use_batch_norm": [true],
 
     "bilstm_units": [256],
     "bilstm_layers": [2],
