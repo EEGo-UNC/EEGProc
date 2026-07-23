@@ -11,6 +11,9 @@ class GraphConv(layers.Layer):
     The graph nodes are EEG electrodes. Any frequency bands are node features,
     so the same ``n_nodes x n_nodes`` electrode graph is applied to every band
     before the learned feature projection mixes the band/features dimension.
+    Inputs may contain any number of leading dimensions, including the native
+    sequence shape ``(batch, time, n_nodes, features)``; graph operations are
+    broadcast over all leading dimensions without ``TimeDistributed``.
 
     The normalized adjacency is
 
@@ -147,11 +150,21 @@ class GraphConv(layers.Layer):
         del training  # The layer has no train/inference-specific operation.
 
         X = tf.convert_to_tensor(X)
-        tf.debugging.assert_equal(
-            tf.shape(X)[-2],
-            self.n_nodes,
-            message="GraphConv input node dimension does not match n_nodes.",
-        )
+
+        # build() already validates a statically known node dimension. Retain
+        # a runtime assertion only for genuinely dynamic shapes, avoiding an
+        # unnecessary assertion op in the normal fixed-channel EEG path.
+        static_nodes = X.shape[-2]
+        if static_nodes is None:
+            tf.debugging.assert_equal(
+                tf.shape(X)[-2],
+                self.n_nodes,
+                message="GraphConv input node dimension does not match n_nodes.",
+            )
+        elif int(static_nodes) != self.n_nodes:
+            raise ValueError(
+                f"GraphConv expected {self.n_nodes} nodes, got {static_nodes}."
+            )
 
         A_norm = self.normalized_adjacency(dtype=X.dtype)
 
@@ -167,8 +180,10 @@ class GraphConv(layers.Layer):
                 * mean_entropy
             )
 
-        AX = tf.matmul(A_norm, X)
-        H = tf.matmul(AX, tf.cast(self.W, X.dtype))
+        # tf.matmul broadcasts A_norm over every leading dimension of X,
+        # e.g. batch and time for rank-4 EEG sequences.
+        AX = tf.linalg.matmul(A_norm, X)
+        H = tf.linalg.matmul(AX, tf.cast(self.W, X.dtype))
 
         if self.b is not None:
             H = H + tf.cast(self.b, H.dtype)

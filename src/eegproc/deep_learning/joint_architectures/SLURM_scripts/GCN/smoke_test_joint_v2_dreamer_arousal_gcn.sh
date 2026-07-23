@@ -206,8 +206,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --seed 42 \
     --validation-subjects 4 \
     --validation-seed 42 \
-    --early-stopping-patience 50 \
-    --early-stopping-min-delta 0.001 \
+    --early-stopping-patience 20 \
+    --early-stopping-min-delta 0.005 \
     --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode max \
     --final-epoch-strategy median \
@@ -263,6 +263,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         1
     ],
     "bilstm_dropout": [
-        0.3
+        0.1
     ]
 }'

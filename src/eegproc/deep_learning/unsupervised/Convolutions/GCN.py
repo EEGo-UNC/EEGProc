@@ -111,26 +111,27 @@ class GCNEncoder(BaseEncoder):
         for i, units in enumerate(self.gcn_units):
             # Keep the graph transform linear here. Activation is applied after
             # the residual addition so the skip path is not distorted first.
+            # GraphConv natively accepts (..., n_nodes, features), so the
+            # complete (batch, time, nodes, features) tensor is processed in
+            # one vectorized call. TimeDistributed would invoke the layer once
+            # per timestep, repeating adjacency regularization and adding major
+            # tracing/runtime overhead.
             self.gcn_layers.append(
-                layers.TimeDistributed(
-                    GraphConv(
-                        units=units,
-                        n_nodes=n_channels,
-                        activation=None,
-                        self_loop_bias=self.graph_self_loop_bias,
-                        identity_mix=self.graph_identity_mix,
-                        adjacency_reg_weight=self.graph_adjacency_reg_weight,
-                        name=f"graph_conv_{i}",
-                    ),
+                GraphConv(
+                    units=units,
+                    n_nodes=n_channels,
+                    activation=None,
+                    self_loop_bias=self.graph_self_loop_bias,
+                    identity_mix=self.graph_identity_mix,
+                    adjacency_reg_weight=self.graph_adjacency_reg_weight,
                     name=f"gcn_{i}",
                 )
             )
 
+            # A direct BatchNormalization call supports rank-4 tensors and
+            # normalizes the graph feature axis over batch, time, and nodes.
             self.bn_layers.append(
-                layers.TimeDistributed(
-                    layers.BatchNormalization(),
-                    name=f"gcn_bn_{i}",
-                )
+                layers.BatchNormalization(name=f"gcn_bn_{i}")
                 if use_batch_norm
                 else None
             )
@@ -261,8 +262,8 @@ class GCNEncoder(BaseEncoder):
     def get_adjacency_matrices(self) -> dict[str, tf.Tensor]:
         """Return normalized electrode adjacency matrices for diagnostics."""
         return {
-            wrapper.name: wrapper.layer.normalized_adjacency()
-            for wrapper in self.gcn_layers
+            graph_layer.name: graph_layer.normalized_adjacency()
+            for graph_layer in self.gcn_layers
         }
 
     def get_config(self) -> dict:
@@ -439,25 +440,22 @@ class GCNDecoder(tf.keras.Model):
         input_units = graph_seed_units
         decoder_units = tuple(reversed(self.gcn_units[:-1]))
         for i, units in enumerate(decoder_units):
+            # Process every reconstructed timestep in one vectorized
+            # graph-convolution call. This keeps one shared electrode graph and
+            # adds its regularizer only once per decoder layer/model call.
             self.graph_layers.append(
-                layers.TimeDistributed(
-                    GraphConv(
-                        units=units,
-                        n_nodes=n_channels,
-                        activation=None,
-                        self_loop_bias=self.graph_self_loop_bias,
-                        identity_mix=self.graph_identity_mix,
-                        adjacency_reg_weight=self.graph_adjacency_reg_weight,
-                        name=f"dec_graph_conv_{i}",
-                    ),
+                GraphConv(
+                    units=units,
+                    n_nodes=n_channels,
+                    activation=None,
+                    self_loop_bias=self.graph_self_loop_bias,
+                    identity_mix=self.graph_identity_mix,
+                    adjacency_reg_weight=self.graph_adjacency_reg_weight,
                     name=f"dec_gcn_{i}",
                 )
             )
             self.graph_bn_layers.append(
-                layers.TimeDistributed(
-                    layers.BatchNormalization(),
-                    name=f"dec_gcn_bn_{i}",
-                )
+                layers.BatchNormalization(name=f"dec_gcn_bn_{i}")
                 if use_batch_norm
                 else None
             )
@@ -483,16 +481,13 @@ class GCNDecoder(tf.keras.Model):
 
         # Combine a graph-mixed reconstruction with a node-local bypass. The
         # bypass prevents the final graph layer from erasing electrode identity.
-        self.output_graph = layers.TimeDistributed(
-            GraphConv(
-                units=n_bands,
-                n_nodes=n_channels,
-                activation=None,
-                self_loop_bias=self.graph_self_loop_bias,
-                identity_mix=self.graph_identity_mix,
-                adjacency_reg_weight=self.graph_adjacency_reg_weight,
-                name="dec_output_graph_conv",
-            ),
+        self.output_graph = GraphConv(
+            units=n_bands,
+            n_nodes=n_channels,
+            activation=None,
+            self_loop_bias=self.graph_self_loop_bias,
+            identity_mix=self.graph_identity_mix,
+            adjacency_reg_weight=self.graph_adjacency_reg_weight,
             name="dec_output_graph",
         )
         self.output_local = layers.Dense(
@@ -612,12 +607,10 @@ class GCNDecoder(tf.keras.Model):
     def get_adjacency_matrices(self) -> dict[str, tf.Tensor]:
         """Return normalized decoder electrode graphs for diagnostics."""
         matrices = {
-            wrapper.name: wrapper.layer.normalized_adjacency()
-            for wrapper in self.graph_layers
+            graph_layer.name: graph_layer.normalized_adjacency()
+            for graph_layer in self.graph_layers
         }
-        matrices[self.output_graph.name] = (
-            self.output_graph.layer.normalized_adjacency()
-        )
+        matrices[self.output_graph.name] = self.output_graph.normalized_adjacency()
         return matrices
 
     def compute_output_shape(self, input_shape):

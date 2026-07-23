@@ -20,5 +20,5 @@
     - Model continues to collapse. Decoder is at mean, trial prediction is random or predicts same class.
 - 07/23/2026
     - Fixed preprocessing and dreamer preparation. Rerunning models.
-    - CNN1D and CNN2D did not work. Classifier collapsed in GCN
-    
+    - CNN1D and CNN2D did not work. Classifier collapsed in GCN.
+    - Reviewed and fixed problems across all encoders and VAE losses.
