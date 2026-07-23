@@ -203,7 +203,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --final-verbose 2 \
     --selection-level trial \
     --selection-metric f1 \
-    --prediction-latent-samples 20 \
+    --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
     --validation-subjects 4 \
@@ -263,7 +263,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         2
     ],
     "bilstm_dropout": [
-        0.1
+        0.2
     ]
 }'
 
