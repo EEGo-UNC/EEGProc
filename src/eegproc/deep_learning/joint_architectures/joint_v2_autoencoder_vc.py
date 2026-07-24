@@ -7,11 +7,14 @@ timestep::
     encoder_output -> z_mean, z_log_var
     z = z_mean + exp(0.5 * z_log_var) * epsilon
 
-The sampled latent sequence is used by both downstream branches during
-training:
+Each training sample is a complete trial shaped
+``(n_windows, window_timesteps, n_features)``. The trial and window dimensions
+are flattened only while the shared encoder and decoder process individual
+windows. The two downstream branches are:
 
-1. ``z -> decoder -> reconstruction``
-2. ``z -> classification_model -> variational_classifier``
+1. ``window z -> decoder -> one reconstruction per window``
+2. ``window z -> window classification_model -> trial_classification_model
+   -> one variational-classifier prediction per trial``
 
 At evaluation/inference time, callers can independently choose whether to use
 ``z_mean`` or sample from ``q(z|x)``. Latent sampling is deliberately separated
@@ -175,8 +178,11 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
     decoder : tf.keras.Model
         Decoder mapping the sampled latent sequence back to raw EEG.
     classification_model : tf.keras.Model
-        Recurrent feature extractor mapping the sampled latent sequence to one
-        classification embedding per sample.
+        Window-level recurrent feature extractor mapping each sampled latent
+        window sequence to one window embedding.
+    trial_classification_model : tf.keras.Model
+        Trial-level recurrent feature extractor mapping the ordered sequence of
+        window embeddings to one embedding per trial.
     variational_classifier : tf.keras.layers.Layer
         Final variational classification head accepting the recurrent
         classification embedding and returning class logits.
@@ -209,6 +215,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         encoder: tf.keras.Model,
         decoder: tf.keras.Model,
         classification_model: tf.keras.Model,
+        trial_classification_model: tf.keras.Model,
         variational_classifier: tf.keras.layers.Layer,
         latent_features: int,
         ae_loss_weight: float = 0.5,
@@ -235,6 +242,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             raise ValueError("decoder must be provided.")
         if classification_model is None:
             raise ValueError("classification_model must be provided.")
+        if trial_classification_model is None:
+            raise ValueError("trial_classification_model must be provided.")
         if variational_classifier is None:
             raise ValueError("variational_classifier must be provided.")
         if latent_features < 1:
@@ -254,6 +263,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.encoder = encoder
         self.decoder = decoder
         self.classification_model = classification_model
+        self.trial_classification_model = trial_classification_model
         self.variational_classifier = variational_classifier
 
         self.latent_features = int(latent_features)
@@ -489,21 +499,87 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
         return encoder_output, z_mean, z_log_var
 
-    def _classify_latent(
+    @staticmethod
+    def _flatten_trial_windows(
+        inputs: tf.Tensor,
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """Flatten ``(trial, window)`` while preserving both dimensions."""
+        inputs = tf.convert_to_tensor(inputs, dtype=tf.float32)
+        if inputs.shape.rank != 4:
+            raise ValueError(
+                "Trial-level input must have rank 4 and shape "
+                "(batch_trials, n_windows, window_timesteps, n_features); "
+                f"got {inputs.shape}."
+            )
+
+        input_shape = tf.shape(inputs)
+        batch_trials = input_shape[0]
+        n_windows = input_shape[1]
+        flat_windows = tf.reshape(
+            inputs,
+            [
+                batch_trials * n_windows,
+                input_shape[2],
+                input_shape[3],
+            ],
+        )
+        return flat_windows, batch_trials, n_windows
+
+    @staticmethod
+    def _restore_trial_window_axes(
+        flat_tensor: tf.Tensor,
+        batch_trials: tf.Tensor,
+        n_windows: tf.Tensor,
+    ) -> tf.Tensor:
+        """Restore leading ``(batch_trials, n_windows)`` dimensions."""
+        flat_shape = tf.shape(flat_tensor)
+        target_shape = tf.concat(
+            [
+                tf.reshape(batch_trials, [1]),
+                tf.reshape(n_windows, [1]),
+                flat_shape[1:],
+            ],
+            axis=0,
+        )
+        return tf.reshape(flat_tensor, target_shape)
+
+    def _classify_flat_latents(
         self,
-        latent_sequence: tf.Tensor,
+        latent_windows_flat: tf.Tensor,
+        batch_trials: tf.Tensor,
+        n_windows: tf.Tensor,
         training: bool = False,
-    ) -> tuple[tf.Tensor, tf.Tensor]:
-        """Classify one batch of latent sequences."""
-        classification_latent = self.classification_model(
-            latent_sequence,
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """Return window embeddings, one trial embedding, and trial logits."""
+        window_embeddings_flat = self.classification_model(
+            latent_windows_flat,
             training=training,
         )
+        if window_embeddings_flat.shape.rank != 2:
+            raise ValueError(
+                "classification_model must return one rank-2 embedding per "
+                f"window; got {window_embeddings_flat.shape}."
+            )
+
+        window_embeddings = tf.reshape(
+            window_embeddings_flat,
+            [batch_trials, n_windows, tf.shape(window_embeddings_flat)[-1]],
+        )
+        trial_classification_latent = self.trial_classification_model(
+            window_embeddings,
+            training=training,
+        )
+        if trial_classification_latent.shape.rank != 2:
+            raise ValueError(
+                "trial_classification_model must return one rank-2 embedding "
+                f"per trial; got {trial_classification_latent.shape}."
+            )
+
         logits = self.variational_classifier(
-            classification_latent,
+            trial_classification_latent,
             training=training,
         )
-        return classification_latent, logits
+        return window_embeddings, trial_classification_latent, logits
 
     def call(
         self,
@@ -512,44 +588,69 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         sample_latent: bool | None = None,
         include_reconstruction: bool | None = None,
     ) -> dict[str, tf.Tensor]:
-        """Run the model with independent sampling and decoder control.
+        """Run window reconstruction and trial classification together.
 
-        When ``ae_loss_weight`` is zero, reconstruction is omitted by default.
-        This prevents the unused decoder branch from allocating activations or
-        participating in the gradient tape during classifier-only training.
+        Inputs are complete trials shaped ``(B, W, T, F)``. The encoder and
+        decoder operate on ``B * W`` independent windows, while the classifier
+        receives the ordered ``W`` window embeddings and emits one prediction
+        per trial.
         """
         if sample_latent is None:
             sample_latent = training
         if include_reconstruction is None:
             include_reconstruction = self.ae_loss_weight > 0.0
 
-        encoder_output, z_mean, z_log_var = self._posterior_parameters(
-            inputs,
-            training=training,
+        flat_inputs, batch_trials, n_windows = self._flatten_trial_windows(inputs)
+        encoder_output_flat, z_mean_flat, z_log_var_flat = (
+            self._posterior_parameters(flat_inputs, training=training)
         )
-        latent_sequence = self._latent_for_mode(
-            z_mean=z_mean,
-            z_log_var=z_log_var,
+        latent_windows_flat = self._latent_for_mode(
+            z_mean=z_mean_flat,
+            z_log_var=z_log_var_flat,
             sample_latent=sample_latent,
         )
 
-        classification_latent, logits = self._classify_latent(
-            latent_sequence,
+        (
+            window_classification_latent,
+            trial_classification_latent,
+            logits,
+        ) = self._classify_flat_latents(
+            latent_windows_flat,
+            batch_trials=batch_trials,
+            n_windows=n_windows,
             training=training,
         )
+
         outputs = {
-            "encoder_output": encoder_output,
-            "z_mean": z_mean,
-            "z_log_var": z_log_var,
-            "latent_sequence": latent_sequence,
-            "classification_latent": classification_latent,
+            "encoder_output": self._restore_trial_window_axes(
+                encoder_output_flat, batch_trials, n_windows
+            ),
+            "z_mean": self._restore_trial_window_axes(
+                z_mean_flat, batch_trials, n_windows
+            ),
+            "z_log_var": self._restore_trial_window_axes(
+                z_log_var_flat, batch_trials, n_windows
+            ),
+            "latent_sequence": self._restore_trial_window_axes(
+                latent_windows_flat, batch_trials, n_windows
+            ),
+            "window_classification_latent": window_classification_latent,
+            # Backwards-compatible key now intentionally denotes the trial
+            # embedding consumed by the variational classifier.
+            "classification_latent": trial_classification_latent,
+            "trial_classification_latent": trial_classification_latent,
             "logits": logits,
         }
 
         if include_reconstruction:
-            outputs["reconstruction"] = self.decoder(
-                latent_sequence,
+            reconstruction_flat = self.decoder(
+                latent_windows_flat,
                 training=training,
+            )
+            outputs["reconstruction"] = self._restore_trial_window_axes(
+                reconstruction_flat,
+                batch_trials,
+                n_windows,
             )
 
         return outputs
@@ -560,33 +661,22 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         n_samples: int = 30,
         seed: int | tuple[int, int] | None = None,
     ) -> dict[str, tf.Tensor]:
-        """Average classifier probabilities across posterior latent samples.
-
-        The CNN encoder is evaluated once. ``n_samples`` latent sequences are
-        then drawn from ``q(z|x)`` and classified in one vectorized recurrent
-        pass. Dropout remains disabled and BatchNorm uses moving statistics.
-
-        ``n_samples=1`` performs one random posterior draw. Use ``seed`` for a
-        reproducible draw or Monte Carlo estimate.
-        """
+        """Average trial probabilities across posterior window-latent draws."""
         if n_samples < 1:
             raise ValueError("n_samples must be at least 1.")
 
-        inputs = tf.convert_to_tensor(inputs, dtype=tf.float32)
-        _encoder_output, z_mean, z_log_var = self._posterior_parameters(
-            inputs,
+        flat_inputs, batch_trials, n_windows = self._flatten_trial_windows(inputs)
+        _encoder_output, z_mean_flat, z_log_var_flat = self._posterior_parameters(
+            flat_inputs,
             training=False,
         )
 
         epsilon_shape = tf.concat(
-            [tf.constant([int(n_samples)], dtype=tf.int32), tf.shape(z_mean)],
+            [tf.constant([int(n_samples)], dtype=tf.int32), tf.shape(z_mean_flat)],
             axis=0,
         )
         if seed is None:
-            epsilon = tf.random.normal(
-                shape=epsilon_shape,
-                dtype=z_mean.dtype,
-            )
+            epsilon = tf.random.normal(shape=epsilon_shape, dtype=z_mean_flat.dtype)
         else:
             if isinstance(seed, int):
                 stateless_seed = tf.constant([seed, 0], dtype=tf.int32)
@@ -597,14 +687,16 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             epsilon = tf.random.stateless_normal(
                 shape=epsilon_shape,
                 seed=stateless_seed,
-                dtype=z_mean.dtype,
+                dtype=z_mean_flat.dtype,
             )
 
-        z_std = tf.exp(0.5 * z_log_var)
-        z_samples = z_mean[tf.newaxis, ...] + z_std[tf.newaxis, ...] * epsilon
-
+        z_std = tf.exp(0.5 * z_log_var_flat)
+        z_samples = (
+            z_mean_flat[tf.newaxis, ...]
+            + z_std[tf.newaxis, ...] * epsilon
+        )
         sample_shape = tf.shape(z_samples)
-        z_flat = tf.reshape(
+        z_samples_flat = tf.reshape(
             z_samples,
             [
                 sample_shape[0] * sample_shape[1],
@@ -612,22 +704,31 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 sample_shape[3],
             ],
         )
-        _classification_latent, logits_flat = self._classify_latent(
-            z_flat,
-            training=False,
+
+        _window_embeddings, _trial_latent, logits_flat = (
+            self._classify_flat_latents(
+                z_samples_flat,
+                batch_trials=sample_shape[0] * batch_trials,
+                n_windows=n_windows,
+                training=False,
+            )
         )
         probabilities_flat = tf.nn.softmax(logits_flat, axis=-1)
         n_classes = tf.shape(probabilities_flat)[-1]
         probability_samples = tf.reshape(
             probabilities_flat,
-            [sample_shape[0], sample_shape[1], n_classes],
+            [sample_shape[0], batch_trials, n_classes],
         )
 
         return {
             "mean_probabilities": tf.reduce_mean(probability_samples, axis=0),
             "probability_samples": probability_samples,
-            "z_mean": z_mean,
-            "z_log_var": z_log_var,
+            "z_mean": self._restore_trial_window_axes(
+                z_mean_flat, batch_trials, n_windows
+            ),
+            "z_log_var": self._restore_trial_window_axes(
+                z_log_var_flat, batch_trials, n_windows
+            ),
         }
 
     @staticmethod
@@ -661,6 +762,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         sample_weight=None,
     ) -> tuple[dict[str, tf.Tensor], dict[str, tf.Tensor]]:
         autoencoder_enabled = self.ae_loss_weight > 0.0
+        x = tf.convert_to_tensor(x, dtype=tf.float32)
         outputs = self(
             x,
             training=training,
@@ -668,19 +770,32 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
 
         if autoencoder_enabled:
-            # Flatten latent timesteps and features so the VAE loss computes one
-            # mean KL value over every latent coordinate in each sample.
+            if x.shape.rank != 4:
+                raise ValueError(
+                    "Window-level reconstruction requires trial input shaped "
+                    f"(B, W, T, F); got {x.shape}."
+                )
+            x_shape = tf.shape(x)
+            n_window_samples = x_shape[0] * x_shape[1]
+            x_windows_flat = tf.reshape(
+                x,
+                [n_window_samples, x_shape[2], x_shape[3]],
+            )
+            reconstruction_flat = tf.reshape(
+                outputs["reconstruction"],
+                [n_window_samples, x_shape[2], x_shape[3]],
+            )
             z_mean_flat = tf.reshape(
                 outputs["z_mean"],
-                [tf.shape(outputs["z_mean"])[0], -1],
+                [n_window_samples, -1],
             )
             z_log_var_flat = tf.reshape(
                 outputs["z_log_var"],
-                [tf.shape(outputs["z_log_var"])[0], -1],
+                [n_window_samples, -1],
             )
             vae_losses = self.reconstruction_loss_fn(
-                x_true=x,
-                x_pred=outputs["reconstruction"],
+                x_true=x_windows_flat,
+                x_pred=reconstruction_flat,
                 z_mean=z_mean_flat,
                 z_log_var=z_log_var_flat,
             )
@@ -694,8 +809,16 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             }
 
         y_flat = self._flatten_labels(y)
+        tf.debugging.assert_equal(
+            tf.shape(y_flat)[0],
+            tf.shape(outputs["logits"])[0],
+            message=(
+                "The classifier must emit one prediction per trial and labels "
+                "must contain exactly one class ID per trial."
+            ),
+        )
         vc_losses = self.variational_classifier.vc_loss_components(
-            mh=outputs["classification_latent"],
+            mh=outputs["trial_classification_latent"],
             y=y_flat,
             alpha=self.vc_alpha,
             beta=self.vc_beta,
@@ -710,10 +833,6 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             + self.vc_loss_weight * vc_losses["total_loss"]
         )
 
-        # Custom train_step bypasses Keras' compiled-loss machinery, so layer
-        # penalties created with add_loss() must be included explicitly. This
-        # activates GraphConv adjacency regularization and any kernel/activity
-        # regularizers attached to nested layers.
         if self.losses:
             regularization_loss = tf.add_n(
                 [
@@ -934,6 +1053,20 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
         return self._metric_results()
 
+    def predict_step(self, data):
+        """Return trial logits without running the reconstruction decoder."""
+        if isinstance(data, tuple):
+            inputs = data[0]
+        else:
+            inputs = data
+        outputs = self(
+            inputs,
+            training=False,
+            sample_latent=False,
+            include_reconstruction=False,
+        )
+        return outputs["logits"]
+
     def get_config(self) -> dict:
         """Return a complete serializable configuration for this model."""
         config = super().get_config()
@@ -943,6 +1076,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 "decoder": _serialize_keras_component(self.decoder),
                 "classification_model": _serialize_keras_component(
                     self.classification_model
+                ),
+                "trial_classification_model": _serialize_keras_component(
+                    self.trial_classification_model
                 ),
                 "variational_classifier": _serialize_keras_component(
                     self.variational_classifier
@@ -973,6 +1109,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "encoder",
             "decoder",
             "classification_model",
+            "trial_classification_model",
             "variational_classifier",
             "reconstruction_loss_fn",
         ):

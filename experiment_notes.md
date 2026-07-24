@@ -23,3 +23,6 @@
     - CNN1D and CNN2D did not work. Classifier collapsed in GCN.
     - Reviewed and fixed problems across all encoders and VAE losses.
     - Encouraging results on the smoke test, finally achieved ~0.6 trial macro f1.
+- 07/24/2026
+    - Classifier need to be at the trial level and decoders at the window level.
+    

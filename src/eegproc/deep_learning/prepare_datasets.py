@@ -3,7 +3,9 @@ prepare_datasets.py
 ===================
 Convert raw DEAP, DREAMER, AMIGOS, and EEGEmotions dataset files into the NumPy format
 expected by STSNet's train_eval.py (and by joint_v2_data.py's
-``build_dataset``):
+``build_dataset``). These files intentionally retain complete trials; the
+joint-v2 training loader later creates ordered overlapping windows and groups
+them into rank-4 trial samples for hierarchical classification:
 
     {dataset}_eeg.npy    — float32, shape (n_subjects, n_trials, n_channels, n_samples)
     {dataset}_labels.npy — float32, shape (n_subjects, n_trials, n_label_dims)
@@ -739,6 +741,10 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
         ``14 electrodes x 4 bands`` in channel-major order.
     dreamer_labels.npy
         Float32 ``(23, 18, 2)`` containing ``[valence, arousal]``.
+
+    The converter does not pre-window these arrays. With four-second windows
+    and 50% overlap, the training loader derives 29 ordered windows from each
+    retained 60-second trial while preserving one label per trial.
     """
     try:
         import pandas as pd

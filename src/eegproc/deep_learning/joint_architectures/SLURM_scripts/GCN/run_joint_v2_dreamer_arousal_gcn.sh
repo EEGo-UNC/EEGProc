@@ -203,8 +203,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --cpus-per-worker 2 \
     --outer-verbose 0 \
     --final-verbose 2 \
-    --selection-level trial \
-    --selection-metric f1 \
     --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
@@ -212,6 +210,11 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --validation-seed 42 \
     --early-stopping-patience 50 \
     --early-stopping-min-delta 0.005 \
+    --window-sec 4.0 \
+    --window-overlap 0.5 \
+    --batch-size 2 \
+    --selection-level trial \
+    --selection-metric f1 \
     --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode max \
     --final-epoch-strategy median \
