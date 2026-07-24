@@ -460,6 +460,28 @@ def _is_trial_tensor(X: np.ndarray) -> bool:
     return np.asarray(X).ndim == 4
 
 
+def _count_windows_for_indices(
+    feature_array: np.ndarray,
+    indices: np.ndarray,
+) -> int:
+    """Count underlying windows represented by selected samples.
+
+    Rank-4 hierarchical inputs contain one trial per first-axis sample and one
+    window axis at position 1. Rank-3 legacy inputs contain one window per
+    first-axis sample.
+    """
+    features = np.asarray(feature_array)
+    selected_count = int(len(indices))
+    if features.ndim == 4:
+        return selected_count * int(features.shape[1])
+    if features.ndim == 3:
+        return selected_count
+    raise ValueError(
+        "feature_array must be rank 3 or 4 when counting windows; "
+        f"got {features.shape}."
+    )
+
+
 def _direct_trial_aggregation(
     probabilities: np.ndarray,
     y_true: np.ndarray,
@@ -2062,12 +2084,13 @@ def _run_outer_fold(
         combinations(unique_outer_train_subjects, n_inner_subjects_to_leave_out)
     )
 
+    sample_level = "trials" if feature_array.ndim == 4 else "windows"
     _print_fold_header(
         outer_fold_number,
         total_outer_folds,
         f"outer test subjects={outer_test_subjects.tolist()} "
         f"(outer_train={len(outer_train_indices)}, "
-        f"outer_test={len(outer_test_indices)} windows)",
+        f"outer_test={len(outer_test_indices)} {sample_level})",
     )
 
     inner_scores_by_config: list[list[dict]] = [[] for _ in grid_configs]
@@ -2189,8 +2212,8 @@ def _run_outer_fold(
                 "outer_fold": int(outer_fold_number),
                 "inner_fold": int(inner_fold_number),
                 "left_out_subjects": inner_val_subjects.tolist(),
-                "n_train_windows": int(len(inner_train_indices)),
-                "n_val_windows": int(len(inner_val_indices)),
+                "n_train_windows": _count_windows_for_indices(feature_array, inner_train_indices),
+                "n_val_windows": _count_windows_for_indices(feature_array, inner_val_indices),
                 "n_train_trials": int(len(set(zip(
                     subject_ids_inner_train.tolist(), trial_ids_inner_train.tolist()
                 )))),
@@ -2354,8 +2377,8 @@ def _run_outer_fold(
     outer_fold_result = {
         "outer_fold_number": int(outer_fold_number),
         "left_out_subjects": outer_test_subjects.tolist(),
-        "n_outer_train_windows": count_windows(outer_train_indices),
-        "n_outer_test_windows": int(len(outer_test_indices)),
+        "n_outer_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
+        "n_outer_test_windows": _count_windows_for_indices(feature_array, outer_test_indices),
         "n_outer_train_trials": int(len(set(zip(
             subject_ids_outer_train.tolist(), trial_ids_outer_train.tolist()
         )))),
@@ -3082,11 +3105,6 @@ def _run_loso_fold(
     def count_trials(subject_ids: np.ndarray, trial_ids: np.ndarray) -> int:
         return int(len(set(zip(subject_ids.tolist(), trial_ids.tolist()))))
 
-    def count_windows(indices: np.ndarray) -> int:
-        if feature_array.ndim == 4:
-            return int(len(indices) * feature_array.shape[1])
-        return int(len(indices))
-
     subject_ids_outer_train = subject_id_array[outer_train_indices]
     trial_ids_outer_train = trial_id_array[outer_train_indices]
 
@@ -3100,13 +3118,13 @@ def _run_loso_fold(
             _python_scalar(value) for value in validation_subjects.tolist()
         ],
         "validation_seed": validation_seed,
-        "n_train_windows": count_windows(outer_train_indices),
-        "n_fit_train_windows": count_windows(fit_train_indices),
-        "n_validation_windows": count_windows(validation_indices),
-        "n_test_windows": count_windows(test_indices),
+        "n_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
+        "n_fit_train_windows": _count_windows_for_indices(feature_array, fit_train_indices),
+        "n_validation_windows": _count_windows_for_indices(feature_array, validation_indices),
+        "n_test_windows": _count_windows_for_indices(feature_array, test_indices),
         # Compatibility aliases for code that previously consumed nested CV.
-        "n_outer_train_windows": int(len(outer_train_indices)),
-        "n_outer_test_windows": count_windows(test_indices),
+        "n_outer_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
+        "n_outer_test_windows": _count_windows_for_indices(feature_array, test_indices),
         "n_train_trials": count_trials(
             subject_ids_outer_train, trial_ids_outer_train
         ),

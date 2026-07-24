@@ -214,13 +214,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode max \
     --final-epoch-strategy median \
-    --hyperparameters-json \
     --hyperparameters-json '{
     "epochs": [
         200
     ],
     "batch_size": [
-        32
+        2
     ],
     "learning_rate": [
         0.0001

@@ -25,4 +25,4 @@
     - Encouraging results on the smoke test, finally achieved ~0.6 trial macro f1.
 - 07/24/2026
     - Classifier need to be at the trial level and decoders at the window level.
-    
+    - Decoders are finally performing reasonably, now we must fix the classifier.
