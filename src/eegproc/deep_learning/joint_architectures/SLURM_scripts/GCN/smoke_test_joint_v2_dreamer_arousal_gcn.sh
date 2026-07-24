@@ -202,13 +202,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 4 \
+    --validation-subjects 3 \
     --validation-seed 42 \
     --early-stopping-patience 20 \
     --early-stopping-min-delta 0.005 \
     --window-sec 4.0 \
     --window-overlap 0.5 \
-    --batch-size 2 \
+    --batch-size 4 \
     --selection-level trial \
     --selection-metric f1 \
     --early-stopping-monitor val_trial_f1 \
@@ -224,14 +224,14 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "learning_rate": [
         0.0001
     ],
-    "ae_loss_weight": [0.5],
+    "ae_loss_weight": [0.3],
     "vc_loss_weight": [1.0],
     "vc_alpha": [1.0],
     "vc_beta": [0.0, 0.4],
     "vc_gamma": [0.0],
     "vc_lambda": [0.0, 0.1],
     "vae_beta": [
-        0.0
+        0.3
     ],
     "t_down": [
         2
@@ -240,12 +240,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         32
     ],
     "dropout": [
-        0.1
+        0.2
     ],
     "gcn_units": [
         [
-            64,
-            32
+            32,
+            16
         ]
     ],
     "temporal_pool_sizes": [
@@ -260,12 +260,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         true
     ],
     "bilstm_units": [
-        256
+        128
     ],
     "bilstm_layers": [
         1
     ],
     "bilstm_dropout": [
-        0.1
+        0.3
     ]
 }'
