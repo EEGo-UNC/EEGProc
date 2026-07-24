@@ -260,8 +260,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         ],
         "gcn_units": [
             [
-                64,
-                32
+                32,
+                16
             ]
         ],
         "temporal_pool_sizes": [
