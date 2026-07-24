@@ -208,60 +208,76 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-min-delta 0.005 \
     --window-sec 4.0 \
     --window-overlap 0.5 \
-    --batch-size 4 \
+    --batch-size 8 \
     --selection-level trial \
     --selection-metric f1 \
     --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode max \
     --final-epoch-strategy median \
     --hyperparameters-json '{
-    "epochs": [
-        200
-    ],
-    "batch_size": [
-        2
-    ],
-    "learning_rate": [
-        0.0001
-    ],
-    "ae_loss_weight": [0.3],
-    "vc_loss_weight": [1.0],
-    "vc_alpha": [1.0],
-    "vc_beta": [0.4],
-    "vc_gamma": [0.0],
-    "vc_lambda": [0.1],
-    "vae_beta": [
-        0.3
-    ],
-    "t_down": [
-        2
-    ],
-    "emb_dim": [
-        32
-    ],
-    "dropout": [
-        0.2
-    ],
-    "gcn_units": [
-        [
-            32,
-            16
-        ]
-    ],
-    "temporal_pool_sizes": [
-        [
+        "epochs": [
+            300
+        ],
+        "batch_size": [
+            8
+        ],
+        "learning_rate": [
+            0.0001
+        ],
+        "ae_loss_weight": [
+            0.0, 0.3
+        ],
+        "vc_loss_weight": [
+            1.0
+        ],
+        "vc_alpha": [
+            1.0
+        ],
+        "vc_beta": [
+            0.0, 0.2
+        ],
+        "vc_gamma": [
+            0.0
+        ],
+        "vc_lambda": [
+            0.0, 0.1
+        ],
+        "vae_beta": [
+            0.3
+        ],
+        "t_down": [
             2
+        ],
+        "emb_dim": [
+            32, 64
+        ],
+        "dropout": [
+            0.1
+        ],
+        "gcn_units": [
+            [
+                128,
+                64
+            ]
+        ],
+        "temporal_pool_sizes": [
+            [
+                2
+            ]
+        ],
+        "activation": [
+            "relu"
+        ],
+        "use_batch_norm": [
+            true
+        ],
+        "bilstm_units": [
+            256
+        ],
+        "bilstm_layers": [
+            1
+        ],
+        "bilstm_dropout": [
+            0.2
         ]
-    ],
-    "activation": [
-        "relu"
-    ],
-    "use_batch_norm": [
-        true
-    ],
-    
-    
-    "bilstm_units": [64],
-    "bilstm_layers": [1],
-    "bilstm_dropout": [0.3]
-}'
+    }'
