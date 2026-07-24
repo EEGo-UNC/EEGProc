@@ -205,9 +205,9 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --validation-subjects 3 \
     --validation-seed 42 \
     --early-stopping-patience 20 \
-    --early-stopping-min-delta 0.005 \
+    --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
-    --window-overlap 0.5 \
+    --window-overlap 0.0 \
     --batch-size 8 \
     --selection-level trial \
     --selection-metric f1 \
@@ -249,15 +249,15 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             2
         ],
         "emb_dim": [
-            32, 64
+            32
         ],
         "dropout": [
             0.1
         ],
         "gcn_units": [
             [
-                128,
-                64
+                64,
+                32
             ]
         ],
         "temporal_pool_sizes": [
@@ -269,10 +269,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             "relu"
         ],
         "use_batch_norm": [
-            true
+            false
         ],
         "bilstm_units": [
-            256
+            128
         ],
         "bilstm_layers": [
             1
