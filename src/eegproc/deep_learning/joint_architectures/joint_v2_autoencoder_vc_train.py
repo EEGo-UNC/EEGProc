@@ -1,11 +1,15 @@
-"""Training entry point for the joint VAE + BiLSTM + variational classifier.
+"""Training entry point for the joint VAE + trial BiLSTM + variational classifier.
 
-This module keeps the v2 model file focused on architecture only. It provides
-leave-one-subject-out cross-validation with seeded subject-level validation, flat hyperparameter search
-across a hierarchical trial classifier, window-level decoder reconstruction-accuracy
-reporting, DREAMER-backed data loading
-(see ``joint_v2_data.py``), structured logging, and final model saving. The
-autoencoder can be selected with ``--encoder-type`` as CNN1D, CNN2D, or GCN.
+Each trial is represented as an ordered sequence of EEG windows. The selected
+encoder processes every window, temporal mean pooling converts each encoded
+window into one embedding, and a single BiLSTM processes the complete sequence
+of window embeddings to produce one trial-level representation. The decoder
+continues to reconstruct individual windows.
+
+This module provides leave-one-subject-out cross-validation with seeded
+subject-level validation, flat hyperparameter search, structured logging,
+DREAMER-backed data loading (see ``joint_v2_data.py``), and final model saving.
+The autoencoder can be selected with ``--encoder-type`` as CNN1D, CNN2D, or GCN.
 """
 
 from __future__ import annotations
@@ -128,12 +132,14 @@ class JointV2TrainingConfig:
     save_weights: bool = True
     save_final_history_csv: bool = True
     seed: int | None = None
+    # The only BiLSTM operates at trial level over ordered window embeddings.
     bilstm_units: int = 64
     n_bilstm_layers: int = 1
-    bilstm_dropout: float = 0.10
-    trial_bilstm_units: int = 64
-    n_trial_bilstm_layers: int = 1
-    trial_bilstm_dropout: float = 0.30
+    bilstm_dropout: float = 0.30
+    # Backwards-compatible aliases. Leave as None so bilstm_* remains canonical.
+    trial_bilstm_units: int | None = None
+    n_trial_bilstm_layers: int | None = None
+    trial_bilstm_dropout: float | None = None
     bilstm_kwargs: dict = field(default_factory=dict)
     trial_bilstm_kwargs: dict = field(default_factory=dict)
     encoder_kwargs: dict = field(default_factory=dict)
@@ -908,10 +914,10 @@ def build_joint_autoencoder_variational_classifier_v2(
     update_discriminator: bool = False,
     bilstm_units: int = 64,
     n_bilstm_layers: int = 1,
-    bilstm_dropout: float = 0.10,
-    trial_bilstm_units: int = 64,
-    n_trial_bilstm_layers: int = 1,
-    trial_bilstm_dropout: float = 0.30,
+    bilstm_dropout: float = 0.30,
+    trial_bilstm_units: int | None = None,
+    n_trial_bilstm_layers: int | None = None,
+    trial_bilstm_dropout: float | None = None,
     bilstm_kwargs: dict | None = None,
     trial_bilstm_kwargs: dict | None = None,
     encoder_kwargs: dict | None = None,
@@ -919,7 +925,7 @@ def build_joint_autoencoder_variational_classifier_v2(
     classifier_kwargs: dict | None = None,
     model_name: str | None = None,
 ) -> JointAutoencoderVariationalClassifierV2:
-    """Build a window VAE with hierarchical trial-level classification."""
+    """Build a window VAE with one trial-level BiLSTM classifier."""
     n_windows, timesteps, n_features = map(int, input_shape)
     encoder_type = encoder_type.lower()
 
@@ -951,61 +957,74 @@ def build_joint_autoencoder_variational_classifier_v2(
     if latent_timesteps is None or latent_features is None:
         raise ValueError(
             "The encoder must expose static latent timestep and feature "
-            "dimensions so the window BiLSTM can be built."
+            "dimensions so window embeddings can be pooled."
         )
 
-    window_recurrent_defaults = {
-        "lstm_units": int(bilstm_units),
-        "n_bilstm_layers": int(n_bilstm_layers),
-        "dropout": float(bilstm_dropout),
-        "name": f"joint_{encoder_type}_window_bilstm",
-    }
-    if bilstm_kwargs:
-        reserved = {"timesteps", "n_features", "n_classes"}
-        conflicting = reserved.intersection(bilstm_kwargs)
-        if conflicting:
-            raise ValueError(
-                "bilstm_kwargs cannot override dimensions supplied by the "
-                f"joint model: {sorted(conflicting)}"
-            )
-        window_recurrent_defaults.update(bilstm_kwargs)
+    # There is intentionally no recurrent model inside each EEG window.
+    # The encoder already preserves a latent temporal sequence; mean pooling
+    # converts that sequence into one compact embedding per window.
+    window_input = tf.keras.Input(
+        shape=(int(latent_timesteps), int(latent_features)),
+        name=f"joint_{encoder_type}_window_pool_input",
+    )
+    window_embedding = tf.keras.layers.GlobalAveragePooling1D(
+        name=f"joint_{encoder_type}_window_mean_pool",
+    )(window_input)
+    classification_model = tf.keras.Model(
+        inputs=window_input,
+        outputs=window_embedding,
+        name=f"joint_{encoder_type}_window_pool",
+    )
+    window_embedding_features = int(latent_features)
 
-    classification_model = BiLSTMClassifier(
-        timesteps=int(latent_timesteps),
-        n_features=int(latent_features),
-        n_classes=n_classes,
-        **window_recurrent_defaults,
-    ).build_feature_extractor()
-
-    dummy_window_embedding = classification_model(latent_sequence, training=False)
-    if dummy_window_embedding.shape.rank != 2:
-        raise ValueError(
-            "The window feature extractor must return one rank-2 embedding per "
-            f"window; got {dummy_window_embedding.shape}."
-        )
-    window_embedding_features = dummy_window_embedding.shape[-1]
-    if window_embedding_features is None:
-        raise ValueError("The window embedding width must be statically known.")
+    # bilstm_* is now the canonical configuration for the only BiLSTM, which
+    # operates across the ordered window embeddings of a complete trial.
+    # trial_bilstm_* remains an optional backwards-compatible alias.
+    resolved_bilstm_units = int(
+        bilstm_units if trial_bilstm_units is None else trial_bilstm_units
+    )
+    resolved_bilstm_layers = int(
+        n_bilstm_layers
+        if n_trial_bilstm_layers is None
+        else n_trial_bilstm_layers
+    )
+    resolved_bilstm_dropout = float(
+        bilstm_dropout
+        if trial_bilstm_dropout is None
+        else trial_bilstm_dropout
+    )
+    if resolved_bilstm_units < 1:
+        raise ValueError("bilstm_units must be >= 1.")
+    if resolved_bilstm_layers < 1:
+        raise ValueError("bilstm_layers must be >= 1.")
+    if not 0.0 <= resolved_bilstm_dropout < 1.0:
+        raise ValueError("bilstm_dropout must be in [0, 1).")
 
     trial_recurrent_defaults = {
-        "lstm_units": int(trial_bilstm_units),
-        "n_bilstm_layers": int(n_trial_bilstm_layers),
-        "dropout": float(trial_bilstm_dropout),
+        "lstm_units": resolved_bilstm_units,
+        "n_bilstm_layers": resolved_bilstm_layers,
+        "dropout": resolved_bilstm_dropout,
         "name": f"joint_{encoder_type}_trial_bilstm",
     }
-    if trial_bilstm_kwargs:
-        reserved = {"timesteps", "n_features", "n_classes"}
-        conflicting = reserved.intersection(trial_bilstm_kwargs)
+
+    reserved = {"timesteps", "n_features", "n_classes"}
+    for kwargs_name, supplied_kwargs in (
+        ("bilstm_kwargs", bilstm_kwargs),
+        ("trial_bilstm_kwargs", trial_bilstm_kwargs),
+    ):
+        if not supplied_kwargs:
+            continue
+        conflicting = reserved.intersection(supplied_kwargs)
         if conflicting:
             raise ValueError(
-                "trial_bilstm_kwargs cannot override dimensions supplied by "
-                f"the joint model: {sorted(conflicting)}"
+                f"{kwargs_name} cannot override dimensions supplied by the "
+                f"joint model: {sorted(conflicting)}"
             )
-        trial_recurrent_defaults.update(trial_bilstm_kwargs)
+        trial_recurrent_defaults.update(supplied_kwargs)
 
     trial_classification_model = BiLSTMClassifier(
         timesteps=n_windows,
-        n_features=int(window_embedding_features),
+        n_features=window_embedding_features,
         n_classes=n_classes,
         **trial_recurrent_defaults,
     ).build_feature_extractor()
@@ -1026,7 +1045,7 @@ def build_joint_autoencoder_variational_classifier_v2(
         vc_gamma=vc_gamma,
         vc_lambda=vc_lambda,
         update_discriminator=update_discriminator,
-        name=model_name or f"joint_{encoder_type}_window_vae_trial_vc_v2",
+        name=model_name or f"joint_{encoder_type}_window_vae_single_trial_bilstm_vc_v2",
     )
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate))
     return model
@@ -1273,21 +1292,45 @@ def train_joint_autoencoder_variational_classifier_v2(
                 bilstm_dropout=float(
                     hparams.get("bilstm_dropout", training_config.bilstm_dropout)
                 ),
-                trial_bilstm_units=int(
-                    hparams.get(
+                trial_bilstm_units=(
+                    None
+                    if hparams.get(
                         "trial_bilstm_units", training_config.trial_bilstm_units
                     )
+                    is None
+                    else int(
+                        hparams.get(
+                            "trial_bilstm_units",
+                            training_config.trial_bilstm_units,
+                        )
+                    )
                 ),
-                n_trial_bilstm_layers=int(
-                    hparams.get(
+                n_trial_bilstm_layers=(
+                    None
+                    if hparams.get(
                         "trial_bilstm_layers",
                         training_config.n_trial_bilstm_layers,
                     )
+                    is None
+                    else int(
+                        hparams.get(
+                            "trial_bilstm_layers",
+                            training_config.n_trial_bilstm_layers,
+                        )
+                    )
                 ),
-                trial_bilstm_dropout=float(
-                    hparams.get(
+                trial_bilstm_dropout=(
+                    None
+                    if hparams.get(
                         "trial_bilstm_dropout",
                         training_config.trial_bilstm_dropout,
+                    )
+                    is None
+                    else float(
+                        hparams.get(
+                            "trial_bilstm_dropout",
+                            training_config.trial_bilstm_dropout,
+                        )
                     )
                 ),
                 bilstm_kwargs=bilstm_kwargs,
@@ -1315,6 +1358,10 @@ def train_joint_autoencoder_variational_classifier_v2(
     logger.info("Unique subjects: %d", len(np.unique(subject_id_array)))
     logger.info("Trials: %d", len(feature_array))
     logger.info("Ordered windows per trial: %d", feature_array.shape[1])
+    logger.info(
+        "Classifier hierarchy: encoder -> temporal mean pooling per window "
+        "-> one trial-level BiLSTM -> variational classifier"
+    )
     logger.info("Window shape: %s", tuple(feature_array.shape[2:]))
 
     class_ids = _as_class_ids(label_array)
@@ -1705,37 +1752,52 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--bilstm-units",
         type=int,
         default=64,
-        help="Hidden units in the window-level BiLSTM (default: 64).",
+        help=(
+            "Hidden units in the only BiLSTM, which operates across the "
+            "ordered windows of a trial (default: 64)."
+        ),
     )
     parser.add_argument(
         "--bilstm-layers",
         type=int,
         default=1,
-        help="Number of stacked window-level BiLSTM layers (default: 1).",
+        help=(
+            "Number of stacked layers in the trial-level BiLSTM "
+            "(default: 1)."
+        ),
     )
     parser.add_argument(
         "--bilstm-dropout",
         type=float,
-        default=0.10,
-        help="Dropout in the window-level BiLSTM (default: 0.10).",
+        default=0.30,
+        help="Dropout in the trial-level BiLSTM (default: 0.30).",
     )
     parser.add_argument(
         "--trial-bilstm-units",
         type=int,
-        default=64,
-        help="Hidden units in the trial-level BiLSTM (default: 64).",
+        default=None,
+        help=(
+            "Deprecated alias for --bilstm-units. When supplied, it overrides "
+            "the canonical value."
+        ),
     )
     parser.add_argument(
         "--trial-bilstm-layers",
         type=int,
-        default=1,
-        help="Number of stacked trial-level BiLSTM layers (default: 1).",
+        default=None,
+        help=(
+            "Deprecated alias for --bilstm-layers. When supplied, it overrides "
+            "the canonical value."
+        ),
     )
     parser.add_argument(
         "--trial-bilstm-dropout",
         type=float,
-        default=0.30,
-        help="Dropout in the trial-level BiLSTM (default: 0.30).",
+        default=None,
+        help=(
+            "Deprecated alias for --bilstm-dropout. When supplied, it overrides "
+            "the canonical value."
+        ),
     )
     parser.add_argument(
         "--hyperparameters-json",
@@ -1747,7 +1809,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "conv_filters, 2D kernel_sizes, spatial_pool_sizes, and "
             "temporal_pool_sizes; GCN uses "
             "gcn_units and temporal_pool_sizes. Common keys include t_down, "
-            "emb_dim, dropout, use_batch_norm, and the BiLSTM/loss settings."
+            "emb_dim, dropout, use_batch_norm, and the single trial-level "
+            "BiLSTM/loss settings."
         ),
     )
     parser.add_argument("--features-npy", default=None)
