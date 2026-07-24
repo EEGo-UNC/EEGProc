@@ -183,8 +183,6 @@ with tf.device("/GPU:0"):
 print("GPU exp-gradient test:", gradient.numpy())
 TF_PY
 
-# Fast end-to-end smoke test matching the official GCN run configuration.
-# One fold, one hyperparameter configuration, and two latent samples keep it quick.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
     --raw-eeg-npy datasets/dreamer_eeg.npy \
     --raw-labels-npy datasets/dreamer_labels.npy \
@@ -193,75 +191,91 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --n-channels 14 \
     --n-bands 4 \
     --out-dir runs/joint_autoencoder_vc_v2/GCN \
-    --run-name dreamer_arousal_vaevc_gcn \
-    --max-folds 2 \
+    --run-name dreamer_arousal_gcn_overfit \
+    --max-folds 1 \
     --n-jobs 1 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
-    --prediction-latent-samples 15 \
+    --prediction-latent-samples 1 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 3 \
+    --validation-subjects 1 \
     --validation-seed 42 \
-    --early-stopping-patience 20 \
-    --early-stopping-min-delta 0.005 \
+    --early-stopping-patience 300 \
+    --early-stopping-min-delta 0.0 \
     --window-sec 4.0 \
     --window-overlap 0.5 \
-    --batch-size 4 \
+    --batch-size 8 \
     --selection-level trial \
     --selection-metric f1 \
     --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode max \
     --final-epoch-strategy median \
     --hyperparameters-json '{
-    "epochs": [
-        200
-    ],
-    "batch_size": [
-        2
-    ],
-    "learning_rate": [
-        0.0001
-    ],
-    "ae_loss_weight": [0.3],
-    "vc_loss_weight": [1.0],
-    "vc_alpha": [1.0],
-    "vc_beta": [0.4],
-    "vc_gamma": [0.0],
-    "vc_lambda": [0.1],
-    "vae_beta": [
-        0.3
-    ],
-    "t_down": [
-        2
-    ],
-    "emb_dim": [
-        32
-    ],
-    "dropout": [
-        0.2
-    ],
-    "gcn_units": [
-        [
-            32,
-            16
-        ]
-    ],
-    "temporal_pool_sizes": [
-        [
+        "epochs": [
+            300
+        ],
+        "batch_size": [
+            8
+        ],
+        "learning_rate": [
+            0.001
+        ],
+        "ae_loss_weight": [
+            0.0
+        ],
+        "vc_loss_weight": [
+            1.0
+        ],
+        "vc_alpha": [
+            1.0
+        ],
+        "vc_beta": [
+            0.0
+        ],
+        "vc_gamma": [
+            0.0
+        ],
+        "vc_lambda": [
+            0.0
+        ],
+        "vae_beta": [
+            0.0
+        ],
+        "t_down": [
             2
+        ],
+        "emb_dim": [
+            64
+        ],
+        "dropout": [
+            0.0
+        ],
+        "gcn_units": [
+            [
+                128,
+                64
+            ]
+        ],
+        "temporal_pool_sizes": [
+            [
+                2
+            ]
+        ],
+        "activation": [
+            "relu"
+        ],
+        "use_batch_norm": [
+            false
+        ],
+        "bilstm_units": [
+            256
+        ],
+        "bilstm_layers": [
+            1
+        ],
+        "bilstm_dropout": [
+            0.0
         ]
-    ],
-    "activation": [
-        "relu"
-    ],
-    "use_batch_norm": [
-        true
-    ],
-    
-    
-    "bilstm_units": [64],
-    "bilstm_layers": [1],
-    "bilstm_dropout": [0.3]
-}'
+    }'
