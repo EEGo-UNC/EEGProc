@@ -256,7 +256,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             64
         ],
         "dropout": [
-            0.1
+            0.3
         ],
         "gcn_units": [
             [
