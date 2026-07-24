@@ -261,11 +261,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     ],
     
     
-    "bilstm_units": [256],
+    "bilstm_units": [64],
     "bilstm_layers": [1],
-    "bilstm_dropout": [0.3],
-
-    "trial_bilstm_units": [128],
-    "trial_bilstm_layers": [1],
-    "trial_bilstm_dropout": [0.3]
+    "bilstm_dropout": [0.3]
 }'
