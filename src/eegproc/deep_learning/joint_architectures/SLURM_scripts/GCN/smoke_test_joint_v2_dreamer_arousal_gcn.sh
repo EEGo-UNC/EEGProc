@@ -227,7 +227,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             300
         ],
         "batch_size": [
-            128
+            32
         ],
         "learning_rate": [
             0.0001
@@ -257,7 +257,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             2
         ],
         "emb_dim": [
-            64
+            32
         ],
         "dropout": [
             0.3
@@ -265,9 +265,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "gcn_units": [
             [
                 64,
-                128,
-                256,
-                128
+                32
             ]
         ],
         "temporal_pool_sizes": [
@@ -279,7 +277,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             "relu"
         ],
         "use_batch_norm": [
-            false, true
+            false
         ],
         "bilstm_units": [
             64
