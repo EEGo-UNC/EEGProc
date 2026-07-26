@@ -211,7 +211,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --label-threshold-mode subject_median \
     --use-class-weight \
     --batch-size 128 \
-    --selection-level window \
+    --selection-level trial \
     --selection-metric accuracy \
     --early-stopping-monitor val_joint_loss \
     --early-stopping-mode min \
