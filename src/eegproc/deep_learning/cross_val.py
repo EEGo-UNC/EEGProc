@@ -77,6 +77,8 @@ _JOINT_LOSS_WEIGHT_KEYS = frozenset(
         "vc_beta",
         "vc_gamma",
         "vc_lambda",
+        "subject_loss_weight",
+        "use_subject_adversarial",
     }
 )
 
@@ -224,6 +226,25 @@ def _split_config(config: dict) -> tuple[dict, dict]:
     model_hp = {k: v for k, v in config.items() if k not in _FIT_RESERVED_KEYS}
     fit_hp = {k: v for k, v in config.items() if k in _FIT_RESERVED_KEYS}
     return model_hp, fit_hp
+
+
+def _prepare_fit_inputs_with_subject_ids(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    subject_ids: np.ndarray,
+):
+    """Attach fold-local subject labels only when the model requests them.
+
+    Subject-adversarial models expose ``prepare_fit_inputs``. The method maps
+    the fitting subjects to contiguous fold-local classes and returns a Keras
+    input dictionary. Ordinary models continue receiving the original EEG
+    tensor unchanged. Validation and test inputs are intentionally left raw so
+    held-out identities never contribute to the adversarial loss.
+    """
+    prepare = getattr(model, "prepare_fit_inputs", None)
+    if prepare is None or not getattr(model, "use_subject_adversarial", False):
+        return X
+    return prepare(X, subject_ids)
 
 
 def _choose_best_config_index(
@@ -2722,6 +2743,11 @@ def _run_outer_fold(
             model = model_builder_function(**model_hp)
 
             try:
+                X_inner_train_for_fit = _prepare_fit_inputs_with_subject_ids(
+                    model,
+                    X_inner_train,
+                    subject_ids_inner_train,
+                )
                 fit_kwargs = dict(fit_hp)
                 fit_kwargs["validation_data"] = (X_inner_val, y_inner_val)
 
@@ -2734,7 +2760,7 @@ def _run_outer_fold(
                 }
 
                 model.fit(
-                    X_inner_train,
+                    X_inner_train_for_fit,
                     y_inner_train,
                     class_weight=class_weight,
                     verbose=verbose,
@@ -2899,6 +2925,11 @@ def _run_outer_fold(
     final_model = model_builder_function(**model_hp)
 
     try:
+        X_outer_train_for_fit = _prepare_fit_inputs_with_subject_ids(
+            final_model,
+            X_outer_train,
+            subject_ids_outer_train,
+        )
         y_outer_train_ids = _as_numpy_1d(y_outer_train)
         classes, counts = np.unique(y_outer_train_ids, return_counts=True)
 
@@ -2908,7 +2939,7 @@ def _run_outer_fold(
         }
 
         final_model.fit(
-            X_outer_train,
+            X_outer_train_for_fit,
             y_outer_train,
             class_weight=class_weight,
             verbose=verbose,
@@ -3616,6 +3647,11 @@ def _run_loso_fold(
 
     tf.keras.backend.clear_session()
     model = model_builder_function(**model_hp)
+    X_fit_train_for_fit = _prepare_fit_inputs_with_subject_ids(
+        model,
+        X_fit_train,
+        subject_ids_fit_train,
+    )
 
     epochs_ran = 0
     best_epoch: int | None = None
@@ -3637,7 +3673,7 @@ def _run_loso_fold(
             else None
         )
         history = model.fit(
-            X_fit_train,
+            X_fit_train_for_fit,
             y_fit_train,
             validation_data=validation_data,
             class_weight=class_weight,

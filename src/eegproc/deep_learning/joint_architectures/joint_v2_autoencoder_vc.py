@@ -8,10 +8,15 @@ or variational classification head emits one prediction for the same window.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 
+import numpy as np
 import tensorflow as tf
 
-from ..unsupervised.VariationalAutoencoderLoss import VariationalAutoencoderLoss
+from ..unsupervised.VariationalAutoencoderLoss import (
+    GradientReversal,
+    VariationalAutoencoderLoss,
+)
 
 
 def _serialize_keras_component(component):
@@ -161,6 +166,14 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         vc_lambda: float = 1.0,
         update_discriminator: bool = False,
         use_class_weight: bool = True,
+        use_subject_adversarial: bool = False,
+        n_subject_classes: int | None = None,
+        subject_adversarial_weight: float = 0.05,
+        subject_loss_weight: float = 1.0,
+        subject_hidden_units: int = 64,
+        subject_dropout: float = 0.0,
+        subject_latent_mode: str = "mean",
+        subject_mc_samples: int = 5,
         name: str = "joint_autoencoder_variational_classifier_v2",
         **kwargs,
     ) -> None:
@@ -186,6 +199,24 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             raise ValueError(
                 "z_log_var_clip_min must be smaller than z_log_var_clip_max."
             )
+        if subject_adversarial_weight < 0.0:
+            raise ValueError("subject_adversarial_weight must be non-negative.")
+        if subject_loss_weight < 0.0:
+            raise ValueError("subject_loss_weight must be non-negative.")
+        if subject_hidden_units < 1:
+            raise ValueError("subject_hidden_units must be at least 1.")
+        if not 0.0 <= subject_dropout < 1.0:
+            raise ValueError("subject_dropout must be in [0, 1).")
+        subject_latent_mode = str(subject_latent_mode).lower()
+        if subject_latent_mode not in {"mean", "mc"}:
+            raise ValueError(
+                "subject_latent_mode must be 'mean' or 'mc', "
+                f"got {subject_latent_mode!r}."
+            )
+        if subject_mc_samples < 1:
+            raise ValueError("subject_mc_samples must be at least 1.")
+        if n_subject_classes is not None and int(n_subject_classes) < 2:
+            raise ValueError("n_subject_classes must be at least 2 when supplied.")
 
         self.encoder = encoder
         self.decoder = decoder
@@ -199,6 +230,16 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.z_log_var_clip_min = float(z_log_var_clip_min)
         self.z_log_var_clip_max = float(z_log_var_clip_max)
         self.use_class_weight = bool(use_class_weight)
+        self.use_subject_adversarial = bool(use_subject_adversarial)
+        self.n_subject_classes = (
+            None if n_subject_classes is None else int(n_subject_classes)
+        )
+        self.subject_adversarial_weight = float(subject_adversarial_weight)
+        self.subject_loss_weight = float(subject_loss_weight)
+        self.subject_hidden_units = int(subject_hidden_units)
+        self.subject_dropout = float(subject_dropout)
+        self.subject_latent_mode = subject_latent_mode
+        self.subject_mc_samples = int(subject_mc_samples)
 
         self.z_mean_projection = tf.keras.layers.Dense(
             self.latent_features,
@@ -210,6 +251,17 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             bias_initializer="zeros",
             name="z_log_var",
         )
+
+        # The subject head is configured lazily from each fold's fitting
+        # subjects. This keeps its output dimension fold-local and prevents
+        # validation/test identities from becoming subject classes.
+        self.subject_pooling = None
+        self.subject_gradient_reversal = None
+        self.subject_hidden = None
+        self.subject_dropout_layer = None
+        self.subject_classifier = None
+        if self.use_subject_adversarial and self.n_subject_classes is not None:
+            self._configure_subject_head(self.n_subject_classes)
 
         self.reconstruction_loss_fn = (
             reconstruction_loss_fn
@@ -265,6 +317,13 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.decoder_accuracy_tracker = DecoderReconstructionAccuracy(
             name="decoder_accuracy"
         )
+        self.subject_loss_tracker = tf.keras.metrics.Mean(name="subject_loss")
+        self.weighted_subject_loss_tracker = tf.keras.metrics.Mean(
+            name="weighted_subject_loss"
+        )
+        self.subject_accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
+            name="subject_accuracy"
+        )
 
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
         self.vc_cross_entropy_tracker = tf.keras.metrics.Mean(
@@ -305,6 +364,132 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             for class_index in range(self.variational_classifier.n_classes)
         ]
 
+    def _configure_subject_head(self, n_subject_classes: int) -> None:
+        """Create the fold-local subject discriminator exactly once."""
+        n_subject_classes = int(n_subject_classes)
+        if n_subject_classes < 2:
+            raise ValueError("Subject-adversarial training requires at least 2 subjects.")
+        if self.subject_classifier is not None:
+            if self.n_subject_classes != n_subject_classes:
+                raise ValueError(
+                    "The subject head is already configured for "
+                    f"{self.n_subject_classes} classes, not {n_subject_classes}."
+                )
+            return
+
+        self.n_subject_classes = n_subject_classes
+        self.subject_pooling = tf.keras.layers.GlobalAveragePooling1D(
+            name="subject_latent_pool"
+        )
+        self.subject_gradient_reversal = GradientReversal(
+            adversarial_weight=self.subject_adversarial_weight,
+            name="subject_gradient_reversal",
+        )
+        self.subject_hidden = tf.keras.layers.Dense(
+            self.subject_hidden_units,
+            activation="relu",
+            name="subject_hidden",
+        )
+        self.subject_dropout_layer = tf.keras.layers.Dropout(
+            self.subject_dropout,
+            name="subject_dropout",
+        )
+        self.subject_classifier = tf.keras.layers.Dense(
+            n_subject_classes,
+            activation=None,
+            name="subject_logits",
+        )
+
+    def prepare_fit_inputs(self, eeg_inputs, subject_ids):
+        """Attach deterministic fold-local subject targets to training inputs."""
+        if not self.use_subject_adversarial:
+            return eeg_inputs
+
+        eeg_array = np.asarray(eeg_inputs)
+        subjects = np.asarray(subject_ids).reshape(-1)
+        if len(eeg_array) != len(subjects):
+            raise ValueError(
+                "EEG samples and subject IDs must align for adversarial training; "
+                f"got {len(eeg_array)} and {len(subjects)}."
+            )
+        unique_subjects = np.sort(np.unique(subjects))
+        self._configure_subject_head(len(unique_subjects))
+        subject_to_class = {
+            value.item() if isinstance(value, np.generic) else value: index
+            for index, value in enumerate(unique_subjects)
+        }
+        fold_local_ids = np.asarray(
+            [
+                subject_to_class[
+                    value.item() if isinstance(value, np.generic) else value
+                ]
+                for value in subjects
+            ],
+            dtype=np.int32,
+        )
+        return {"eeg": eeg_array, "subject_id": fold_local_ids}
+
+    @staticmethod
+    def _split_eeg_and_subject_inputs(inputs):
+        if isinstance(inputs, Mapping):
+            if "eeg" not in inputs:
+                raise ValueError("Training input dictionaries must contain an 'eeg' key.")
+            return inputs["eeg"], inputs.get("subject_id")
+        return inputs, None
+
+    def _subject_head_forward(
+        self,
+        latent_sequence: tf.Tensor,
+        training: bool,
+    ) -> tf.Tensor:
+        if self.subject_classifier is None:
+            raise RuntimeError(
+                "Subject head is not configured. Call prepare_fit_inputs(...) "
+                "before fitting this fold."
+            )
+        pooled = self.subject_pooling(latent_sequence)
+        reversed_features = self.subject_gradient_reversal(pooled)
+        hidden = self.subject_hidden(reversed_features)
+        hidden = self.subject_dropout_layer(hidden, training=training)
+        return self.subject_classifier(hidden)
+
+    def _subject_logits_from_posterior(
+        self,
+        z_mean: tf.Tensor,
+        z_log_var: tf.Tensor,
+        training: bool,
+    ) -> tf.Tensor:
+        if self.subject_latent_mode == "mean":
+            return self._subject_head_forward(z_mean, training=training)
+
+        sample_count = self.subject_mc_samples
+        epsilon_shape = tf.concat(
+            [tf.constant([sample_count], dtype=tf.int32), tf.shape(z_mean)],
+            axis=0,
+        )
+        epsilon = tf.random.normal(epsilon_shape, dtype=z_mean.dtype)
+        latent_samples = (
+            z_mean[tf.newaxis, ...]
+            + tf.exp(0.5 * z_log_var)[tf.newaxis, ...] * epsilon
+        )
+        shape = tf.shape(latent_samples)
+        flat_samples = tf.reshape(
+            latent_samples,
+            [shape[0] * shape[1], shape[2], shape[3]],
+        )
+        flat_logits = self._subject_head_forward(flat_samples, training=training)
+        logits_by_sample = tf.reshape(
+            flat_logits,
+            [shape[0], shape[1], self.n_subject_classes],
+        )
+        # Average the predictive distribution across Monte Carlo draws. The
+        # returned normalized log-probabilities are valid logits for sparse CE.
+        log_probabilities = tf.nn.log_softmax(logits_by_sample, axis=-1)
+        return (
+            tf.reduce_logsumexp(log_probabilities, axis=0)
+            - tf.math.log(tf.cast(sample_count, log_probabilities.dtype))
+        )
+
     @property
     def metrics(self) -> list[tf.keras.metrics.Metric]:
         metrics: list[tf.keras.metrics.Metric] = [
@@ -320,6 +505,14 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                     self.kl_loss_tracker,
                     self.weighted_kl_loss_tracker,
                     self.decoder_accuracy_tracker,
+                ]
+            )
+        if self.use_subject_adversarial:
+            metrics.extend(
+                [
+                    self.subject_loss_tracker,
+                    self.weighted_subject_loss_tracker,
+                    self.subject_accuracy_tracker,
                 ]
             )
         metrics.extend(
@@ -451,8 +644,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         training: bool = False,
         sample_latent: bool | None = None,
         include_reconstruction: bool | None = None,
+        include_subject_adversarial: bool | None = None,
     ) -> dict[str, tf.Tensor]:
         """Run reconstruction and classification for independent windows."""
+        inputs, _subject_ids = self._split_eeg_and_subject_inputs(inputs)
         inputs = tf.convert_to_tensor(inputs, dtype=tf.float32)
         if inputs.shape.rank != 3:
             raise ValueError(
@@ -463,6 +658,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             sample_latent = training
         if include_reconstruction is None:
             include_reconstruction = self.ae_loss_weight > 0.0
+        if include_subject_adversarial is None:
+            include_subject_adversarial = (
+                self.use_subject_adversarial and training is True
+            )
 
         encoder_output, z_mean, z_log_var = self._posterior_parameters(
             inputs,
@@ -510,6 +709,17 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         if include_reconstruction:
             outputs["reconstruction"] = self.decoder(
                 decoder_latent_sequence,
+                training=training,
+            )
+        if include_subject_adversarial:
+            if not self.use_subject_adversarial:
+                raise ValueError(
+                    "include_subject_adversarial=True, but the subject branch "
+                    "is disabled."
+                )
+            outputs["subject_logits"] = self._subject_logits_from_posterior(
+                z_mean=z_mean,
+                z_log_var=z_log_var,
                 training=training,
             )
         return outputs
@@ -662,36 +872,68 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         sample_weight=None,
     ) -> tuple[dict[str, tf.Tensor], dict[str, tf.Tensor]]:
         autoencoder_enabled = self.ae_loss_weight > 0.0
-        x = tf.convert_to_tensor(x, dtype=tf.float32)
-        if x.shape.rank != 3:
+        eeg_inputs, subject_ids = self._split_eeg_and_subject_inputs(x)
+        eeg_inputs = tf.convert_to_tensor(eeg_inputs, dtype=tf.float32)
+        if eeg_inputs.shape.rank != 3:
             raise ValueError(
                 "Window-level training expects (B, T, F); got "
-                f"{x.shape}."
+                f"{eeg_inputs.shape}."
             )
+
+        subject_enabled_for_batch = (
+            self.use_subject_adversarial and subject_ids is not None
+        )
         outputs = self(
-            x,
+            eeg_inputs,
             training=training,
             include_reconstruction=autoencoder_enabled,
+            include_subject_adversarial=subject_enabled_for_batch,
         )
 
+        zero = tf.zeros((), dtype=outputs["logits"].dtype)
         if autoencoder_enabled:
-            batch_size = tf.shape(x)[0]
+            batch_size = tf.shape(eeg_inputs)[0]
             z_mean_flat = tf.reshape(outputs["z_mean"], [batch_size, -1])
             z_log_var_flat = tf.reshape(outputs["z_log_var"], [batch_size, -1])
             vae_losses = self.reconstruction_loss_fn(
-                x_true=x,
+                x_true=eeg_inputs,
                 x_pred=outputs["reconstruction"],
                 z_mean=z_mean_flat,
                 z_log_var=z_log_var_flat,
+                include_subject_loss=False,
+            )
+            autoencoder_loss = (
+                vae_losses["reconstruction_loss"]
+                + vae_losses["weighted_kl_loss"]
             )
         else:
-            zero = tf.zeros((), dtype=outputs["logits"].dtype)
             vae_losses = {
-                "total_loss": zero,
                 "reconstruction_loss": zero,
                 "kl_loss": zero,
                 "weighted_kl_loss": zero,
             }
+            autoencoder_loss = zero
+
+        if subject_enabled_for_batch:
+            subject_ids = tf.cast(tf.reshape(subject_ids, [-1]), tf.int32)
+            tf.debugging.assert_equal(
+                tf.shape(subject_ids)[0],
+                tf.shape(outputs["subject_logits"])[0],
+                message="Subject labels must align with EEG windows.",
+            )
+            subject_loss_per_sample = self.reconstruction_loss_fn.compute_subject_loss(
+                subject_true=subject_ids,
+                subject_pred=outputs["subject_logits"],
+            )
+            subject_loss = tf.reduce_mean(subject_loss_per_sample)
+            weighted_subject_loss = (
+                tf.cast(self.subject_loss_weight, subject_loss.dtype)
+                * subject_loss
+            )
+            outputs["subject_targets"] = subject_ids
+        else:
+            subject_loss = zero
+            weighted_subject_loss = zero
 
         y_flat = self._flatten_labels(y)
         tf.debugging.assert_equal(
@@ -714,8 +956,9 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
 
         base_total_loss = (
-            self.ae_loss_weight * vae_losses["total_loss"]
+            self.ae_loss_weight * autoencoder_loss
             + self.vc_loss_weight * vc_losses["total_loss"]
+            + weighted_subject_loss
         )
         if self.losses:
             regularization_loss = tf.add_n(
@@ -729,10 +972,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "total_loss": total_loss,
             "base_total_loss": base_total_loss,
             "regularization_loss": regularization_loss,
-            "autoencoder_loss": vae_losses["total_loss"],
+            "autoencoder_loss": autoencoder_loss,
             "reconstruction_loss": vae_losses["reconstruction_loss"],
             "kl_loss": vae_losses["kl_loss"],
             "weighted_kl_loss": vae_losses["weighted_kl_loss"],
+            "subject_loss": subject_loss,
+            "weighted_subject_loss": weighted_subject_loss,
             "vc_loss": vc_losses["total_loss"],
             "vc_cross_entropy": vc_losses["cross_entropy"],
             "weighted_vc_cross_entropy": vc_losses["weighted_cross_entropy"],
@@ -786,6 +1031,16 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 x_true,
                 outputs["reconstruction"],
             )
+        if self.use_subject_adversarial:
+            self.subject_loss_tracker.update_state(losses["subject_loss"])
+            self.weighted_subject_loss_tracker.update_state(
+                losses["weighted_subject_loss"]
+            )
+            if "subject_targets" in outputs and "subject_logits" in outputs:
+                self.subject_accuracy_tracker.update_state(
+                    outputs["subject_targets"],
+                    outputs["subject_logits"],
+                )
         self.vc_loss_tracker.update_state(losses["vc_loss"])
         self.vc_cross_entropy_tracker.update_state(losses["vc_cross_entropy"])
         self.weighted_vc_cross_entropy_tracker.update_state(
@@ -880,7 +1135,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self._update_trackers(
             losses=losses,
             outputs=outputs,
-            x_true=x,
+            x_true=self._split_eeg_and_subject_inputs(x)[0],
             y_flat=y_flat,
             sample_weight=sample_weight,
             discriminator_loss=discriminator_loss,
@@ -900,7 +1155,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self._update_trackers(
             losses=losses,
             outputs=outputs,
-            x_true=x,
+            x_true=self._split_eeg_and_subject_inputs(x)[0],
             y_flat=y_flat,
             sample_weight=sample_weight,
             discriminator_loss=discriminator_loss,
@@ -947,6 +1202,14 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 "vc_lambda": self.vc_lambda,
                 "update_discriminator": self.update_discriminator,
                 "use_class_weight": self.use_class_weight,
+                "use_subject_adversarial": self.use_subject_adversarial,
+                "n_subject_classes": self.n_subject_classes,
+                "subject_adversarial_weight": self.subject_adversarial_weight,
+                "subject_loss_weight": self.subject_loss_weight,
+                "subject_hidden_units": self.subject_hidden_units,
+                "subject_dropout": self.subject_dropout,
+                "subject_latent_mode": self.subject_latent_mode,
+                "subject_mc_samples": self.subject_mc_samples,
             }
         )
         return config

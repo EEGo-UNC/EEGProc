@@ -28,3 +28,4 @@
     - Decoders are finally performing reasonably, now we must fix the classifier.
 - 07/26/2026
     - Models are basically learning to collapse classes.
+    - Feature expansion optimization has val_acc and train_acc going up together. Previous models had train_acc go up and val_acc go down.

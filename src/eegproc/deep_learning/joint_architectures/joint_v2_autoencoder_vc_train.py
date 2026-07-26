@@ -162,6 +162,13 @@ class JointV2TrainingConfig:
     cpus_per_worker: int = 2
     max_folds: int | None = None
     use_class_weight: bool = True
+    use_subject_adversarial: bool = False
+    subject_adversarial_weight: float = 0.05
+    subject_loss_weight: float = 1.0
+    subject_hidden_units: int = 64
+    subject_dropout: float = 0.0
+    subject_latent_mode: str = "mean"
+    subject_mc_samples: int = 5
     label_threshold_mode: str = "global"
     window_normalization: str = "global_rms"
 
@@ -918,6 +925,14 @@ def build_joint_autoencoder_variational_classifier_v2(
     vc_lambda: float = 1.0,
     update_discriminator: bool = False,
     use_class_weight: bool = True,
+    use_subject_adversarial: bool = False,
+    n_subject_classes: int | None = None,
+    subject_adversarial_weight: float = 0.05,
+    subject_loss_weight: float = 1.0,
+    subject_hidden_units: int = 64,
+    subject_dropout: float = 0.0,
+    subject_latent_mode: str = "mean",
+    subject_mc_samples: int = 5,
     bilstm_units: int = 64,
     n_bilstm_layers: int = 1,
     bilstm_dropout: float = 0.30,
@@ -1035,6 +1050,14 @@ def build_joint_autoencoder_variational_classifier_v2(
         vc_lambda=vc_lambda,
         update_discriminator=update_discriminator,
         use_class_weight=use_class_weight,
+        use_subject_adversarial=use_subject_adversarial,
+        n_subject_classes=n_subject_classes,
+        subject_adversarial_weight=subject_adversarial_weight,
+        subject_loss_weight=subject_loss_weight,
+        subject_hidden_units=subject_hidden_units,
+        subject_dropout=subject_dropout,
+        subject_latent_mode=subject_latent_mode,
+        subject_mc_samples=subject_mc_samples,
         name=(
             model_name
             or f"joint_{encoder_type}_window_vae_bilstm_{classifier_head}_v2"
@@ -1183,6 +1206,13 @@ def train_joint_autoencoder_variational_classifier_v2(
             "vc_gamma",
             "vc_lambda",
             "update_discriminator",
+            "use_subject_adversarial",
+            "subject_adversarial_weight",
+            "subject_loss_weight",
+            "subject_hidden_units",
+            "subject_dropout",
+            "subject_latent_mode",
+            "subject_mc_samples",
             "classifier_head",
             *encoder_hparam_keys,
             *bilstm_hparam_keys,
@@ -1277,6 +1307,48 @@ def train_joint_autoencoder_variational_classifier_v2(
                     )
                 ),
                 use_class_weight=training_config.use_class_weight,
+                use_subject_adversarial=bool(
+                    hparams.get(
+                        "use_subject_adversarial",
+                        training_config.use_subject_adversarial,
+                    )
+                ),
+                subject_adversarial_weight=float(
+                    hparams.get(
+                        "subject_adversarial_weight",
+                        training_config.subject_adversarial_weight,
+                    )
+                ),
+                subject_loss_weight=float(
+                    hparams.get(
+                        "subject_loss_weight",
+                        training_config.subject_loss_weight,
+                    )
+                ),
+                subject_hidden_units=int(
+                    hparams.get(
+                        "subject_hidden_units",
+                        training_config.subject_hidden_units,
+                    )
+                ),
+                subject_dropout=float(
+                    hparams.get(
+                        "subject_dropout",
+                        training_config.subject_dropout,
+                    )
+                ),
+                subject_latent_mode=str(
+                    hparams.get(
+                        "subject_latent_mode",
+                        training_config.subject_latent_mode,
+                    )
+                ),
+                subject_mc_samples=int(
+                    hparams.get(
+                        "subject_mc_samples",
+                        training_config.subject_mc_samples,
+                    )
+                ),
                 bilstm_units=int(
                     hparams.get("bilstm_units", training_config.bilstm_units)
                 ),
@@ -1345,6 +1417,19 @@ def train_joint_autoencoder_variational_classifier_v2(
     logger.info("Classification/evaluation level: window")
     logger.info("Default classifier head: %s", training_config.classifier_head)
     logger.info("Class weighting enabled: %s", training_config.use_class_weight)
+    logger.info(
+        "Subject-adversarial branch enabled: %s",
+        training_config.use_subject_adversarial,
+    )
+    if training_config.use_subject_adversarial:
+        logger.info(
+            "Subject branch: GRL weight=%.6f, loss weight=%.6f, "
+            "latent_mode=%s, mc_samples=%d",
+            training_config.subject_adversarial_weight,
+            training_config.subject_loss_weight,
+            training_config.subject_latent_mode,
+            training_config.subject_mc_samples,
+        )
     logger.info("Window normalization: %s", training_config.window_normalization)
     logger.info("Label threshold mode: %s", training_config.label_threshold_mode)
     logger.info("Window feature shape: %s", feature_array.shape)
@@ -1593,8 +1678,13 @@ def train_joint_autoencoder_variational_classifier_v2(
     else:
         logger.info("Final-fit class weighting is disabled.")
 
+    final_fit_inputs = (
+        final_model.prepare_fit_inputs(feature_array, subject_id_array)
+        if getattr(final_model, "use_subject_adversarial", False)
+        else feature_array
+    )
     final_history = final_model.fit(
-        feature_array,
+        final_fit_inputs,
         label_array,
         class_weight=final_class_weight,
         epochs=selected_final_epochs,
@@ -1864,6 +1954,61 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--vc-gamma", type=float, default=0.0)
     parser.add_argument("--vc-lambda", type=float, default=1.0)
     parser.add_argument("--update-discriminator", action="store_true")
+    subject_group = parser.add_mutually_exclusive_group()
+    subject_group.add_argument(
+        "--use-subject-adversarial",
+        dest="use_subject_adversarial",
+        action="store_true",
+        help=(
+            "Enable a fold-local subject classifier behind gradient reversal "
+            "so the encoder learns subject-invariant latent features."
+        ),
+    )
+    subject_group.add_argument(
+        "--no-subject-adversarial",
+        dest="use_subject_adversarial",
+        action="store_false",
+        help="Disable the subject-adversarial branch (default).",
+    )
+    parser.set_defaults(use_subject_adversarial=False)
+    parser.add_argument(
+        "--subject-adversarial-weight",
+        type=float,
+        default=0.05,
+        help=(
+            "Gradient-reversal strength applied only to the encoder "
+            "(default: 0.05)."
+        ),
+    )
+    parser.add_argument(
+        "--subject-loss-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "Positive subject cross-entropy weight for the subject head "
+            "(default: 1.0)."
+        ),
+    )
+    parser.add_argument("--subject-hidden-units", type=int, default=64)
+    parser.add_argument("--subject-dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--subject-latent-mode",
+        choices=("mean", "mc"),
+        default="mean",
+        help=(
+            "Use the posterior mean or Monte Carlo posterior samples for the "
+            "subject adversary (default: mean)."
+        ),
+    )
+    parser.add_argument(
+        "--subject-mc-samples",
+        type=int,
+        default=5,
+        help=(
+            "Number of posterior draws averaged when "
+            "--subject-latent-mode mc is selected (default: 5)."
+        ),
+    )
     parser.add_argument(
         "--bilstm-units",
         type=int,
@@ -2093,6 +2238,16 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--early-stopping-patience must be >= 0.")
     if args.early_stopping_min_delta < 0.0:
         raise ValueError("--early-stopping-min-delta must be >= 0.")
+    if args.subject_adversarial_weight < 0.0:
+        raise ValueError("--subject-adversarial-weight must be >= 0.")
+    if args.subject_loss_weight < 0.0:
+        raise ValueError("--subject-loss-weight must be >= 0.")
+    if args.subject_hidden_units < 1:
+        raise ValueError("--subject-hidden-units must be >= 1.")
+    if not 0.0 <= args.subject_dropout < 1.0:
+        raise ValueError("--subject-dropout must be in [0, 1).")
+    if args.subject_mc_samples < 1:
+        raise ValueError("--subject-mc-samples must be >= 1.")
     validation_seed = (
         args.validation_seed
         if args.validation_seed is not None
@@ -2168,6 +2323,13 @@ def main(argv: list[str] | None = None) -> int:
         cpus_per_worker=args.cpus_per_worker,
         max_folds=args.max_folds,
         use_class_weight=args.use_class_weight,
+        use_subject_adversarial=args.use_subject_adversarial,
+        subject_adversarial_weight=args.subject_adversarial_weight,
+        subject_loss_weight=args.subject_loss_weight,
+        subject_hidden_units=args.subject_hidden_units,
+        subject_dropout=args.subject_dropout,
+        subject_latent_mode=args.subject_latent_mode,
+        subject_mc_samples=args.subject_mc_samples,
         label_threshold_mode=args.label_threshold_mode,
         window_normalization=(
             "none" if args.no_zscore else args.window_normalization
