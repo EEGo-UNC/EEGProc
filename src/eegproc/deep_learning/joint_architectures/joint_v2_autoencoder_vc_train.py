@@ -1,15 +1,14 @@
-"""Training entry point for the joint VAE + trial BiLSTM + variational classifier.
+"""Training entry point for a window-level joint VAE + BiLSTM + VC model.
 
-Each trial is represented as an ordered sequence of EEG windows. The selected
-encoder processes every window, temporal mean pooling converts each encoded
-window into one embedding, and a single BiLSTM processes the complete sequence
-of window embeddings to produce one trial-level representation. The decoder
-continues to reconstruct individual windows.
+Every four-second EEG window is one supervised sample. The encoder and decoder
+operate on that window, a BiLSTM summarizes its latent temporal sequence, and
+the variational classifier emits one prediction per window. LOSO splitting and
+validation remain subject-disjoint; trial IDs are retained only for optional
+secondary aggregation and prediction logs.
 
-This module provides leave-one-subject-out cross-validation with seeded
-subject-level validation, flat hyperparameter search, structured logging,
-DREAMER-backed data loading (see ``joint_v2_data.py``), and final model saving.
-The autoencoder can be selected with ``--encoder-type`` as CNN1D, CNN2D, or GCN.
+The loader supports window-local channel-band z-scoring and an explicit
+subject-median label mode. Class weighting can be enabled or disabled without
+changing cross_val.py.
 """
 
 from __future__ import annotations
@@ -110,12 +109,12 @@ class JointV2TrainingConfig:
     n_channels: int = 14
     n_bands: int | None = None
     learning_rate: float = 1e-3
-    batch_size: int = 2
+    batch_size: int = 64
     cv_max_epochs: int = 50
     final_epoch_strategy: str = "median"
     final_epochs: int | None = None
     selection_metric: str = "f1"
-    selection_level: str = "trial"
+    selection_level: str = "window"
     maximize_metric: bool | None = None
     prediction_latent_samples: int = 0
     latent_sampling_seed: int | None = None
@@ -125,14 +124,14 @@ class JointV2TrainingConfig:
     final_verbose: int = 1
     early_stopping_patience: int = 5
     early_stopping_min_delta: float = 0.0
-    early_stopping_monitor: str = "val_loss"
-    early_stopping_mode: str = "min"
+    early_stopping_monitor: str = "val_window_f1"
+    early_stopping_mode: str = "max"
     use_early_stopping: bool = True
     save_full_model: bool = True
     save_weights: bool = True
     save_final_history_csv: bool = True
     seed: int | None = None
-    # The only BiLSTM operates at trial level over ordered window embeddings.
+    # The only BiLSTM operates within each window over latent timesteps.
     bilstm_units: int = 64
     n_bilstm_layers: int = 1
     bilstm_dropout: float = 0.30
@@ -150,154 +149,108 @@ class JointV2TrainingConfig:
     n_jobs: int = 4
     cpus_per_worker: int = 2
     max_folds: int | None = None
+    use_class_weight: bool = True
+    label_threshold_mode: str = "global"
 
 
-def _group_window_samples_into_trials(
+def _flatten_grouped_trials_to_windows(
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
     trial_id_array: np.ndarray,
-    *,
-    expected_n_windows: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Group ordered window samples into one rank-4 tensor per trial.
-
-    Input windows must already be ordered chronologically within each
-    ``(subject_id, trial_id)`` pair. One trial label is retained and checked
-    against every repeated window label.
-    """
-    feature_array = np.asarray(feature_array, dtype=np.float32)
-    label_array = np.asarray(label_array)
-    subject_id_array = np.asarray(subject_id_array).reshape(-1)
-    trial_id_array = np.asarray(trial_id_array).reshape(-1)
-
-    if feature_array.ndim == 4:
-        lengths = (
-            len(feature_array),
-            len(label_array),
-            len(subject_id_array),
-            len(trial_id_array),
-        )
-        if len(set(lengths)) != 1:
-            raise ValueError(
-                "Grouped trial arrays must align on their first dimension; "
-                f"got lengths {lengths}."
-            )
-        if (
-            expected_n_windows is not None
-            and feature_array.shape[1] != expected_n_windows
-        ):
-            raise ValueError(
-                "Grouped trials contain an unexpected number of windows: "
-                f"expected {expected_n_windows}, got {feature_array.shape[1]}."
-            )
-        return feature_array, label_array, subject_id_array, trial_id_array
-
-    if feature_array.ndim != 3:
-        raise ValueError(
-            "Expected flat windows shaped (n_windows, timesteps, n_features) "
-            "or grouped trials shaped "
-            "(n_trials, n_windows, timesteps, n_features); got "
-            f"{feature_array.shape}."
-        )
-
-    lengths = (
-        len(feature_array),
-        len(label_array),
-        len(subject_id_array),
-        len(trial_id_array),
+    """Convert legacy rank-4 trial tensors into aligned flat windows."""
+    features = np.asarray(feature_array, dtype=np.float32)
+    labels = np.asarray(label_array)
+    subjects = np.asarray(subject_id_array).reshape(-1)
+    trials = np.asarray(trial_id_array).reshape(-1)
+    if features.ndim != 4:
+        return features, labels, subjects, trials
+    if not (len(features) == len(labels) == len(subjects) == len(trials)):
+        raise ValueError("Grouped trial arrays must align on axis 0.")
+    n_trials, n_windows, timesteps, n_features = features.shape
+    return (
+        features.reshape(n_trials * n_windows, timesteps, n_features),
+        np.repeat(labels, n_windows, axis=0),
+        np.repeat(subjects, n_windows),
+        np.repeat(trials, n_windows),
     )
-    if len(set(lengths)) != 1:
+
+
+def _zscore_each_window(
+    feature_array: np.ndarray,
+    epsilon: float = 1e-6,
+) -> np.ndarray:
+    """Z-score every feature independently within each EEG window.
+
+    Input shape is ``(n_windows, timesteps, n_features)``. Statistics are never
+    shared across subjects, trials, windows, or CV partitions, so this operation
+    cannot leak held-out labels or training-set distribution information.
+    """
+    features = np.asarray(feature_array, dtype=np.float32)
+    if features.ndim != 3:
         raise ValueError(
-            "Window features, labels, subject IDs, and trial IDs must align; "
-            f"got lengths {lengths}."
+            "Window z-scoring expects (n_windows, timesteps, n_features); "
+            f"got {features.shape}."
+        )
+    mean = np.mean(features, axis=1, keepdims=True, dtype=np.float64)
+    std = np.std(features, axis=1, keepdims=True, dtype=np.float64)
+    safe_std = np.maximum(std, float(epsilon))
+    normalized = (features.astype(np.float64) - mean) / safe_std
+    if not np.isfinite(normalized).all():
+        raise ValueError("Window z-scoring produced NaN or Inf values.")
+    return normalized.astype(np.float32)
+
+
+def _subject_median_window_labels(
+    labels_path: str | Path,
+    label_dimension: str,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+) -> np.ndarray:
+    """Create subject-relative binary labels and repeat them over windows.
+
+    This changes the target from an absolute DREAMER threshold to whether a
+    trial is at or above that subject's own median rating. It mitigates rating
+    scale usage differences but must be reported as a separate label protocol.
+    """
+    raw_labels = np.load(Path(labels_path), allow_pickle=False)
+    if raw_labels.ndim != 3 or raw_labels.shape[-1] < 2:
+        raise ValueError(
+            "subject_median label mode requires raw labels shaped "
+            "(subjects, trials, >=2) with [valence, arousal]."
+        )
+    dimension_index = {"valence": 0, "arousal": 1}[label_dimension]
+    subjects = np.asarray(subject_id_array).reshape(-1)
+    trials = np.asarray(trial_id_array).reshape(-1)
+    output = np.empty(len(subjects), dtype=np.int64)
+    unique_subjects = np.unique(subjects)
+    if len(unique_subjects) != raw_labels.shape[0]:
+        raise ValueError(
+            "Raw-label subject count does not match the windowed subject IDs: "
+            f"{raw_labels.shape[0]} versus {len(unique_subjects)}."
         )
 
-    grouped_indices: dict[tuple[object, object], list[int]] = {}
-    for index, (subject_id, trial_id) in enumerate(
-        zip(subject_id_array, trial_id_array)
-    ):
-        key = (
-            subject_id.item() if isinstance(subject_id, np.generic) else subject_id,
-            trial_id.item() if isinstance(trial_id, np.generic) else trial_id,
-        )
-        grouped_indices.setdefault(key, []).append(index)
-
-    trial_features: list[np.ndarray] = []
-    trial_labels: list[np.ndarray | np.generic | int | float] = []
-    trial_subject_ids: list[object] = []
-    output_trial_ids: list[object] = []
-    observed_window_count: int | None = expected_n_windows
-    groups_are_contiguous = True
-    next_expected_index = 0
-
-    for (subject_id, trial_id), indices_list in grouped_indices.items():
-        indices = np.asarray(indices_list, dtype=np.int64)
-        expected_indices = np.arange(
-            next_expected_index,
-            next_expected_index + len(indices),
+    for subject_row, subject_id in enumerate(sorted(unique_subjects.tolist())):
+        subject_mask = subjects == subject_id
+        unique_trials = sorted(np.unique(trials[subject_mask]).tolist())
+        if len(unique_trials) != raw_labels.shape[1]:
+            raise ValueError(
+                f"Subject {subject_id!r} has {len(unique_trials)} trial IDs, but "
+                f"the raw label file has {raw_labels.shape[1]} trials."
+            )
+        ratings = raw_labels[subject_row, :, dimension_index].astype(np.float64)
+        threshold = float(np.median(ratings))
+        binary_by_trial = (ratings >= threshold).astype(np.int64)
+        trial_to_label = {
+            trial_id: int(binary_by_trial[trial_row])
+            for trial_row, trial_id in enumerate(unique_trials)
+        }
+        output[subject_mask] = np.asarray(
+            [trial_to_label[trial_id] for trial_id in trials[subject_mask]],
             dtype=np.int64,
         )
-        if not np.array_equal(indices, expected_indices):
-            groups_are_contiguous = False
-        next_expected_index += len(indices)
-
-        windows = feature_array[indices]
-        n_windows = int(len(windows))
-
-        if observed_window_count is None:
-            observed_window_count = n_windows
-        if n_windows != observed_window_count:
-            raise ValueError(
-                "Every trial must contain the same number of ordered windows. "
-                f"Expected {observed_window_count}, but subject {subject_id!r}, "
-                f"trial {trial_id!r} contains {n_windows}."
-            )
-
-        labels = label_array[indices]
-        first_label = labels[0]
-        if labels.ndim == 1:
-            labels_match = np.all(labels == first_label)
-        else:
-            labels_match = np.allclose(
-                labels,
-                np.broadcast_to(first_label, labels.shape),
-                rtol=0.0,
-                atol=0.0,
-            )
-        if not labels_match:
-            raise ValueError(
-                "All windows in one trial must share the same label. "
-                f"Subject {subject_id!r}, trial {trial_id!r} does not."
-            )
-
-        trial_features.append(windows)
-        trial_labels.append(first_label)
-        trial_subject_ids.append(subject_id)
-        output_trial_ids.append(trial_id)
-
-    if not trial_features:
-        raise ValueError("No trial groups were produced from the window arrays.")
-
-    if groups_are_contiguous and next_expected_index == len(feature_array):
-        # The standard joint_v2_data order is subject-major, trial-major, then
-        # chronological window. Reshape is a view and avoids duplicating the
-        # full overlapped EEG tensor in host memory.
-        grouped_feature_array = feature_array.reshape(
-            len(trial_features),
-            int(observed_window_count),
-            feature_array.shape[1],
-            feature_array.shape[2],
-        )
-    else:
-        grouped_feature_array = np.stack(trial_features, axis=0)
-
-    return (
-        grouped_feature_array.astype(np.float32, copy=False),
-        np.asarray(trial_labels, dtype=label_array.dtype),
-        np.asarray(trial_subject_ids, dtype=subject_id_array.dtype),
-        np.asarray(output_trial_ids, dtype=trial_id_array.dtype),
-    )
+    return output
 
 
 def load_joint_v2_training_data(
@@ -309,24 +262,25 @@ def load_joint_v2_training_data(
     overlap: float = 0.5,
     median_label: float = DREAMER_MEDIAN_LABEL,
     zscore: bool = True,
+    label_threshold_mode: str = "global",
     dataset: str | DatasetConfig = "dreamer",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Load ordered windows and group them into trial-level samples.
+    """Load flat window samples for subject-disjoint LOSO classification.
 
-    The returned feature tensor has shape
-    ``(n_trials, n_windows_per_trial, window_timesteps, n_features)`` and the
-    other arrays contain exactly one label, subject ID, and trial ID per trial.
-    For a 60-second trial, four-second windows, and 50% overlap, this produces
-    29 ordered windows per trial.
+    Returns ``(features, labels, subject_ids, trial_ids)`` with features shaped
+    ``(n_windows, window_timesteps, n_features)``. Raw-data z-scoring inside
+    ``build_joint_v2_dataset`` is disabled; when ``zscore=True``, normalization
+    is applied independently within every final window instead.
     """
     window_size = int(round(window_size_sec * fs))
     if window_size <= 0:
-        raise ValueError(
-            "window_size_sec * fs must produce a positive size; got "
-            f"{window_size}."
-        )
+        raise ValueError("window_size_sec * fs must produce a positive size.")
     if not (0.0 <= overlap < 1.0):
         raise ValueError(f"overlap must be in [0, 1), got {overlap}.")
+    if label_threshold_mode not in {"global", "subject_median"}:
+        raise ValueError(
+            "label_threshold_mode must be 'global' or 'subject_median'."
+        )
 
     dataset_arrays = build_joint_v2_dataset(
         eeg_path=eeg_path,
@@ -336,7 +290,7 @@ def load_joint_v2_training_data(
         fs=fs,
         overlap=overlap,
         median_label=median_label,
-        zscore=zscore,
+        zscore=False,
         dataset=dataset,
     )
 
@@ -347,48 +301,61 @@ def load_joint_v2_training_data(
         raw_eeg = np.load(Path(eeg_path), mmap_mode="r", allow_pickle=False)
         if raw_eeg.ndim != 4:
             raise ValueError(
-                "Expected raw EEG shaped "
-                "(n_subjects, n_trials, n_channels, n_samples); got "
-                f"{raw_eeg.shape}."
+                "Expected raw EEG shaped (subjects, trials, channels, samples); "
+                f"got {raw_eeg.shape}."
             )
-
         n_subjects, n_trials, _n_channels, n_samples = raw_eeg.shape
-        if n_samples < window_size:
-            raise ValueError(
-                f"Raw trials contain {n_samples} samples, shorter than "
-                f"window_size={window_size}."
-            )
-
         hop = max(1, int(round(window_size * (1.0 - overlap))))
         n_windows_per_trial = 1 + (n_samples - window_size) // hop
-        per_subject_trial_ids = np.repeat(
-            np.arange(n_trials, dtype=np.int64),
-            n_windows_per_trial,
+        trial_id_array = np.tile(
+            np.repeat(np.arange(n_trials, dtype=np.int64), n_windows_per_trial),
+            n_subjects,
         )
-        trial_id_array = np.tile(per_subject_trial_ids, n_subjects)
-        if len(trial_id_array) != len(feature_array):
-            raise ValueError(
-                "Generated trial IDs do not align with the windowed dataset. "
-                f"Generated {len(trial_id_array)} IDs for "
-                f"{len(feature_array)} windows."
-            )
     else:
         raise ValueError(
-            "build_joint_v2_dataset must return either three arrays "
-            "(features, labels, subject_ids) or four arrays with trial_ids."
+            "build_joint_v2_dataset must return three or four aligned arrays."
         )
 
-    raw_eeg = np.load(Path(eeg_path), mmap_mode="r", allow_pickle=False)
-    n_samples = int(raw_eeg.shape[-1])
-    hop = max(1, int(round(window_size * (1.0 - overlap))))
-    expected_n_windows = 1 + (n_samples - window_size) // hop
+    feature_array, label_array, subject_id_array, trial_id_array = (
+        _flatten_grouped_trials_to_windows(
+            feature_array,
+            label_array,
+            subject_id_array,
+            trial_id_array,
+        )
+    )
+    if feature_array.ndim != 3:
+        raise ValueError(
+            "Window-level training requires features shaped "
+            f"(n_windows, timesteps, features); got {feature_array.shape}."
+        )
+    lengths = tuple(
+        len(array)
+        for array in (
+            feature_array,
+            label_array,
+            subject_id_array,
+            trial_id_array,
+        )
+    )
+    if len(set(lengths)) != 1:
+        raise ValueError(f"Window arrays are not aligned: {lengths}.")
 
-    return _group_window_samples_into_trials(
-        feature_array,
-        label_array,
-        subject_id_array,
-        trial_id_array,
-        expected_n_windows=expected_n_windows,
+    if label_threshold_mode == "subject_median":
+        label_array = _subject_median_window_labels(
+            labels_path=labels_path,
+            label_dimension=label_dimension,
+            subject_id_array=subject_id_array,
+            trial_id_array=trial_id_array,
+        )
+    if zscore:
+        feature_array = _zscore_each_window(feature_array)
+
+    return (
+        np.asarray(feature_array, dtype=np.float32),
+        np.asarray(label_array),
+        np.asarray(subject_id_array),
+        np.asarray(trial_id_array),
     )
 
 def _load_numpy_array(path: str | Path) -> np.ndarray:
@@ -898,7 +865,7 @@ def _build_encoder_decoder(
 
 
 def build_joint_autoencoder_variational_classifier_v2(
-    input_shape: tuple[int, int, int],
+    input_shape: tuple[int, int],
     n_classes: int = 2,
     encoder_type: str = "cnn1d",
     n_channels: int = 14,
@@ -912,6 +879,7 @@ def build_joint_autoencoder_variational_classifier_v2(
     vc_gamma: float = 0.0,
     vc_lambda: float = 1.0,
     update_discriminator: bool = False,
+    use_class_weight: bool = True,
     bilstm_units: int = 64,
     n_bilstm_layers: int = 1,
     bilstm_dropout: float = 0.30,
@@ -925,10 +893,9 @@ def build_joint_autoencoder_variational_classifier_v2(
     classifier_kwargs: dict | None = None,
     model_name: str | None = None,
 ) -> JointAutoencoderVariationalClassifierV2:
-    """Build a window VAE with one trial-level BiLSTM classifier."""
-    n_windows, timesteps, n_features = map(int, input_shape)
+    """Build a VAE and BiLSTM classifier that both operate per window."""
+    timesteps, n_features = map(int, input_shape)
     encoder_type = encoder_type.lower()
-
     encoder, decoder = _build_encoder_decoder(
         encoder_type=encoder_type,
         timesteps=timesteps,
@@ -947,39 +914,14 @@ def build_joint_autoencoder_variational_classifier_v2(
     latent_sequence = encoder(dummy_window, training=False)
     if latent_sequence.shape.rank != 3:
         raise ValueError(
-            f"{type(encoder).__name__} must return a rank-3 sequence shaped "
-            "(batch_windows, latent_timesteps, latent_features); got "
-            f"{latent_sequence.shape}."
+            f"{type(encoder).__name__} must return rank-3 latent sequences; "
+            f"got {latent_sequence.shape}."
         )
-
     latent_timesteps = latent_sequence.shape[1]
     latent_features = latent_sequence.shape[2]
     if latent_timesteps is None or latent_features is None:
-        raise ValueError(
-            "The encoder must expose static latent timestep and feature "
-            "dimensions so window embeddings can be pooled."
-        )
+        raise ValueError("The encoder must expose static latent dimensions.")
 
-    # There is intentionally no recurrent model inside each EEG window.
-    # The encoder already preserves a latent temporal sequence; mean pooling
-    # converts that sequence into one compact embedding per window.
-    window_input = tf.keras.Input(
-        shape=(int(latent_timesteps), int(latent_features)),
-        name=f"joint_{encoder_type}_window_pool_input",
-    )
-    window_embedding = tf.keras.layers.GlobalAveragePooling1D(
-        name=f"joint_{encoder_type}_window_mean_pool",
-    )(window_input)
-    classification_model = tf.keras.Model(
-        inputs=window_input,
-        outputs=window_embedding,
-        name=f"joint_{encoder_type}_window_pool",
-    )
-    window_embedding_features = int(latent_features)
-
-    # bilstm_* is now the canonical configuration for the only BiLSTM, which
-    # operates across the ordered window embeddings of a complete trial.
-    # trial_bilstm_* remains an optional backwards-compatible alias.
     resolved_bilstm_units = int(
         bilstm_units if trial_bilstm_units is None else trial_bilstm_units
     )
@@ -993,20 +935,17 @@ def build_joint_autoencoder_variational_classifier_v2(
         if trial_bilstm_dropout is None
         else trial_bilstm_dropout
     )
-    if resolved_bilstm_units < 1:
-        raise ValueError("bilstm_units must be >= 1.")
-    if resolved_bilstm_layers < 1:
-        raise ValueError("bilstm_layers must be >= 1.")
+    if resolved_bilstm_units < 1 or resolved_bilstm_layers < 1:
+        raise ValueError("BiLSTM units and layers must both be >= 1.")
     if not 0.0 <= resolved_bilstm_dropout < 1.0:
         raise ValueError("bilstm_dropout must be in [0, 1).")
 
-    trial_recurrent_defaults = {
+    recurrent_defaults = {
         "lstm_units": resolved_bilstm_units,
         "n_bilstm_layers": resolved_bilstm_layers,
         "dropout": resolved_bilstm_dropout,
-        "name": f"joint_{encoder_type}_trial_bilstm",
+        "name": f"joint_{encoder_type}_window_bilstm",
     }
-
     reserved = {"timesteps", "n_features", "n_classes"}
     for kwargs_name, supplied_kwargs in (
         ("bilstm_kwargs", bilstm_kwargs),
@@ -1017,16 +956,16 @@ def build_joint_autoencoder_variational_classifier_v2(
         conflicting = reserved.intersection(supplied_kwargs)
         if conflicting:
             raise ValueError(
-                f"{kwargs_name} cannot override dimensions supplied by the "
-                f"joint model: {sorted(conflicting)}"
+                f"{kwargs_name} cannot override dimensions: "
+                f"{sorted(conflicting)}"
             )
-        trial_recurrent_defaults.update(supplied_kwargs)
+        recurrent_defaults.update(supplied_kwargs)
 
-    trial_classification_model = BiLSTMClassifier(
-        timesteps=n_windows,
-        n_features=window_embedding_features,
+    classification_model = BiLSTMClassifier(
+        timesteps=int(latent_timesteps),
+        n_features=int(latent_features),
         n_classes=n_classes,
-        **trial_recurrent_defaults,
+        **recurrent_defaults,
     ).build_feature_extractor()
 
     variational_classifier = VariationalClassifier(**classifier_defaults)
@@ -1034,7 +973,6 @@ def build_joint_autoencoder_variational_classifier_v2(
         encoder=encoder,
         decoder=decoder,
         classification_model=classification_model,
-        trial_classification_model=trial_classification_model,
         variational_classifier=variational_classifier,
         latent_features=int(latent_features),
         ae_loss_weight=ae_loss_weight,
@@ -1045,7 +983,8 @@ def build_joint_autoencoder_variational_classifier_v2(
         vc_gamma=vc_gamma,
         vc_lambda=vc_lambda,
         update_discriminator=update_discriminator,
-        name=model_name or f"joint_{encoder_type}_window_vae_single_trial_bilstm_vc_v2",
+        use_class_weight=use_class_weight,
+        name=model_name or f"joint_{encoder_type}_window_vae_bilstm_vc_v2",
     )
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate))
     return model
@@ -1062,7 +1001,7 @@ def train_joint_autoencoder_variational_classifier_v2(
     training_config: JointV2TrainingConfig | None = None,
     model_builder_function: Callable[[], tf.keras.Model] | None = None,
 ) -> dict:
-    """Train complete trials with flat LOSO and seeded validation."""
+    """Train independent windows with subject-disjoint LOSO."""
 
     training_config = training_config or JointV2TrainingConfig()
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1102,29 +1041,28 @@ def train_joint_autoencoder_variational_classifier_v2(
     subject_id_array = np.asarray(subject_id_array)
     trial_id_array = np.asarray(trial_id_array)
 
-    if feature_array.ndim == 3:
-        (
-            feature_array,
-            label_array,
-            subject_id_array,
-            trial_id_array,
-        ) = _group_window_samples_into_trials(
-            feature_array,
-            label_array,
-            subject_id_array,
-            trial_id_array,
-        )
+    (
+        feature_array,
+        label_array,
+        subject_id_array,
+        trial_id_array,
+    ) = _flatten_grouped_trials_to_windows(
+        feature_array,
+        label_array,
+        subject_id_array,
+        trial_id_array,
+    )
 
-    if feature_array.ndim != 4:
+    if feature_array.ndim != 3:
         raise ValueError(
             "feature_array must have shape "
-            "(n_trials, n_windows, timesteps, n_features); got "
+            "(n_windows, timesteps, n_features); got "
             f"{feature_array.shape}."
         )
 
     if encoder_type in {"cnn2d", "gcn"}:
         resolved_channels, resolved_bands = _resolve_channel_band_shape(
-            n_features=feature_array.shape[3],
+            n_features=feature_array.shape[2],
             n_channels=training_config.n_channels,
             n_bands=training_config.n_bands,
         )
@@ -1283,6 +1221,7 @@ def train_joint_autoencoder_variational_classifier_v2(
                         training_config.model_kwargs.get("update_discriminator", False),
                     )
                 ),
+                use_class_weight=training_config.use_class_weight,
                 bilstm_units=int(
                     hparams.get("bilstm_units", training_config.bilstm_units)
                 ),
@@ -1342,7 +1281,10 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     logger.info("Starting joint-model v2 training run in %s", run_dir)
     logger.info("Encoder type: %s", encoder_type)
-    logger.info("Trial feature shape: %s", feature_array.shape)
+    logger.info("Classification/evaluation level: window")
+    logger.info("Class weighting enabled: %s", training_config.use_class_weight)
+    logger.info("Label threshold mode: %s", training_config.label_threshold_mode)
+    logger.info("Window feature shape: %s", feature_array.shape)
     if encoder_type in {"cnn2d", "gcn"}:
         logger.info(
             "Channel-band grid: %d channels x %d bands",
@@ -1356,13 +1298,16 @@ def train_joint_autoencoder_variational_classifier_v2(
                 "the second spatial dimension more meaning."
             )
     logger.info("Unique subjects: %d", len(np.unique(subject_id_array)))
-    logger.info("Trials: %d", len(feature_array))
-    logger.info("Ordered windows per trial: %d", feature_array.shape[1])
+    logger.info("Windows: %d", len(feature_array))
     logger.info(
-        "Classifier hierarchy: encoder -> temporal mean pooling per window "
-        "-> one trial-level BiLSTM -> variational classifier"
+        "Unique subject-trial labels represented: %d",
+        len(set(zip(subject_id_array.tolist(), trial_id_array.tolist()))),
     )
-    logger.info("Window shape: %s", tuple(feature_array.shape[2:]))
+    logger.info(
+        "Classifier path: window encoder -> window BiLSTM -> "
+        "variational classifier"
+    )
+    logger.info("Window shape: %s", tuple(feature_array.shape[1:]))
 
     class_ids = _as_class_ids(label_array)
     class_values, class_counts = np.unique(class_ids, return_counts=True)
@@ -1416,8 +1361,8 @@ def train_joint_autoencoder_variational_classifier_v2(
         n_epochs=training_config.cv_max_epochs,
         batch_size=training_config.batch_size,
         hyperparameters=training_config.hyperparameters,
-        evaluation_level="trial",
-        selection_level=training_config.selection_level,
+        evaluation_level="window",
+        selection_level="window",
         selection_metric=training_config.selection_metric,
         maximize_metric=training_config.maximize_metric,
         metrics=("accuracy", "f1", "precision", "recall"),
@@ -1523,13 +1468,17 @@ def train_joint_autoencoder_variational_classifier_v2(
             tf.keras.callbacks.CSVLogger(str(run_dir / "final_training_history.csv")),
         )
 
-    final_class_ids = _as_class_ids(label_array)
-    final_classes, final_counts = np.unique(final_class_ids, return_counts=True)
-    final_class_weight = {
-        int(class_id): len(final_class_ids) / (len(final_classes) * count)
-        for class_id, count in zip(final_classes, final_counts)
-    }
-    logger.info("Final-fit class weights: %s", final_class_weight)
+    final_class_weight = None
+    if training_config.use_class_weight:
+        final_class_ids = _as_class_ids(label_array)
+        final_classes, final_counts = np.unique(final_class_ids, return_counts=True)
+        final_class_weight = {
+            int(class_id): len(final_class_ids) / (len(final_classes) * count)
+            for class_id, count in zip(final_classes, final_counts)
+        }
+        logger.info("Final-fit window class weights: %s", final_class_weight)
+    else:
+        logger.info("Final-fit class weighting is disabled.")
 
     final_history = final_model.fit(
         feature_array,
@@ -1564,6 +1513,9 @@ def train_joint_autoencoder_variational_classifier_v2(
         "selected_final_batch_size": selected_final_batch_size,
         "cv_best_epochs": cv_best_epochs,
         "final_epoch_strategy": training_config.final_epoch_strategy,
+        "classification_level": "window",
+        "use_class_weight": training_config.use_class_weight,
+        "label_threshold_mode": training_config.label_threshold_mode,
         "loso_cv": cv_results,
         "final_fit_history": final_history.history,
         "final_full_dataset_metrics": final_eval,
@@ -1580,7 +1532,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Train JointAutoencoderVariationalClassifierV2 with a CNN1D, "
-            "CNN2D, or GCN autoencoder, seeded validation, and trial-level flat LOSO search."
+            "CNN2D, or GCN autoencoder, seeded validation, and window-level LOSO search."
         )
     )
     parser.add_argument("--out-dir", default="runs/joint_autoencoder_vc_v2")
@@ -1619,7 +1571,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument(
         "--max-folds",
@@ -1650,12 +1602,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--selection-level",
         choices=("window", "trial"),
-        default="trial",
-        help=(
-            "Evaluation level used for hyperparameter selection. The "
-            "hierarchical model emits one classifier output per trial, so use "
-            "trial (default: trial)."
-        ),
+        default="window",
+        help="Window is the enforced selection level for this model.",
     )
     parser.add_argument(
         "--prediction-latent-samples",
@@ -1710,23 +1658,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--early-stopping-monitor",
-        default="val_loss",
+        default="val_window_f1",
         help=(
             "Validation metric monitored by early stopping. val_loss is the "
             "complete weighted joint VAE+VC objective and should use "
             "--early-stopping-mode min. Other available metrics include "
-            "val_trial_f1, val_trial_loss, val_decoder_accuracy, "
+            "val_window_f1, val_window_loss, val_decoder_accuracy, "
             "val_vc_cross_entropy, and val_accuracy "
-            "(default monitor: val_loss)."
+            "(default monitor: val_window_f1)."
         ),
     )
     parser.add_argument(
         "--early-stopping-mode",
         choices=("auto", "min", "max"),
-        default="min",
+        default="max",
         help=(
             "Whether the monitored metric should decrease or increase "
-            "(default: min for the complete val_loss objective)."
+            "(default: max for val_window_f1)."
         ),
     )
     parser.add_argument("--no-save-full-model", action="store_true")
@@ -1753,8 +1701,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=64,
         help=(
-            "Hidden units in the only BiLSTM, which operates across the "
-            "ordered windows of a trial (default: 64)."
+            "Hidden units in the window-level BiLSTM (default: 64)."
         ),
     )
     parser.add_argument(
@@ -1762,7 +1709,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1,
         help=(
-            "Number of stacked layers in the trial-level BiLSTM "
+            "Number of stacked layers in the window-level BiLSTM "
             "(default: 1)."
         ),
     )
@@ -1770,7 +1717,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--bilstm-dropout",
         type=float,
         default=0.30,
-        help="Dropout in the trial-level BiLSTM (default: 0.30).",
+        help="Dropout in the window-level BiLSTM (default: 0.30).",
     )
     parser.add_argument(
         "--trial-bilstm-units",
@@ -1809,8 +1756,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "conv_filters, 2D kernel_sizes, spatial_pool_sizes, and "
             "temporal_pool_sizes; GCN uses "
             "gcn_units and temporal_pool_sizes. Common keys include t_down, "
-            "emb_dim, dropout, use_batch_norm, and the single trial-level "
-            "BiLSTM/loss settings."
+            "emb_dim, dropout, use_batch_norm, and the single window-level "
+            "window BiLSTM/loss settings."
         ),
     )
     parser.add_argument("--features-npy", default=None)
@@ -1820,9 +1767,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--trials-npy",
         default=None,
         help=(
-            "Trial ID array aligned with --features-npy. Flat window arrays "
-            "are grouped into ordered trials; rank-4 trial arrays are accepted "
-            "directly."
+            "Trial ID array aligned with --features-npy. Rank-3 window "
+            "arrays are used directly; legacy rank-4 trial arrays are flattened."
         ),
     )
     parser.add_argument(
@@ -1877,8 +1823,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-zscore",
         action="store_true",
-        help="Disable per-subject, per-channel z-scoring of the raw EEG before windowing.",
+        help="Disable per-window, per-feature z-scoring after windowing.",
     )
+    parser.add_argument(
+        "--label-threshold-mode",
+        choices=("global", "subject_median"),
+        default="global",
+        help=(
+            "global preserves the dataset-wide threshold; subject_median "
+            "binarizes each subject relative to their own rating median."
+        ),
+    )
+    class_weight_group = parser.add_mutually_exclusive_group()
+    class_weight_group.add_argument(
+        "--use-class-weight",
+        dest="use_class_weight",
+        action="store_true",
+        help="Enable fold-local inverse-frequency class weighting (default).",
+    )
+    class_weight_group.add_argument(
+        "--no-class-weight",
+        dest="use_class_weight",
+        action="store_false",
+        help="Disable class weighting for CV and final training.",
+    )
+    parser.set_defaults(use_class_weight=True)
 
     parser.add_argument(
         "--n-jobs",
@@ -1930,6 +1899,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.validation_seed is not None
         else (args.seed if args.seed is not None else 42)
     )
+    if args.selection_level != "window":
+        print(
+            "Warning: --selection-level trial is ignored; this model is "
+            "window-level and uses window selection.",
+            flush=True,
+        )
+    early_stopping_monitor = args.early_stopping_monitor.replace(
+        "val_trial_", "val_window_"
+    )
 
     config = JointV2TrainingConfig(
         output_dir=Path(args.out_dir),
@@ -1944,7 +1922,7 @@ def main(argv: list[str] | None = None) -> int:
         final_epoch_strategy=args.final_epoch_strategy,
         final_epochs=args.final_epochs,
         selection_metric=args.selection_metric,
-        selection_level=args.selection_level,
+        selection_level="window",
         prediction_latent_samples=args.prediction_latent_samples,
         latent_sampling_seed=args.latent_sampling_seed,
         validation_subjects_per_fold=args.validation_subjects,
@@ -1953,7 +1931,7 @@ def main(argv: list[str] | None = None) -> int:
         final_verbose=args.final_verbose,
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
-        early_stopping_monitor=args.early_stopping_monitor,
+        early_stopping_monitor=early_stopping_monitor,
         early_stopping_mode=args.early_stopping_mode,
         use_early_stopping=not args.no_early_stopping,
         save_full_model=not args.no_save_full_model,
@@ -1980,6 +1958,8 @@ def main(argv: list[str] | None = None) -> int:
         n_jobs=args.n_jobs,
         cpus_per_worker=args.cpus_per_worker,
         max_folds=args.max_folds,
+        use_class_weight=args.use_class_weight,
+        label_threshold_mode=args.label_threshold_mode,
     )
 
     feature_array = label_array = subject_id_array = trial_id_array = None
@@ -2016,6 +1996,7 @@ def main(argv: list[str] | None = None) -> int:
             overlap=args.window_overlap,
             median_label=args.median_label,
             zscore=not args.no_zscore,
+            label_threshold_mode=args.label_threshold_mode,
             dataset=dataset_config,
         )
 

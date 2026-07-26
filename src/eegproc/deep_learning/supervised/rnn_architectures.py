@@ -124,8 +124,12 @@ class RNNClassifier(ABC):
         """Apply the recurrent stack while retaining the temporal axis."""
         for layer_index in range(self.n_rnn_layers):
             x = self.recurrent_layer(layer_index)(x)
-            x = layers.BatchNormalization(
-                name=f"{self.name}_bn_{layer_index}"
+            # Layer normalization is sample-local and does not carry running
+            # statistics learned from the training subjects into a held-out
+            # subject, making it safer for LOSO EEG generalization.
+            x = layers.LayerNormalization(
+                axis=-1,
+                name=f"{self.name}_ln_{layer_index}",
             )(x)
             x = layers.Dropout(
                 self.dropout,
