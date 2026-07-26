@@ -212,9 +212,9 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --no-class-weight \
     --batch-size 64 \
     --selection-level window \
-    --selection-metric accuracy \
-    --early-stopping-monitor val_accuracy \
-    --early-stopping-mode max \
+    --selection-metric f1 \
+    --early-stopping-monitor val_joint_loss \
+    --early-stopping-mode min \
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
@@ -283,4 +283,3 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             0.3
         ]
     }'
-    
