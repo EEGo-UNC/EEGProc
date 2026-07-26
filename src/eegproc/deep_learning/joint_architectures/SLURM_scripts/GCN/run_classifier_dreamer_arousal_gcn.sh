@@ -6,7 +6,7 @@
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
+#SBATCH `   `em=128G
 #SBATCH --time=36:00:00
 
 set -euo pipefail
@@ -201,8 +201,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
-    --selection-level trial \
-    --selection-metric f1 \
     --prediction-latent-samples 18 \
     --latent-sampling-seed 42 \
     --seed 42 \
@@ -214,8 +212,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --window-overlap 0.0 \
     --batch-size 8 \
     --selection-level trial \
-    --selection-metric f1 \
-    --early-stopping-monitor val_trial_f1 \
+    --selection-metric accuracy \
+    --early-stopping-monitor val_trial_accuracy \
     --early-stopping-mode max \
     --final-epoch-strategy median \
     --hyperparameters-json '{
@@ -229,7 +227,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             0.0001
         ],
         "ae_loss_weight": [
-            0.3
+            0.0, 0.3
         ],
         "vc_loss_weight": [
             1.0
@@ -260,8 +258,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         ],
         "gcn_units": [
             [
-                32,
-                16
+                64,
+                32
             ]
         ],
         "temporal_pool_sizes": [
@@ -276,7 +274,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            64
+            128
         ],
         "bilstm_layers": [
             1
