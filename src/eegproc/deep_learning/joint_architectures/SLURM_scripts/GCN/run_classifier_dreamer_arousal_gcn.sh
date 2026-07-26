@@ -258,8 +258,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         ],
         "gcn_units": [
             [
-                64,
-                32
+                128,
+                64
             ]
         ],
         "temporal_pool_sizes": [
@@ -274,7 +274,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            128
+            256
         ],
         "bilstm_layers": [
             1
