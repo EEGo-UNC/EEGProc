@@ -202,7 +202,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --prediction-latent-samples 5 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 3 \
+    --validation-subjects 4 \
     --validation-seed 42 \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
@@ -210,7 +210,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --window-overlap 0.0 \
     --label-threshold-mode subject_median \
     --use-class-weight \
-    --batch-size 64 \
+    --batch-size 128 \
     --selection-level window \
     --selection-metric accuracy \
     --early-stopping-monitor val_joint_loss \
@@ -221,7 +221,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             300
         ],
         "batch_size": [
-            64
+            128
         ],
         "learning_rate": [
             0.0001
@@ -271,16 +271,16 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             "relu"
         ],
         "use_batch_norm": [
-            true
+            false, true
         ],
         "bilstm_units": [
-            512
+            256
         ],
         "bilstm_layers": [
             1
         ],
         "bilstm_dropout": [
-            0.3
+            0.4
         ],
         "classifier_head": [
             "hybrid"
