@@ -237,7 +237,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         ],
         "vc_beta": [
             0.05, 0.1
-        ]
+        ],
         "vc_gamma": [
             0.0
         ],
