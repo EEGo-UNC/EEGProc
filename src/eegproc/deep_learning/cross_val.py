@@ -17,10 +17,31 @@ from typing import Callable, Literal, Mapping
 import numpy as np
 import tensorflow as tf
 from joblib.externals import cloudpickle
-from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    log_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
-_CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
+_CLASSIFICATION_METRICS = frozenset(
+    {
+        "accuracy",
+        # Existing class-balanced metrics. These remain macro averaged.
+        "f1",
+        "precision",
+        "recall",
+        # Paper-comparison metrics commonly reported for binary DREAMER tasks.
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
+    }
+)
 
 # Sequence-valued encoder settings need architecture-aware nesting rules.
 # The integer is the nesting depth of one architecture value:
@@ -514,21 +535,34 @@ def _direct_trial_aggregation(
 def _classification_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
+    probabilities: np.ndarray,
     metrics: list[str] | tuple[str, ...],
     n_classes: int,
 ) -> dict:
-    """Compute selected classification metrics across all expected classes.
+    """Compute selected classification metrics.
 
-    F1, precision, and recall use macro averaging so every class contributes
-    equally. ``n_classes`` must come from the model output width rather than
-    from the labels observed in one fold, because a validation/test fold may
-    contain no examples of one of the expected classes.
+    ``f1``, ``precision``, and ``recall`` preserve the existing macro-averaged
+    definitions so every expected class contributes equally. The additional
+    ``binary_*`` metrics treat class 1 as the positive class, matching the
+    common reporting convention in DREAMER papers such as STSNet. ``roc_auc``
+    uses the predicted probability for class 1.
+
+    Binary paper-comparison metrics require exactly two output classes. AUC is
+    undefined when a fold contains only one ground-truth class; in that case
+    ``roc_auc`` is reported as NaN rather than inventing a score.
     """
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
+    probabilities = np.asarray(probabilities, dtype=np.float64)
 
     if n_classes < 2:
         raise ValueError(f"n_classes must be >= 2, got {n_classes}.")
+    if probabilities.ndim != 2 or probabilities.shape != (len(y_true), n_classes):
+        raise ValueError(
+            "probabilities must have shape (n_samples, n_classes); got "
+            f"{probabilities.shape} for {len(y_true)} labels and "
+            f"{n_classes} classes."
+        )
 
     expected_labels = list(range(n_classes))
 
@@ -541,6 +575,18 @@ def _classification_metrics(
         raise ValueError(
             f"y_pred contains labels outside the expected range "
             f"[0, {n_classes - 1}]."
+        )
+
+    binary_metric_names = {
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
+    }
+    if n_classes != 2 and any(metric in binary_metric_names for metric in metrics):
+        raise ValueError(
+            "binary_f1, binary_precision, binary_recall, and roc_auc require "
+            f"exactly two classes; got n_classes={n_classes}."
         )
 
     scores: dict[str, float] = {}
@@ -587,6 +633,60 @@ def _classification_metrics(
                     zero_division=0,
                 )
             )
+
+        elif metric == "balanced_accuracy":
+            # For binary/multiclass classification this is macro recall over
+            # the complete expected label set, including an absent class as 0.
+            scores["balanced_accuracy"] = float(
+                recall_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "binary_f1":
+            scores["binary_f1"] = float(
+                f1_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "binary_precision":
+            scores["binary_precision"] = float(
+                precision_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "binary_recall":
+            scores["binary_recall"] = float(
+                recall_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "roc_auc":
+            if len(np.unique(y_true)) < 2:
+                scores["roc_auc"] = float("nan")
+            else:
+                scores["roc_auc"] = float(
+                    roc_auc_score(y_true, probabilities[:, 1])
+                )
 
     return scores
 
@@ -782,6 +882,7 @@ def _level_scores(
         _classification_metrics(
             y_true=y_true,
             y_pred=y_pred,
+            probabilities=probabilities,
             metrics=metrics,
             n_classes=probabilities.shape[1],
         )
@@ -1171,8 +1272,15 @@ def _mean_std_rows(rows: list[dict], metric_names: list[str]) -> tuple[dict, dic
         if not values:
             continue
 
-        mean_scores[metric_name] = float(np.mean(values))
-        std_scores[metric_name] = float(np.std(values))
+        numeric_values = np.asarray(values, dtype=np.float64)
+        finite_values = numeric_values[np.isfinite(numeric_values)]
+        if not len(finite_values):
+            mean_scores[metric_name] = float("nan")
+            std_scores[metric_name] = float("nan")
+            continue
+
+        mean_scores[metric_name] = float(np.mean(finite_values))
+        std_scores[metric_name] = float(np.std(finite_values))
 
     return mean_scores, std_scores
 
@@ -2433,7 +2541,17 @@ def nested_lnso_cv(
     selection_level: Literal["window", "trial"] = "trial",
     evaluation_level: Literal["window", "trial"] = "trial",
     maximize_metric: bool | None = None,
-    metrics: list[str] | tuple[str, ...] = ("accuracy", "f1", "precision", "recall"),
+    metrics: list[str] | tuple[str, ...] = (
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
+    ),
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
     n_prediction_latent_samples: int = 0,
@@ -3451,6 +3569,11 @@ def loso_cv(
         "f1",
         "precision",
         "recall",
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
     ),
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
@@ -3512,7 +3635,9 @@ def loso_cv(
     ---------
     ``selection_level`` determines whether configurations are ranked using
     window- or trial-level scores. Hierarchical rank-4 inputs require trial-level
-    selection. ``selection_metric`` defaults to macro-F1.
+    selection. ``selection_metric`` defaults to macro-F1. ``f1``, ``precision``,
+    and ``recall`` are macro averaged; the ``binary_*`` metrics treat class 1 as
+    positive, and ``roc_auc`` uses the class-1 probability for paper comparison.
     Classification metrics are maximized; probability loss and joint loss are minimized unless
     ``maximize_metric`` is explicitly supplied. Ties use lower between-subject
     standard deviation, lower mean log loss, then the earlier grid index.
