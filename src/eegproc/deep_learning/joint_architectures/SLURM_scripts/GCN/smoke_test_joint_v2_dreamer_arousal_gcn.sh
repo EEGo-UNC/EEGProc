@@ -202,7 +202,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --prediction-latent-samples 5 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 4 \
+    --validation-subjects 3 \
     --validation-seed 42 \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
@@ -236,13 +236,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             1.0
         ],
         "vc_beta": [
-            0.2
-        ],
+            0.05, 0.1
+        ]
         "vc_gamma": [
             0.0
         ],
         "vc_lambda": [
-            0.1
+            0.0
         ],
         "vae_beta": [
             0.3
@@ -283,6 +283,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             0.3
         ],
         "classifier_head": [
-            "dense"
+            "hybrid"
         ]
     }'

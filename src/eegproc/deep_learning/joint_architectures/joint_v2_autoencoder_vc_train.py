@@ -2,7 +2,7 @@
 
 Every four-second EEG window is one supervised sample. The encoder and decoder
 operate on that window, a BiLSTM summarizes its latent temporal sequence, and
-the variational classifier emits one prediction per window. LOSO splitting and
+a selectable dense, hybrid, or variational head emits one prediction per window. LOSO splitting and
 validation remain subject-disjoint; trial IDs are retained only for optional
 secondary aggregation and prediction logs.
 
@@ -67,6 +67,7 @@ try:
     from ..supervised.rnn_architectures import BiLSTMClassifier
     from ..supervised.variational_classifier import (
         DenseClassifier,
+        HybridClassifier,
         VariationalClassifier,
     )
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
@@ -86,6 +87,7 @@ except ImportError:
     )
     from eegproc.deep_learning.supervised.variational_classifier import (
         DenseClassifier,
+        HybridClassifier,
         VariationalClassifier,
     )
     from eegproc.deep_learning.unsupervised.Convolutions.CNN1D import (
@@ -930,7 +932,7 @@ def build_joint_autoencoder_variational_classifier_v2(
     classifier_head: str = "variational",
     model_name: str | None = None,
 ) -> JointAutoencoderVariationalClassifierV2:
-    """Build a window VAE plus BiLSTM with a dense or variational head."""
+    """Build a window VAE plus BiLSTM with a selectable classifier head."""
     timesteps, n_features = map(int, input_shape)
     encoder_type = encoder_type.lower()
     encoder, decoder = _build_encoder_decoder(
@@ -1008,11 +1010,13 @@ def build_joint_autoencoder_variational_classifier_v2(
     classifier_head = str(classifier_head).lower()
     if classifier_head == "dense":
         variational_classifier = DenseClassifier(**classifier_defaults)
+    elif classifier_head == "hybrid":
+        variational_classifier = HybridClassifier(**classifier_defaults)
     elif classifier_head == "variational":
         variational_classifier = VariationalClassifier(**classifier_defaults)
     else:
         raise ValueError(
-            "classifier_head must be 'dense' or 'variational'; "
+            "classifier_head must be 'dense', 'hybrid', or 'variational'; "
             f"got {classifier_head!r}."
         )
 
@@ -1912,7 +1916,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--classifier-head",
-        choices=("dense", "variational"),
+        choices=("dense", "hybrid", "variational"),
         default="variational",
         help=(
             "Default classification head when classifier_head is absent from "
@@ -1932,7 +1936,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "temporal_pool_sizes; GCN uses "
             "gcn_units and temporal_pool_sizes. Common keys include t_down, "
             "emb_dim, dropout, use_batch_norm, classifier_head "
-            "('dense' or 'variational'), and the single window-level "
+            "('dense', 'hybrid', or 'variational'), and the single "
+            "window-level "
             "BiLSTM/loss settings."
         ),
     )

@@ -3,8 +3,10 @@
 ``VariationalClassifier`` maintains learned Gaussian class priors and
 classifies via Bayes' rule, with an optional auxiliary discriminator for
 latent-space alignment. ``DenseClassifier`` is a standard trainable linear
-logit head that exposes the same loss-component interface, allowing the joint
-training pipeline to switch heads without changing its custom train/test steps.
+logit head. ``HybridClassifier`` predicts with dense logits while retaining
+the variational latent, discriminator, and class-prior regularizers. All three
+heads expose the same loss-component interface, allowing the joint pipeline to
+switch heads without changing its custom train/test steps.
 """
 
 from __future__ import annotations
@@ -579,3 +581,80 @@ class VariationalClassifier(tf.keras.layers.Layer):
         config = super().get_config()
         config.update({"n_classes": self.n_classes})
         return config
+
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
+class HybridClassifier(VariationalClassifier):
+    """Dense prediction head with variational representation regularization.
+
+    Predictions are produced by a conventional trainable dense layer::
+
+        logits = W h + b
+
+    The inherited ``vc_loss_components`` method then combines weighted dense
+    cross-entropy with the same class-conditional latent KL, discriminator,
+    and class-prior terms used by :class:`VariationalClassifier`::
+
+        L = alpha * CE_dense
+            + beta * KL_latent
+            + gamma * L_discriminator
+            + lambda * KL_class_prior
+
+    Thus, unlike ``VariationalClassifier``, Gaussian likelihoods do not define
+    the decision boundary. The Gaussian class parameters instead regularize
+    the BiLSTM embedding. ``vc_lambda=0`` is recommended for the first hybrid
+    diagnostic because the learned class-prior parameter is auxiliary to the
+    dense logits.
+    """
+
+    supports_variational_regularization = True
+    supports_discriminator = True
+
+    def __init__(
+        self,
+        n_classes: int = 2,
+        latent_dim: int | None = None,
+        use_bias: bool = True,
+        kernel_initializer: str | dict = "glorot_uniform",
+        bias_initializer: str | dict = "zeros",
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            n_classes=n_classes,
+            latent_dim=latent_dim,
+            **kwargs,
+        )
+        self.use_bias = bool(use_bias)
+        self.kernel_initializer = tf.keras.initializers.get(kernel_initializer)
+        self.bias_initializer = tf.keras.initializers.get(bias_initializer)
+        self.logits_layer = tf.keras.layers.Dense(
+            self.n_classes,
+            use_bias=self.use_bias,
+            kernel_initializer=self.kernel_initializer,
+            bias_initializer=self.bias_initializer,
+            name="hybrid_dense_class_logits",
+        )
+
+    def build(self, input_shape) -> None:
+        # Build the nested dense layer before the parent marks this layer built.
+        self.logits_layer.build(input_shape)
+        super().build(input_shape)
+
+    def call(self, mh: tf.Tensor, training: bool = False) -> tf.Tensor:
+        self._last_mh = mh
+        return self.logits_layer(mh, training=training)
+
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config.update(
+            {
+                "use_bias": self.use_bias,
+                "kernel_initializer": tf.keras.initializers.serialize(
+                    self.kernel_initializer
+                ),
+                "bias_initializer": tf.keras.initializers.serialize(
+                    self.bias_initializer
+                ),
+            }
+        )
+        return config
+
