@@ -457,13 +457,23 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             inputs,
             training=training,
         )
-        latent_sequence = self._latent_for_mode(
-            z_mean=z_mean,
-            z_log_var=z_log_var,
-            sample_latent=sample_latent,
-        )
+        # The classifier uses the deterministic posterior mean during training.
+        # Feeding a fresh unit-variance posterior sample to every four-second
+        # window can overwhelm its affective signal and produce a constant-class
+        # solution. Sampling remains available for the decoder and explicit MC
+        # prediction.
+        classification_sequence = z_mean
+        if include_reconstruction:
+            decoder_latent_sequence = self._latent_for_mode(
+                z_mean=z_mean,
+                z_log_var=z_log_var,
+                sample_latent=sample_latent,
+            )
+        else:
+            decoder_latent_sequence = z_mean
+
         classification_latent, logits = self._classify_latents(
-            latent_sequence,
+            classification_sequence,
             training=training,
         )
 
@@ -471,14 +481,15 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "encoder_output": encoder_output,
             "z_mean": z_mean,
             "z_log_var": z_log_var,
-            "latent_sequence": latent_sequence,
+            "latent_sequence": decoder_latent_sequence,
+            "classification_latent_sequence": classification_sequence,
             "window_classification_latent": classification_latent,
             "classification_latent": classification_latent,
             "logits": logits,
         }
         if include_reconstruction:
             outputs["reconstruction"] = self.decoder(
-                latent_sequence,
+                decoder_latent_sequence,
                 training=training,
             )
         return outputs

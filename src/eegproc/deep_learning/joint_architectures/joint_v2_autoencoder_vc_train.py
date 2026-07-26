@@ -124,7 +124,7 @@ class JointV2TrainingConfig:
     final_verbose: int = 1
     early_stopping_patience: int = 5
     early_stopping_min_delta: float = 0.0
-    early_stopping_monitor: str = "val_window_f1"
+    early_stopping_monitor: str = "val_accuracy"
     early_stopping_mode: str = "max"
     use_early_stopping: bool = True
     save_full_model: bool = True
@@ -151,6 +151,7 @@ class JointV2TrainingConfig:
     max_folds: int | None = None
     use_class_weight: bool = True
     label_threshold_mode: str = "global"
+    window_normalization: str = "global_rms"
 
 
 def _flatten_grouped_trials_to_windows(
@@ -177,28 +178,47 @@ def _flatten_grouped_trials_to_windows(
     )
 
 
-def _zscore_each_window(
+def _normalize_each_window(
     feature_array: np.ndarray,
+    mode: str = "global_rms",
     epsilon: float = 1e-6,
 ) -> np.ndarray:
-    """Z-score every feature independently within each EEG window.
+    """Normalize windows without destroying channel-band power structure.
 
-    Input shape is ``(n_windows, timesteps, n_features)``. Statistics are never
-    shared across subjects, trials, windows, or CV partitions, so this operation
-    cannot leak held-out labels or training-set distribution information.
+    ``global_rms`` divides each complete window by one scalar RMS value. This
+    removes gross recording-gain differences while preserving relative power
+    across electrodes and frequency bands. ``feature_zscore`` is retained only
+    as an explicit ablation because it forces every channel-band stream to unit
+    variance and can erase the amplitude information used for EEG emotion
+    recognition. ``none`` leaves the filtered waveforms unchanged.
     """
     features = np.asarray(feature_array, dtype=np.float32)
     if features.ndim != 3:
         raise ValueError(
-            "Window z-scoring expects (n_windows, timesteps, n_features); "
+            "Window normalization expects (n_windows, timesteps, n_features); "
             f"got {features.shape}."
         )
-    mean = np.mean(features, axis=1, keepdims=True, dtype=np.float64)
-    std = np.std(features, axis=1, keepdims=True, dtype=np.float64)
-    safe_std = np.maximum(std, float(epsilon))
-    normalized = (features.astype(np.float64) - mean) / safe_std
+    mode = str(mode).lower()
+    if mode == "none":
+        return features
+    if mode == "global_rms":
+        rms = np.sqrt(
+            np.mean(np.square(features, dtype=np.float64), axis=(1, 2), keepdims=True)
+        )
+        normalized = features.astype(np.float64) / np.maximum(rms, float(epsilon))
+    elif mode == "feature_zscore":
+        mean = np.mean(features, axis=1, keepdims=True, dtype=np.float64)
+        std = np.std(features, axis=1, keepdims=True, dtype=np.float64)
+        normalized = (features.astype(np.float64) - mean) / np.maximum(
+            std, float(epsilon)
+        )
+    else:
+        raise ValueError(
+            "window normalization must be one of: none, global_rms, "
+            f"feature_zscore; got {mode!r}."
+        )
     if not np.isfinite(normalized).all():
-        raise ValueError("Window z-scoring produced NaN or Inf values.")
+        raise ValueError("Window normalization produced NaN or Inf values.")
     return normalized.astype(np.float32)
 
 
@@ -261,22 +281,27 @@ def load_joint_v2_training_data(
     fs: float = DREAMER_FS,
     overlap: float = 0.5,
     median_label: float = DREAMER_MEDIAN_LABEL,
-    zscore: bool = True,
+    window_normalization: str = "global_rms",
     label_threshold_mode: str = "global",
     dataset: str | DatasetConfig = "dreamer",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load flat window samples for subject-disjoint LOSO classification.
 
     Returns ``(features, labels, subject_ids, trial_ids)`` with features shaped
-    ``(n_windows, window_timesteps, n_features)``. Raw-data z-scoring inside
-    ``build_joint_v2_dataset`` is disabled; when ``zscore=True``, normalization
-    is applied independently within every final window instead.
+    ``(n_windows, window_timesteps, n_features)``. Upstream normalization in
+    ``build_joint_v2_dataset`` is disabled. Optional final-window normalization
+    uses one global RMS scale per window by default, preserving channel-band
+    power ratios.
     """
     window_size = int(round(window_size_sec * fs))
     if window_size <= 0:
         raise ValueError("window_size_sec * fs must produce a positive size.")
     if not (0.0 <= overlap < 1.0):
         raise ValueError(f"overlap must be in [0, 1), got {overlap}.")
+    if window_normalization not in {"none", "global_rms", "feature_zscore"}:
+        raise ValueError(
+            "window_normalization must be none, global_rms, or feature_zscore."
+        )
     if label_threshold_mode not in {"global", "subject_median"}:
         raise ValueError(
             "label_threshold_mode must be 'global' or 'subject_median'."
@@ -348,8 +373,9 @@ def load_joint_v2_training_data(
             subject_id_array=subject_id_array,
             trial_id_array=trial_id_array,
         )
-    if zscore:
-        feature_array = _zscore_each_window(feature_array)
+    feature_array = _normalize_each_window(
+        feature_array, mode=window_normalization
+    )
 
     return (
         np.asarray(feature_array, dtype=np.float32),
@@ -1283,6 +1309,7 @@ def train_joint_autoencoder_variational_classifier_v2(
     logger.info("Encoder type: %s", encoder_type)
     logger.info("Classification/evaluation level: window")
     logger.info("Class weighting enabled: %s", training_config.use_class_weight)
+    logger.info("Window normalization: %s", training_config.window_normalization)
     logger.info("Label threshold mode: %s", training_config.label_threshold_mode)
     logger.info("Window feature shape: %s", feature_array.shape)
     if encoder_type in {"cnn2d", "gcn"}:
@@ -1658,14 +1685,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--early-stopping-monitor",
-        default="val_window_f1",
+        default="val_accuracy",
         help=(
             "Validation metric monitored by early stopping. val_loss is the "
             "complete weighted joint VAE+VC objective and should use "
             "--early-stopping-mode min. Other available metrics include "
-            "val_window_f1, val_window_loss, val_decoder_accuracy, "
+            "val_accuracy, val_loss, val_decoder_accuracy, "
             "val_vc_cross_entropy, and val_accuracy "
-            "(default monitor: val_window_f1)."
+            "(default monitor: val_accuracy)."
         ),
     )
     parser.add_argument(
@@ -1674,7 +1701,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="max",
         help=(
             "Whether the monitored metric should decrease or increase "
-            "(default: max for val_window_f1)."
+            "(default: max for val_accuracy)."
         ),
     )
     parser.add_argument("--no-save-full-model", action="store_true")
@@ -1821,9 +1848,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Median-split threshold for label binarization (default: 3).",
     )
     parser.add_argument(
+        "--window-normalization",
+        choices=("none", "global_rms", "feature_zscore"),
+        default="global_rms",
+        help=(
+            "Window normalization mode. global_rms removes overall gain while "
+            "preserving relative channel-band power; feature_zscore is an "
+            "aggressive ablation; none disables normalization."
+        ),
+    )
+    parser.add_argument(
         "--no-zscore",
         action="store_true",
-        help="Disable per-window, per-feature z-scoring after windowing.",
+        help=(
+            "Deprecated compatibility alias for --window-normalization none."
+        ),
     )
     parser.add_argument(
         "--label-threshold-mode",
@@ -1960,6 +1999,9 @@ def main(argv: list[str] | None = None) -> int:
         max_folds=args.max_folds,
         use_class_weight=args.use_class_weight,
         label_threshold_mode=args.label_threshold_mode,
+        window_normalization=(
+            "none" if args.no_zscore else args.window_normalization
+        ),
     )
 
     feature_array = label_array = subject_id_array = trial_id_array = None
@@ -1995,7 +2037,9 @@ def main(argv: list[str] | None = None) -> int:
             fs=args.fs,
             overlap=args.window_overlap,
             median_label=args.median_label,
-            zscore=not args.no_zscore,
+            window_normalization=(
+                "none" if args.no_zscore else args.window_normalization
+            ),
             label_threshold_mode=args.label_threshold_mode,
             dataset=dataset_config,
         )

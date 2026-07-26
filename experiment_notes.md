@@ -26,3 +26,5 @@
 - 07/24/2026
     - Classifier need to be at the trial level and decoders at the window level.
     - Decoders are finally performing reasonably, now we must fix the classifier.
+- 07/26/2026
+    - Models are basically learning to collapse classes.
