@@ -274,7 +274,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false, true
         ],
         "bilstm_units": [
-            256
+            64
         ],
         "bilstm_layers": [
             1
