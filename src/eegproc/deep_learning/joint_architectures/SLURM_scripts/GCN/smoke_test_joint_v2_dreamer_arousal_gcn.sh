@@ -212,8 +212,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --no-class-weight \
     --batch-size 64 \
     --selection-level window \
-    --selection-metric f1 \
-    --early-stopping-monitor val_window_accuracy \
+    --selection-metric accuracy \
+    --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --final-epoch-strategy median \
     --hyperparameters-json '{
@@ -251,15 +251,15 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             2
         ],
         "emb_dim": [
-            32
+            64 
         ],
         "dropout": [
             0.3
         ],
         "gcn_units": [
             [
-                32,
-                16
+                128,
+                64
             ]
         ],
         "temporal_pool_sizes": [
@@ -271,10 +271,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             "relu"
         ],
         "use_batch_norm": [
-            false
+            true
         ],
         "bilstm_units": [
-            64
+            124
         ],
         "bilstm_layers": [
             1
@@ -283,3 +283,4 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             0.3
         ]
     }'
+    
