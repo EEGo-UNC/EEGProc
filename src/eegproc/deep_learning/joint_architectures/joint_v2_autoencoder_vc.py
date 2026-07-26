@@ -477,6 +477,13 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             training=training,
         )
 
+        probabilities = tf.nn.softmax(logits, axis=-1)
+        if self.variational_classifier.n_classes == 2:
+            logit_margin = logits[:, 1] - logits[:, 0]
+        else:
+            top_logits = tf.math.top_k(logits, k=2, sorted=True).values
+            logit_margin = top_logits[:, 0] - top_logits[:, 1]
+
         outputs = {
             "encoder_output": encoder_output,
             "z_mean": z_mean,
@@ -486,6 +493,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "window_classification_latent": classification_latent,
             "classification_latent": classification_latent,
             "logits": logits,
+            "probabilities": probabilities,
+            "logit_margin": logit_margin,
         }
         if include_reconstruction:
             outputs["reconstruction"] = self.decoder(
@@ -493,6 +502,56 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 training=training,
             )
         return outputs
+
+    def predict_diagnostics(
+        self,
+        inputs,
+        batch_size: int | None = None,
+    ) -> dict[str, tf.Tensor]:
+        """Return deterministic internal tensors for prediction diagnostics.
+
+        This method never samples the VAE posterior and never reconstructs the
+        input. It therefore inspects the exact posterior-mean path used by
+        ``predict_step`` and ordinary deterministic evaluation.
+        """
+        inputs = tf.convert_to_tensor(inputs, dtype=tf.float32)
+        if inputs.shape.rank != 3:
+            raise ValueError(
+                "Prediction diagnostics expect rank-3 window inputs; got "
+                f"{inputs.shape}."
+            )
+
+        n_samples = int(tf.shape(inputs)[0].numpy())
+        effective_batch_size = n_samples if batch_size is None else int(batch_size)
+        if effective_batch_size < 1:
+            raise ValueError("batch_size must be at least 1 when provided.")
+
+        keys = (
+            "encoder_output",
+            "z_mean",
+            "z_log_var",
+            "classification_latent_sequence",
+            "classification_latent",
+            "logits",
+            "probabilities",
+            "logit_margin",
+        )
+        collected: dict[str, list[tf.Tensor]] = {key: [] for key in keys}
+
+        for start in range(0, n_samples, effective_batch_size):
+            batch_outputs = self(
+                inputs[start : start + effective_batch_size],
+                training=False,
+                sample_latent=False,
+                include_reconstruction=False,
+            )
+            for key in keys:
+                collected[key].append(batch_outputs[key])
+
+        return {
+            key: tf.concat(values, axis=0)
+            for key, values in collected.items()
+        }
 
     def predict_mc_probabilities(
         self,

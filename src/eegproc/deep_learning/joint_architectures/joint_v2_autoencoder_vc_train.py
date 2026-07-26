@@ -59,11 +59,11 @@ except ImportError:
 
 try:
     try:
-        from ..cross_val import loso_cv
+        from ..cross_val import PredictionDiagnostics, loso_cv
     except ImportError:
         # Supports replacing the repository's ordinary cross_val.py with this
         # variant while retaining the standard module name.
-        from ..cross_val import loso_cv
+        from ..cross_val import PredictionDiagnostics, loso_cv
     from ..supervised.rnn_architectures import BiLSTMClassifier
     from ..supervised.variational_classifier import VariationalClassifier
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
@@ -75,9 +75,9 @@ except ImportError:
         sys.path.insert(0, str(SRC_ROOT))
 
     try:
-        from eegproc.deep_learning.cross_val import loso_cv
+        from eegproc.deep_learning.cross_val import PredictionDiagnostics, loso_cv
     except ImportError:
-        from eegproc.deep_learning.cross_val import loso_cv
+        from eegproc.deep_learning.cross_val import PredictionDiagnostics, loso_cv
     from eegproc.deep_learning.supervised.rnn_architectures import (
         BiLSTMClassifier,
     )
@@ -118,6 +118,11 @@ class JointV2TrainingConfig:
     maximize_metric: bool | None = None
     prediction_latent_samples: int = 0
     latent_sampling_seed: int | None = None
+    prediction_diagnostics: bool = True
+    prediction_diagnostics_every_n_epochs: int = 1
+    prediction_diagnostics_max_samples: int = 256
+    prediction_diagnostics_threshold_tolerance: float = 0.01
+    prediction_diagnostics_seed: int | None = 42
     validation_subjects_per_fold: int = 2
     validation_seed: int | None = 42
     outer_verbose: int = 0
@@ -1396,6 +1401,17 @@ def train_joint_autoencoder_variational_classifier_v2(
         log_predictions=True,
         n_prediction_latent_samples=training_config.prediction_latent_samples,
         latent_sampling_seed=training_config.latent_sampling_seed,
+        prediction_diagnostics=training_config.prediction_diagnostics,
+        prediction_diagnostics_every_n_epochs=(
+            training_config.prediction_diagnostics_every_n_epochs
+        ),
+        prediction_diagnostics_max_samples=(
+            training_config.prediction_diagnostics_max_samples
+        ),
+        prediction_diagnostics_threshold_tolerance=(
+            training_config.prediction_diagnostics_threshold_tolerance
+        ),
+        prediction_diagnostics_seed=training_config.prediction_diagnostics_seed,
         validation_subjects_per_fold=(
             training_config.validation_subjects_per_fold
             if training_config.use_early_stopping
@@ -1421,6 +1437,18 @@ def train_joint_autoencoder_variational_classifier_v2(
     fold_rows: list[dict] = []
     for fold_result in cv_results["outer_fold_results"]:
         row = dict(fold_result)
+        # Large per-example and per-epoch logs are exported to dedicated CSVs
+        # below rather than embedded as Python-list strings in the fold table.
+        for log_key in (
+            "prediction_log",
+            "window_prediction_log",
+            "trial_prediction_log",
+            "variational_interval_log",
+            "window_variational_interval_log",
+            "trial_variational_interval_log",
+            "prediction_diagnostics_log",
+        ):
+            row.pop(log_key, None)
         test_subjects = row.pop("outer_test_subjects", row.pop("left_out_subjects", []))
         row["outer_test_subjects"] = ",".join(map(str, test_subjects))
         if "validation_subjects" in row:
@@ -1437,6 +1465,18 @@ def train_joint_autoencoder_variational_classifier_v2(
     _write_csv(
         run_dir / "grid_search_summary.csv",
         _grid_summary_rows(cv_results),
+    )
+    _write_csv(
+        run_dir / "prediction_diagnostics.csv",
+        cv_results.get("prediction_diagnostics_log", []),
+    )
+    _write_csv(
+        run_dir / "window_predictions.csv",
+        cv_results.get("window_prediction_log", []),
+    )
+    _write_csv(
+        run_dir / "trial_predictions.csv",
+        cv_results.get("trial_prediction_log", []),
     )
 
     if "best_config" not in cv_results:
@@ -1489,6 +1529,21 @@ def train_joint_autoencoder_variational_classifier_v2(
     final_callbacks: list[tf.keras.callbacks.Callback] = [
         tf.keras.callbacks.TerminateOnNaN(),
     ]
+    final_prediction_diagnostics_callback: PredictionDiagnostics | None = None
+    if training_config.prediction_diagnostics:
+        final_prediction_diagnostics_callback = PredictionDiagnostics(
+            X_train=feature_array,
+            y_train=label_array,
+            fold_number=None,
+            batch_size=selected_final_batch_size,
+            every_n_epochs=training_config.prediction_diagnostics_every_n_epochs,
+            max_samples=training_config.prediction_diagnostics_max_samples,
+            threshold_tolerance=(
+                training_config.prediction_diagnostics_threshold_tolerance
+            ),
+            seed=training_config.prediction_diagnostics_seed,
+        )
+        final_callbacks.append(final_prediction_diagnostics_callback)
     if training_config.save_final_history_csv:
         final_callbacks.insert(
             0,
@@ -1517,6 +1572,12 @@ def train_joint_autoencoder_variational_classifier_v2(
         callbacks=final_callbacks,
     )
 
+    if final_prediction_diagnostics_callback is not None:
+        _write_csv(
+            run_dir / "final_prediction_diagnostics.csv",
+            final_prediction_diagnostics_callback.history,
+        )
+
     final_eval = final_model.evaluate(
         feature_array,
         label_array,
@@ -1543,6 +1604,16 @@ def train_joint_autoencoder_variational_classifier_v2(
         "classification_level": "window",
         "use_class_weight": training_config.use_class_weight,
         "label_threshold_mode": training_config.label_threshold_mode,
+        "prediction_diagnostics": training_config.prediction_diagnostics,
+        "prediction_diagnostics_every_n_epochs": (
+            training_config.prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": (
+            training_config.prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": (
+            training_config.prediction_diagnostics_threshold_tolerance
+        ),
         "loso_cv": cv_results,
         "final_fit_history": final_history.history,
         "final_full_dataset_metrics": final_eval,
@@ -1647,6 +1718,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Optional seed for reproducible Monte Carlo latent prediction.",
+    )
+    parser.add_argument(
+        "--no-prediction-diagnostics",
+        action="store_true",
+        help=(
+            "Disable per-epoch deterministic probability, logit, and latent "
+            "spread diagnostics."
+        ),
+    )
+    parser.add_argument(
+        "--prediction-diagnostics-every",
+        type=int,
+        default=1,
+        help="Run prediction diagnostics every N epochs (default: 1).",
+    )
+    parser.add_argument(
+        "--prediction-diagnostics-samples",
+        type=int,
+        default=256,
+        help=(
+            "Maximum approximately class-balanced samples inspected from each "
+            "training/validation split (default: 256)."
+        ),
+    )
+    parser.add_argument(
+        "--prediction-threshold-tolerance",
+        type=float,
+        default=0.01,
+        help=(
+            "Probability distance used to flag near-uniform predictions. For "
+            "binary models, 0.01 marks p(class 1) in (0.49, 0.51)."
+        ),
+    )
+    parser.add_argument(
+        "--prediction-diagnostics-seed",
+        type=int,
+        default=42,
+        help="Seed used to select fixed diagnostic subsets (default: 42).",
     )
     parser.add_argument("--outer-verbose", type=int, default=0)
     parser.add_argument("--final-verbose", type=int, default=1)
@@ -1923,6 +2032,12 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--hyperparameters-json must decode to a JSON object.")
     if args.prediction_latent_samples < 0:
         raise ValueError("--prediction-latent-samples must be >= 0.")
+    if args.prediction_diagnostics_every < 1:
+        raise ValueError("--prediction-diagnostics-every must be >= 1.")
+    if args.prediction_diagnostics_samples < 1:
+        raise ValueError("--prediction-diagnostics-samples must be >= 1.")
+    if args.prediction_threshold_tolerance < 0.0:
+        raise ValueError("--prediction-threshold-tolerance must be >= 0.")
     if args.n_channels < 1:
         raise ValueError("--n-channels must be >= 1.")
     if args.n_bands is not None and args.n_bands < 1:
@@ -1964,6 +2079,15 @@ def main(argv: list[str] | None = None) -> int:
         selection_level="window",
         prediction_latent_samples=args.prediction_latent_samples,
         latent_sampling_seed=args.latent_sampling_seed,
+        prediction_diagnostics=not args.no_prediction_diagnostics,
+        prediction_diagnostics_every_n_epochs=(
+            args.prediction_diagnostics_every
+        ),
+        prediction_diagnostics_max_samples=args.prediction_diagnostics_samples,
+        prediction_diagnostics_threshold_tolerance=(
+            args.prediction_threshold_tolerance
+        ),
+        prediction_diagnostics_seed=args.prediction_diagnostics_seed,
         validation_subjects_per_fold=args.validation_subjects,
         validation_seed=validation_seed,
         outer_verbose=args.outer_verbose,

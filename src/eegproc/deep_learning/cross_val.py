@@ -476,6 +476,412 @@ def _predict_labels(probabilities: np.ndarray) -> np.ndarray:
     return np.argmax(probabilities, axis=1).astype(np.int64)
 
 
+def _stratified_diagnostic_indices(
+    y: np.ndarray,
+    max_samples: int,
+    seed: int | None,
+) -> np.ndarray:
+    """Choose a deterministic approximately class-balanced diagnostic subset."""
+    y_ids = _as_numpy_1d(y).astype(np.int64)
+    if max_samples < 1:
+        raise ValueError("max_samples must be at least 1.")
+    if len(y_ids) <= max_samples:
+        return np.arange(len(y_ids), dtype=np.int64)
+
+    rng = np.random.default_rng(seed)
+    classes = np.unique(y_ids)
+    per_class = max(1, max_samples // max(1, len(classes)))
+    selected: list[int] = []
+
+    for class_id in classes:
+        class_indices = np.where(y_ids == class_id)[0]
+        take = min(per_class, len(class_indices))
+        selected.extend(
+            rng.choice(class_indices, size=take, replace=False).tolist()
+        )
+
+    selected_array = np.asarray(sorted(set(selected)), dtype=np.int64)
+    remaining_slots = max_samples - len(selected_array)
+    if remaining_slots > 0:
+        remaining = np.setdiff1d(
+            np.arange(len(y_ids), dtype=np.int64),
+            selected_array,
+            assume_unique=False,
+        )
+        if len(remaining):
+            extra = rng.choice(
+                remaining,
+                size=min(remaining_slots, len(remaining)),
+                replace=False,
+            )
+            selected_array = np.sort(
+                np.concatenate([selected_array, extra.astype(np.int64)])
+            )
+
+    return selected_array[:max_samples]
+
+
+def _numpy_value(value):
+    """Convert tensors and array-like values to numpy arrays."""
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value)
+
+
+def _diagnostic_model_outputs(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    batch_size: int | None,
+) -> dict[str, np.ndarray]:
+    """Return probabilities and any available internal classifier tensors."""
+    if hasattr(model, "predict_diagnostics"):
+        raw_outputs = model.predict_diagnostics(X, batch_size=batch_size)
+    else:
+        inputs = tf.convert_to_tensor(X, dtype=tf.float32)
+        try:
+            raw_outputs = model(
+                inputs,
+                training=False,
+                sample_latent=False,
+                include_reconstruction=False,
+            )
+        except TypeError:
+            raw_outputs = model(inputs, training=False)
+
+    if isinstance(raw_outputs, Mapping):
+        outputs = {
+            str(key): _numpy_value(value)
+            for key, value in raw_outputs.items()
+            if value is not None
+        }
+        if "probabilities" in outputs:
+            probabilities = _to_probabilities(outputs["probabilities"])
+        elif "logits" in outputs:
+            probabilities = _to_probabilities(outputs["logits"])
+        else:
+            classifier_output = _extract_classifier_output(raw_outputs)
+            probabilities = _to_probabilities(_numpy_value(classifier_output))
+        outputs["probabilities"] = probabilities
+        return outputs
+
+    classifier_output = _extract_classifier_output(raw_outputs)
+    return {
+        "probabilities": _to_probabilities(_numpy_value(classifier_output)),
+    }
+
+
+def _prediction_diagnostic_summary(
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    threshold_tolerance: float = 0.01,
+    internal_outputs: Mapping[str, np.ndarray] | None = None,
+) -> dict[str, float | int]:
+    """Summarize confidence, threshold collapse, and internal feature spread."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    y_ids = _as_numpy_1d(y_true).astype(np.int64)
+    if probabilities.ndim != 2 or len(probabilities) != len(y_ids):
+        raise ValueError(
+            "Diagnostic probabilities must have shape (n, c) and align with "
+            f"labels; got {probabilities.shape} and {len(y_ids)} labels."
+        )
+    if threshold_tolerance < 0.0:
+        raise ValueError("threshold_tolerance must be non-negative.")
+
+    clipped = np.clip(probabilities, 1e-12, 1.0)
+    y_pred = _predict_labels(probabilities)
+    confidence = np.max(probabilities, axis=1)
+    entropy = -np.sum(clipped * np.log(clipped), axis=1)
+    sorted_probabilities = np.sort(probabilities, axis=1)
+    top_two_margin = (
+        sorted_probabilities[:, -1] - sorted_probabilities[:, -2]
+        if probabilities.shape[1] > 1
+        else np.zeros(len(probabilities), dtype=np.float64)
+    )
+
+    summary: dict[str, float | int] = {
+        "n_samples": int(len(y_ids)),
+        "accuracy": float(np.mean(y_pred == y_ids)),
+        "confidence_mean": float(np.mean(confidence)),
+        "confidence_std": float(np.std(confidence)),
+        "confidence_min": float(np.min(confidence)),
+        "confidence_max": float(np.max(confidence)),
+        "entropy_mean": float(np.mean(entropy)),
+        "entropy_std": float(np.std(entropy)),
+        "top_two_margin_mean": float(np.mean(top_two_margin)),
+        "top_two_margin_std": float(np.std(top_two_margin)),
+        "near_uniform_fraction": float(
+            np.mean(
+                np.max(
+                    np.abs(probabilities - 1.0 / probabilities.shape[1]),
+                    axis=1,
+                )
+                < threshold_tolerance
+            )
+        ),
+    }
+
+    for class_index in range(probabilities.shape[1]):
+        class_probabilities = probabilities[:, class_index]
+        summary[f"p_class_{class_index}_min"] = float(np.min(class_probabilities))
+        summary[f"p_class_{class_index}_mean"] = float(np.mean(class_probabilities))
+        summary[f"p_class_{class_index}_median"] = float(
+            np.median(class_probabilities)
+        )
+        summary[f"p_class_{class_index}_max"] = float(np.max(class_probabilities))
+        summary[f"p_class_{class_index}_std"] = float(np.std(class_probabilities))
+        summary[f"p_class_{class_index}_q05"] = float(
+            np.quantile(class_probabilities, 0.05)
+        )
+        summary[f"p_class_{class_index}_q95"] = float(
+            np.quantile(class_probabilities, 0.95)
+        )
+        summary[f"true_class_{class_index}_fraction"] = float(
+            np.mean(y_ids == class_index)
+        )
+        summary[f"predicted_class_{class_index}_fraction"] = float(
+            np.mean(y_pred == class_index)
+        )
+
+    if probabilities.shape[1] == 2:
+        p1 = probabilities[:, 1]
+        signed_margin = probabilities[:, 1] - probabilities[:, 0]
+        summary.update(
+            {
+                "p1_distance_from_0_5_mean": float(np.mean(np.abs(p1 - 0.5))),
+                "near_0_5_fraction": float(
+                    np.mean(np.abs(p1 - 0.5) < threshold_tolerance)
+                ),
+                "binary_margin_mean": float(np.mean(signed_margin)),
+                "binary_margin_std": float(np.std(signed_margin)),
+                "binary_margin_min": float(np.min(signed_margin)),
+                "binary_margin_max": float(np.max(signed_margin)),
+            }
+        )
+
+    if internal_outputs:
+        diagnostic_keys = (
+            "encoder_output",
+            "z_mean",
+            "z_log_var",
+            "classification_latent_sequence",
+            "classification_latent",
+            "window_classification_latent",
+            "logits",
+            "logit_margin",
+        )
+        for key in diagnostic_keys:
+            if key not in internal_outputs:
+                continue
+            values = np.asarray(internal_outputs[key], dtype=np.float64)
+            if values.size == 0:
+                continue
+            summary[f"{key}_mean"] = float(np.mean(values))
+            summary[f"{key}_std"] = float(np.std(values))
+            summary[f"{key}_min"] = float(np.min(values))
+            summary[f"{key}_max"] = float(np.max(values))
+            if values.ndim >= 2:
+                flattened = values.reshape(values.shape[0], -1)
+                summary[f"{key}_sample_std_mean"] = float(
+                    np.mean(np.std(flattened, axis=1))
+                )
+
+    return summary
+
+
+def _print_probability_diagnostics(
+    label: str,
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    threshold_tolerance: float = 0.01,
+) -> dict[str, float | int]:
+    """Print a compact probability-distribution diagnostic line."""
+    summary = _prediction_diagnostic_summary(
+        probabilities=probabilities,
+        y_true=y_true,
+        threshold_tolerance=threshold_tolerance,
+    )
+    parts = [
+        f"n={summary['n_samples']}",
+        f"accuracy={summary['accuracy']:.4f}",
+        f"confidence={summary['confidence_mean']:.4f}",
+        f"margin_std={summary['top_two_margin_std']:.6f}",
+        f"near_uniform={summary['near_uniform_fraction']:.4f}",
+    ]
+    if probabilities.shape[1] == 2:
+        parts.extend(
+            [
+                f"p1={summary['p_class_1_min']:.6f}/"
+                f"{summary['p_class_1_mean']:.6f}/"
+                f"{summary['p_class_1_max']:.6f}",
+                f"p1_std={summary['p_class_1_std']:.6f}",
+                f"near_0.5={summary['near_0_5_fraction']:.4f}",
+                f"pred1={summary['predicted_class_1_fraction']:.4f}",
+                f"true1={summary['true_class_1_fraction']:.4f}",
+            ]
+        )
+    print(f"\nPrediction diagnostics [{label}]: " + "  ".join(parts), flush=True)
+    return summary
+
+
+class PredictionDiagnostics(tf.keras.callbacks.Callback):
+    """Inspect deterministic train/validation predictions during training.
+
+    Only a fixed, approximately class-balanced subset is evaluated, so the
+    callback remains inexpensive relative to a full validation pass. It records
+    exact probability spread and, when the model exposes ``predict_diagnostics``,
+    latent and logit spread as well.
+    """
+
+    def __init__(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray | None = None,
+        y_val: np.ndarray | None = None,
+        fold_number: int | None = None,
+        batch_size: int | None = None,
+        every_n_epochs: int = 1,
+        max_samples: int = 256,
+        threshold_tolerance: float = 0.01,
+        seed: int | None = 42,
+    ) -> None:
+        super().__init__()
+        if every_n_epochs < 1:
+            raise ValueError("every_n_epochs must be at least 1.")
+        if max_samples < 1:
+            raise ValueError("max_samples must be at least 1.")
+        if threshold_tolerance < 0.0:
+            raise ValueError("threshold_tolerance must be non-negative.")
+
+        train_indices = _stratified_diagnostic_indices(
+            y_train,
+            max_samples=max_samples,
+            seed=seed,
+        )
+        self.X_train = np.asarray(X_train)[train_indices]
+        self.y_train = np.asarray(y_train)[train_indices]
+
+        self.X_val = None
+        self.y_val = None
+        if X_val is not None and y_val is not None and len(X_val):
+            validation_seed = None if seed is None else int(seed) + 1
+            val_indices = _stratified_diagnostic_indices(
+                y_val,
+                max_samples=max_samples,
+                seed=validation_seed,
+            )
+            self.X_val = np.asarray(X_val)[val_indices]
+            self.y_val = np.asarray(y_val)[val_indices]
+
+        self.fold_number = fold_number
+        self.batch_size = batch_size
+        self.every_n_epochs = int(every_n_epochs)
+        self.threshold_tolerance = float(threshold_tolerance)
+        self.history: list[dict] = []
+
+    def _report_split(
+        self,
+        split: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        epoch_number: int,
+        logs: dict,
+    ) -> None:
+        internal_outputs = _diagnostic_model_outputs(
+            model=self.model,
+            X=X,
+            batch_size=self.batch_size,
+        )
+        summary = _prediction_diagnostic_summary(
+            probabilities=internal_outputs["probabilities"],
+            y_true=y,
+            threshold_tolerance=self.threshold_tolerance,
+            internal_outputs=internal_outputs,
+        )
+        row = {
+            "fold": None if self.fold_number is None else int(self.fold_number),
+            "epoch": int(epoch_number),
+            "split": split,
+            **summary,
+        }
+        self.history.append(row)
+
+        log_keys = (
+            "accuracy",
+            "confidence_mean",
+            "entropy_mean",
+            "top_two_margin_std",
+            "near_uniform_fraction",
+            "p_class_1_mean",
+            "p_class_1_std",
+            "near_0_5_fraction",
+            "binary_margin_std",
+            "z_mean_std",
+            "classification_latent_std",
+            "logits_std",
+            "logit_margin_std",
+        )
+        for key in log_keys:
+            if key in summary:
+                logs[f"diag_{split}_{key}"] = float(summary[key])
+
+        fold_text = "?" if self.fold_number is None else str(self.fold_number)
+        parts = [
+            f"n={summary['n_samples']}",
+            f"acc={summary['accuracy']:.4f}",
+            f"conf={summary['confidence_mean']:.4f}",
+            f"margin_std={summary['top_two_margin_std']:.6f}",
+            f"near_uniform={summary['near_uniform_fraction']:.4f}",
+        ]
+        if "p_class_1_mean" in summary:
+            parts.extend(
+                [
+                    f"p1={summary['p_class_1_min']:.6f}/"
+                    f"{summary['p_class_1_mean']:.6f}/"
+                    f"{summary['p_class_1_max']:.6f}",
+                    f"p1_std={summary['p_class_1_std']:.6f}",
+                    f"near_0.5={summary['near_0_5_fraction']:.4f}",
+                ]
+            )
+        for key, short_name in (
+            ("z_mean_std", "z_mean_std"),
+            ("classification_latent_std", "cls_latent_std"),
+            ("logits_std", "logits_std"),
+            ("logit_margin_std", "logit_margin_std"),
+        ):
+            if key in summary:
+                parts.append(f"{short_name}={summary[key]:.6f}")
+
+        print(
+            f"\n[Prediction diagnostics][fold={fold_text}]"
+            f"[epoch={epoch_number}][{split}] " + "  ".join(parts),
+            flush=True,
+        )
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        epoch_number = int(epoch) + 1
+        if epoch_number % self.every_n_epochs != 0:
+            return
+        if logs is None:
+            logs = {}
+
+        self._report_split(
+            split="train",
+            X=self.X_train,
+            y=self.y_train,
+            epoch_number=epoch_number,
+            logs=logs,
+        )
+        if self.X_val is not None and self.y_val is not None:
+            self._report_split(
+                split="validation",
+                X=self.X_val,
+                y=self.y_val,
+                epoch_number=epoch_number,
+                logs=logs,
+            )
+
+
 def _is_trial_tensor(X: np.ndarray) -> bool:
     """Return True for hierarchical inputs shaped ``(N, W, T, F)``."""
     return np.asarray(X).ndim == 4
@@ -994,8 +1400,26 @@ def _make_prediction_log(
             "trial_id": _python_scalar(trial_ids[i]),
             "y_true": int(y_true[i]),
             "y_pred": pred_class,
+            "correct": int(pred_class == int(y_true[i])),
             "p_pred": float(probabilities[i, pred_class]),
+            "confidence": float(np.max(probabilities[i])),
+            "entropy": float(
+                -np.sum(
+                    np.clip(probabilities[i], 1e-12, 1.0)
+                    * np.log(np.clip(probabilities[i], 1e-12, 1.0))
+                )
+            ),
+            "top_two_margin": float(
+                np.sort(probabilities[i])[-1] - np.sort(probabilities[i])[-2]
+            ),
         }
+        if probabilities.shape[1] == 2:
+            row["class_1_margin"] = float(
+                probabilities[i, 1] - probabilities[i, 0]
+            )
+            row["distance_from_0_5"] = float(
+                abs(probabilities[i, 1] - 0.5)
+            )
 
         for class_idx in range(probabilities.shape[1]):
             row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
@@ -1025,8 +1449,26 @@ def _make_trial_prediction_log(
             "n_windows": int(trial_aggregation["n_windows"][i]),
             "y_true": int(y_true[i]),
             "y_pred": pred_class,
+            "correct": int(pred_class == int(y_true[i])),
             "p_pred": float(probabilities[i, pred_class]),
+            "confidence": float(np.max(probabilities[i])),
+            "entropy": float(
+                -np.sum(
+                    np.clip(probabilities[i], 1e-12, 1.0)
+                    * np.log(np.clip(probabilities[i], 1e-12, 1.0))
+                )
+            ),
+            "top_two_margin": float(
+                np.sort(probabilities[i])[-1] - np.sort(probabilities[i])[-2]
+            ),
         }
+        if probabilities.shape[1] == 2:
+            row["class_1_margin"] = float(
+                probabilities[i, 1] - probabilities[i, 0]
+            )
+            row["distance_from_0_5"] = float(
+                abs(probabilities[i, 1] - 0.5)
+            )
 
         for class_idx in range(probabilities.shape[1]):
             row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
@@ -1316,6 +1758,11 @@ def _evaluate_trial_tensor_fold(
         latent_sampling_seed=latent_sampling_seed,
     )
     y_pred_trial = _predict_labels(probabilities_trial)
+    _print_probability_diagnostics(
+        label=f"fold {fold_index} test trial",
+        probabilities=probabilities_trial,
+        y_true=y_true_trial,
+    )
     keras_evaluation = _keras_evaluation_results(
         model=model,
         X=X_test,
@@ -1498,6 +1945,11 @@ def _evaluate_classification_fold(
         latent_sampling_seed=latent_sampling_seed,
     )
     y_pred_window = _predict_labels(probabilities_window)
+    _print_probability_diagnostics(
+        label=f"fold {fold_index} test window",
+        probabilities=probabilities_window,
+        y_true=y_true_window,
+    )
 
     # model.evaluate() is retained as a diagnostic because joint Keras models
     # may include reconstruction/regularization terms beyond classification.
@@ -1528,6 +1980,11 @@ def _evaluate_classification_fold(
         y_true=y_true_window,
         subject_ids=subject_ids_test,
         trial_ids=trial_ids_test,
+    )
+    _print_probability_diagnostics(
+        label=f"fold {fold_index} test trial-aggregated",
+        probabilities=trial_aggregation["probabilities"],
+        y_true=trial_aggregation["y_true"],
     )
     trial_scores = _level_scores(
         y_true=trial_aggregation["y_true"],
@@ -2958,6 +3415,11 @@ def _run_loso_fold(
     early_stopping_monitor: str,
     early_stopping_mode: Literal["auto", "min", "max"],
     restore_best_weights: bool,
+    prediction_diagnostics: bool,
+    prediction_diagnostics_every_n_epochs: int,
+    prediction_diagnostics_max_samples: int,
+    prediction_diagnostics_threshold_tolerance: float,
+    prediction_diagnostics_seed: int | None,
     verbose: int,
     extra_fit_kwargs: dict,
 ) -> dict:
@@ -3102,6 +3564,26 @@ def _run_loso_fold(
 
     fit_call_kwargs = dict(extra_fit_kwargs)
     callbacks = list(fit_call_kwargs.pop("callbacks", []))
+    prediction_diagnostics_callback: PredictionDiagnostics | None = None
+
+    if prediction_diagnostics:
+        prediction_diagnostics_callback = PredictionDiagnostics(
+            X_train=X_fit_train,
+            y_train=y_fit_train,
+            X_val=(X_validation if validation_subjects_per_fold > 0 else None),
+            y_val=(y_validation if validation_subjects_per_fold > 0 else None),
+            fold_number=fold_number,
+            batch_size=current_batch_size,
+            every_n_epochs=prediction_diagnostics_every_n_epochs,
+            max_samples=prediction_diagnostics_max_samples,
+            threshold_tolerance=prediction_diagnostics_threshold_tolerance,
+            seed=(
+                None
+                if prediction_diagnostics_seed is None
+                else int(prediction_diagnostics_seed) + int(fold_number)
+            ),
+        )
+        callbacks.append(prediction_diagnostics_callback)
 
     if validation_subjects_per_fold > 0:
         if early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}:
@@ -3277,6 +3759,11 @@ def _run_loso_fold(
         "best_epoch": None if best_epoch is None else int(best_epoch),
         "best_monitored_value": best_monitored_value,
         "stopped_early": bool(stopped_early),
+        "prediction_diagnostics_log": (
+            []
+            if prediction_diagnostics_callback is None
+            else list(prediction_diagnostics_callback.history)
+        ),
         "evaluation_level": evaluation_level,
         "selection_level": None,
         "fixed_config": dict(fixed_config),
@@ -3325,6 +3812,7 @@ def _run_loso_fold(
         "outer_fold_result": fold_record,
         "best_config_result": fixed_config_record,
         "inner_cv_result": empty_inner_cv_record,
+        "prediction_diagnostics_log": fold_record["prediction_diagnostics_log"],
         **evaluation,
     }
 
@@ -3588,6 +4076,11 @@ def loso_cv(
     early_stopping_monitor: str = "val_loss",
     early_stopping_mode: Literal["auto", "min", "max"] = "min",
     restore_best_weights: bool = True,
+    prediction_diagnostics: bool = False,
+    prediction_diagnostics_every_n_epochs: int = 1,
+    prediction_diagnostics_max_samples: int = 256,
+    prediction_diagnostics_threshold_tolerance: float = 0.01,
+    prediction_diagnostics_seed: int | None = 42,
     verbose: int = 0,
     extra_fit_kwargs: dict | None = None,
     n_jobs: int = 1,
@@ -3769,6 +4262,16 @@ def loso_cv(
         )
     if not early_stopping_monitor:
         raise ValueError("early_stopping_monitor must be a non-empty string.")
+    if prediction_diagnostics_every_n_epochs < 1:
+        raise ValueError(
+            "prediction_diagnostics_every_n_epochs must be at least 1."
+        )
+    if prediction_diagnostics_max_samples < 1:
+        raise ValueError("prediction_diagnostics_max_samples must be at least 1.")
+    if prediction_diagnostics_threshold_tolerance < 0.0:
+        raise ValueError(
+            "prediction_diagnostics_threshold_tolerance must be non-negative."
+        )
     if (
         early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
         and validation_subjects_per_fold == 0
@@ -3862,6 +4365,7 @@ def loso_cv(
     )
     print(f"Primary reported metrics: {evaluation_level}-level")
     print(f"Prediction logging: {log_predictions}")
+    print(f"Prediction diagnostics: {prediction_diagnostics}")
     print(f"Variational interval logging: {log_variational_intervals}")
     prediction_mode = (
         "posterior mean"
@@ -3917,6 +4421,17 @@ def loso_cv(
         "early_stopping_monitor": early_stopping_monitor,
         "early_stopping_mode": early_stopping_mode,
         "restore_best_weights": restore_best_weights,
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
         "verbose": verbose,
         "extra_fit_kwargs": extra_fit_kwargs,
     }
@@ -4043,6 +4558,17 @@ def loso_cv(
         "early_stopping_monitor": early_stopping_monitor,
         "early_stopping_mode": early_stopping_mode,
         "restore_best_weights": bool(restore_best_weights),
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,
@@ -4058,6 +4584,7 @@ def loso_cv(
         "variational_interval_log": [],
         "window_variational_interval_log": [],
         "trial_variational_interval_log": [],
+        "prediction_diagnostics_log": [],
         "fold_results": [],
         "best_configs": [],
         "inner_cv_results": [],
@@ -4127,6 +4654,9 @@ def loso_cv(
         )
         results["trial_variational_interval_log"].extend(
             fold_output["trial_variational_interval_log"]
+        )
+        results["prediction_diagnostics_log"].extend(
+            fold_output.get("prediction_diagnostics_log", [])
         )
         results["fold_results"].append(fold_record)
         results["outer_fold_results"].append(fold_record)
