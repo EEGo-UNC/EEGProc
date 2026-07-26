@@ -209,10 +209,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --window-sec 4.0 \
     --window-overlap 0.0 \
     --label-threshold-mode subject_median \
-    --no-class-weight \
+    --use-class-weight \
     --batch-size 64 \
     --selection-level window \
-    --selection-metric f1 \
+    --selection-metric accuracy \
     --early-stopping-monitor val_joint_loss \
     --early-stopping-mode min \
     --final-epoch-strategy median \
