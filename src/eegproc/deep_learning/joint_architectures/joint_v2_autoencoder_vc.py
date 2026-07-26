@@ -1,8 +1,8 @@
-"""Window-level joint variational autoencoder and classifier.
+"""Window-level joint variational autoencoder and selectable classifier.
 
 Each sample is one EEG window. The VAE reconstructs that window, a recurrent
-feature extractor summarizes its latent temporal sequence, and the variational
-classifier emits one prediction for the same window.
+feature extractor summarizes its latent temporal sequence, and either a dense
+or variational classification head emits one prediction for the same window.
 """
 
 from __future__ import annotations
@@ -129,12 +129,12 @@ class DecoderReconstructionAccuracy(tf.keras.metrics.Metric):
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
 class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
-    """Joint window-level VAE and variational classifier.
+    """Joint window-level VAE with a dense or variational classifier.
 
     Every sample is one EEG window shaped ``(timesteps, n_features)``. The
     encoder and decoder operate on that window, while ``classification_model``
     summarizes the sampled latent sequence into one embedding and the
-    variational classifier emits one prediction for the same window.
+    selected classification head emits one prediction for the same window.
 
     ``use_class_weight`` controls whether a ``class_weight`` dictionary passed
     by external training utilities is honored. This lets the existing LOSO
@@ -230,7 +230,18 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.vc_lambda = float(vc_lambda)
         self.update_discriminator = bool(update_discriminator)
 
-        if self.vc_gamma > 0.0 and not self.update_discriminator:
+        classifier_supports_discriminator = bool(
+            getattr(
+                self.variational_classifier,
+                "supports_discriminator",
+                hasattr(self.variational_classifier, "discriminator"),
+            )
+        )
+        if (
+            classifier_supports_discriminator
+            and self.vc_gamma > 0.0
+            and not self.update_discriminator
+        ):
             raise ValueError(
                 "vc_gamma is positive, but update_discriminator=False. "
                 "A discriminator KL term requires a trained discriminator."

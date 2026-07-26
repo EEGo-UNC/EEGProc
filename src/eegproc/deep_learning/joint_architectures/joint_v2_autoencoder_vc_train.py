@@ -65,7 +65,10 @@ try:
         # variant while retaining the standard module name.
         from ..cross_val import PredictionDiagnostics, loso_cv
     from ..supervised.rnn_architectures import BiLSTMClassifier
-    from ..supervised.variational_classifier import VariationalClassifier
+    from ..supervised.variational_classifier import (
+        DenseClassifier,
+        VariationalClassifier,
+    )
     from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
     from ..unsupervised.Convolutions.CNN2D import CNN2DDecoder, CNN2DEncoder
     from ..unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
@@ -82,6 +85,7 @@ except ImportError:
         BiLSTMClassifier,
     )
     from eegproc.deep_learning.supervised.variational_classifier import (
+        DenseClassifier,
         VariationalClassifier,
     )
     from eegproc.deep_learning.unsupervised.Convolutions.CNN1D import (
@@ -149,6 +153,7 @@ class JointV2TrainingConfig:
     encoder_kwargs: dict = field(default_factory=dict)
     decoder_kwargs: dict = field(default_factory=dict)
     classifier_kwargs: dict = field(default_factory=dict)
+    classifier_head: str = "variational"
     model_kwargs: dict = field(default_factory=dict)
     hyperparameters: dict = field(default_factory=dict)
     n_jobs: int = 4
@@ -922,9 +927,10 @@ def build_joint_autoencoder_variational_classifier_v2(
     encoder_kwargs: dict | None = None,
     decoder_kwargs: dict | None = None,
     classifier_kwargs: dict | None = None,
+    classifier_head: str = "variational",
     model_name: str | None = None,
 ) -> JointAutoencoderVariationalClassifierV2:
-    """Build a VAE and BiLSTM classifier that both operate per window."""
+    """Build a window VAE plus BiLSTM with a dense or variational head."""
     timesteps, n_features = map(int, input_shape)
     encoder_type = encoder_type.lower()
     encoder, decoder = _build_encoder_decoder(
@@ -999,7 +1005,17 @@ def build_joint_autoencoder_variational_classifier_v2(
         **recurrent_defaults,
     ).build_feature_extractor()
 
-    variational_classifier = VariationalClassifier(**classifier_defaults)
+    classifier_head = str(classifier_head).lower()
+    if classifier_head == "dense":
+        variational_classifier = DenseClassifier(**classifier_defaults)
+    elif classifier_head == "variational":
+        variational_classifier = VariationalClassifier(**classifier_defaults)
+    else:
+        raise ValueError(
+            "classifier_head must be 'dense' or 'variational'; "
+            f"got {classifier_head!r}."
+        )
+
     model = JointAutoencoderVariationalClassifierV2(
         encoder=encoder,
         decoder=decoder,
@@ -1015,7 +1031,10 @@ def build_joint_autoencoder_variational_classifier_v2(
         vc_lambda=vc_lambda,
         update_discriminator=update_discriminator,
         use_class_weight=use_class_weight,
-        name=model_name or f"joint_{encoder_type}_window_vae_bilstm_vc_v2",
+        name=(
+            model_name
+            or f"joint_{encoder_type}_window_vae_bilstm_{classifier_head}_v2"
+        ),
     )
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate))
     return model
@@ -1160,6 +1179,7 @@ def train_joint_autoencoder_variational_classifier_v2(
             "vc_gamma",
             "vc_lambda",
             "update_discriminator",
+            "classifier_head",
             *encoder_hparam_keys,
             *bilstm_hparam_keys,
             "bilstm_kwargs",
@@ -1308,11 +1328,18 @@ def train_joint_autoencoder_variational_classifier_v2(
                 encoder_kwargs=encoder_kwargs,
                 decoder_kwargs=decoder_kwargs,
                 classifier_kwargs=classifier_kwargs,
+                classifier_head=str(
+                    hparams.get(
+                        "classifier_head",
+                        training_config.classifier_head,
+                    )
+                ),
             )
 
     logger.info("Starting joint-model v2 training run in %s", run_dir)
     logger.info("Encoder type: %s", encoder_type)
     logger.info("Classification/evaluation level: window")
+    logger.info("Default classifier head: %s", training_config.classifier_head)
     logger.info("Class weighting enabled: %s", training_config.use_class_weight)
     logger.info("Window normalization: %s", training_config.window_normalization)
     logger.info("Label threshold mode: %s", training_config.label_threshold_mode)
@@ -1336,8 +1363,8 @@ def train_joint_autoencoder_variational_classifier_v2(
         len(set(zip(subject_id_array.tolist(), trial_id_array.tolist()))),
     )
     logger.info(
-        "Classifier path: window encoder -> window BiLSTM -> "
-        "variational classifier"
+        "Classifier path: window encoder -> window BiLSTM -> %s head",
+        training_config.classifier_head,
     )
     logger.info("Window shape: %s", tuple(feature_array.shape[1:]))
 
@@ -1602,6 +1629,7 @@ def train_joint_autoencoder_variational_classifier_v2(
         "cv_best_epochs": cv_best_epochs,
         "final_epoch_strategy": training_config.final_epoch_strategy,
         "classification_level": "window",
+        "default_classifier_head": training_config.classifier_head,
         "use_class_weight": training_config.use_class_weight,
         "label_threshold_mode": training_config.label_threshold_mode,
         "prediction_diagnostics": training_config.prediction_diagnostics,
@@ -1883,6 +1911,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--classifier-head",
+        choices=("dense", "variational"),
+        default="variational",
+        help=(
+            "Default classification head when classifier_head is absent from "
+            "--hyperparameters-json. The JSON grid can contain "
+            "classifier_head: [\"dense\", \"variational\"] "
+            "to compare both heads (default: variational)."
+        ),
+    )
+    parser.add_argument(
         "--hyperparameters-json",
         default=None,
         help=(
@@ -1892,8 +1931,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "conv_filters, 2D kernel_sizes, spatial_pool_sizes, and "
             "temporal_pool_sizes; GCN uses "
             "gcn_units and temporal_pool_sizes. Common keys include t_down, "
-            "emb_dim, dropout, use_batch_norm, and the single window-level "
-            "window BiLSTM/loss settings."
+            "emb_dim, dropout, use_batch_norm, classifier_head "
+            "('dense' or 'variational'), and the single window-level "
+            "BiLSTM/loss settings."
         ),
     )
     parser.add_argument("--features-npy", default=None)
@@ -2107,6 +2147,7 @@ def main(argv: list[str] | None = None) -> int:
         trial_bilstm_units=args.trial_bilstm_units,
         n_trial_bilstm_layers=args.trial_bilstm_layers,
         trial_bilstm_dropout=args.trial_bilstm_dropout,
+        classifier_head=args.classifier_head,
         model_kwargs={
             "ae_loss_weight": args.ae_loss_weight,
             "vc_loss_weight": args.vc_loss_weight,
