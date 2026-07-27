@@ -32,4 +32,4 @@
 - 07/27/2026
     - Added adversarial subject identifiability goal which penalizes the VAE loss in order to reduce subject-unique representations. This fixed the optimization direction and has higher accuracy on subject 1, but it takes too many epochs (over 300) and the val_acc was still around 0.4 by the end.
     - Added supervised contrastive learning to penalize differences in user distributions.
-    - Trial-level runs 
+    - Trial-level runs work better.
