@@ -222,7 +222,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "use_supcon": [true],
         "supcon_weight": [0.1],
         "supcon_temperature": [0.1],
-        "supcon_cross_subject_only": [true]
+        "supcon_cross_subject_only": [true],
 
         "use_subject_adversarial": [true],
         "subject_adversarial_weight": [0.6],
