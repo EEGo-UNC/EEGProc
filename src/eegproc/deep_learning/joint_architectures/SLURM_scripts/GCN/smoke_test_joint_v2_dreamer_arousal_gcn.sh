@@ -261,15 +261,15 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             2
         ],
         "emb_dim": [
-            32
+            64
         ],
         "dropout": [
             0.2
         ],
         "gcn_units": [
             [
-                64,
-                32
+                128,
+                64
             ]
         ],
         "temporal_pool_sizes": [
@@ -284,7 +284,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            64
+            128
         ],
         "bilstm_layers": [
             1
