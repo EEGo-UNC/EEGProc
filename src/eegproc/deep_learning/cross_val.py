@@ -3610,6 +3610,12 @@ def _run_loso_fold(
     threshold_selection_level: Literal["window", "trial"],
     verbose: int,
     extra_fit_kwargs: dict,
+    test_indices_override: np.ndarray | None = None,
+    left_out_subjects_override: list | tuple | np.ndarray | None = None,
+    held_out_trials: list[dict] | None = None,
+    validation_excluded_subjects: list | tuple | np.ndarray | None = None,
+    fold_description: str | None = None,
+    cv_strategy: str = "loso",
 ) -> dict:
     """Train and evaluate one LOSO fold with optional seeded validation.
 
@@ -3619,28 +3625,52 @@ def _run_loso_fold(
     updates. They provide ``validation_data`` for early stopping without adding
     another model fit.
     """
-    test_mask = subject_id_array == test_subject
-    outer_train_mask = ~test_mask
+    if test_indices_override is None:
+        test_mask = subject_id_array == test_subject
+        test_indices = np.where(test_mask)[0]
+    else:
+        test_indices = np.asarray(test_indices_override, dtype=np.int64).reshape(-1)
+        if len(test_indices) == 0:
+            raise ValueError("test_indices_override must contain at least one index.")
+        if np.any(test_indices < 0) or np.any(test_indices >= len(feature_array)):
+            raise ValueError(
+                "test_indices_override contains an index outside the feature array."
+            )
+        test_indices = np.unique(test_indices)
+        test_mask = np.zeros(len(feature_array), dtype=bool)
+        test_mask[test_indices] = True
 
+    outer_train_mask = ~test_mask
     outer_train_indices = np.where(outer_train_mask)[0]
-    test_indices = np.where(test_mask)[0]
 
     if len(outer_train_indices) == 0 or len(test_indices) == 0:
+        split_name = "LOSO" if test_indices_override is None else cv_strategy
         raise ValueError(
-            f"Invalid LOSO split for subject {test_subject!r}: "
-            f"train={len(outer_train_indices)}, test={len(test_indices)} samples."
+            f"Invalid {split_name} split: train={len(outer_train_indices)}, "
+            f"test={len(test_indices)} samples."
         )
 
     outer_train_subjects = np.sort(
         np.unique(subject_id_array[outer_train_indices])
     )
+    validation_candidate_subjects = outer_train_subjects
+    if validation_excluded_subjects is not None:
+        validation_candidate_subjects = np.setdiff1d(
+            outer_train_subjects,
+            np.asarray(validation_excluded_subjects),
+            assume_unique=False,
+        )
     if validation_subjects_per_fold < 0:
         raise ValueError("validation_subjects_per_fold must be >= 0.")
-    if validation_subjects_per_fold >= len(outer_train_subjects):
+    if (
+        validation_subjects_per_fold > 0
+        and validation_subjects_per_fold >= len(validation_candidate_subjects)
+    ):
         raise ValueError(
-            "validation_subjects_per_fold must leave at least one subject for "
-            f"gradient training. Got {validation_subjects_per_fold} validation "
-            f"subjects from {len(outer_train_subjects)} outer-training subjects."
+            "validation_subjects_per_fold must leave at least one eligible "
+            "subject outside validation. Got "
+            f"{validation_subjects_per_fold} validation subjects from "
+            f"{len(validation_candidate_subjects)} eligible subjects."
         )
 
     if validation_subjects_per_fold > 0:
@@ -3649,7 +3679,7 @@ def _run_loso_fold(
         rng = np.random.default_rng(fold_seed)
         validation_subjects = np.sort(
             rng.choice(
-                outer_train_subjects,
+                validation_candidate_subjects,
                 size=validation_subjects_per_fold,
                 replace=False,
             )
@@ -3666,13 +3696,23 @@ def _run_loso_fold(
         fit_train_indices = outer_train_indices
 
     sample_level = "trials" if feature_array.ndim == 4 else "windows"
+    if fold_description is None:
+        fold_description = (
+            f"LOSO test subject={_python_scalar(test_subject)!r} "
+            f"(fit_train={len(fit_train_indices)}, "
+            f"validation={len(validation_indices)}, "
+            f"test={len(test_indices)} {sample_level})"
+        )
+    else:
+        fold_description = (
+            f"{fold_description} (fit_train={len(fit_train_indices)}, "
+            f"validation={len(validation_indices)}, "
+            f"test={len(test_indices)} {sample_level})"
+        )
     _print_fold_header(
         fold_number,
         total_folds,
-        f"LOSO test subject={_python_scalar(test_subject)!r} "
-        f"(fit_train={len(fit_train_indices)}, "
-        f"validation={len(validation_indices)}, "
-        f"test={len(test_indices)} {sample_level})",
+        fold_description,
     )
     if len(validation_subjects):
         print(
@@ -3953,12 +3993,26 @@ def _run_loso_fold(
     subject_ids_outer_train = subject_id_array[outer_train_indices]
     trial_ids_outer_train = trial_id_array[outer_train_indices]
 
+    if left_out_subjects_override is None:
+        left_out_subjects = [_python_scalar(test_subject)]
+        left_out_subject = _python_scalar(test_subject)
+    else:
+        left_out_subjects = [
+            _python_scalar(value)
+            for value in np.asarray(left_out_subjects_override).reshape(-1).tolist()
+        ]
+        left_out_subject = (
+            left_out_subjects[0] if len(left_out_subjects) == 1 else None
+        )
+
     fold_record = {
         "fold_number": int(fold_number),
         "outer_fold_number": int(fold_number),
-        "left_out_subject": _python_scalar(test_subject),
-        "left_out_subjects": [_python_scalar(test_subject)],
-        "outer_test_subjects": [_python_scalar(test_subject)],
+        "cv_strategy": cv_strategy,
+        "left_out_subject": left_out_subject,
+        "left_out_subjects": left_out_subjects,
+        "outer_test_subjects": left_out_subjects,
+        "held_out_trials": [] if held_out_trials is None else held_out_trials,
         "validation_subjects": [
             _python_scalar(value) for value in validation_subjects.tolist()
         ],
@@ -4124,6 +4178,16 @@ def _compact_loso_fold_result(fold_output: dict) -> dict:
         "left_out_subject": fold_record["left_out_subject"],
         "left_out_subjects": list(fold_record["left_out_subjects"]),
         "outer_test_subjects": list(fold_record["outer_test_subjects"]),
+        "cv_strategy": fold_record.get("cv_strategy", "loso"),
+        "held_out_trials": [
+            dict(row) for row in fold_record.get("held_out_trials", [])
+        ],
+        "n_subjects_with_trials_left_out": int(
+            fold_record.get("n_subjects_with_trials_left_out", 0)
+        ),
+        "k_trials_left_out_per_subject": fold_record.get(
+            "k_trials_left_out_per_subject"
+        ),
         "validation_subjects": list(fold_record["validation_subjects"]),
         "validation_seed": fold_record["validation_seed"],
         "n_train_windows": int(fold_record["n_train_windows"]),
@@ -5001,3 +5065,1093 @@ def loso_cv(
     )
 
     return results
+
+
+# ---------------------------------------------------------------------
+# Leave-N-Subjects-and-K-Trials-Out cross-validation
+# ---------------------------------------------------------------------
+
+
+def _stable_scalar_sort_key(value) -> tuple[str, str]:
+    """Return a deterministic ordering key for mixed scalar ID types."""
+    value = _python_scalar(value)
+    return type(value).__name__, repr(value)
+
+
+def _trial_metadata_by_subject(
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+) -> tuple[dict, dict, tuple[int, ...]]:
+    """Return subject-to-trials and one class label per subject/trial key."""
+    y_ids = _as_numpy_1d(label_array).astype(np.int64)
+    subject_to_trials: dict = {}
+    labels_by_key: dict[tuple, int] = {}
+
+    grouped_labels: dict[tuple, set[int]] = {}
+    for subject_id, trial_id, label in zip(
+        subject_id_array,
+        trial_id_array,
+        y_ids,
+    ):
+        subject_value = _python_scalar(subject_id)
+        trial_value = _python_scalar(trial_id)
+        key = (subject_value, trial_value)
+        grouped_labels.setdefault(key, set()).add(int(label))
+
+    for (subject_id, trial_id), labels in grouped_labels.items():
+        if len(labels) != 1:
+            raise ValueError(
+                "Every (subject_id, trial_id) group must have one label. "
+                f"Subject {subject_id!r}, trial {trial_id!r} has labels "
+                f"{sorted(labels)}."
+            )
+        labels_by_key[(subject_id, trial_id)] = int(next(iter(labels)))
+        subject_to_trials.setdefault(subject_id, []).append(trial_id)
+
+    for subject_id, trial_ids in subject_to_trials.items():
+        subject_to_trials[subject_id] = tuple(
+            sorted(set(trial_ids), key=_stable_scalar_sort_key)
+        )
+
+    classes = tuple(sorted(set(labels_by_key.values())))
+    return subject_to_trials, labels_by_key, classes
+
+
+def _lnskto_split_signature(held_out_trials: list[dict]) -> tuple:
+    """Create a hashable canonical signature for one LNSKTO test split."""
+    rows = []
+    for row in held_out_trials:
+        subject_id = _python_scalar(row["subject_id"])
+        trial_ids = tuple(
+            sorted(
+                (_python_scalar(value) for value in row["trial_ids"]),
+                key=_stable_scalar_sort_key,
+            )
+        )
+        rows.append((subject_id, trial_ids))
+    rows.sort(key=lambda item: _stable_scalar_sort_key(item[0]))
+    return tuple(rows)
+
+
+def _generate_lnskto_fold_specs(
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+    n_subjects: int = 3,
+    k_trials: int = 3,
+    n_folds: int | None = None,
+    split_seed: int | None = 42,
+    require_all_classes_in_test: bool = True,
+    candidate_pool_size: int = 256,
+) -> list[dict]:
+    """Generate balanced, reproducible LNSKTO test partitions.
+
+    Each fold selects ``n_subjects`` subjects and exactly ``k_trials`` complete
+    trials from each selected subject. Other trials from those same subjects
+    remain eligible for training. Full test partitions are unique, while
+    individual subjects or trials may reappear across folds as needed.
+    """
+    subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
+    label_array = np.asarray(label_array)
+
+    if n_subjects < 1:
+        raise ValueError("n_subjects must be at least 1.")
+    if k_trials < 1:
+        raise ValueError("k_trials must be at least 1.")
+    if candidate_pool_size < 1:
+        raise ValueError("candidate_pool_size must be at least 1.")
+    if split_seed is not None and split_seed < 0:
+        raise ValueError("split_seed must be non-negative or None.")
+
+    subject_to_trials, labels_by_key, global_classes = _trial_metadata_by_subject(
+        label_array=label_array,
+        subject_id_array=subject_id_array,
+        trial_id_array=trial_id_array,
+    )
+    unique_subjects = tuple(
+        sorted(subject_to_trials, key=_stable_scalar_sort_key)
+    )
+
+    if n_subjects > len(unique_subjects):
+        raise ValueError(
+            f"n_subjects={n_subjects} exceeds the {len(unique_subjects)} "
+            "available subjects."
+        )
+
+    insufficient = {
+        subject_id: len(trials)
+        for subject_id, trials in subject_to_trials.items()
+        if len(trials) <= k_trials
+    }
+    if insufficient:
+        details = ", ".join(
+            f"{subject_id!r}:{count}"
+            for subject_id, count in sorted(
+                insufficient.items(),
+                key=lambda item: _stable_scalar_sort_key(item[0]),
+            )
+        )
+        raise ValueError(
+            f"Every selectable subject needs at least {k_trials + 1} unique "
+            f"trials so that k_trials={k_trials} can be tested while at least "
+            f"one trial remains in training. Insufficient subjects: {details}."
+        )
+
+    if n_folds is None:
+        # For DREAMER this produces 23 folds. More generally, it gives each
+        # subject approximately ``n_subjects`` test appearances overall.
+        n_folds = len(unique_subjects)
+    n_folds = int(n_folds)
+    if n_folds < 1:
+        raise ValueError("n_folds must be at least 1.")
+
+    if require_all_classes_in_test and len(global_classes) < 2:
+        raise ValueError(
+            "require_all_classes_in_test=True requires at least two classes."
+        )
+    if require_all_classes_in_test and n_subjects * k_trials < len(global_classes):
+        raise ValueError(
+            "The test fold is too small to contain all classes: "
+            f"n_subjects * k_trials={n_subjects * k_trials}, "
+            f"n_classes={len(global_classes)}."
+        )
+
+    rng = np.random.default_rng(split_seed)
+    subject_use_count = {subject_id: 0 for subject_id in unique_subjects}
+    trial_use_count = {
+        key: 0 for key in labels_by_key
+    }
+    seen_signatures: set[tuple] = set()
+    all_trial_keys = set(labels_by_key)
+    fold_specs: list[dict] = []
+
+    for fold_number in range(1, n_folds + 1):
+        best_candidate: tuple | None = None
+        best_score: tuple | None = None
+
+        # Draw many candidates, then choose the one that best balances class
+        # composition, subject reuse, and trial reuse.
+        attempts = max(candidate_pool_size, 64)
+        for _ in range(attempts):
+            selected_subject_indices = rng.choice(
+                len(unique_subjects),
+                size=n_subjects,
+                replace=False,
+            )
+            selected_subjects = [
+                unique_subjects[int(index)]
+                for index in selected_subject_indices
+            ]
+
+            held_out_trials: list[dict] = []
+            held_out_keys: set[tuple] = set()
+            for subject_id in selected_subjects:
+                subject_trials = subject_to_trials[subject_id]
+                selected_trial_indices = rng.choice(
+                    len(subject_trials),
+                    size=k_trials,
+                    replace=False,
+                )
+                selected_trials = [
+                    subject_trials[int(index)]
+                    for index in selected_trial_indices
+                ]
+                selected_trials = sorted(
+                    selected_trials,
+                    key=_stable_scalar_sort_key,
+                )
+                held_out_trials.append(
+                    {
+                        "subject_id": _python_scalar(subject_id),
+                        "trial_ids": [
+                            _python_scalar(value) for value in selected_trials
+                        ],
+                    }
+                )
+                held_out_keys.update(
+                    (subject_id, trial_id) for trial_id in selected_trials
+                )
+
+            held_out_trials.sort(
+                key=lambda row: _stable_scalar_sort_key(row["subject_id"])
+            )
+            signature = _lnskto_split_signature(held_out_trials)
+            if signature in seen_signatures:
+                continue
+
+            test_labels = [labels_by_key[key] for key in held_out_keys]
+            train_keys = all_trial_keys.difference(held_out_keys)
+            train_labels = {labels_by_key[key] for key in train_keys}
+            if train_labels != set(global_classes):
+                continue
+            if (
+                require_all_classes_in_test
+                and set(test_labels) != set(global_classes)
+            ):
+                continue
+
+            class_counts = np.asarray(
+                [test_labels.count(class_id) for class_id in global_classes],
+                dtype=np.int64,
+            )
+            class_imbalance = int(class_counts.max() - class_counts.min())
+            subject_counts = [
+                subject_use_count[subject_id]
+                for subject_id in selected_subjects
+            ]
+            trial_counts = [
+                trial_use_count[key] for key in held_out_keys
+            ]
+            score = (
+                class_imbalance,
+                max(subject_counts, default=0),
+                sum(subject_counts),
+                max(trial_counts, default=0),
+                sum(trial_counts),
+                float(rng.random()),
+            )
+
+            if best_score is None or score < best_score:
+                best_score = score
+                best_candidate = (
+                    held_out_trials,
+                    held_out_keys,
+                    signature,
+                    test_labels,
+                )
+
+        if best_candidate is None:
+            raise RuntimeError(
+                "Could not generate another valid unique LNSKTO fold. Reduce "
+                "n_folds, disable require_all_classes_in_test, or change the "
+                "split seed."
+            )
+
+        held_out_trials, held_out_keys, signature, test_labels = best_candidate
+        seen_signatures.add(signature)
+        selected_subjects = [
+            row["subject_id"] for row in held_out_trials
+        ]
+        for subject_id in selected_subjects:
+            subject_use_count[subject_id] += 1
+        for key in held_out_keys:
+            trial_use_count[key] += 1
+
+        test_mask = np.zeros(len(subject_id_array), dtype=bool)
+        for row in held_out_trials:
+            subject_mask = subject_id_array == row["subject_id"]
+            trial_mask = np.isin(trial_id_array, row["trial_ids"])
+            test_mask |= subject_mask & trial_mask
+        test_indices = np.where(test_mask)[0].astype(np.int64)
+
+        observed_test_keys = set(
+            zip(
+                subject_id_array[test_indices].tolist(),
+                trial_id_array[test_indices].tolist(),
+            )
+        )
+        expected_test_keys = {
+            (_python_scalar(subject_id), _python_scalar(trial_id))
+            for subject_id, trial_id in held_out_keys
+        }
+        if observed_test_keys != expected_test_keys:
+            raise RuntimeError(
+                "Internal LNSKTO split-generation error: selected trial keys "
+                "did not map exactly to the test samples."
+            )
+
+        fold_specs.append(
+            {
+                "fold_number": int(fold_number),
+                "test_indices": test_indices,
+                "test_subjects": selected_subjects,
+                "held_out_trials": held_out_trials,
+                "n_test_trials": int(len(held_out_keys)),
+                "test_class_counts": {
+                    int(class_id): int(test_labels.count(class_id))
+                    for class_id in global_classes
+                },
+            }
+        )
+
+    return fold_specs
+
+
+def _run_lnskto_fold_task(
+    fold_number: int,
+    fold_spec: dict,
+    n_subjects: int,
+    k_trials: int,
+    **worker_state,
+) -> dict:
+    """Execute one LNSKTO split through the shared fold-training pipeline."""
+    test_subjects = list(fold_spec["test_subjects"])
+    held_out_trials = [dict(row) for row in fold_spec["held_out_trials"]]
+    trial_summary = "; ".join(
+        f"subject={row['subject_id']!r}: trials={row['trial_ids']}"
+        for row in held_out_trials
+    )
+    fold_output = _run_loso_fold(
+        fold_number=fold_number,
+        test_subject=f"LNSKTO-{fold_number}",
+        test_indices_override=np.asarray(fold_spec["test_indices"], dtype=np.int64),
+        left_out_subjects_override=test_subjects,
+        held_out_trials=held_out_trials,
+        validation_excluded_subjects=test_subjects,
+        fold_description=(
+            f"LNSKTO n={n_subjects}, k={k_trials}; {trial_summary}"
+        ),
+        cv_strategy="leave_n_subjects_k_trials_out",
+        **worker_state,
+    )
+
+    fold_record = fold_output["fold_record"]
+    fold_record.update(
+        {
+            "n_subjects_with_trials_left_out": int(n_subjects),
+            "k_trials_left_out_per_subject": int(k_trials),
+            "test_class_counts": dict(fold_spec["test_class_counts"]),
+            "selected_subjects_remain_in_training": True,
+        }
+    )
+    fold_output["outer_fold_result"] = fold_record
+    return fold_output
+
+
+def _lnskto_fold_process_main(
+    worker_state_payload: bytes,
+    task_queue,
+    result_queue,
+    gpu_id: int | None,
+    cpus_per_worker: int | None,
+    assigned_device_label: str | None,
+) -> None:
+    """Run LNSKTO folds in one persistent spawned process."""
+    try:
+        _configure_tensorflow_worker(
+            gpu_id=gpu_id,
+            cpus_per_worker=cpus_per_worker,
+            assigned_device_label=assigned_device_label,
+        )
+        worker_state = cloudpickle.loads(worker_state_payload)
+
+        while True:
+            task = task_queue.get()
+            if task is None:
+                return
+            fold_number, fold_spec = task
+            try:
+                fold_output = _run_lnskto_fold_task(
+                    fold_number=fold_number,
+                    fold_spec=fold_spec,
+                    **worker_state,
+                )
+                result_queue.put(("ok", int(fold_number), fold_output))
+            except BaseException:
+                result_queue.put(
+                    ("error", int(fold_number), traceback.format_exc())
+                )
+                return
+    except BaseException:
+        result_queue.put(("error", -1, traceback.format_exc()))
+    finally:
+        tf.keras.backend.clear_session()
+        gc.collect()
+
+
+def lnskto_cv(
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray | None = None,
+    n_subjects: int = 3,
+    k_trials: int = 3,
+    n_folds: int | None = None,
+    split_seed: int | None = 42,
+    require_all_classes_in_test: bool = True,
+    n_epochs: int = 50,
+    batch_size: int = 2,
+    hyperparameters: dict | None = None,
+    preprocessing_strategy: Callable | None = None,
+    evaluation_level: Literal["window", "trial"] = "trial",
+    selection_metric: str = "f1",
+    selection_level: Literal["window", "trial"] = "trial",
+    maximize_metric: bool | None = None,
+    metrics: list[str] | tuple[str, ...] = (
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
+    ),
+    log_predictions: bool = True,
+    log_variational_intervals: bool = False,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
+    n_uncertainty_samples: int = 30,
+    ci_level: float = 0.95,
+    validation_subjects_per_fold: int = 0,
+    validation_seed: int | None = 42,
+    early_stopping_patience: int | None = 5,
+    early_stopping_min_delta: float = 0.0,
+    early_stopping_monitor: str = "val_loss",
+    early_stopping_mode: Literal["auto", "min", "max"] = "min",
+    restore_best_weights: bool = True,
+    prediction_diagnostics: bool = False,
+    prediction_diagnostics_every_n_epochs: int = 1,
+    prediction_diagnostics_max_samples: int = 256,
+    prediction_diagnostics_threshold_tolerance: float = 0.01,
+    prediction_diagnostics_seed: int | None = 42,
+    decision_thresholds: list[float] | tuple[float, ...] = (0.5,),
+    threshold_selection_metric: Literal[
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    ] = "f1",
+    threshold_selection_level: Literal["window", "trial"] = "trial",
+    verbose: int = 0,
+    extra_fit_kwargs: dict | None = None,
+    n_jobs: int = 1,
+    gpu_ids: list[int] | tuple[int, ...] | None = None,
+    cpus_per_worker: int | None = None,
+) -> dict:
+    """Run flat Leave-N-Subjects-and-K-Trials-Out cross-validation.
+
+    In every fold, ``n_subjects`` subjects are selected and exactly
+    ``k_trials`` complete trials are placed in the test set for each selected
+    subject. The selected subjects are *not* removed completely: their other
+    trials remain in the training pool. Thus this protocol measures
+    generalization to unseen trials from partly observed subjects, not strict
+    cross-subject generalization. Use ``loso_cv`` or ``nested_lnso_cv`` for a
+    subject-independent estimate.
+
+    The defaults are ``n_subjects=3`` and ``k_trials=3``, producing nine held-
+    out trials per fold. When ``n_folds`` is ``None``, the number of folds is
+    set to the total number of subjects (23 for DREAMER). Fold generation is
+    deterministic for a fixed ``split_seed`` and balances repeated use of
+    subjects and trials across folds. Entire ``(subject_id, trial_id)`` groups
+    are kept together, so rank-3 window data never leaks windows from a test
+    trial into training.
+
+    Hyperparameter selection follows the same flat-search semantics as
+    ``loso_cv``: every configuration is evaluated on all generated folds, and
+    the globally best configuration is selected from the mean requested metric.
+    This is not nested CV because the same folds are used for model selection
+    and final performance reporting.
+
+    When fold-local validation subjects are requested, subjects contributing
+    held-out test trials are excluded from validation selection. Their remaining
+    non-test trials therefore stay in gradient training, preserving the intended
+    partial-subject holdout design.
+    """
+    extra_fit_kwargs = extra_fit_kwargs or {}
+
+    if "validation_data" in extra_fit_kwargs:
+        raise ValueError(
+            "Do not pass a fixed validation_data array to lnskto_cv. It would "
+            "not be reconstructed fold-locally and could create leakage."
+        )
+    if subject_id_array is None:
+        raise ValueError("subject_id_array is required for LNSKTO CV.")
+    if trial_id_array is None:
+        raise ValueError(
+            "trial_id_array is required. Pass one trial ID per sample, aligned "
+            "with feature_array."
+        )
+
+    _validate_evaluation_level(evaluation_level, "evaluation_level")
+    _validate_evaluation_level(selection_level, "selection_level")
+
+    feature_array = np.asarray(feature_array)
+    label_array = np.asarray(label_array)
+    subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
+
+    if feature_array.ndim not in {3, 4}:
+        raise ValueError(
+            "feature_array must be rank 3 for window samples or rank 4 for "
+            f"grouped trial samples; got {feature_array.shape}."
+        )
+    if feature_array.ndim == 4:
+        if selection_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require selection_level='trial'."
+            )
+        if evaluation_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require evaluation_level='trial'."
+            )
+
+    input_lengths = (
+        len(feature_array),
+        len(label_array),
+        len(subject_id_array),
+        len(trial_id_array),
+    )
+    if len(set(input_lengths)) != 1:
+        raise ValueError(
+            "feature_array, label_array, subject_id_array, and trial_id_array "
+            f"must have the same first dimension. Got lengths {input_lengths}."
+        )
+
+    metrics = tuple(metrics)
+    for metric in metrics:
+        if metric not in _CLASSIFICATION_METRICS:
+            raise ValueError(
+                f"Unsupported metric: {metric}. Supported metrics: "
+                f"{sorted(_CLASSIFICATION_METRICS)}"
+            )
+
+    allowed_selection_metrics = {"loss", "joint_loss", *metrics}
+    if selection_metric not in allowed_selection_metrics:
+        raise ValueError(
+            f"selection_metric={selection_metric!r} is unavailable. Use "
+            f"'loss', 'joint_loss', or one of metrics={list(metrics)}."
+        )
+    if (
+        feature_array.ndim == 3
+        and selection_metric == "joint_loss"
+        and selection_level != "window"
+    ):
+        raise ValueError(
+            "Window-level models require selection_level='window' when "
+            "selecting by joint_loss."
+        )
+    if maximize_metric is None:
+        maximize_metric = selection_metric not in {"loss", "joint_loss"}
+
+    if n_subjects < 1:
+        raise ValueError("n_subjects must be at least 1.")
+    if k_trials < 1:
+        raise ValueError("k_trials must be at least 1.")
+    if n_folds is not None and n_folds < 1:
+        raise ValueError("n_folds must be at least 1 or None.")
+    if split_seed is not None and split_seed < 0:
+        raise ValueError("split_seed must be non-negative or None.")
+    if n_prediction_latent_samples < 0:
+        raise ValueError("n_prediction_latent_samples must be >= 0.")
+    if not (0.0 < ci_level < 1.0):
+        raise ValueError("ci_level must be between 0 and 1.")
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be >= 1.")
+    if cpus_per_worker is not None and cpus_per_worker < 1:
+        raise ValueError("cpus_per_worker must be >= 1 when provided.")
+
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if validation_seed is not None and validation_seed < 0:
+        raise ValueError("validation_seed must be >= 0 or None.")
+    if early_stopping_patience is not None and early_stopping_patience < 0:
+        raise ValueError("early_stopping_patience must be >= 0 or None.")
+    if early_stopping_min_delta < 0.0:
+        raise ValueError("early_stopping_min_delta must be >= 0.")
+    if early_stopping_mode not in {"auto", "min", "max"}:
+        raise ValueError(
+            "early_stopping_mode must be 'auto', 'min', or 'max'."
+        )
+    if not early_stopping_monitor:
+        raise ValueError("early_stopping_monitor must be a non-empty string.")
+    if prediction_diagnostics_every_n_epochs < 1:
+        raise ValueError(
+            "prediction_diagnostics_every_n_epochs must be at least 1."
+        )
+    if prediction_diagnostics_max_samples < 1:
+        raise ValueError(
+            "prediction_diagnostics_max_samples must be at least 1."
+        )
+    if prediction_diagnostics_threshold_tolerance < 0.0:
+        raise ValueError(
+            "prediction_diagnostics_threshold_tolerance must be non-negative."
+        )
+
+    decision_thresholds = _normalize_decision_thresholds(decision_thresholds)
+    if threshold_selection_metric not in {
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    }:
+        raise ValueError(
+            "threshold_selection_metric must be accuracy, f1, "
+            "balanced_accuracy, or binary_f1."
+        )
+    _validate_evaluation_level(
+        threshold_selection_level,
+        "threshold_selection_level",
+    )
+    if len(decision_thresholds) > 1 and validation_subjects_per_fold == 0:
+        raise ValueError(
+            "Testing multiple decision thresholds requires fold-local "
+            "validation subjects. Set validation_subjects_per_fold >= 1."
+        )
+    if (
+        early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
+        and validation_subjects_per_fold == 0
+        and early_stopping_patience is not None
+    ):
+        raise ValueError(
+            f"{early_stopping_monitor} requires at least one fold-local "
+            "validation subject."
+        )
+
+    unique_subjects = np.unique(subject_id_array)
+    if n_subjects > len(unique_subjects):
+        raise ValueError(
+            f"n_subjects={n_subjects} exceeds the {len(unique_subjects)} "
+            "available subjects."
+        )
+    validation_candidate_count = len(unique_subjects) - n_subjects
+    if (
+        validation_subjects_per_fold > 0
+        and validation_subjects_per_fold >= validation_candidate_count
+    ):
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one non-test "
+            "subject outside validation. With "
+            f"{len(unique_subjects)} subjects and n_subjects={n_subjects}, "
+            f"only {validation_candidate_count} validation candidates remain."
+        )
+
+    fold_specs = _generate_lnskto_fold_specs(
+        label_array=label_array,
+        subject_id_array=subject_id_array,
+        trial_id_array=trial_id_array,
+        n_subjects=n_subjects,
+        k_trials=k_trials,
+        n_folds=n_folds,
+        split_seed=split_seed,
+        require_all_classes_in_test=require_all_classes_in_test,
+    )
+    total_folds = len(fold_specs)
+
+    effective_hyperparameters = {
+        "epochs": n_epochs,
+        "batch_size": batch_size,
+        **(hyperparameters or {}),
+    }
+    sequence_hyperparameter_depths = getattr(
+        model_builder_function,
+        "_sequence_hyperparameter_depths",
+        None,
+    )
+    grid_configs = _expand_hyperparameter_grid(
+        effective_hyperparameters,
+        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+    )
+    _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
+    if not grid_configs:
+        raise ValueError("The hyperparameter grid produced no configurations.")
+
+    total_model_fits = len(grid_configs) * total_folds
+    effective_n_jobs = min(n_jobs, total_folds)
+    normalized_gpu_ids: tuple[int, ...] | None = None
+    if gpu_ids is None and effective_n_jobs > 1:
+        normalized_gpu_ids = _auto_assign_gpu_ids(effective_n_jobs)
+        if normalized_gpu_ids is not None:
+            effective_n_jobs = len(normalized_gpu_ids)
+    elif gpu_ids is not None:
+        normalized_gpu_ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
+        if not normalized_gpu_ids:
+            raise ValueError("gpu_ids must contain at least one GPU index.")
+        if len(set(normalized_gpu_ids)) != len(normalized_gpu_ids):
+            raise ValueError("gpu_ids must not contain duplicate GPU indices.")
+        if effective_n_jobs > len(normalized_gpu_ids):
+            raise ValueError(
+                f"n_jobs={effective_n_jobs} requires at least that many GPU "
+                f"IDs, but gpu_ids={normalized_gpu_ids}."
+            )
+        normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
+
+    print(
+        f"\nFlat LNSKTO hyperparameter search — n={n_subjects}, "
+        f"k={k_trials}, {len(grid_configs)} configuration"
+        f"{'s' if len(grid_configs) != 1 else ''}, {total_folds} fold"
+        f"{'s' if total_folds != 1 else ''} each"
+    )
+    print(
+        f"Each test fold contains {n_subjects * k_trials} complete trials; "
+        "selected subjects' remaining trials stay in training."
+    )
+    print(f"Split seed: {split_seed}")
+    print(f"Require all classes in test: {require_all_classes_in_test}")
+    print(f"Total model fits: {total_model_fits}")
+    print(f"Requested metrics: {list(metrics)}")
+    print(
+        f"Configuration selection: {selection_level}-level "
+        f"{selection_metric} "
+        f"({'maximize' if maximize_metric else 'minimize'})"
+    )
+    print(f"Primary reported metrics: {evaluation_level}-level")
+    print(f"Prediction logging: {log_predictions}")
+    print(f"Prediction diagnostics: {prediction_diagnostics}")
+    print(f"Variational interval logging: {log_variational_intervals}")
+    print(
+        "Decision thresholds: "
+        f"{list(decision_thresholds)}; selection="
+        f"{threshold_selection_level}_{threshold_selection_metric}"
+    )
+    prediction_mode = (
+        "posterior mean"
+        if n_prediction_latent_samples == 0
+        else f"MC average over {n_prediction_latent_samples} latent sample(s)"
+    )
+    print(f"Prediction latent mode: {prediction_mode}")
+    if validation_subjects_per_fold > 0:
+        print(
+            "Per-fold validation: "
+            f"{validation_subjects_per_fold} seeded non-test subject(s), "
+            f"seed={validation_seed}, monitor={early_stopping_monitor}, "
+            f"patience={early_stopping_patience}, "
+            f"restore_best_weights={restore_best_weights}"
+        )
+    else:
+        print("Per-fold validation: disabled")
+    print(f"Fold workers: {effective_n_jobs}")
+    if effective_n_jobs > 1 and normalized_gpu_ids is None:
+        print("Worker devices: CPU-only")
+    elif normalized_gpu_ids is not None:
+        print(f"Worker devices: GPUs {list(normalized_gpu_ids)}")
+    else:
+        print("Worker device: current TensorFlow default")
+
+    tasks = [
+        (int(spec["fold_number"]), spec)
+        for spec in fold_specs
+    ]
+    common_worker_state = {
+        "n_subjects": int(n_subjects),
+        "k_trials": int(k_trials),
+        "total_folds": total_folds,
+        "model_builder_function": model_builder_function,
+        "feature_array": feature_array,
+        "label_array": label_array,
+        "subject_id_array": subject_id_array,
+        "trial_id_array": trial_id_array,
+        "batch_size": batch_size,
+        "preprocessing_strategy": preprocessing_strategy,
+        "evaluation_level": evaluation_level,
+        "metrics": metrics,
+        "log_predictions": log_predictions,
+        "log_variational_intervals": log_variational_intervals,
+        "n_prediction_latent_samples": n_prediction_latent_samples,
+        "latent_sampling_seed": latent_sampling_seed,
+        "n_uncertainty_samples": n_uncertainty_samples,
+        "ci_level": ci_level,
+        "validation_subjects_per_fold": validation_subjects_per_fold,
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": early_stopping_min_delta,
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": restore_best_weights,
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": decision_thresholds,
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
+        "verbose": verbose,
+        "extra_fit_kwargs": extra_fit_kwargs,
+    }
+
+    config_results: list[dict] = []
+    best_so_far_result: dict | None = None
+    best_fold_outputs: list[dict] | None = None
+
+    for config_index, config in enumerate(grid_configs):
+        print("\n" + "#" * 80)
+        print(
+            f"Configuration {config_index + 1} / {len(grid_configs)} "
+            f"({total_folds} LNSKTO fits)"
+        )
+        _print_config("Configuration:", config)
+        worker_state = {
+            **common_worker_state,
+            "fixed_config": config,
+        }
+
+        if effective_n_jobs == 1 and normalized_gpu_ids is None:
+            fold_outputs = [
+                _run_lnskto_fold_task(
+                    fold_number=fold_number,
+                    fold_spec=fold_spec,
+                    **worker_state,
+                )
+                for fold_number, fold_spec in tasks
+            ]
+        else:
+            fold_outputs = _run_spawned_fold_pool(
+                worker_target=_lnskto_fold_process_main,
+                worker_state=worker_state,
+                tasks=tasks,
+                n_workers=effective_n_jobs,
+                gpu_ids=normalized_gpu_ids,
+                cpus_per_worker=cpus_per_worker,
+                worker_name_prefix=f"LNSKTOConfig{config_index + 1}Worker",
+                worker_description=(
+                    f"LNSKTO fold for configuration {config_index + 1}"
+                ),
+            )
+
+        fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+        config_result = _aggregate_loso_config_result(
+            config_index=config_index,
+            config=config,
+            fold_outputs=fold_outputs,
+            metrics=metrics,
+            selection_metric=selection_metric,
+            selection_level=selection_level,
+        )
+        config_results.append(config_result)
+
+        if (
+            best_so_far_result is None
+            or _loso_config_sort_key(
+                config_result=config_result,
+                selection_metric=selection_metric,
+                selection_level=selection_level,
+                maximize_metric=bool(maximize_metric),
+            )
+            < _loso_config_sort_key(
+                config_result=best_so_far_result,
+                selection_metric=selection_metric,
+                selection_level=selection_level,
+                maximize_metric=bool(maximize_metric),
+            )
+        ):
+            best_so_far_result = config_result
+            best_fold_outputs = fold_outputs
+
+        print(
+            f"\nConfiguration {config_index + 1} complete: mean "
+            f"{selection_level}_{selection_metric}="
+            f"{config_result['selection_score']:.6f} ± "
+            f"{config_result['selection_score_std']:.6f}",
+            flush=True,
+        )
+
+    best_config_index = _choose_best_loso_config_index(
+        config_results=config_results,
+        selection_metric=selection_metric,
+        selection_level=selection_level,
+        maximize_metric=bool(maximize_metric),
+    )
+    best_config_result = config_results[best_config_index]
+    best_config = dict(best_config_result["config"])
+    if (
+        best_so_far_result is None
+        or best_fold_outputs is None
+        or int(best_so_far_result["config_index"]) != best_config_index
+    ):
+        raise RuntimeError(
+            "Internal LNSKTO grid-search error: selected configuration logs "
+            "were not retained correctly."
+        )
+
+    results = {
+        "cv_strategy": "flat_leave_n_subjects_k_trials_out_hyperparameter_search",
+        "hyperparameter_search": True,
+        "n_subjects": int(n_subjects),
+        "k_trials": int(k_trials),
+        "n_test_trials_per_fold": int(n_subjects * k_trials),
+        "n_folds": int(total_folds),
+        "split_seed": split_seed,
+        "require_all_classes_in_test": bool(require_all_classes_in_test),
+        "selected_subjects_remain_in_training": True,
+        "fold_definitions": [
+            {
+                "fold_number": int(spec["fold_number"]),
+                "test_subjects": list(spec["test_subjects"]),
+                "held_out_trials": [
+                    dict(row) for row in spec["held_out_trials"]
+                ],
+                "n_test_trials": int(spec["n_test_trials"]),
+                "test_class_counts": dict(spec["test_class_counts"]),
+            }
+            for spec in fold_specs
+        ],
+        "grid_configs": [dict(config) for config in grid_configs],
+        "n_configs": int(len(grid_configs)),
+        "n_total_cv_fits": int(total_model_fits),
+        "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "maximize_metric": bool(maximize_metric),
+        "n_prediction_latent_samples": int(n_prediction_latent_samples),
+        "latent_sampling_seed": latent_sampling_seed,
+        "validation_subjects_per_fold": int(validation_subjects_per_fold),
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": float(early_stopping_min_delta),
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": bool(restore_best_weights),
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": list(decision_thresholds),
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
+        "config_results": config_results,
+        "best_config_index": int(best_config_index),
+        "best_config": best_config,
+        "best_config_result": best_config_result,
+        "fixed_config": best_config,
+        "fold_metrics": [],
+        "window_fold_metrics": [],
+        "trial_fold_metrics": [],
+        "user_metrics": [],
+        "prediction_log": [],
+        "window_prediction_log": [],
+        "trial_prediction_log": [],
+        "variational_interval_log": [],
+        "window_variational_interval_log": [],
+        "trial_variational_interval_log": [],
+        "prediction_diagnostics_log": [],
+        "fold_results": [],
+        "best_configs": [],
+        "inner_cv_results": [],
+        "outer_fold_results": [],
+        "mean_scores": dict(best_config_result["mean_scores"]),
+        "std_scores": dict(best_config_result["std_scores"]),
+        "window_mean_scores": dict(best_config_result["window_mean_scores"]),
+        "window_std_scores": dict(best_config_result["window_std_scores"]),
+        "trial_mean_scores": dict(best_config_result["trial_mean_scores"]),
+        "trial_std_scores": dict(best_config_result["trial_std_scores"]),
+    }
+
+    for fold_output in best_fold_outputs:
+        fold_number = int(fold_output["outer_fold_number"])
+        fold_record = dict(fold_output["fold_record"])
+        fold_record.update(
+            {
+                "config_index": int(best_config_index),
+                "fixed_config": dict(best_config),
+                "best_config": dict(best_config),
+                "selection_metric": selection_metric,
+                "selection_level": selection_level,
+                "selection_score": float(best_config_result["selection_score"]),
+                "configuration_source": "global_flat_lnskto_grid_search",
+            }
+        )
+        global_best_record = {
+            "outer_fold": fold_number,
+            "best_config_index": int(best_config_index),
+            "best_config": dict(best_config),
+            "selection_metric": selection_metric,
+            "selection_level": selection_level,
+            "selection_score": float(best_config_result["selection_score"]),
+            "configuration_source": "global_flat_lnskto_grid_search",
+        }
+        empty_inner_record = {
+            "outer_fold": fold_number,
+            "inner_fold_results": [],
+            "inner_mean_scores": [],
+            "inner_std_scores": [],
+            "configuration_source": (
+                "not_applicable_for_flat_lnskto_grid_search"
+            ),
+        }
+
+        results["fold_metrics"].append(fold_output["fold_metrics"])
+        results["window_fold_metrics"].append(
+            fold_output["window_fold_metrics"]
+        )
+        results["trial_fold_metrics"].append(
+            fold_output["trial_fold_metrics"]
+        )
+        results["user_metrics"].extend(fold_output["user_metrics"])
+        results["prediction_log"].extend(fold_output["prediction_log"])
+        results["window_prediction_log"].extend(
+            fold_output["window_prediction_log"]
+        )
+        results["trial_prediction_log"].extend(
+            fold_output["trial_prediction_log"]
+        )
+        results["variational_interval_log"].extend(
+            fold_output["variational_interval_log"]
+        )
+        results["window_variational_interval_log"].extend(
+            fold_output["window_variational_interval_log"]
+        )
+        results["trial_variational_interval_log"].extend(
+            fold_output["trial_variational_interval_log"]
+        )
+        results["prediction_diagnostics_log"].extend(
+            fold_output.get("prediction_diagnostics_log", [])
+        )
+        results["fold_results"].append(fold_record)
+        results["outer_fold_results"].append(fold_record)
+        results["best_configs"].append(global_best_record)
+        results["inner_cv_results"].append(empty_inner_record)
+
+    print("\nFlat LNSKTO hyperparameter search complete")
+    print("=" * 80)
+    print(
+        f"Selected configuration {best_config_index + 1} / "
+        f"{len(grid_configs)} using {selection_level}-level "
+        f"{selection_metric}."
+    )
+    _print_config("Best configuration:", best_config)
+    print(
+        f"Selection score: {best_config_result['selection_score']:.6f} ± "
+        f"{best_config_result['selection_score_std']:.6f}"
+    )
+    print("Selected configuration primary mean scores:")
+    print(
+        pformat(
+            results["mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration primary score standard deviations:")
+    print(
+        pformat(
+            results["std_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration window-level mean scores:")
+    print(
+        pformat(
+            results["window_mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration trial-level mean scores:")
+    print(
+        pformat(
+            results["trial_mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    return results
+
+
+# Descriptive alias for callers that prefer the full protocol name.
+leave_n_subjects_k_trials_out_cv = lnskto_cv

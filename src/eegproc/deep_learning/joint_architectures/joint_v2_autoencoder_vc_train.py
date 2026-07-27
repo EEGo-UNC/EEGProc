@@ -1,4 +1,4 @@
-"""Training entry point for window- or trial-level joint VAE classification.
+"""Training entry point for joint VAE classification with selectable CV.
 
 Window mode preserves one prediction per EEG window. Trial mode groups ordered
 windows by ``(subject_id, trial_id)``, pads sessions only after all available
@@ -6,8 +6,9 @@ windows have been retained, reconstructs valid windows independently, and
 trains a BiLSTM across the complete session window sequence to emit one label.
 
 The loader supports window-local channel-band z-scoring and an explicit
-subject-median label mode. Class weighting can be enabled or disabled without
-changing cross_val.py.
+subject-median label mode. Cross-validation can use strict LOSO or hold out K
+complete trials from each of N selected subjects without splitting a trial
+across train and test.
 """
 
 from __future__ import annotations
@@ -58,11 +59,11 @@ except ImportError:
 
 try:
     try:
-        from ..cross_val import PredictionDiagnostics, loso_cv
+        from ..cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
     except ImportError:
         # Supports replacing the repository's ordinary cross_val.py with this
         # variant while retaining the standard module name.
-        from ..cross_val import PredictionDiagnostics, loso_cv
+        from ..cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
     from ..supervised.rnn_architectures import BiLSTMClassifier
     from ..supervised.variational_classifier import (
         DenseClassifier,
@@ -78,9 +79,9 @@ except ImportError:
         sys.path.insert(0, str(SRC_ROOT))
 
     try:
-        from eegproc.deep_learning.cross_val import PredictionDiagnostics, loso_cv
+        from eegproc.deep_learning.cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
     except ImportError:
-        from eegproc.deep_learning.cross_val import PredictionDiagnostics, loso_cv
+        from eegproc.deep_learning.cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
     from eegproc.deep_learning.supervised.rnn_architectures import (
         BiLSTMClassifier,
     )
@@ -118,6 +119,11 @@ class JointV2TrainingConfig:
     weight_decay: float = 1e-4
     batch_size: int = 64
     cv_max_epochs: int = 50
+    cv_strategy: str = "loso"
+    lnskto_subjects: int = 3
+    lnskto_trials: int = 3
+    lnskto_split_seed: int | None = 42
+    lnskto_require_all_classes_in_test: bool = True
     final_epoch_strategy: str = "median"
     final_epochs: int | None = None
     classification_level: str = "window"
@@ -1306,7 +1312,7 @@ def train_joint_autoencoder_variational_classifier_v2(
     training_config: JointV2TrainingConfig | None = None,
     model_builder_function: Callable[[], tf.keras.Model] | None = None,
 ) -> dict:
-    """Train window or grouped-trial samples with subject-disjoint LOSO."""
+    """Train window or grouped-trial samples with selectable CV."""
 
     training_config = training_config or JointV2TrainingConfig()
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1716,6 +1722,17 @@ def train_joint_autoencoder_variational_classifier_v2(
     logger.info("Starting joint-model v2 training run in %s", run_dir)
     logger.info("Encoder type: %s", encoder_type)
     logger.info("Classification/evaluation level: %s", classification_level)
+    logger.info("Cross-validation strategy: %s", training_config.cv_strategy)
+    if training_config.cv_strategy == "lnskto":
+        logger.info(
+            "LNSKTO split: %d subjects x %d held-out trials, split_seed=%s, "
+            "require_all_classes_in_test=%s, folds=%s",
+            training_config.lnskto_subjects,
+            training_config.lnskto_trials,
+            training_config.lnskto_split_seed,
+            training_config.lnskto_require_all_classes_in_test,
+            training_config.max_folds,
+        )
     logger.info("Default classifier head: %s", training_config.classifier_head)
     logger.info(
         "Optimizer: %s, learning_rate=%.8g, weight_decay=%.8g",
@@ -1847,62 +1864,95 @@ def train_joint_autoencoder_variational_classifier_v2(
         },
     }[encoder_type]
 
-    cv_results = loso_cv(
-        model_builder_function=model_builder_function,
-        feature_array=feature_array,
-        label_array=label_array,
-        subject_id_array=subject_id_array,
-        trial_id_array=trial_id_array,
-        n_epochs=training_config.cv_max_epochs,
-        batch_size=training_config.batch_size,
-        hyperparameters=training_config.hyperparameters,
-        evaluation_level=classification_level,
-        selection_level=(
+    common_cv_kwargs = {
+        "model_builder_function": model_builder_function,
+        "feature_array": feature_array,
+        "label_array": label_array,
+        "subject_id_array": subject_id_array,
+        "trial_id_array": trial_id_array,
+        "n_epochs": training_config.cv_max_epochs,
+        "batch_size": training_config.batch_size,
+        "hyperparameters": training_config.hyperparameters,
+        "evaluation_level": classification_level,
+        "selection_level": (
             "trial"
             if classification_level == "trial"
             else training_config.selection_level
         ),
-        selection_metric=training_config.selection_metric,
-        maximize_metric=training_config.maximize_metric,
-        metrics=("accuracy", "f1", "precision", "recall"),
-        log_predictions=True,
-        n_prediction_latent_samples=training_config.prediction_latent_samples,
-        latent_sampling_seed=training_config.latent_sampling_seed,
-        decision_thresholds=training_config.decision_thresholds,
-        threshold_selection_metric=training_config.threshold_selection_metric,
-        threshold_selection_level=training_config.threshold_selection_level,
-        prediction_diagnostics=training_config.prediction_diagnostics,
-        prediction_diagnostics_every_n_epochs=(
+        "selection_metric": training_config.selection_metric,
+        "maximize_metric": training_config.maximize_metric,
+        "metrics": ("accuracy", "f1", "precision", "recall"),
+        "log_predictions": True,
+        "n_prediction_latent_samples": (
+            training_config.prediction_latent_samples
+        ),
+        "latent_sampling_seed": training_config.latent_sampling_seed,
+        "decision_thresholds": training_config.decision_thresholds,
+        "threshold_selection_metric": (
+            training_config.threshold_selection_metric
+        ),
+        "threshold_selection_level": (
+            training_config.threshold_selection_level
+        ),
+        "prediction_diagnostics": training_config.prediction_diagnostics,
+        "prediction_diagnostics_every_n_epochs": (
             training_config.prediction_diagnostics_every_n_epochs
         ),
-        prediction_diagnostics_max_samples=(
+        "prediction_diagnostics_max_samples": (
             training_config.prediction_diagnostics_max_samples
         ),
-        prediction_diagnostics_threshold_tolerance=(
+        "prediction_diagnostics_threshold_tolerance": (
             training_config.prediction_diagnostics_threshold_tolerance
         ),
-        prediction_diagnostics_seed=training_config.prediction_diagnostics_seed,
-        validation_subjects_per_fold=(
+        "prediction_diagnostics_seed": (
+            training_config.prediction_diagnostics_seed
+        ),
+        "validation_subjects_per_fold": (
             training_config.validation_subjects_per_fold
             if training_config.use_early_stopping
             else 0
         ),
-        validation_seed=training_config.validation_seed,
-        early_stopping_patience=(
+        "validation_seed": training_config.validation_seed,
+        "early_stopping_patience": (
             training_config.early_stopping_patience
             if training_config.use_early_stopping
             else None
         ),
-        early_stopping_min_delta=training_config.early_stopping_min_delta,
-        early_stopping_monitor=training_config.early_stopping_monitor,
-        early_stopping_mode=training_config.early_stopping_mode,
-        restore_best_weights=True,
-        verbose=training_config.outer_verbose,
-        extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
-        n_jobs=training_config.n_jobs,
-        cpus_per_worker=training_config.cpus_per_worker,
-        max_folds=training_config.max_folds,
-    )
+        "early_stopping_min_delta": (
+            training_config.early_stopping_min_delta
+        ),
+        "early_stopping_monitor": training_config.early_stopping_monitor,
+        "early_stopping_mode": training_config.early_stopping_mode,
+        "restore_best_weights": True,
+        "verbose": training_config.outer_verbose,
+        "extra_fit_kwargs": {
+            "callbacks": [tf.keras.callbacks.TerminateOnNaN()]
+        },
+        "n_jobs": training_config.n_jobs,
+        "cpus_per_worker": training_config.cpus_per_worker,
+    }
+
+    if training_config.cv_strategy == "loso":
+        cv_results = loso_cv(
+            **common_cv_kwargs,
+            max_folds=training_config.max_folds,
+        )
+    elif training_config.cv_strategy == "lnskto":
+        cv_results = lnskto_cv(
+            **common_cv_kwargs,
+            n_subjects=training_config.lnskto_subjects,
+            k_trials=training_config.lnskto_trials,
+            n_folds=training_config.max_folds,
+            split_seed=training_config.lnskto_split_seed,
+            require_all_classes_in_test=(
+                training_config.lnskto_require_all_classes_in_test
+            ),
+        )
+    else:
+        raise ValueError(
+            "cv_strategy must be 'loso' or 'lnskto'; got "
+            f"{training_config.cv_strategy!r}."
+        )
 
     fold_rows: list[dict] = []
     for fold_result in cv_results["outer_fold_results"]:
@@ -1925,13 +1975,30 @@ def train_joint_autoencoder_variational_classifier_v2(
             row["validation_subjects"] = ",".join(
                 map(str, row["validation_subjects"])
             )
+        if "held_out_trials" in row:
+            row["held_out_trials"] = json.dumps(
+                row["held_out_trials"],
+                sort_keys=True,
+                default=_json_default,
+            )
         row["inner_fold_results"] = json.dumps(
             row["inner_fold_results"], default=_json_default
         )
         fold_rows.append(row)
 
-    _write_json(run_dir / "loso_cv_results.json", cv_results)
-    _write_csv(run_dir / "loso_cv_folds.csv", fold_rows)
+    cv_artifact_prefix = (
+        "loso" if training_config.cv_strategy == "loso" else "lnskto"
+    )
+    _write_json(run_dir / "cv_results.json", cv_results)
+    _write_csv(run_dir / "cv_folds.csv", fold_rows)
+    _write_json(
+        run_dir / f"{cv_artifact_prefix}_cv_results.json",
+        cv_results,
+    )
+    _write_csv(
+        run_dir / f"{cv_artifact_prefix}_cv_folds.csv",
+        fold_rows,
+    )
     _write_csv(
         run_dir / "grid_search_summary.csv",
         _grid_summary_rows(cv_results),
@@ -1951,7 +2018,8 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     if "best_config" not in cv_results:
         raise RuntimeError(
-            "loso_cv did not return best_config; the final model cannot be built."
+            "The selected CV function did not return best_config; "
+            "the final model cannot be built."
         )
     selected_final_config = dict(cv_results["best_config"])
     _write_json(run_dir / "selected_config.json", selected_final_config)
@@ -2143,7 +2211,29 @@ def train_joint_autoencoder_variational_classifier_v2(
         "prediction_diagnostics_threshold_tolerance": (
             training_config.prediction_diagnostics_threshold_tolerance
         ),
-        "loso_cv": cv_results,
+        "cv_strategy": training_config.cv_strategy,
+        "lnskto_subjects": (
+            training_config.lnskto_subjects
+            if training_config.cv_strategy == "lnskto"
+            else None
+        ),
+        "lnskto_trials": (
+            training_config.lnskto_trials
+            if training_config.cv_strategy == "lnskto"
+            else None
+        ),
+        "lnskto_split_seed": (
+            training_config.lnskto_split_seed
+            if training_config.cv_strategy == "lnskto"
+            else None
+        ),
+        "cv_results": cv_results,
+        "loso_cv": (
+            cv_results if training_config.cv_strategy == "loso" else None
+        ),
+        "lnskto_cv": (
+            cv_results if training_config.cv_strategy == "lnskto" else None
+        ),
         "final_fit_history": final_history.history,
         "final_full_dataset_metrics": final_eval,
     }
@@ -2159,8 +2249,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Train JointAutoencoderVariationalClassifierV2 with a CNN1D, "
-            "CNN2D, or GCN autoencoder, seeded validation, and selectable "
-            "window/trial LOSO classification."
+            "CNN2D, or GCN autoencoder, seeded validation, selectable "
+            "window/trial classification, and LOSO or LNSKTO CV."
         )
     )
     parser.add_argument("--out-dir", default="runs/joint_autoencoder_vc_v2")
@@ -2208,6 +2298,58 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "the complete session (default: window)."
         ),
     )
+    parser.add_argument(
+        "--cv-strategy",
+        choices=("loso", "lnskto"),
+        default="loso",
+        help=(
+            "Cross-validation protocol. loso holds out one complete subject; "
+            "lnskto holds out K complete trials from each of N selected "
+            "subjects while retaining their other trials in training "
+            "(default: loso)."
+        ),
+    )
+    parser.add_argument(
+        "--lnskto-subjects",
+        type=int,
+        default=3,
+        help=(
+            "Number of subjects contributing held-out trials in each LNSKTO "
+            "fold (default: 3)."
+        ),
+    )
+    parser.add_argument(
+        "--lnskto-trials",
+        type=int,
+        default=3,
+        help=(
+            "Number of complete trials held out from each selected subject in "
+            "every LNSKTO fold (default: 3)."
+        ),
+    )
+    parser.add_argument(
+        "--lnskto-split-seed",
+        type=int,
+        default=42,
+        help=(
+            "Seed for deterministic balanced LNSKTO fold generation "
+            "(default: 42)."
+        ),
+    )
+    lnskto_class_group = parser.add_mutually_exclusive_group()
+    lnskto_class_group.add_argument(
+        "--lnskto-require-all-classes",
+        dest="lnskto_require_all_classes",
+        action="store_true",
+        help="Require every LNSKTO test fold to contain all target classes.",
+    )
+    lnskto_class_group.add_argument(
+        "--lnskto-allow-single-class-folds",
+        dest="lnskto_require_all_classes",
+        action="store_false",
+        help="Allow an LNSKTO test fold containing only one target class.",
+    )
+    parser.set_defaults(lnskto_require_all_classes=True)
     parser.add_argument(
         "--trial-max-windows",
         type=int,
@@ -2272,8 +2414,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Optionally run only the first N sorted LOSO folds. "
-            "Use 1 for an end-to-end smoke test; omit for complete LOSO."
+            "Limit the current CV strategy to N folds. For LOSO this uses "
+            "the first N sorted subjects; for LNSKTO this generates exactly N "
+            "balanced folds. Use 1 for an end-to-end smoke test."
         ),
     )
     parser.add_argument("--final-epochs", type=int, default=None)
@@ -2288,7 +2431,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("loss", "joint_loss", "accuracy", "f1", "precision", "recall"),
         default="f1",
         help=(
-            "Metric used to rank complete LOSO configurations. 'loss' is "
+            "Metric used to rank complete CV configurations. 'loss' is "
             "classification probability log loss; 'joint_loss' is the complete "
             "weighted Keras VAE+VC objective (default: f1)."
         ),
@@ -2326,7 +2469,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[0.5],
         help=(
             "Candidate binary class-1 thresholds selected independently in "
-            "each LOSO fold using validation subjects, for example 0.35 0.40 "
+            "each CV fold using validation subjects, for example 0.35 0.40 "
             "0.45 0.50 0.55 (default: 0.5)."
         ),
     )
@@ -2391,7 +2534,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=2,
         help=(
             "Number of seeded subjects reserved for validation inside every "
-            "LOSO fold (default: 2)."
+            "CV fold (default: 2). In LNSKTO, subjects contributing test "
+            "trials are excluded from validation selection."
         ),
     )
     parser.add_argument(
@@ -2624,7 +2768,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hyperparameters-json",
         default=None,
         help=(
-            "Cartesian grid passed to cross_val.loso_cv. Use only keys valid "
+            "Cartesian grid passed to the selected cross-validation function. "
+            "Use only keys valid "
             "for the selected --encoder-type. CNN1D uses conv_filters, "
             "kernel_sizes, pool_after_layers, and pool_sizes; CNN2D uses "
             "conv_filters, 2D kernel_sizes, spatial_pool_sizes, and "
@@ -2814,6 +2959,12 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--prediction-threshold-tolerance must be >= 0.")
     if args.trial_max_windows is not None and args.trial_max_windows < 1:
         raise ValueError("--trial-max-windows must be >= 1.")
+    if args.lnskto_subjects < 1:
+        raise ValueError("--lnskto-subjects must be >= 1.")
+    if args.lnskto_trials < 1:
+        raise ValueError("--lnskto-trials must be >= 1.")
+    if args.lnskto_split_seed is not None and args.lnskto_split_seed < 0:
+        raise ValueError("--lnskto-split-seed must be >= 0 or omitted.")
     if args.n_channels < 1:
         raise ValueError("--n-channels must be >= 1.")
     if args.n_bands is not None and args.n_bands < 1:
@@ -2871,6 +3022,13 @@ def main(argv: list[str] | None = None) -> int:
         weight_decay=args.weight_decay,
         batch_size=args.batch_size,
         cv_max_epochs=args.epochs,
+        cv_strategy=args.cv_strategy,
+        lnskto_subjects=args.lnskto_subjects,
+        lnskto_trials=args.lnskto_trials,
+        lnskto_split_seed=args.lnskto_split_seed,
+        lnskto_require_all_classes_in_test=(
+            args.lnskto_require_all_classes
+        ),
         final_epoch_strategy=args.final_epoch_strategy,
         final_epochs=args.final_epochs,
         classification_level=args.classification_level,
