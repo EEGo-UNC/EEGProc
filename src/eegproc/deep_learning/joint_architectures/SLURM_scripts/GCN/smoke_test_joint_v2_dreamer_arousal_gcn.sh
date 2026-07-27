@@ -218,7 +218,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
         "subject_adversarial_weight": [0.6],
-        "subject_loss_weight": [0.4],
+        "subject_loss_weight": [0.6],
         "subject_hidden_units": [32],
         "subject_dropout": [0.0],
         "subject_latent_mode": ["mean"],
@@ -237,7 +237,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "label_smoothing": [0.05],
 
         "ae_loss_weight": [
-            0.3
+            0.6
         ],
         "vc_loss_weight": [
             1.0
@@ -268,8 +268,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         ],
         "gcn_units": [
             [
-                128,
-                64
+                64,
+                32
             ]
         ],
         "temporal_pool_sizes": [
@@ -284,7 +284,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            128
+            64
         ],
         "bilstm_layers": [
             1
