@@ -210,7 +210,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --window-overlap 0.5 \
     --label-threshold-mode subject_median \
     --use-class-weight \
-    --selection-level trial \
+    --selection-level window \
     --selection-metric accuracy \
     --early-stopping-monitor val_joint_loss \
     --early-stopping-mode min \
@@ -226,7 +226,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             300
         ],
         "batch_size": [
-            16
+            128
         ],
         "learning_rate": [
             0.0001
