@@ -208,6 +208,9 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --seed 42 \
     --validation-subjects 4 \
     --validation-seed 42 \
+    --decision-thresholds 0.35 0.40 0.45 0.50 0.55 0.60 0.65 \
+    --threshold-selection-metric accuracy \
+    --threshold-selection-level trial \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
@@ -242,7 +245,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     "label_smoothing": [0.05],
 
     "ae_loss_weight": [0.6],
-    "vc_loss_weight": [1.0, 5.0],
+    "vc_loss_weight": [1.0],
     "vc_alpha": [1.0],
     "vc_beta": [0.0, 0.5],
     "vc_gamma": [0.0],
@@ -254,16 +257,14 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         2
     ],
     "emb_dim": [
-        32, 64
+        64, 128
     ],
     "dropout": [
         0.1
     ],
     "gcn_units": [
-        [
-            64,
-            32
-        ]
+        [64, 32], 
+        [128, 64]
     ],
     "temporal_pool_sizes": [
         [
