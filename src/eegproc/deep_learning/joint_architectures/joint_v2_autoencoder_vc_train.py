@@ -178,6 +178,10 @@ class JointV2TrainingConfig:
     subject_dropout: float = 0.0
     subject_latent_mode: str = "mean"
     subject_mc_samples: int = 5
+    use_supcon: bool = False
+    supcon_weight: float = 0.03
+    supcon_temperature: float = 0.1
+    supcon_cross_subject_only: bool = True
     label_threshold_mode: str = "global"
     window_normalization: str = "global_rms"
 
@@ -1117,6 +1121,10 @@ def build_joint_autoencoder_variational_classifier_v2(
     subject_dropout: float = 0.0,
     subject_latent_mode: str = "mean",
     subject_mc_samples: int = 5,
+    use_supcon: bool = False,
+    supcon_weight: float = 0.03,
+    supcon_temperature: float = 0.1,
+    supcon_cross_subject_only: bool = True,
     bilstm_units: int = 64,
     n_bilstm_layers: int = 1,
     bilstm_dropout: float = 0.30,
@@ -1268,6 +1276,10 @@ def build_joint_autoencoder_variational_classifier_v2(
         subject_dropout=subject_dropout,
         subject_latent_mode=subject_latent_mode,
         subject_mc_samples=subject_mc_samples,
+        use_supcon=use_supcon,
+        supcon_weight=supcon_weight,
+        supcon_temperature=supcon_temperature,
+        supcon_cross_subject_only=supcon_cross_subject_only,
         name=(
             model_name
             or f"joint_{encoder_type}_{classification_level}_vae_bilstm_"
@@ -1457,6 +1469,10 @@ def train_joint_autoencoder_variational_classifier_v2(
             "subject_dropout",
             "subject_latent_mode",
             "subject_mc_samples",
+            "use_supcon",
+            "supcon_weight",
+            "supcon_temperature",
+            "supcon_cross_subject_only",
             "classifier_head",
             *encoder_hparam_keys,
             *bilstm_hparam_keys,
@@ -1616,6 +1632,24 @@ def train_joint_autoencoder_variational_classifier_v2(
                         training_config.subject_mc_samples,
                     )
                 ),
+                use_supcon=bool(
+                    hparams.get("use_supcon", training_config.use_supcon)
+                ),
+                supcon_weight=float(
+                    hparams.get("supcon_weight", training_config.supcon_weight)
+                ),
+                supcon_temperature=float(
+                    hparams.get(
+                        "supcon_temperature",
+                        training_config.supcon_temperature,
+                    )
+                ),
+                supcon_cross_subject_only=bool(
+                    hparams.get(
+                        "supcon_cross_subject_only",
+                        training_config.supcon_cross_subject_only,
+                    )
+                ),
                 bilstm_units=int(
                     hparams.get("bilstm_units", training_config.bilstm_units)
                 ),
@@ -1710,6 +1744,20 @@ def train_joint_autoencoder_variational_classifier_v2(
             training_config.subject_latent_mode,
             training_config.subject_mc_samples,
         )
+    logger.info("Supervised contrastive loss enabled: %s", training_config.use_supcon)
+    if training_config.use_supcon:
+        logger.info(
+            "SupCon: weight=%.6f, temperature=%.6f, cross_subject_only=%s",
+            training_config.supcon_weight,
+            training_config.supcon_temperature,
+            training_config.supcon_cross_subject_only,
+        )
+        if training_config.batch_size < 8:
+            logger.warning(
+                "SupCon is using batch_size=%d. Small batches may contain few "
+                "valid positive pairs; inspect supcon_valid_anchor_fraction.",
+                training_config.batch_size,
+            )
     logger.info("Window normalization: %s", training_config.window_normalization)
     logger.info("Label threshold mode: %s", training_config.label_threshold_mode)
     logger.info("Feature tensor shape: %s", feature_array.shape)
@@ -2010,7 +2058,7 @@ def train_joint_autoencoder_variational_classifier_v2(
 
     final_fit_inputs = (
         final_model.prepare_fit_inputs(feature_array, subject_id_array)
-        if getattr(final_model, "use_subject_adversarial", False)
+        if getattr(final_model, "requires_subject_ids", False)
         else feature_array
     )
     final_history = final_model.fit(
@@ -2055,6 +2103,24 @@ def train_joint_autoencoder_variational_classifier_v2(
         "classification_level": classification_level,
         "default_classifier_head": training_config.classifier_head,
         "use_class_weight": training_config.use_class_weight,
+        "use_supcon": bool(
+            selected_final_config.get("use_supcon", training_config.use_supcon)
+        ),
+        "supcon_weight": float(
+            selected_final_config.get("supcon_weight", training_config.supcon_weight)
+        ),
+        "supcon_temperature": float(
+            selected_final_config.get(
+                "supcon_temperature",
+                training_config.supcon_temperature,
+            )
+        ),
+        "supcon_cross_subject_only": bool(
+            selected_final_config.get(
+                "supcon_cross_subject_only",
+                training_config.supcon_cross_subject_only,
+            )
+        ),
         "label_threshold_mode": training_config.label_threshold_mode,
         "prediction_diagnostics": training_config.prediction_diagnostics,
         "label_smoothing": float(
@@ -2447,6 +2513,52 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--subject-latent-mode mc is selected (default: 5)."
         ),
     )
+    supcon_group = parser.add_mutually_exclusive_group()
+    supcon_group.add_argument(
+        "--use-supcon",
+        dest="use_supcon",
+        action="store_true",
+        help=(
+            "Enable supervised contrastive regularization on the post-BiLSTM, "
+            "pre-classifier embedding."
+        ),
+    )
+    supcon_group.add_argument(
+        "--no-supcon",
+        dest="use_supcon",
+        action="store_false",
+        help="Disable supervised contrastive regularization (default).",
+    )
+    parser.set_defaults(use_supcon=False)
+    parser.add_argument(
+        "--supcon-weight",
+        type=float,
+        default=0.03,
+        help="Weight applied to the supervised contrastive loss (default: 0.03).",
+    )
+    parser.add_argument(
+        "--supcon-temperature",
+        type=float,
+        default=0.1,
+        help="Positive SupCon similarity temperature (default: 0.1).",
+    )
+    supcon_positive_group = parser.add_mutually_exclusive_group()
+    supcon_positive_group.add_argument(
+        "--supcon-cross-subject-only",
+        dest="supcon_cross_subject_only",
+        action="store_true",
+        help=(
+            "Use only same-label examples from different subjects as positives "
+            "(default)."
+        ),
+    )
+    supcon_positive_group.add_argument(
+        "--supcon-all-same-class-positives",
+        dest="supcon_cross_subject_only",
+        action="store_false",
+        help="Treat every same-label non-self example as a SupCon positive.",
+    )
+    parser.set_defaults(supcon_cross_subject_only=True)
     parser.add_argument(
         "--bilstm-units",
         type=int,
@@ -2519,7 +2631,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "temporal_pool_sizes; GCN uses "
             "gcn_units and temporal_pool_sizes. Common keys include t_down, "
             "emb_dim, dropout, use_batch_norm, classifier_head "
-            "('dense', 'hybrid', or 'variational'), and the single "
+            "('dense', 'hybrid', or 'variational'), SupCon settings, and the single "
             "window-level "
             "BiLSTM/loss settings."
         ),
@@ -2722,6 +2834,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--subject-dropout must be in [0, 1).")
     if args.subject_mc_samples < 1:
         raise ValueError("--subject-mc-samples must be >= 1.")
+    if args.supcon_weight < 0.0:
+        raise ValueError("--supcon-weight must be >= 0.")
+    if args.supcon_temperature <= 0.0:
+        raise ValueError("--supcon-temperature must be positive.")
     validation_seed = (
         args.validation_seed
         if args.validation_seed is not None
@@ -2819,6 +2935,10 @@ def main(argv: list[str] | None = None) -> int:
         subject_dropout=args.subject_dropout,
         subject_latent_mode=args.subject_latent_mode,
         subject_mc_samples=args.subject_mc_samples,
+        use_supcon=args.use_supcon,
+        supcon_weight=args.supcon_weight,
+        supcon_temperature=args.supcon_temperature,
+        supcon_cross_subject_only=args.supcon_cross_subject_only,
         label_threshold_mode=args.label_threshold_mode,
         window_normalization=(
             "none" if args.no_zscore else args.window_normalization

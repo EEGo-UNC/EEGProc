@@ -178,6 +178,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         subject_dropout: float = 0.0,
         subject_latent_mode: str = "mean",
         subject_mc_samples: int = 5,
+        use_supcon: bool = False,
+        supcon_weight: float = 0.03,
+        supcon_temperature: float = 0.1,
+        supcon_cross_subject_only: bool = True,
         name: str = "joint_autoencoder_variational_classifier_v2",
         **kwargs,
     ) -> None:
@@ -225,6 +229,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             )
         if subject_mc_samples < 1:
             raise ValueError("subject_mc_samples must be at least 1.")
+        if supcon_weight < 0.0:
+            raise ValueError("supcon_weight must be non-negative.")
+        if supcon_temperature <= 0.0:
+            raise ValueError("supcon_temperature must be positive.")
         if n_subject_classes is not None and int(n_subject_classes) < 2:
             raise ValueError("n_subject_classes must be at least 2 when supplied.")
 
@@ -244,7 +252,20 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.z_log_var_clip_min = float(z_log_var_clip_min)
         self.z_log_var_clip_max = float(z_log_var_clip_max)
         self.use_class_weight = bool(use_class_weight)
-        self.use_subject_adversarial = bool(use_subject_adversarial)
+        self.subject_adversarial_enabled = bool(use_subject_adversarial)
+        self.use_supcon = bool(use_supcon)
+        self.supcon_weight = float(supcon_weight)
+        self.supcon_temperature = float(supcon_temperature)
+        self.supcon_cross_subject_only = bool(supcon_cross_subject_only)
+        self.requires_subject_ids = bool(
+            self.subject_adversarial_enabled
+            or (self.use_supcon and self.supcon_cross_subject_only)
+        )
+        # Backward-compatible signal for cross_val.py, whose current helper
+        # attaches subject IDs only when this public attribute is true. Model
+        # internals use subject_adversarial_enabled, so SupCon can request the
+        # metadata without accidentally enabling the gradient-reversal branch.
+        self.use_subject_adversarial = self.requires_subject_ids
         self.n_subject_classes = (
             None if n_subject_classes is None else int(n_subject_classes)
         )
@@ -274,7 +295,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         self.subject_hidden = None
         self.subject_dropout_layer = None
         self.subject_classifier = None
-        if self.use_subject_adversarial and self.n_subject_classes is not None:
+        if self.subject_adversarial_enabled and self.n_subject_classes is not None:
             self._configure_subject_head(self.n_subject_classes)
 
         self.reconstruction_loss_fn = (
@@ -337,6 +358,16 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
         self.subject_accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
             name="subject_accuracy"
+        )
+        self.supcon_loss_tracker = tf.keras.metrics.Mean(name="supcon_loss")
+        self.weighted_supcon_loss_tracker = tf.keras.metrics.Mean(
+            name="weighted_supcon_loss"
+        )
+        self.supcon_valid_anchor_fraction_tracker = tf.keras.metrics.Mean(
+            name="supcon_valid_anchor_fraction"
+        )
+        self.supcon_positive_pairs_tracker = tf.keras.metrics.Mean(
+            name="supcon_positive_pairs"
         )
 
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
@@ -415,8 +446,14 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
         )
 
     def prepare_fit_inputs(self, eeg_inputs, subject_ids):
-        """Attach deterministic fold-local subject targets to training inputs."""
-        if not self.use_subject_adversarial:
+        """Attach fold-local subject IDs when an objective needs them.
+
+        IDs are remapped to contiguous values so the same input dictionary can
+        feed the optional subject classifier and cross-subject SupCon masks.
+        Validation and test inputs may remain raw; SupCon is then omitted from
+        their loss rather than using held-out identity metadata.
+        """
+        if not self.requires_subject_ids:
             return eeg_inputs
 
         eeg_array = np.asarray(eeg_inputs)
@@ -427,7 +464,8 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 f"got {len(eeg_array)} and {len(subjects)}."
             )
         unique_subjects = np.sort(np.unique(subjects))
-        self._configure_subject_head(len(unique_subjects))
+        if self.subject_adversarial_enabled:
+            self._configure_subject_head(len(unique_subjects))
         subject_to_class = {
             value.item() if isinstance(value, np.generic) else value: index
             for index, value in enumerate(unique_subjects)
@@ -540,12 +578,21 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                     self.decoder_accuracy_tracker,
                 ]
             )
-        if self.use_subject_adversarial:
+        if self.subject_adversarial_enabled:
             metrics.extend(
                 [
                     self.subject_loss_tracker,
                     self.weighted_subject_loss_tracker,
                     self.subject_accuracy_tracker,
+                ]
+            )
+        if self.use_supcon:
+            metrics.extend(
+                [
+                    self.supcon_loss_tracker,
+                    self.weighted_supcon_loss_tracker,
+                    self.supcon_valid_anchor_fraction_tracker,
+                    self.supcon_positive_pairs_tracker,
                 ]
             )
         metrics.extend(
@@ -710,7 +757,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             include_reconstruction = self.ae_loss_weight > 0.0
         if include_subject_adversarial is None:
             include_subject_adversarial = (
-                self.use_subject_adversarial and training is True
+                self.subject_adversarial_enabled and training is True
             )
 
         if self.classification_level == "window":
@@ -839,7 +886,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 else tf.reshape(reconstruction_flat, tf.shape(inputs))
             )
         if include_subject_adversarial:
-            if not self.use_subject_adversarial:
+            if not self.subject_adversarial_enabled:
                 raise ValueError(
                     "include_subject_adversarial=True, but the subject branch "
                     "is disabled."
@@ -1051,6 +1098,150 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             return tf.argmax(y_tensor, axis=-1, output_type=tf.int32)
         return tf.cast(tf.reshape(y_tensor, [-1]), tf.int32)
 
+    @staticmethod
+    def _supervised_contrastive_loss(
+        embeddings: tf.Tensor,
+        labels: tf.Tensor,
+        temperature: float,
+        subject_ids: tf.Tensor | None = None,
+        cross_subject_only: bool = True,
+        sample_weight: tf.Tensor | None = None,
+    ) -> dict[str, tf.Tensor]:
+        """Compute supervised contrastive loss over one classification batch.
+
+        Positives share the emotion label. When ``cross_subject_only`` is true,
+        positives must additionally come from different subjects. Same-label,
+        same-subject pairs are ignored rather than treated as false negatives.
+        Anchors without a valid positive contribute zero and are excluded from
+        the loss mean; their fraction is reported for batch-quality diagnosis.
+        """
+        embeddings = tf.convert_to_tensor(embeddings)
+        if embeddings.shape.rank != 2:
+            raise ValueError(
+                "SupCon embeddings must be rank 2, shaped (batch, features); "
+                f"got {embeddings.shape}."
+            )
+        labels = tf.cast(tf.reshape(labels, [-1]), tf.int32)
+        tf.debugging.assert_equal(
+            tf.shape(embeddings)[0],
+            tf.shape(labels)[0],
+            message="SupCon embeddings and labels must align.",
+        )
+        temperature_tensor = tf.cast(temperature, embeddings.dtype)
+        tf.debugging.assert_positive(
+            temperature_tensor,
+            message="SupCon temperature must be positive.",
+        )
+
+        normalized = tf.math.l2_normalize(embeddings, axis=-1, epsilon=1e-12)
+        similarity = tf.matmul(normalized, normalized, transpose_b=True)
+        similarity = similarity / temperature_tensor
+
+        batch_size = tf.shape(similarity)[0]
+        self_mask = tf.eye(batch_size, dtype=tf.bool)
+        non_self_mask = tf.logical_not(self_mask)
+        same_label = tf.equal(labels[:, tf.newaxis], labels[tf.newaxis, :])
+
+        if cross_subject_only:
+            if subject_ids is None:
+                zero = tf.zeros((), dtype=embeddings.dtype)
+                return {
+                    "loss": zero,
+                    "valid_anchor_fraction": zero,
+                    "positive_pairs": zero,
+                }
+            subject_ids = tf.cast(tf.reshape(subject_ids, [-1]), tf.int32)
+            tf.debugging.assert_equal(
+                tf.shape(subject_ids)[0],
+                batch_size,
+                message="SupCon subject IDs must align with embeddings.",
+            )
+            same_subject = tf.equal(
+                subject_ids[:, tf.newaxis],
+                subject_ids[tf.newaxis, :],
+            )
+            positive_mask = tf.logical_and(
+                non_self_mask,
+                tf.logical_and(same_label, tf.logical_not(same_subject)),
+            )
+            # Do not push same-class samples from one subject apart merely
+            # because they are excluded from the cross-subject positive set.
+            ignored_same_subject_positive = tf.logical_and(
+                non_self_mask,
+                tf.logical_and(same_label, same_subject),
+            )
+            denominator_mask = tf.logical_and(
+                non_self_mask,
+                tf.logical_not(ignored_same_subject_positive),
+            )
+        else:
+            positive_mask = tf.logical_and(non_self_mask, same_label)
+            denominator_mask = non_self_mask
+
+        large_negative = tf.cast(-1e9, similarity.dtype)
+        masked_similarity = tf.where(
+            denominator_mask,
+            similarity,
+            large_negative,
+        )
+        row_max = tf.stop_gradient(
+            tf.reduce_max(masked_similarity, axis=1, keepdims=True)
+        )
+        stabilized = similarity - row_max
+        exp_similarity = (
+            tf.exp(stabilized)
+            * tf.cast(denominator_mask, stabilized.dtype)
+        )
+        log_denominator = tf.math.log(
+            tf.reduce_sum(exp_similarity, axis=1, keepdims=True)
+            + tf.cast(tf.keras.backend.epsilon(), stabilized.dtype)
+        )
+        log_probability = stabilized - log_denominator
+
+        positive_count = tf.reduce_sum(
+            tf.cast(positive_mask, stabilized.dtype),
+            axis=1,
+        )
+        mean_positive_log_probability = tf.math.divide_no_nan(
+            tf.reduce_sum(
+                log_probability * tf.cast(positive_mask, stabilized.dtype),
+                axis=1,
+            ),
+            positive_count,
+        )
+        valid_anchor = positive_count > 0.0
+        per_anchor_loss = tf.where(
+            valid_anchor,
+            -mean_positive_log_probability,
+            tf.zeros_like(mean_positive_log_probability),
+        )
+
+        anchor_weights = tf.cast(valid_anchor, per_anchor_loss.dtype)
+        if sample_weight is not None:
+            sample_weight = tf.cast(
+                tf.reshape(sample_weight, [-1]),
+                per_anchor_loss.dtype,
+            )
+            tf.debugging.assert_equal(
+                tf.shape(sample_weight)[0],
+                batch_size,
+                message="SupCon sample weights must align with embeddings.",
+            )
+            anchor_weights *= sample_weight
+        loss = tf.math.divide_no_nan(
+            tf.reduce_sum(per_anchor_loss * anchor_weights),
+            tf.reduce_sum(anchor_weights),
+        )
+        return {
+            "loss": loss,
+            "valid_anchor_fraction": tf.reduce_mean(
+                tf.cast(valid_anchor, embeddings.dtype)
+            ),
+            "positive_pairs": tf.reduce_sum(
+                tf.cast(positive_mask, embeddings.dtype)
+            ),
+        }
+
     def _compute_weighted_losses(
         self,
         x,
@@ -1069,7 +1260,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             )
 
         subject_enabled_for_batch = (
-            self.use_subject_adversarial and subject_ids is not None
+            self.subject_adversarial_enabled and subject_ids is not None
         )
         outputs = self(
             eeg_inputs,
@@ -1183,6 +1374,38 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 f"{self.classification_level} sample."
             ),
         )
+        if (
+            self.use_supcon
+            and self.supcon_cross_subject_only
+            and training
+            and subject_ids is None
+        ):
+            raise ValueError(
+                "Cross-subject SupCon requires subject IDs during fitting. "
+                "Use prepare_fit_inputs(...) or update the CV input helper."
+            )
+        if self.use_supcon:
+            supcon_components = self._supervised_contrastive_loss(
+                embeddings=outputs["classification_latent"],
+                labels=y_flat,
+                temperature=self.supcon_temperature,
+                subject_ids=subject_ids,
+                cross_subject_only=self.supcon_cross_subject_only,
+                sample_weight=sample_weight,
+            )
+            supcon_loss = supcon_components["loss"]
+            weighted_supcon_loss = (
+                tf.cast(self.supcon_weight, supcon_loss.dtype) * supcon_loss
+            )
+        else:
+            supcon_components = {
+                "loss": zero,
+                "valid_anchor_fraction": zero,
+                "positive_pairs": zero,
+            }
+            supcon_loss = zero
+            weighted_supcon_loss = zero
+
         vc_losses = self.variational_classifier.vc_loss_components(
             mh=outputs["classification_latent"],
             y=y_flat,
@@ -1198,6 +1421,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             self.ae_loss_weight * autoencoder_loss
             + self.vc_loss_weight * vc_losses["total_loss"]
             + weighted_subject_loss
+            + weighted_supcon_loss
         )
         if self.losses:
             regularization_loss = tf.add_n(
@@ -1220,6 +1444,12 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
             "weighted_kl_loss": vae_losses["weighted_kl_loss"],
             "subject_loss": subject_loss,
             "weighted_subject_loss": weighted_subject_loss,
+            "supcon_loss": supcon_loss,
+            "weighted_supcon_loss": weighted_supcon_loss,
+            "supcon_valid_anchor_fraction": supcon_components[
+                "valid_anchor_fraction"
+            ],
+            "supcon_positive_pairs": supcon_components["positive_pairs"],
             "vc_loss": vc_losses["total_loss"],
             "vc_cross_entropy": vc_losses["cross_entropy"],
             "weighted_vc_cross_entropy": vc_losses["weighted_cross_entropy"],
@@ -1306,7 +1536,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 x_metric,
                 reconstruction_metric,
             )
-        if self.use_subject_adversarial:
+        if self.subject_adversarial_enabled:
             self.subject_loss_tracker.update_state(losses["subject_loss"])
             self.weighted_subject_loss_tracker.update_state(
                 losses["weighted_subject_loss"]
@@ -1316,6 +1546,17 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                     outputs["subject_targets"],
                     outputs["subject_logits"],
                 )
+        if self.use_supcon:
+            self.supcon_loss_tracker.update_state(losses["supcon_loss"])
+            self.weighted_supcon_loss_tracker.update_state(
+                losses["weighted_supcon_loss"]
+            )
+            self.supcon_valid_anchor_fraction_tracker.update_state(
+                losses["supcon_valid_anchor_fraction"]
+            )
+            self.supcon_positive_pairs_tracker.update_state(
+                losses["supcon_positive_pairs"]
+            )
         self.vc_loss_tracker.update_state(losses["vc_loss"])
         self.vc_cross_entropy_tracker.update_state(losses["vc_cross_entropy"])
         self.weighted_vc_cross_entropy_tracker.update_state(
@@ -1478,7 +1719,7 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 "vc_lambda": self.vc_lambda,
                 "update_discriminator": self.update_discriminator,
                 "use_class_weight": self.use_class_weight,
-                "use_subject_adversarial": self.use_subject_adversarial,
+                "use_subject_adversarial": self.subject_adversarial_enabled,
                 "n_subject_classes": self.n_subject_classes,
                 "subject_adversarial_weight": self.subject_adversarial_weight,
                 "subject_loss_weight": self.subject_loss_weight,
@@ -1486,6 +1727,10 @@ class JointAutoencoderVariationalClassifierV2(tf.keras.Model):
                 "subject_dropout": self.subject_dropout,
                 "subject_latent_mode": self.subject_latent_mode,
                 "subject_mc_samples": self.subject_mc_samples,
+                "use_supcon": self.use_supcon,
+                "supcon_weight": self.supcon_weight,
+                "supcon_temperature": self.supcon_temperature,
+                "supcon_cross_subject_only": self.supcon_cross_subject_only,
             }
         )
         return config

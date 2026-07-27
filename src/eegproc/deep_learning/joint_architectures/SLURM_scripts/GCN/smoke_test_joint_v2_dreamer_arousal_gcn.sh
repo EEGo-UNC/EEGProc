@@ -219,12 +219,18 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-mode min \
     --final-epoch-strategy median \
     --hyperparameters-json '{
+        "use_supcon": [true],
+        "supcon_weight": [0.1],
+        "supcon_temperature": [0.1],
+        "supcon_cross_subject_only": [true]
+
         "use_subject_adversarial": [true],
         "subject_adversarial_weight": [0.6],
         "subject_loss_weight": [0.6],
         "subject_hidden_units": [32],
         "subject_dropout": [0.0],
         "subject_latent_mode": ["mean"],
+
         "epochs": [
             400
         ],
