@@ -241,7 +241,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             0.3
         ],
         "vc_loss_weight": [
-            10.0
+            1.0
         ],
         "vc_alpha": [
             1.0
