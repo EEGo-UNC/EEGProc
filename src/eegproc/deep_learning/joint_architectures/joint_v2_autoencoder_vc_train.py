@@ -1726,7 +1726,8 @@ def train_joint_autoencoder_variational_classifier_v2(
     if training_config.cv_strategy == "lnskto":
         logger.info(
             "LNSKTO split: %d subjects x %d held-out trials, split_seed=%s, "
-            "require_all_classes_in_test=%s, folds=%s",
+            "require_all_classes_in_test=%s, folds=%s; selected subjects keep "
+            "their non-test trials in training and test trial keys never repeat",
             training_config.lnskto_subjects,
             training_config.lnskto_trials,
             training_config.lnskto_split_seed,
@@ -2227,6 +2228,12 @@ def train_joint_autoencoder_variational_classifier_v2(
             if training_config.cv_strategy == "lnskto"
             else None
         ),
+        "lnskto_selected_subjects_remain_in_training": (
+            True if training_config.cv_strategy == "lnskto" else None
+        ),
+        "lnskto_test_trial_keys_are_globally_unique": (
+            True if training_config.cv_strategy == "lnskto" else None
+        ),
         "cv_results": cv_results,
         "loso_cv": (
             cv_results if training_config.cv_strategy == "loso" else None
@@ -2305,8 +2312,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Cross-validation protocol. loso holds out one complete subject; "
             "lnskto holds out K complete trials from each of N selected "
-            "subjects while retaining their other trials in training "
-            "(default: loso)."
+            "subjects while retaining their other trials in training. Every "
+            "held-out (subject, trial) key is used as test data at most once "
+            "across all generated folds (default: loso)."
         ),
     )
     parser.add_argument(
@@ -2332,8 +2340,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=42,
         help=(
-            "Seed for deterministic balanced LNSKTO fold generation "
-            "(default: 42)."
+            "Seed for deterministic, globally trial-disjoint LNSKTO fold "
+            "generation (default: 42)."
         ),
     )
     lnskto_class_group = parser.add_mutually_exclusive_group()
