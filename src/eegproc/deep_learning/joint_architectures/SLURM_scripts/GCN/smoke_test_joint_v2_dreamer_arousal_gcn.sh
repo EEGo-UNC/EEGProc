@@ -218,7 +218,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
         "subject_adversarial_weight": [0.6],
-        "subject_loss_weight": [1.0],
+        "subject_loss_weight": [0.4],
         "subject_hidden_units": [32],
         "subject_dropout": [0.0],
         "subject_latent_mode": ["mean"],
