@@ -202,6 +202,9 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
+    --decision-thresholds 0.35 0.40 0.45 0.50 0.55 0.60 0.65 \
+    --threshold-selection-metric accuracy \
+    --threshold-selection-level trial \
     --validation-subjects 4 \
     --validation-seed 42 \
     --early-stopping-patience 40 \
@@ -210,7 +213,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --window-overlap 0.5 \
     --label-threshold-mode subject_median \
     --use-class-weight \
-    --selection-level window \
+    --selection-level trial \
     --selection-metric accuracy \
     --early-stopping-monitor val_joint_loss \
     --early-stopping-mode min \
@@ -223,10 +226,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "subject_dropout": [0.0],
         "subject_latent_mode": ["mean"],
         "epochs": [
-            300
+            400
         ],
         "batch_size": [
-            128
+            16
         ],
         "learning_rate": [
             0.0001
