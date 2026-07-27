@@ -206,28 +206,36 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --seed 42 \
     --validation-subjects 4 \
     --validation-seed 42 \
-    --early-stopping-patience 30 \
-    --early-stopping-min-delta 0.005 \
+    --early-stopping-patience 40 \
+    --early-stopping-min-delta 0.001 \
     --window-sec 4.0 \
-    --window-overlap 0.5 \
-    --batch-size 8 \
+    --window-overlap 0.0 \
+    --label-threshold-mode subject_median \
+    --use-class-weight \
+    --batch-size 128 \
     --selection-level trial \
     --selection-metric accuracy \
-    --early-stopping-monitor val_trial_accuracy \
-    --early-stopping-mode max \
+    --early-stopping-monitor val_joint_loss \
+    --early-stopping-mode min \
     --final-epoch-strategy median \
     --hyperparameters-json '{
+        "use_subject_adversarial": [true],
+        "subject_adversarial_weight": [0.5],
+        "subject_loss_weight": [1.0],
+        "subject_hidden_units": [32],
+        "subject_dropout": [0.0],
+        "subject_latent_mode": ["mean"],
         "epochs": [
             300
         ],
         "batch_size": [
-            8
+            32
         ],
         "learning_rate": [
             0.0001
         ],
         "ae_loss_weight": [
-            0.0, 0.3
+            0.3
         ],
         "vc_loss_weight": [
             1.0
@@ -242,7 +250,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             0.0
         ],
         "vc_lambda": [
-            0.1
+            0.0
         ],
         "vae_beta": [
             0.3
@@ -251,15 +259,15 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             2
         ],
         "emb_dim": [
-            64
+            32
         ],
         "dropout": [
-            0.3
+            0.2
         ],
         "gcn_units": [
             [
-                128,
-                64
+                64,
+                32
             ]
         ],
         "temporal_pool_sizes": [
@@ -274,12 +282,15 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            256
+            64
         ],
         "bilstm_layers": [
             1
         ],
         "bilstm_dropout": [
             0.4
+        ],
+        "classifier_head": [
+            "hybrid"
         ]
     }'

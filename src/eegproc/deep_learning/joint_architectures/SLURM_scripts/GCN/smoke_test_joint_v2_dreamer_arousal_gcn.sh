@@ -207,7 +207,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
-    --window-overlap 0.0 \
+    --window-overlap 0.5 \
     --label-threshold-mode subject_median \
     --use-class-weight \
     --batch-size 128 \
@@ -218,7 +218,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
-        "subject_adversarial_weight": [0.3],
+        "subject_adversarial_weight": [0.5],
         "subject_loss_weight": [1.0],
         "subject_hidden_units": [32],
         "subject_dropout": [0.0],
@@ -242,7 +242,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             1.0
         ],
         "vc_beta": [
-            0.05, 0.1
+            0.3
         ],
         "vc_gamma": [
             0.0
