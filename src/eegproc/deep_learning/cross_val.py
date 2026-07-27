@@ -79,6 +79,7 @@ _JOINT_LOSS_WEIGHT_KEYS = frozenset(
         "vc_lambda",
         "subject_loss_weight",
         "use_subject_adversarial",
+        "label_smoothing",
     }
 )
 
@@ -492,9 +493,130 @@ def _predict_probabilities(
     return _to_probabilities(raw_pred)
 
 
-def _predict_labels(probabilities: np.ndarray) -> np.ndarray:
-    """Convert probabilities to integer class predictions."""
+def _normalize_decision_thresholds(
+    thresholds: list[float] | tuple[float, ...] | np.ndarray,
+) -> tuple[float, ...]:
+    """Validate, deduplicate, and sort binary class-1 thresholds."""
+    values = np.asarray(thresholds, dtype=np.float64).reshape(-1)
+    if values.size == 0:
+        raise ValueError("decision_thresholds must contain at least one value.")
+    if not np.isfinite(values).all():
+        raise ValueError("decision_thresholds must contain only finite values.")
+    if np.any(values <= 0.0) or np.any(values >= 1.0):
+        raise ValueError("Every decision threshold must be strictly between 0 and 1.")
+    return tuple(float(value) for value in np.unique(values))
+
+
+def _predict_labels(
+    probabilities: np.ndarray,
+    decision_threshold: float = 0.5,
+) -> np.ndarray:
+    """Convert probabilities to labels using a binary class-1 threshold."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    if probabilities.ndim != 2:
+        raise ValueError(
+            "probabilities must have shape (n_samples, n_classes); got "
+            f"{probabilities.shape}."
+        )
+    if probabilities.shape[1] == 2:
+        threshold = float(decision_threshold)
+        if not 0.0 < threshold < 1.0:
+            raise ValueError("decision_threshold must be strictly between 0 and 1.")
+        return (probabilities[:, 1] >= threshold).astype(np.int64)
+    if not np.isclose(float(decision_threshold), 0.5):
+        raise ValueError(
+            "Custom decision thresholds are supported only for binary models."
+        )
     return np.argmax(probabilities, axis=1).astype(np.int64)
+
+
+def _threshold_metric_value(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    metric: str,
+) -> float:
+    """Score one validation threshold without using test labels."""
+    y_true = _as_numpy_1d(y_true).astype(np.int64)
+    y_pred = _as_numpy_1d(y_pred).astype(np.int64)
+    if metric == "accuracy":
+        return float(accuracy_score(y_true, y_pred))
+    if metric == "f1":
+        return float(
+            f1_score(
+                y_true,
+                y_pred,
+                average="macro",
+                labels=[0, 1],
+                zero_division=0,
+            )
+        )
+    if metric == "balanced_accuracy":
+        return float(
+            recall_score(
+                y_true,
+                y_pred,
+                average="macro",
+                labels=[0, 1],
+                zero_division=0,
+            )
+        )
+    if metric == "binary_f1":
+        return float(
+            f1_score(
+                y_true,
+                y_pred,
+                average="binary",
+                pos_label=1,
+                zero_division=0,
+            )
+        )
+    raise ValueError(
+        "threshold_selection_metric must be accuracy, f1, "
+        "balanced_accuracy, or binary_f1."
+    )
+
+
+def _select_binary_decision_threshold(
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    thresholds: tuple[float, ...],
+    metric: str,
+) -> tuple[float, float, list[dict]]:
+    """Select a threshold on validation data with deterministic tie-breaking."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    if probabilities.ndim != 2 or probabilities.shape[1] != 2:
+        if len(thresholds) > 1 or not np.isclose(thresholds[0], 0.5):
+            raise ValueError(
+                "Threshold search requires a binary two-probability output."
+            )
+        return 0.5, float("nan"), []
+
+    rows: list[dict] = []
+    for threshold in thresholds:
+        y_pred = _predict_labels(
+            probabilities,
+            decision_threshold=threshold,
+        )
+        score = _threshold_metric_value(y_true, y_pred, metric)
+        rows.append(
+            {
+                "threshold": float(threshold),
+                "score": float(score),
+                "predicted_class_1_fraction": float(np.mean(y_pred == 1)),
+            }
+        )
+
+    # Maximize score; ties prefer the threshold closest to the conventional 0.5,
+    # then the lower threshold for a stable deterministic result.
+    best = min(
+        rows,
+        key=lambda row: (
+            -row["score"],
+            abs(row["threshold"] - 0.5),
+            row["threshold"],
+        ),
+    )
+    return float(best["threshold"]), float(best["score"]), rows
 
 
 def _stratified_diagnostic_indices(
@@ -936,6 +1058,7 @@ def _direct_trial_aggregation(
     subject_ids: np.ndarray,
     trial_ids: np.ndarray,
     n_windows_per_trial: int,
+    decision_threshold: float = 0.5,
 ) -> dict:
     """Build the trial-log structure when the model already predicts trials."""
     probabilities = np.asarray(probabilities, dtype=np.float64)
@@ -951,7 +1074,10 @@ def _direct_trial_aggregation(
     return {
         "probabilities": probabilities,
         "y_true": y_true,
-        "y_pred": _predict_labels(probabilities),
+        "y_pred": _predict_labels(
+            probabilities,
+            decision_threshold=decision_threshold,
+        ),
         "subject_ids": subject_ids,
         "trial_ids": trial_ids,
         "n_windows": np.full(len(y_true), int(n_windows_per_trial), dtype=np.int64),
@@ -1124,6 +1250,7 @@ def _aggregate_window_probabilities_by_trial(
     y_true: np.ndarray,
     subject_ids: np.ndarray,
     trial_ids: np.ndarray,
+    decision_threshold: float = 0.5,
 ) -> dict:
     """Aggregate window probabilities into one prediction per subject/trial.
 
@@ -1190,7 +1317,10 @@ def _aggregate_window_probabilities_by_trial(
     return {
         "probabilities": trial_probabilities_array,
         "y_true": np.asarray(trial_y_true, dtype=np.int64),
-        "y_pred": _predict_labels(trial_probabilities_array),
+        "y_pred": _predict_labels(
+            trial_probabilities_array,
+            decision_threshold=decision_threshold,
+        ),
         "subject_ids": np.asarray(trial_subject_ids),
         "trial_ids": np.asarray(output_trial_ids),
         "n_windows": np.asarray(trial_window_counts, dtype=np.int64),
@@ -1526,6 +1656,7 @@ def _make_variational_interval_logs(
     fold_index: int,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    decision_threshold: float = 0.5,
 ) -> tuple[list[dict], list[dict]]:
     """Estimate stochastic probability intervals for windows and trials.
 
@@ -1552,7 +1683,9 @@ def _make_variational_interval_logs(
         alpha = 1.0 - ci_level
         trial_low = np.quantile(trial_samples, alpha / 2.0, axis=0)
         trial_high = np.quantile(trial_samples, 1.0 - alpha / 2.0, axis=0)
-        trial_pred = _predict_labels(trial_mean)
+        trial_pred = _predict_labels(
+            trial_mean, decision_threshold=decision_threshold
+        )
 
         trial_rows: list[dict] = []
         for i in range(len(y_true)):
@@ -1596,7 +1729,9 @@ def _make_variational_interval_logs(
     alpha = 1.0 - ci_level
     window_low = np.quantile(window_samples, alpha / 2.0, axis=0)
     window_high = np.quantile(window_samples, 1.0 - alpha / 2.0, axis=0)
-    window_pred = _predict_labels(window_mean)
+    window_pred = _predict_labels(
+        window_mean, decision_threshold=decision_threshold
+    )
 
     window_rows: list[dict] = []
     for i in range(len(y_true)):
@@ -1626,6 +1761,7 @@ def _make_variational_interval_logs(
         y_true=y_true,
         subject_ids=subject_ids,
         trial_ids=trial_ids,
+        decision_threshold=decision_threshold,
     )
 
     trial_sample_list: list[np.ndarray] = []
@@ -1644,7 +1780,9 @@ def _make_variational_interval_logs(
     trial_mean = trial_samples.mean(axis=0)
     trial_low = np.quantile(trial_samples, alpha / 2.0, axis=0)
     trial_high = np.quantile(trial_samples, 1.0 - alpha / 2.0, axis=0)
-    trial_pred = _predict_labels(trial_mean)
+    trial_pred = _predict_labels(
+        trial_mean, decision_threshold=decision_threshold
+    )
 
     trial_rows: list[dict] = []
     for i in range(len(reference_aggregation["y_true"])):
@@ -1768,6 +1906,7 @@ def _evaluate_trial_tensor_fold(
     log_variational_intervals: bool,
     n_uncertainty_samples: int,
     ci_level: float,
+    decision_threshold: float = 0.5,
 ) -> dict:
     """Evaluate a model that emits one classifier prediction per trial."""
     y_true_trial = _as_numpy_1d(y_test).astype(np.int64)
@@ -1778,7 +1917,10 @@ def _evaluate_trial_tensor_fold(
         n_prediction_latent_samples=n_prediction_latent_samples,
         latent_sampling_seed=latent_sampling_seed,
     )
-    y_pred_trial = _predict_labels(probabilities_trial)
+    y_pred_trial = _predict_labels(
+        probabilities_trial,
+        decision_threshold=decision_threshold,
+    )
     _print_probability_diagnostics(
         label=f"fold {fold_index} test trial",
         probabilities=probabilities_trial,
@@ -1822,6 +1964,7 @@ def _evaluate_trial_tensor_fold(
             else {}
         ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
+        "decision_threshold": float(decision_threshold),
         **trial_scores,
         **_prefix_scores(trial_scores, "trial"),
     }
@@ -1873,6 +2016,7 @@ def _evaluate_trial_tensor_fold(
         subject_ids=subject_ids_test,
         trial_ids=trial_ids_test,
         n_windows_per_trial=n_windows_per_trial,
+        decision_threshold=decision_threshold,
     )
     trial_prediction_rows = (
         _make_trial_prediction_log(fold_index, trial_aggregation)
@@ -1892,6 +2036,7 @@ def _evaluate_trial_tensor_fold(
             fold_index=fold_index,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
+            decision_threshold=decision_threshold,
         )
 
     _print_metric_row(
@@ -1931,6 +2076,7 @@ def _evaluate_classification_fold(
     log_variational_intervals: bool = False,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    decision_threshold: float = 0.5,
 ) -> dict:
     """Evaluate one outer fold at the model's native classification level."""
     _validate_evaluation_level(evaluation_level, "evaluation_level")
@@ -1955,6 +2101,7 @@ def _evaluate_classification_fold(
             log_variational_intervals=log_variational_intervals,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
+            decision_threshold=decision_threshold,
         )
     y_true_window = _as_numpy_1d(y_test).astype(np.int64)
 
@@ -1965,7 +2112,10 @@ def _evaluate_classification_fold(
         n_prediction_latent_samples=n_prediction_latent_samples,
         latent_sampling_seed=latent_sampling_seed,
     )
-    y_pred_window = _predict_labels(probabilities_window)
+    y_pred_window = _predict_labels(
+        probabilities_window,
+        decision_threshold=decision_threshold,
+    )
     _print_probability_diagnostics(
         label=f"fold {fold_index} test window",
         probabilities=probabilities_window,
@@ -2001,6 +2151,7 @@ def _evaluate_classification_fold(
         y_true=y_true_window,
         subject_ids=subject_ids_test,
         trial_ids=trial_ids_test,
+        decision_threshold=decision_threshold,
     )
     _print_probability_diagnostics(
         label=f"fold {fold_index} test trial-aggregated",
@@ -2033,6 +2184,7 @@ def _evaluate_classification_fold(
             else {}
         ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
+        "decision_threshold": float(decision_threshold),
         **primary_scores,
         **_prefix_scores(window_scores, "window"),
         **_prefix_scores(trial_scores, "trial"),
@@ -2043,11 +2195,13 @@ def _evaluate_classification_fold(
         "n_windows": int(len(y_true_window)),
         "keras_model_loss": float(keras_model_loss),
         "joint_loss": float(keras_model_loss),
+        "decision_threshold": float(decision_threshold),
         **window_scores,
     }
     trial_fold_metrics = {
         "fold": int(fold_index),
         "n_trials": int(len(trial_aggregation["y_true"])),
+        "decision_threshold": float(decision_threshold),
         **trial_scores,
     }
 
@@ -3451,6 +3605,9 @@ def _run_loso_fold(
     prediction_diagnostics_max_samples: int,
     prediction_diagnostics_threshold_tolerance: float,
     prediction_diagnostics_seed: int | None,
+    decision_thresholds: tuple[float, ...],
+    threshold_selection_metric: str,
+    threshold_selection_level: Literal["window", "trial"],
     verbose: int,
     extra_fit_kwargs: dict,
 ) -> dict:
@@ -3716,6 +3873,57 @@ def _run_loso_fold(
         if best_epoch is None and epochs_ran > 0:
             best_epoch = epochs_ran
 
+        selected_decision_threshold = float(decision_thresholds[0])
+        threshold_validation_score: float | None = None
+        threshold_search_results: list[dict] = []
+        if validation_subjects_per_fold > 0:
+            validation_probabilities = _predict_probabilities(
+                model=model,
+                X=X_validation,
+                batch_size=current_batch_size,
+                n_prediction_latent_samples=n_prediction_latent_samples,
+                latent_sampling_seed=latent_sampling_seed,
+            )
+            if threshold_selection_level == "trial":
+                if _is_trial_tensor(X_validation):
+                    threshold_validation = _direct_trial_aggregation(
+                        probabilities=validation_probabilities,
+                        y_true=y_validation,
+                        subject_ids=subject_ids_validation,
+                        trial_ids=trial_ids_validation,
+                        n_windows_per_trial=X_validation.shape[1],
+                    )
+                else:
+                    threshold_validation = _aggregate_window_probabilities_by_trial(
+                        probabilities=validation_probabilities,
+                        y_true=y_validation,
+                        subject_ids=subject_ids_validation,
+                        trial_ids=trial_ids_validation,
+                    )
+                threshold_probabilities = threshold_validation["probabilities"]
+                threshold_y_true = threshold_validation["y_true"]
+            else:
+                threshold_probabilities = validation_probabilities
+                threshold_y_true = _as_numpy_1d(y_validation).astype(np.int64)
+
+            (
+                selected_decision_threshold,
+                threshold_validation_score,
+                threshold_search_results,
+            ) = _select_binary_decision_threshold(
+                probabilities=threshold_probabilities,
+                y_true=threshold_y_true,
+                thresholds=decision_thresholds,
+                metric=threshold_selection_metric,
+            )
+            print(
+                f"Fold {fold_number} selected decision threshold "
+                f"{selected_decision_threshold:.4f} from validation "
+                f"{threshold_selection_level}_{threshold_selection_metric}="
+                f"{threshold_validation_score:.6f}",
+                flush=True,
+            )
+
         evaluation = _evaluate_classification_fold(
             model=model,
             X_test=X_test,
@@ -3732,6 +3940,7 @@ def _run_loso_fold(
             log_variational_intervals=log_variational_intervals,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
+            decision_threshold=selected_decision_threshold,
         )
     finally:
         del model
@@ -3795,6 +4004,12 @@ def _run_loso_fold(
         "best_epoch": None if best_epoch is None else int(best_epoch),
         "best_monitored_value": best_monitored_value,
         "stopped_early": bool(stopped_early),
+        "decision_threshold": float(selected_decision_threshold),
+        "decision_threshold_candidates": list(decision_thresholds),
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
+        "threshold_validation_score": threshold_validation_score,
+        "threshold_search_results": threshold_search_results,
         "prediction_diagnostics_log": (
             []
             if prediction_diagnostics_callback is None
@@ -3927,6 +4142,10 @@ def _compact_loso_fold_result(fold_output: dict) -> dict:
         "best_epoch": fold_record["best_epoch"],
         "best_monitored_value": fold_record["best_monitored_value"],
         "stopped_early": bool(fold_record["stopped_early"]),
+        "decision_threshold": float(fold_record["decision_threshold"]),
+        "threshold_selection_metric": fold_record["threshold_selection_metric"],
+        "threshold_selection_level": fold_record["threshold_selection_level"],
+        "threshold_validation_score": fold_record["threshold_validation_score"],
         "evaluation_level": fold_record["evaluation_level"],
         "fold_metrics": dict(fold_output["fold_metrics"]),
         "window_fold_metrics": dict(fold_output["window_fold_metrics"]),
@@ -4117,6 +4336,11 @@ def loso_cv(
     prediction_diagnostics_max_samples: int = 256,
     prediction_diagnostics_threshold_tolerance: float = 0.01,
     prediction_diagnostics_seed: int | None = 42,
+    decision_thresholds: list[float] | tuple[float, ...] = (0.5,),
+    threshold_selection_metric: Literal[
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    ] = "f1",
+    threshold_selection_level: Literal["window", "trial"] = "trial",
     verbose: int = 0,
     extra_fit_kwargs: dict | None = None,
     n_jobs: int = 1,
@@ -4308,6 +4532,23 @@ def loso_cv(
         raise ValueError(
             "prediction_diagnostics_threshold_tolerance must be non-negative."
         )
+    decision_thresholds = _normalize_decision_thresholds(decision_thresholds)
+    if threshold_selection_metric not in {
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    }:
+        raise ValueError(
+            "threshold_selection_metric must be accuracy, f1, "
+            "balanced_accuracy, or binary_f1."
+        )
+    _validate_evaluation_level(
+        threshold_selection_level,
+        "threshold_selection_level",
+    )
+    if len(decision_thresholds) > 1 and validation_subjects_per_fold == 0:
+        raise ValueError(
+            "Testing multiple decision thresholds requires fold-local validation "
+            "subjects. Set validation_subjects_per_fold >= 1."
+        )
     if (
         early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
         and validation_subjects_per_fold == 0
@@ -4403,6 +4644,11 @@ def loso_cv(
     print(f"Prediction logging: {log_predictions}")
     print(f"Prediction diagnostics: {prediction_diagnostics}")
     print(f"Variational interval logging: {log_variational_intervals}")
+    print(
+        "Decision thresholds: "
+        f"{list(decision_thresholds)}; selection="
+        f"{threshold_selection_level}_{threshold_selection_metric}"
+    )
     prediction_mode = (
         "posterior mean"
         if n_prediction_latent_samples == 0
@@ -4468,6 +4714,9 @@ def loso_cv(
             prediction_diagnostics_threshold_tolerance
         ),
         "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": decision_thresholds,
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
         "verbose": verbose,
         "extra_fit_kwargs": extra_fit_kwargs,
     }
@@ -4605,6 +4854,9 @@ def loso_cv(
             prediction_diagnostics_threshold_tolerance
         ),
         "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": list(decision_thresholds),
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,

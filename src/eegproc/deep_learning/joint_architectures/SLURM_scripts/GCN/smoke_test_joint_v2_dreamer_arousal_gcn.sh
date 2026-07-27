@@ -210,7 +210,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --window-overlap 0.5 \
     --label-threshold-mode subject_median \
     --use-class-weight \
-    --batch-size 128 \
     --selection-level trial \
     --selection-metric accuracy \
     --early-stopping-monitor val_joint_loss \
@@ -218,7 +217,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
-        "subject_adversarial_weight": [0.5],
+        "subject_adversarial_weight": [0.8],
         "subject_loss_weight": [1.0],
         "subject_hidden_units": [32],
         "subject_dropout": [0.0],
@@ -277,7 +276,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             "relu"
         ],
         "use_batch_norm": [
-            false
+            true
         ],
         "bilstm_units": [
             64

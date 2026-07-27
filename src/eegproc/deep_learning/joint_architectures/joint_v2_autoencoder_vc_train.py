@@ -115,6 +115,8 @@ class JointV2TrainingConfig:
     n_channels: int = 14
     n_bands: int | None = None
     learning_rate: float = 1e-3
+    optimizer_name: str = "adamw"
+    weight_decay: float = 1e-4
     batch_size: int = 64
     cv_max_epochs: int = 50
     final_epoch_strategy: str = "median"
@@ -124,6 +126,9 @@ class JointV2TrainingConfig:
     maximize_metric: bool | None = None
     prediction_latent_samples: int = 0
     latent_sampling_seed: int | None = None
+    decision_thresholds: tuple[float, ...] = (0.5,)
+    threshold_selection_metric: str = "f1"
+    threshold_selection_level: str = "trial"
     prediction_diagnostics: bool = True
     prediction_diagnostics_every_n_epochs: int = 1
     prediction_diagnostics_max_samples: int = 256
@@ -156,6 +161,7 @@ class JointV2TrainingConfig:
     decoder_kwargs: dict = field(default_factory=dict)
     classifier_kwargs: dict = field(default_factory=dict)
     classifier_head: str = "variational"
+    label_smoothing: float = 0.0
     model_kwargs: dict = field(default_factory=dict)
     hyperparameters: dict = field(default_factory=dict)
     n_jobs: int = 4
@@ -909,6 +915,44 @@ def _build_encoder_decoder(
     )
 
 
+
+def _build_optimizer(
+    optimizer_name: str,
+    learning_rate: float,
+    weight_decay: float,
+) -> tf.keras.optimizers.Optimizer:
+    """Build the selected Adam-family optimizer.
+
+    AdamW applies decoupled weight decay to trainable parameters. Plain Adam is
+    retained as an explicit ablation and ignores ``weight_decay``.
+    """
+    optimizer_name = str(optimizer_name).lower()
+    learning_rate = float(learning_rate)
+    weight_decay = float(weight_decay)
+
+    if learning_rate <= 0.0:
+        raise ValueError(
+            f"learning_rate must be positive, got {learning_rate}."
+        )
+    if weight_decay < 0.0:
+        raise ValueError(
+            f"weight_decay must be non-negative, got {weight_decay}."
+        )
+
+    if optimizer_name == "adam":
+        return tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    if optimizer_name == "adamw":
+        return tf.keras.optimizers.AdamW(
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+        )
+
+    raise ValueError(
+        "optimizer_name must be 'adam' or 'adamw', "
+        f"got {optimizer_name!r}."
+    )
+
+
 def build_joint_autoencoder_variational_classifier_v2(
     input_shape: tuple[int, int],
     n_classes: int = 2,
@@ -916,6 +960,9 @@ def build_joint_autoencoder_variational_classifier_v2(
     n_channels: int = 14,
     n_bands: int | None = None,
     learning_rate: float = 1e-3,
+    optimizer_name: str = "adamw",
+    weight_decay: float = 1e-4,
+    label_smoothing: float = 0.0,
     ae_loss_weight: float = 0.5,
     vc_loss_weight: float = 0.5,
     vae_beta: float = 1.0,
@@ -960,7 +1007,13 @@ def build_joint_autoencoder_variational_classifier_v2(
         decoder_kwargs=decoder_kwargs,
     )
 
-    classifier_defaults = {"n_classes": n_classes}
+    label_smoothing = float(label_smoothing)
+    if not 0.0 <= label_smoothing < 1.0:
+        raise ValueError("label_smoothing must be in [0, 1).")
+    classifier_defaults = {
+        "n_classes": n_classes,
+        "label_smoothing": label_smoothing,
+    }
     if classifier_kwargs:
         classifier_defaults.update(classifier_kwargs)
 
@@ -1063,7 +1116,12 @@ def build_joint_autoencoder_variational_classifier_v2(
             or f"joint_{encoder_type}_window_vae_bilstm_{classifier_head}_v2"
         ),
     )
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate))
+    optimizer = _build_optimizer(
+        optimizer_name=optimizer_name,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+    )
+    model.compile(optimizer=optimizer)
     return model
 
 
@@ -1198,6 +1256,10 @@ def train_joint_autoencoder_variational_classifier_v2(
         }
         model_hparam_keys = {
             "learning_rate",
+            "optimizer",
+            "optimizer_name",
+            "weight_decay",
+            "label_smoothing",
             "ae_loss_weight",
             "vc_loss_weight",
             "vae_beta",
@@ -1257,6 +1319,24 @@ def train_joint_autoencoder_variational_classifier_v2(
                 n_bands=training_config.n_bands,
                 learning_rate=float(
                     hparams.get("learning_rate", training_config.learning_rate)
+                ),
+                optimizer_name=str(
+                    hparams.get(
+                        "optimizer",
+                        hparams.get(
+                            "optimizer_name",
+                            training_config.optimizer_name,
+                        ),
+                    )
+                ),
+                weight_decay=float(
+                    hparams.get("weight_decay", training_config.weight_decay)
+                ),
+                label_smoothing=float(
+                    hparams.get(
+                        "label_smoothing",
+                        training_config.label_smoothing,
+                    )
                 ),
                 ae_loss_weight=float(
                     hparams.get(
@@ -1416,7 +1496,20 @@ def train_joint_autoencoder_variational_classifier_v2(
     logger.info("Encoder type: %s", encoder_type)
     logger.info("Classification/evaluation level: window")
     logger.info("Default classifier head: %s", training_config.classifier_head)
+    logger.info(
+        "Optimizer: %s, learning_rate=%.8g, weight_decay=%.8g",
+        training_config.optimizer_name,
+        training_config.learning_rate,
+        training_config.weight_decay,
+    )
     logger.info("Class weighting enabled: %s", training_config.use_class_weight)
+    logger.info("Default label smoothing: %.6f", training_config.label_smoothing)
+    logger.info(
+        "Decision thresholds: %s; validation selection=%s_%s",
+        list(training_config.decision_thresholds),
+        training_config.threshold_selection_level,
+        training_config.threshold_selection_metric,
+    )
     logger.info(
         "Subject-adversarial branch enabled: %s",
         training_config.use_subject_adversarial,
@@ -1517,6 +1610,9 @@ def train_joint_autoencoder_variational_classifier_v2(
         log_predictions=True,
         n_prediction_latent_samples=training_config.prediction_latent_samples,
         latent_sampling_seed=training_config.latent_sampling_seed,
+        decision_thresholds=training_config.decision_thresholds,
+        threshold_selection_metric=training_config.threshold_selection_metric,
+        threshold_selection_level=training_config.threshold_selection_level,
         prediction_diagnostics=training_config.prediction_diagnostics,
         prediction_diagnostics_every_n_epochs=(
             training_config.prediction_diagnostics_every_n_epochs
@@ -1601,6 +1697,30 @@ def train_joint_autoencoder_variational_classifier_v2(
         )
     selected_final_config = dict(cv_results["best_config"])
     _write_json(run_dir / "selected_config.json", selected_final_config)
+    cv_selected_thresholds = [
+        float(row["decision_threshold"])
+        for row in cv_results.get("outer_fold_results", [])
+        if row.get("decision_threshold") is not None
+    ]
+    final_decision_threshold = float(
+        np.median(cv_selected_thresholds)
+        if cv_selected_thresholds
+        else training_config.decision_thresholds[0]
+    )
+    _write_json(
+        run_dir / "decision_threshold_summary.json",
+        {
+            "fold_selected_thresholds": cv_selected_thresholds,
+            "final_median_threshold": final_decision_threshold,
+            "selection_metric": training_config.threshold_selection_metric,
+            "selection_level": training_config.threshold_selection_level,
+            "candidate_thresholds": list(training_config.decision_thresholds),
+        },
+    )
+    logger.info(
+        "Final inference threshold from fold median: %.6f",
+        final_decision_threshold,
+    )
     configured_epoch_cap = int(
         selected_final_config.get("epochs", training_config.cv_max_epochs)
     )
@@ -1727,6 +1847,17 @@ def train_joint_autoencoder_variational_classifier_v2(
         "use_class_weight": training_config.use_class_weight,
         "label_threshold_mode": training_config.label_threshold_mode,
         "prediction_diagnostics": training_config.prediction_diagnostics,
+        "label_smoothing": float(
+            selected_final_config.get(
+                "label_smoothing",
+                training_config.label_smoothing,
+            )
+        ),
+        "decision_threshold_candidates": list(training_config.decision_thresholds),
+        "cv_selected_decision_thresholds": cv_selected_thresholds,
+        "final_decision_threshold": final_decision_threshold,
+        "threshold_selection_metric": training_config.threshold_selection_metric,
+        "threshold_selection_level": training_config.threshold_selection_level,
         "prediction_diagnostics_every_n_epochs": (
             training_config.prediction_diagnostics_every_n_epochs
         ),
@@ -1794,6 +1925,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument(
+        "--optimizer",
+        choices=("adam", "adamw"),
+        default="adamw",
+        help=(
+            "Optimizer used for every CV and final fit. AdamW applies "
+            "decoupled weight decay (default: adamw)."
+        ),
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=1e-4,
+        help=(
+            "Decoupled weight decay used by AdamW. Ignored by plain Adam "
+            "(default: 1e-4)."
+        ),
+    )
+    parser.add_argument(
+        "--label-smoothing",
+        type=float,
+        default=0.0,
+        help=(
+            "Default classifier label-smoothing level in [0, 1). "
+            "Use 0 to disable it (default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--label-smoothing-levels",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Convenience grid for testing several smoothing levels, for "
+            "example: --label-smoothing-levels 0 0.05 0.1. This populates "
+            "the label_smoothing hyperparameter grid."
+        ),
+    )
+    parser.add_argument(
         "--max-folds",
         type=int,
         default=None,
@@ -1840,6 +2009,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Optional seed for reproducible Monte Carlo latent prediction.",
+    )
+    parser.add_argument(
+        "--decision-thresholds",
+        type=float,
+        nargs="+",
+        default=[0.5],
+        help=(
+            "Candidate binary class-1 thresholds selected independently in "
+            "each LOSO fold using validation subjects, for example 0.35 0.40 "
+            "0.45 0.50 0.55 (default: 0.5)."
+        ),
+    )
+    parser.add_argument(
+        "--threshold-selection-metric",
+        choices=("accuracy", "f1", "balanced_accuracy", "binary_f1"),
+        default="f1",
+        help="Validation metric maximized when choosing the fold threshold.",
+    )
+    parser.add_argument(
+        "--threshold-selection-level",
+        choices=("window", "trial"),
+        default="trial",
+        help=(
+            "Choose thresholds from validation windows or trial-averaged "
+            "probabilities (default: trial)."
+        ),
     )
     parser.add_argument(
         "--no-prediction-diagnostics",
@@ -2220,6 +2415,40 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not isinstance(parsed_hyperparameters, dict):
         raise ValueError("--hyperparameters-json must decode to a JSON object.")
+    if args.label_smoothing_levels is not None:
+        if "label_smoothing" in parsed_hyperparameters:
+            raise ValueError(
+                "Specify label smoothing through either "
+                "--label-smoothing-levels or label_smoothing in "
+                "--hyperparameters-json, not both."
+            )
+        parsed_hyperparameters["label_smoothing"] = list(
+            args.label_smoothing_levels
+        )
+    if args.learning_rate <= 0.0:
+        raise ValueError("--learning-rate must be positive.")
+    smoothing_values = (
+        args.label_smoothing_levels
+        if args.label_smoothing_levels is not None
+        else [args.label_smoothing]
+    )
+    if any(not 0.0 <= float(value) < 1.0 for value in smoothing_values):
+        raise ValueError("All label-smoothing levels must be in [0, 1).")
+    if not args.decision_thresholds:
+        raise ValueError("--decision-thresholds must contain at least one value.")
+    if any(
+        not 0.0 < float(value) < 1.0
+        for value in args.decision_thresholds
+    ):
+        raise ValueError(
+            "Every --decision-thresholds value must be strictly between 0 and 1."
+        )
+    if len(set(map(float, args.decision_thresholds))) != len(
+        args.decision_thresholds
+    ):
+        raise ValueError("--decision-thresholds must not contain duplicates.")
+    if args.weight_decay < 0.0:
+        raise ValueError("--weight-decay must be >= 0.")
     if args.prediction_latent_samples < 0:
         raise ValueError("--prediction-latent-samples must be >= 0.")
     if args.prediction_diagnostics_every < 1:
@@ -2271,6 +2500,8 @@ def main(argv: list[str] | None = None) -> int:
         n_channels=args.n_channels,
         n_bands=args.n_bands,
         learning_rate=args.learning_rate,
+        optimizer_name=args.optimizer,
+        weight_decay=args.weight_decay,
         batch_size=args.batch_size,
         cv_max_epochs=args.epochs,
         final_epoch_strategy=args.final_epoch_strategy,
@@ -2279,6 +2510,9 @@ def main(argv: list[str] | None = None) -> int:
         selection_level="window",
         prediction_latent_samples=args.prediction_latent_samples,
         latent_sampling_seed=args.latent_sampling_seed,
+        decision_thresholds=tuple(sorted(map(float, args.decision_thresholds))),
+        threshold_selection_metric=args.threshold_selection_metric,
+        threshold_selection_level=args.threshold_selection_level,
         prediction_diagnostics=not args.no_prediction_diagnostics,
         prediction_diagnostics_every_n_epochs=(
             args.prediction_diagnostics_every
@@ -2308,6 +2542,7 @@ def main(argv: list[str] | None = None) -> int:
         n_trial_bilstm_layers=args.trial_bilstm_layers,
         trial_bilstm_dropout=args.trial_bilstm_dropout,
         classifier_head=args.classifier_head,
+        label_smoothing=args.label_smoothing,
         model_kwargs={
             "ae_loss_weight": args.ae_loss_weight,
             "vc_loss_weight": args.vc_loss_weight,

@@ -36,12 +36,16 @@ class DenseClassifier(tf.keras.layers.Layer):
         use_bias: bool = True,
         kernel_initializer: str | dict = "glorot_uniform",
         bias_initializer: str | dict = "zeros",
+        label_smoothing: float = 0.0,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         if n_classes < 2:
             raise ValueError("n_classes must be at least 2.")
         self.n_classes = int(n_classes)
+        self.label_smoothing = float(label_smoothing)
+        if not 0.0 <= self.label_smoothing < 1.0:
+            raise ValueError("label_smoothing must be in [0, 1).")
         self.use_bias = bool(use_bias)
         self.kernel_initializer = tf.keras.initializers.get(kernel_initializer)
         self.bias_initializer = tf.keras.initializers.get(bias_initializer)
@@ -104,11 +108,19 @@ class DenseClassifier(tf.keras.layers.Layer):
         if logits is None:
             logits = self(mh, training=True)
 
-        per_sample_cross_entropy = (
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=y,
-                logits=logits,
-            )
+        hard_targets = tf.one_hot(
+            y,
+            depth=self.n_classes,
+            dtype=logits.dtype,
+        )
+        smoothing = tf.cast(self.label_smoothing, logits.dtype)
+        smoothed_targets = (
+            (1.0 - smoothing) * hard_targets
+            + smoothing / tf.cast(self.n_classes, logits.dtype)
+        )
+        per_sample_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+            labels=smoothed_targets,
+            logits=logits,
         )
         cross_entropy = self._weighted_mean(
             per_sample_cross_entropy,
@@ -162,6 +174,7 @@ class DenseClassifier(tf.keras.layers.Layer):
         config.update(
             {
                 "n_classes": self.n_classes,
+                "label_smoothing": self.label_smoothing,
                 "use_bias": self.use_bias,
                 "kernel_initializer": tf.keras.initializers.serialize(
                     self.kernel_initializer
@@ -174,6 +187,7 @@ class DenseClassifier(tf.keras.layers.Layer):
         return config
 
 
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
 class VariationalClassifier(tf.keras.layers.Layer):
     """Variational classification head with separately reportable loss terms."""
 
@@ -184,6 +198,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         self,
         n_classes: int = 2,
         latent_dim: int | None = None,
+        label_smoothing: float = 0.0,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -191,6 +206,9 @@ class VariationalClassifier(tf.keras.layers.Layer):
             raise ValueError("n_classes must be at least 2.")
         self.n_classes = int(n_classes)
         self.latent_dim = latent_dim
+        self.label_smoothing = float(label_smoothing)
+        if not 0.0 <= self.label_smoothing < 1.0:
+            raise ValueError("label_smoothing must be in [0, 1).")
         self._last_mh = None
 
     def build(self, input_shape) -> None:
@@ -405,11 +423,14 @@ class VariationalClassifier(tf.keras.layers.Layer):
         if logits is None:
             logits = self(mh, training=True)
 
-        cross_entropy_per_sample = (
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=y,
-                logits=logits,
-            )
+        smoothing = tf.cast(self.label_smoothing, logits.dtype)
+        smoothed_targets = (
+            (1.0 - smoothing) * tf.cast(y_onehot, logits.dtype)
+            + smoothing / tf.cast(self.n_classes, logits.dtype)
+        )
+        cross_entropy_per_sample = tf.nn.softmax_cross_entropy_with_logits(
+            labels=smoothed_targets,
+            logits=logits,
         )
         cross_entropy = self._weighted_mean(
             cross_entropy_per_sample,
@@ -579,7 +600,12 @@ class VariationalClassifier(tf.keras.layers.Layer):
 
     def get_config(self) -> dict:
         config = super().get_config()
-        config.update({"n_classes": self.n_classes})
+        config.update(
+            {
+                "n_classes": self.n_classes,
+                "label_smoothing": self.label_smoothing,
+            }
+        )
         return config
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
