@@ -226,7 +226,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             300
         ],
         "batch_size": [
-            32
+            128
         ],
         "learning_rate": [
             0.0001
@@ -276,7 +276,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             "relu"
         ],
         "use_batch_norm": [
-            true
+            false
         ],
         "bilstm_units": [
             64
