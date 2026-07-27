@@ -220,7 +220,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "use_supcon": [true],
-        "supcon_weight": [0.1],
+        "supcon_weight": [0.4],
         "supcon_temperature": [0.1],
         "supcon_cross_subject_only": [true],
 
