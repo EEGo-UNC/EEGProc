@@ -217,7 +217,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
-        "subject_adversarial_weight": [0.5],
+        "subject_adversarial_weight": [0.6],
         "subject_loss_weight": [1.0],
         "subject_hidden_units": [32],
         "subject_dropout": [0.0],
@@ -226,7 +226,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             300
         ],
         "batch_size": [
-            128
+            16
         ],
         "learning_rate": [
             0.0001
