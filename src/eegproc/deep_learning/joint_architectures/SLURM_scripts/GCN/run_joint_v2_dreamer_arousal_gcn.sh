@@ -285,7 +285,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     ],
     "bilstm_dropout": [
         0.4
-    ]
+    ],
     "classifier_head": [
         "hybrid"
     ]
