@@ -194,12 +194,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --n-bands 4 \
     --out-dir runs/joint_autoencoder_vc_v2/GCN \
     --run-name dreamer_arousal_vaevc_gcn \
-    --max-folds 2 \
+    --max-folds 1 \
     --n-jobs 1 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
-    --prediction-latent-samples 5 \
+    --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
     --validation-subjects 4 \
@@ -215,9 +215,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-monitor val_joint_loss \
     --early-stopping-mode min \
     --final-epoch-strategy median \
+    --decision-thresholds 0.35 0.5 0.65 \
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
-        "subject_adversarial_weight": [0.8],
+        "subject_adversarial_weight": [0.5],
         "subject_loss_weight": [1.0],
         "subject_hidden_units": [32],
         "subject_dropout": [0.0],
@@ -231,11 +232,16 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "learning_rate": [
             0.0001
         ],
+
+        "optimizer": ["adamw"],
+        "weight_decay": [0.0001],
+        "label_smoothing": [0.05],
+
         "ae_loss_weight": [
             0.3
         ],
         "vc_loss_weight": [
-            1.0
+            10.0
         ],
         "vc_alpha": [
             1.0
