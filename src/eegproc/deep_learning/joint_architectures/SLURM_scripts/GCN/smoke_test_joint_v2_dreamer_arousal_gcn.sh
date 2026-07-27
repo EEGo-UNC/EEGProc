@@ -215,7 +215,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-monitor val_joint_loss \
     --early-stopping-mode min \
     --final-epoch-strategy median \
-    --decision-thresholds 0.35 0.5 0.65 \
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
         "subject_adversarial_weight": [0.5],
