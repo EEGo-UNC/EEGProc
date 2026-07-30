@@ -223,70 +223,69 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-mode max \
     --final-epoch-strategy median \
     --hyperparameters-json '{
-    "use_subject_adversarial": [true],
-    "subject_adversarial_weight": [0.6],
-    "subject_loss_weight": [0.6],
-    "subject_hidden_units": [32],
-    "subject_dropout": [0.0],
+        "use_subject_adversarial": [true],
+        "subject_adversarial_weight": [0.6],
+        "subject_loss_weight": [0.6],
+        "subject_hidden_units": [32],
+        "subject_dropout": [0.0],
 
-    "subject_latent_mode": ["mean"],
-    "epochs": [
-        400
-    ],
-    "batch_size": [
-        16
-    ],
-    "learning_rate": [
-        0.0001
-    ],
+        "subject_latent_mode": ["mean"],
+        "epochs": [
+            400
+        ],
+        "batch_size": [
+            16
+        ],
+        "learning_rate": [
+            0.0001
+        ],
 
-    "optimizer": ["adamw"],
-    "weight_decay": [0.0001],
-    "label_smoothing": [0.05],
+        "optimizer": ["adamw"],
+        "weight_decay": [0.0001],
+        "label_smoothing": [0.05],
 
-    "ae_loss_weight": [0.6],
-    "vc_loss_weight": [1.0],
-    "vc_alpha": [1.0],
-    "vc_beta": [0.0, 0.5],
-    "vc_gamma": [0.0],
-    "vc_lambda": [0.0, 0.1],
-    "vae_beta": [
-        0.3
-    ],
-    "t_down": [
-        2
-    ],
-    "emb_dim": [
-        64, 128
-    ],
-    "dropout": [
-        0.1
-    ],
-    "gcn_units": [
-        [64, 32], 
-        [128, 64]
-    ],
-    "temporal_pool_sizes": [
-        [
+        "ae_loss_weight": [0.6],
+        "vc_loss_weight": [1.0],
+        "vc_alpha": [1.0],
+        "vc_beta": [0.5],
+        "vc_gamma": [0.0],
+        "vc_lambda": [0.1],
+        "vae_beta": [
+            0.3
+        ],
+        "t_down": [
             2
+        ],
+        "emb_dim": [
+            64
+        ],
+        "dropout": [
+            0.1
+        ],
+        "gcn_units": [
+            [128, 64]
+        ],
+        "temporal_pool_sizes": [
+            [
+                2
+            ]
+        ],
+        "activation": [
+            "relu"
+        ],
+        "use_batch_norm": [
+            false
+        ],
+        "bilstm_units": [
+            128, 256
+        ],
+        "bilstm_layers": [
+            1
+        ],
+        "bilstm_dropout": [
+            0.4
         ]
-    ],
-    "activation": [
-        "relu"
-    ],
-    "use_batch_norm": [
-        false
-    ],
-    "bilstm_units": [
-        64, 128
-    ],
-    "bilstm_layers": [
-        1
-    ],
-    "bilstm_dropout": [
-        0.4
-    ]
-    "classifier_head": [
-        "hybrid"
-    ]
-}'
+        "classifier_head": [
+            "hybrid"
+        ]
+    }'
