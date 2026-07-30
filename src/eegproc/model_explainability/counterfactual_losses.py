@@ -148,8 +148,16 @@ def tensor_distance(
     reference: tf.Tensor,
     metric: DistanceMetric = "mse",
     epsilon: float = 1e-8,
+    sample_mask: tf.Tensor | None = None,
 ) -> tf.Tensor:
-    """Compute a batch-mean distance over all non-batch dimensions."""
+    """Compute mean distance, optionally excluding padded trial windows.
+
+    Without ``sample_mask``, the first axis is treated as the sample axis and
+    all remaining dimensions are reduced, preserving the original window-level
+    behavior. With a mask, the mask dimensions identify classification units
+    such as ``(batch, windows)`` and all trailing signal dimensions are reduced
+    per unit before averaging only over valid entries.
+    """
     candidate = tf.convert_to_tensor(candidate)
     reference = tf.cast(tf.convert_to_tensor(reference), candidate.dtype)
 
@@ -159,18 +167,37 @@ def tensor_distance(
         message="Candidate and reference tensors must have identical shapes.",
     )
 
-    difference = tf.reshape(
-        candidate - reference,
-        [tf.shape(candidate)[0], -1],
-    )
+    difference = candidate - reference
+    if sample_mask is None:
+        difference = tf.reshape(difference, [tf.shape(candidate)[0], -1])
+        reduction_axis: int | tuple[int, ...] = 1
+        mask = None
+    else:
+        mask = tf.cast(tf.convert_to_tensor(sample_mask), candidate.dtype)
+        if mask.shape.rank is None or candidate.shape.rank is None:
+            raise ValueError(
+                "candidate and sample_mask must have statically known ranks."
+            )
+        if mask.shape.rank >= candidate.shape.rank:
+            raise ValueError(
+                "sample_mask must have fewer dimensions than the signal tensor."
+            )
+        tf.debugging.assert_equal(
+            tf.shape(candidate)[: mask.shape.rank],
+            tf.shape(mask),
+            message=(
+                "sample_mask shape must match the leading candidate dimensions."
+            ),
+        )
+        reduction_axis = tuple(range(mask.shape.rank, candidate.shape.rank))
 
     if metric == "mse":
-        per_example = tf.reduce_mean(tf.square(difference), axis=1)
+        per_unit = tf.reduce_mean(tf.square(difference), axis=reduction_axis)
     elif metric == "mae":
-        per_example = tf.reduce_mean(tf.abs(difference), axis=1)
+        per_unit = tf.reduce_mean(tf.abs(difference), axis=reduction_axis)
     elif metric == "rmse":
-        per_example = tf.sqrt(
-            tf.reduce_mean(tf.square(difference), axis=1)
+        per_unit = tf.sqrt(
+            tf.reduce_mean(tf.square(difference), axis=reduction_axis)
             + tf.cast(epsilon, candidate.dtype)
         )
     else:
@@ -178,19 +205,26 @@ def tensor_distance(
             f"Unknown metric {metric!r}; choose 'mse', 'mae', or 'rmse'."
         )
 
-    return tf.reduce_mean(per_example)
+    if mask is None:
+        return tf.reduce_mean(per_unit)
+    return tf.math.divide_no_nan(
+        tf.reduce_sum(per_unit * mask),
+        tf.reduce_sum(mask),
+    )
 
 
 def reconstructed_input_proximity_loss(
     counterfactual_reconstruction: tf.Tensor,
     original_features: tf.Tensor,
     metric: DistanceMetric = "mse",
+    sample_mask: tf.Tensor | None = None,
 ) -> tf.Tensor:
-    """Distance from decoded counterfactual EEG to the original feature window."""
+    """Distance from decoded counterfactual EEG to valid original windows."""
     return tensor_distance(
         candidate=counterfactual_reconstruction,
         reference=original_features,
         metric=metric,
+        sample_mask=sample_mask,
     )
 
 
@@ -198,12 +232,14 @@ def decoded_change_distance(
     counterfactual_reconstruction: tf.Tensor,
     original_reconstruction: tf.Tensor,
     metric: DistanceMetric = "mse",
+    sample_mask: tf.Tensor | None = None,
 ) -> tf.Tensor:
-    """Diagnostic distance between counterfactual and original reconstructions."""
+    """Diagnostic distance between valid counterfactual/original windows."""
     return tensor_distance(
         candidate=counterfactual_reconstruction,
         reference=original_reconstruction,
         metric=metric,
+        sample_mask=sample_mask,
     )
 
 
@@ -216,6 +252,7 @@ def counterfactual_objective(
     weights: CounterfactualLossWeights,
     target_probability: float = 0.80,
     signal_metric: DistanceMetric = "mse",
+    sample_mask: tf.Tensor | None = None,
 ) -> dict[str, tf.Tensor]:
     """Compute the reconstructed-space counterfactual objective."""
     validity = target_probability_hinge_loss(
@@ -227,6 +264,7 @@ def counterfactual_objective(
         counterfactual_reconstruction=counterfactual_reconstruction,
         original_features=original_features,
         metric=signal_metric,
+        sample_mask=sample_mask,
     )
 
     dtype = validity.dtype

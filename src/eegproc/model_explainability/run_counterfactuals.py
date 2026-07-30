@@ -1,51 +1,31 @@
-"""Run one deterministic counterfactual example from a completed joint-v2 run.
+"""Run deterministic window- or subject-trial EEG counterfactuals.
 
-The runner:
+The runner rebuilds a completed joint-v2 model, recreates the training windows,
+and follows the model's saved ``classification_level``. In trial mode it selects
+all ordered windows belonging to one ``(subject_id, trial_id)`` pair, applies
+the same padding/cropping layout used in training, optimizes the complete latent
+trial, decodes every window independently, and evaluates one BiLSTM trial
+prediction. Optimization stops at the first requested target probability by
+default and saves explicit trial-level prediction metrics.
 
-1. reads ``training_config.json`` and ``selected_config.json``;
-2. rebuilds the selected joint VAE + BiLSTM + VC architecture;
-3. loads the trained values from ``final_model.keras``;
-4. recreates the DREAMER windows used during training;
-5. selects one EEG window and chooses a target class;
-6. calls ``CounterfactualOptimizer.optimize``;
-7. saves the original and counterfactual arrays to NPZ and metadata to JSON.
-
-The counterfactual optimizer is expected to expose this interface::
-
-    optimizer = CounterfactualOptimizer(
-        model=model,
-        learning_rate=1e-2,
-        max_steps=500,
-        validity_weight=1.0,
-        signal_proximity_weight=0.10,
-        target_probability=0.80,
-        seed=42,
-        verbose=1,
-    )
-
-    result = optimizer.optimize(
-        inputs=x,
-        target_class=target_class,
-    )
-
-``result`` should be a dictionary. TensorFlow tensors and NumPy arrays are
-stored automatically.
-
-How to run
-----------
-From the EEGProc repository root, run:
+Example
+-------
+From the EEGProc repository root::
 
     python -m src.eegproc.model_explainability.run_counterfactuals \
-    --run-dir runs/AAAI_run3_no_divergence_overfit/joint_v2_dreamer_arousal_cnn1d_20260720_105821 \
-    --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
-    --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
-    --sample-index 0 \
-    --learning-rate 0.005 \
-    --max-steps 200 \
-    --target-probability 0.80 \
-    --feature-log-interval 1 \
-    --verbose 1 \
-    --overwrite
+      --run-dir runs/my_trial_model \
+      --subject-id 1 --trial-id 3 \
+      --learning-rate 0.005 --max-steps 200 \
+      --target-probability 0.80 --overwrite
+
+    python -m src.eegproc.model_explainability.run_counterfactuals \ 
+        --raw-eeg-npy datasets/dreamer_eeg.npy \
+        --raw-labels-npy datasets/dreamer_labels.npy \
+        --run-dir runs/AAAI_run10_GCN/GCN/dreamer_arousal_vaevc_gcn_20260724_160700 \
+        --subject-id 1 --trial-id 3 \
+        --learning-rate 0.005 --max-steps 20 \
+        --target-probability 0.70 --overwrite
+
 """
 
 from __future__ import annotations
@@ -174,6 +154,15 @@ def _load_dataset(
         "fs": training_config.get("fs", 128.0),
         "median_label": training_config.get("median_label", 3.0),
         "zscore": training_config.get("zscore", True),
+        "window_normalization": training_config.get(
+            "window_normalization",
+            "global_rms",
+        ),
+        "label_threshold_mode": training_config.get(
+            "label_threshold_mode",
+            "global",
+        ),
+        "dataset": training_config.get("dataset", "dreamer"),
     }
 
     # Preserve the loader's built-in DREAMER path defaults when no override is
@@ -214,14 +203,88 @@ def _load_dataset(
     return features, labels, subject_ids, trial_ids
 
 
+def _resolve_classification_level(
+    training_config: dict[str, Any],
+    selected_config: dict[str, Any],
+) -> str:
+    model_kwargs = dict(training_config.get("model_kwargs", {}) or {})
+    level = str(
+        _pick(
+            "classification_level",
+            selected_config=selected_config,
+            training_config=training_config,
+            model_kwargs=model_kwargs,
+            default="window",
+        )
+    ).lower()
+    if level not in {"window", "trial"}:
+        raise ValueError(
+            "classification_level must be 'window' or 'trial'; "
+            f"received {level!r}."
+        )
+    return level
+
+
+def _resolve_trial_layout(
+    *,
+    subject_ids: np.ndarray,
+    trial_ids: np.ndarray,
+    training_config: dict[str, Any],
+    selected_config: dict[str, Any],
+) -> tuple[int | None, str]:
+    """Return the training-time padded window count and crop rule."""
+    if len(subject_ids) != len(trial_ids):
+        raise ValueError("Subject and trial arrays must align.")
+
+    model_kwargs = dict(training_config.get("model_kwargs", {}) or {})
+    crop = str(
+        _pick(
+            "trial_crop",
+            selected_config=selected_config,
+            training_config=training_config,
+            model_kwargs=model_kwargs,
+            default="center",
+        )
+    ).lower()
+    if crop not in {"start", "center", "end"}:
+        raise ValueError("trial_crop must be start, center, or end.")
+
+    configured = _pick(
+        "n_windows_per_trial",
+        selected_config=selected_config,
+        training_config=training_config,
+        model_kwargs=model_kwargs,
+        default=None,
+        aliases=("trial_max_windows",),
+    )
+    if configured is not None:
+        configured = int(configured)
+        if configured < 1:
+            raise ValueError("n_windows_per_trial must be at least 1.")
+        return configured, crop
+
+    counts: dict[tuple[Any, Any], int] = {}
+    for subject_id, trial_id in zip(subject_ids, trial_ids):
+        key = (
+            subject_id.item() if isinstance(subject_id, np.generic) else subject_id,
+            trial_id.item() if isinstance(trial_id, np.generic) else trial_id,
+        )
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        raise ValueError("No subject-trial groups were found.")
+    return max(counts.values()), crop
+
+
 def _build_selected_model(
     *,
     features: np.ndarray,
     labels: np.ndarray,
     training_config: dict[str, Any],
     selected_config: dict[str, Any],
+    classification_level: str,
+    n_windows_per_trial: int | None,
 ) -> tf.keras.Model:
-    """Rebuild exactly the architecture selected by the training run."""
+    """Rebuild the selected window- or trial-level joint architecture."""
     model_kwargs = dict(training_config.get("model_kwargs", {}) or {})
 
     encoder_kwargs = _merge_dict_setting(
@@ -239,6 +302,7 @@ def _build_selected_model(
         "kernel_sizes",
         "pool_after_layers",
         "pool_sizes",
+        "spatial_pool_sizes",
         "temporal_pool_sizes",
         "gcn_units",
     ):
@@ -260,6 +324,11 @@ def _build_selected_model(
         training_config,
         selected_config,
     )
+    trial_bilstm_kwargs = _merge_dict_setting(
+        "trial_bilstm_kwargs",
+        training_config,
+        selected_config,
+    )
 
     labels_flat = labels
     if labels_flat.ndim == 2 and labels_flat.shape[-1] > 1:
@@ -267,157 +336,113 @@ def _build_selected_model(
     labels_flat = labels_flat.reshape(-1)
     n_classes = int(np.max(labels_flat)) + 1
 
-    model = build_joint_autoencoder_variational_classifier_v2(
-        input_shape=tuple(map(int, features.shape[1:])),
-        n_classes=n_classes,
-        encoder_type=str(
-            _pick(
-                "encoder_type",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default="cnn1d",
-            )
-        ),
-        n_channels=int(
-            _pick(
-                "n_channels",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=features.shape[-1],
-            )
-        ),
-        n_bands=_pick(
-            "n_bands",
+    def pick(key: str, default: Any, aliases: tuple[str, ...] = ()) -> Any:
+        return _pick(
+            key,
             selected_config=selected_config,
             training_config=training_config,
             model_kwargs=model_kwargs,
-            default=None,
+            default=default,
+            aliases=aliases,
+        )
+
+    builder_kwargs: dict[str, Any] = {
+        "input_shape": tuple(map(int, features.shape[1:])),
+        "n_classes": n_classes,
+        "classification_level": classification_level,
+        "n_windows_per_trial": n_windows_per_trial,
+        "encoder_type": str(pick("encoder_type", "cnn1d")),
+        "n_channels": int(pick("n_channels", features.shape[-1])),
+        "n_bands": pick("n_bands", None),
+        "learning_rate": float(pick("learning_rate", 1e-3)),
+        "optimizer_name": str(pick("optimizer_name", "adamw")),
+        "weight_decay": float(pick("weight_decay", 1e-4)),
+        "label_smoothing": float(pick("label_smoothing", 0.0)),
+        "ae_loss_weight": float(pick("ae_loss_weight", 0.5)),
+        "vc_loss_weight": float(pick("vc_loss_weight", 0.5)),
+        "vae_beta": float(pick("vae_beta", 1.0)),
+        "vc_alpha": float(pick("vc_alpha", 1.0)),
+        "vc_beta": float(pick("vc_beta", 1.0)),
+        "vc_gamma": float(pick("vc_gamma", 0.0)),
+        "vc_lambda": float(pick("vc_lambda", 0.0)),
+        "update_discriminator": bool(pick("update_discriminator", False)),
+        "use_class_weight": bool(pick("use_class_weight", True)),
+        "use_subject_adversarial": bool(
+            pick("use_subject_adversarial", False)
         ),
-        learning_rate=float(
-            _pick(
-                "learning_rate",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=1e-3,
-            )
+        "n_subject_classes": pick("n_subject_classes", None),
+        "subject_adversarial_weight": float(
+            pick("subject_adversarial_weight", 0.05)
         ),
-        ae_loss_weight=float(
-            _pick(
-                "ae_loss_weight",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=0.5,
-            )
+        "subject_loss_weight": float(pick("subject_loss_weight", 1.0)),
+        "subject_hidden_units": int(pick("subject_hidden_units", 64)),
+        "subject_dropout": float(pick("subject_dropout", 0.0)),
+        "subject_latent_mode": str(pick("subject_latent_mode", "mean")),
+        "subject_mc_samples": int(pick("subject_mc_samples", 5)),
+        "use_supcon": bool(pick("use_supcon", False)),
+        "supcon_weight": float(pick("supcon_weight", 0.03)),
+        "supcon_temperature": float(pick("supcon_temperature", 0.1)),
+        "supcon_cross_subject_only": bool(
+            pick("supcon_cross_subject_only", True)
         ),
-        vc_loss_weight=float(
-            _pick(
-                "vc_loss_weight",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=0.5,
-            )
+        "bilstm_units": int(pick("bilstm_units", 64)),
+        "n_bilstm_layers": int(
+            pick("bilstm_layers", 1, aliases=("n_bilstm_layers",))
         ),
-        vae_beta=float(
-            _pick(
-                "vae_beta",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=1.0,
-            )
-        ),
-        vc_alpha=float(
-            _pick(
-                "vc_alpha",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=1.0,
-            )
-        ),
-        vc_beta=float(
-            _pick(
-                "vc_beta",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=1.0,
-            )
-        ),
-        vc_gamma=float(
-            _pick(
-                "vc_gamma",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=0.0,
-            )
-        ),
-        vc_lambda=float(
-            _pick(
-                "vc_lambda",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=0.0,
-            )
-        ),
-        update_discriminator=bool(
-            _pick(
-                "update_discriminator",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=False,
-            )
-        ),
-        bilstm_units=int(
-            _pick(
-                "bilstm_units",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=64,
-            )
-        ),
-        n_bilstm_layers=int(
-            _pick(
-                "bilstm_layers",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=2,
-                aliases=("n_bilstm_layers",),
-            )
-        ),
-        bilstm_dropout=float(
-            _pick(
-                "bilstm_dropout",
-                selected_config=selected_config,
-                training_config=training_config,
-                model_kwargs=model_kwargs,
-                default=0.10,
-            )
-        ),
-        bilstm_kwargs=bilstm_kwargs,
-        encoder_kwargs=encoder_kwargs,
-        decoder_kwargs=decoder_kwargs,
-        classifier_kwargs=classifier_kwargs,
+        "bilstm_dropout": float(pick("bilstm_dropout", 0.10)),
+        "trial_bilstm_units": pick("trial_bilstm_units", None),
+        "n_trial_bilstm_layers": pick("n_trial_bilstm_layers", None),
+        "trial_bilstm_dropout": pick("trial_bilstm_dropout", None),
+        "bilstm_kwargs": bilstm_kwargs,
+        "trial_bilstm_kwargs": trial_bilstm_kwargs,
+        "encoder_kwargs": encoder_kwargs,
+        "decoder_kwargs": decoder_kwargs,
+        "classifier_kwargs": classifier_kwargs,
+        "classifier_head": str(pick("classifier_head", "variational")),
+    }
+
+    signature = inspect.signature(
+        build_joint_autoencoder_variational_classifier_v2
+    )
+    supported_kwargs = {
+        key: value
+        for key, value in builder_kwargs.items()
+        if key in signature.parameters and value is not None
+    }
+    model = build_joint_autoencoder_variational_classifier_v2(
+        **supported_kwargs
     )
 
-    dummy = tf.zeros((1, *features.shape[1:]), dtype=tf.float32)
+    if classification_level == "trial":
+        if n_windows_per_trial is None:
+            raise ValueError("Trial mode requires n_windows_per_trial.")
+        dummy_numpy = np.zeros(
+            (1, n_windows_per_trial, *features.shape[1:]),
+            dtype=np.float32,
+        )
+        # The model identifies valid windows from nonzero values.
+        dummy_numpy[:, 0] = np.float32(1e-6)
+    else:
+        dummy_numpy = np.zeros(
+            (1, *features.shape[1:]),
+            dtype=np.float32,
+        )
+    dummy = tf.convert_to_tensor(dummy_numpy)
     try:
-        model(dummy, training=False, sample_latent=False)
+        model(
+            dummy,
+            training=False,
+            sample_latent=False,
+            include_reconstruction=False,
+            include_subject_adversarial=False,
+        )
     except TypeError:
-        model(dummy, training=False)
+        try:
+            model(dummy, training=False, sample_latent=False)
+        except TypeError:
+            model(dummy, training=False)
 
     return model
-
 
 def _load_final_checkpoint(model: tf.keras.Model, run_dir: Path) -> str:
     """Load trained values from final_model.keras, with an H5 fallback."""
@@ -447,37 +472,140 @@ def _load_final_checkpoint(model: tf.keras.Model, run_dir: Path) -> str:
         return "final_model.weights.h5"
 
 
-def _select_index(
+def _as_class_ids(labels: np.ndarray) -> np.ndarray:
+    labels = np.asarray(labels)
+    if labels.ndim == 2 and labels.shape[-1] > 1:
+        return np.argmax(labels, axis=-1).astype(np.int64)
+    return labels.reshape(-1).astype(np.int64)
+
+
+def _trial_crop_start(length: int, target: int, crop: str) -> int:
+    if length <= target or crop == "start":
+        return 0
+    if crop == "end":
+        return length - target
+    return (length - target) // 2
+
+
+def _select_counterfactual_sample(
+    *,
     args: argparse.Namespace,
+    features: np.ndarray,
+    labels: np.ndarray,
     subject_ids: np.ndarray,
     trial_ids: np.ndarray,
-) -> int:
-    if args.subject_id is None and args.trial_id is None:
-        if not 0 <= args.sample_index < len(subject_ids):
-            raise IndexError(
-                f"sample_index must be in [0, {len(subject_ids) - 1}]."
-            )
-        return int(args.sample_index)
+    classification_level: str,
+    n_windows_per_trial: int | None,
+    trial_crop: str,
+) -> dict[str, Any]:
+    """Select one window or one complete ordered subject-trial."""
+    class_ids = _as_class_ids(labels)
 
-    if args.subject_id is None or args.trial_id is None:
-        raise ValueError("--subject-id and --trial-id must be used together.")
+    if classification_level == "window":
+        if args.subject_id is None and args.trial_id is None:
+            if not 0 <= args.sample_index < len(features):
+                raise IndexError(
+                    f"sample_index must be in [0, {len(features) - 1}]."
+                )
+            index = int(args.sample_index)
+        else:
+            if args.subject_id is None or args.trial_id is None:
+                raise ValueError(
+                    "--subject-id and --trial-id must be used together."
+                )
+            matches = np.flatnonzero(
+                (subject_ids == args.subject_id)
+                & (trial_ids == args.trial_id)
+            )
+            if len(matches) == 0:
+                raise ValueError(
+                    f"No windows found for subject {args.subject_id}, "
+                    f"trial {args.trial_id}."
+                )
+            if not 0 <= args.window_in_trial < len(matches):
+                raise IndexError(
+                    f"window_in_trial must be in [0, {len(matches) - 1}] "
+                    "for the selected trial."
+                )
+            index = int(matches[args.window_in_trial])
+
+        return {
+            "inputs": features[index : index + 1],
+            "window_mask": None,
+            "source_indices": np.asarray([index], dtype=np.int64),
+            "subject_id": subject_ids[index],
+            "trial_id": trial_ids[index],
+            "true_class": int(class_ids[index]),
+            "true_label": labels[index],
+            "n_valid_windows": 1,
+            "selection_index": index,
+        }
+
+    if n_windows_per_trial is None:
+        raise ValueError("Trial mode requires n_windows_per_trial.")
+
+    if args.subject_id is None and args.trial_id is None:
+        if not 0 <= args.sample_index < len(features):
+            raise IndexError(
+                f"sample_index must be in [0, {len(features) - 1}]."
+            )
+        seed_index = int(args.sample_index)
+        subject_id = subject_ids[seed_index]
+        trial_id = trial_ids[seed_index]
+    else:
+        if args.subject_id is None or args.trial_id is None:
+            raise ValueError(
+                "--subject-id and --trial-id must be used together."
+            )
+        subject_id = args.subject_id
+        trial_id = args.trial_id
+        seed_index = -1
 
     matches = np.flatnonzero(
-        (subject_ids == args.subject_id)
-        & (trial_ids == args.trial_id)
+        (subject_ids == subject_id) & (trial_ids == trial_id)
     )
     if len(matches) == 0:
         raise ValueError(
-            f"No windows found for subject {args.subject_id}, "
-            f"trial {args.trial_id}."
+            f"No windows found for subject {subject_id}, trial {trial_id}."
         )
-    if not 0 <= args.window_in_trial < len(matches):
-        raise IndexError(
-            f"window_in_trial must be in [0, {len(matches) - 1}] "
-            "for the selected trial."
+    unique_classes = np.unique(class_ids[matches])
+    if len(unique_classes) != 1:
+        raise ValueError(
+            "All windows in a subject-trial must share one class; "
+            f"found {unique_classes.tolist()}."
         )
-    return int(matches[args.window_in_trial])
 
+    start = _trial_crop_start(
+        length=len(matches),
+        target=n_windows_per_trial,
+        crop=trial_crop,
+    )
+    selected = matches[start : start + n_windows_per_trial]
+    kept = len(selected)
+
+    trial_tensor = np.zeros(
+        (1, n_windows_per_trial, features.shape[1], features.shape[2]),
+        dtype=np.float32,
+    )
+    trial_mask = np.zeros((1, n_windows_per_trial), dtype=bool)
+    source_indices = np.full(n_windows_per_trial, -1, dtype=np.int64)
+    trial_tensor[0, :kept] = features[selected]
+    trial_mask[0, :kept] = True
+    source_indices[:kept] = selected
+
+    return {
+        "inputs": trial_tensor,
+        "window_mask": trial_mask,
+        "source_indices": source_indices,
+        "subject_id": subject_id,
+        "trial_id": trial_id,
+        "true_class": int(unique_classes[0]),
+        "true_label": labels[matches[0]],
+        "n_valid_windows": kept,
+        "selection_index": seed_index,
+        "original_trial_window_count": len(matches),
+        "trial_crop_start": start,
+    }
 
 def _model_outputs(
     model: tf.keras.Model,
@@ -488,9 +616,18 @@ def _model_outputs(
             inputs,
             training=False,
             sample_latent=False,
+            include_reconstruction=True,
+            include_subject_adversarial=False,
         )
     except TypeError:
-        outputs = model(inputs, training=False)
+        try:
+            outputs = model(
+                inputs,
+                training=False,
+                sample_latent=False,
+            )
+        except TypeError:
+            outputs = model(inputs, training=False)
 
     if not isinstance(outputs, dict):
         raise TypeError("The joint model must return a dictionary.")
@@ -583,14 +720,29 @@ def _jsonable(value: Any) -> Any:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one deterministic latent counterfactual."
+        description=(
+            "Run one deterministic window- or subject-trial counterfactual."
+        )
     )
     parser.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
 
-    parser.add_argument("--sample-index", type=int, default=0)
+    parser.add_argument(
+        "--sample-index",
+        type=int,
+        default=0,
+        help=(
+            "Window index. In trial mode, its subject and trial identify the "
+            "complete session unless --subject-id/--trial-id are supplied."
+        ),
+    )
     parser.add_argument("--subject-id", type=int, default=None)
     parser.add_argument("--trial-id", type=int, default=None)
-    parser.add_argument("--window-in-trial", type=int, default=0)
+    parser.add_argument(
+        "--window-in-trial",
+        type=int,
+        default=0,
+        help="Used only when the trained model classifies individual windows.",
+    )
     parser.add_argument("--target-class", type=int, default=None)
 
     parser.add_argument("--raw-eeg-npy", type=Path, default=None)
@@ -608,6 +760,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validity-weight", type=float, default=1.0)
     parser.add_argument("--signal-proximity-weight", type=float, default=0.10)
     parser.add_argument("--target-probability", type=float, default=0.80)
+    parser.add_argument(
+        "--signal-metric",
+        choices=("mse", "mae", "rmse"),
+        default="mse",
+    )
+    parser.add_argument(
+        "--stop-on-success",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Stop at the first iterate whose trial/window target probability "
+            "reaches --target-probability (default: enabled)."
+        ),
+    )
     parser.add_argument(
         "--feature-log-interval",
         type=int,
@@ -649,21 +815,53 @@ def main(argv: list[str] | None = None) -> int:
         args,
         training_config,
     )
+    classification_level = _resolve_classification_level(
+        training_config,
+        selected_config,
+    )
+    if classification_level == "trial":
+        n_windows_per_trial, trial_crop = _resolve_trial_layout(
+            subject_ids=subject_ids,
+            trial_ids=trial_ids,
+            training_config=training_config,
+            selected_config=selected_config,
+        )
+    else:
+        n_windows_per_trial = None
+        trial_crop = "center"
+
     model = _build_selected_model(
         features=features,
         labels=labels,
         training_config=training_config,
         selected_config=selected_config,
+        classification_level=classification_level,
+        n_windows_per_trial=n_windows_per_trial,
     )
     checkpoint_name = _load_final_checkpoint(model, run_dir)
 
-    # This freezes model variables but still permits gradients with respect to
-    # the latent counterfactual variable inside CounterfactualOptimizer.
+    # Freeze trained parameters while retaining gradients with respect to the
+    # new counterfactual latent variable.
     model.trainable = False
 
-    selected_index = _select_index(args, subject_ids, trial_ids)
-    x_numpy = features[selected_index : selected_index + 1]
+    selection = _select_counterfactual_sample(
+        args=args,
+        features=features,
+        labels=labels,
+        subject_ids=subject_ids,
+        trial_ids=trial_ids,
+        classification_level=classification_level,
+        n_windows_per_trial=n_windows_per_trial,
+        trial_crop=trial_crop,
+    )
+    x_numpy = np.asarray(selection["inputs"], dtype=np.float32)
     x = tf.convert_to_tensor(x_numpy, dtype=tf.float32)
+    window_mask_numpy = selection["window_mask"]
+    window_mask = (
+        None
+        if window_mask_numpy is None
+        else tf.convert_to_tensor(window_mask_numpy, dtype=tf.bool)
+    )
 
     original = _model_outputs(model, x)
     original_probabilities = tf.nn.softmax(
@@ -676,14 +874,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     LOGGER.info(
-        "sample=%d subject=%s trial=%s true=%s",
-        selected_index,
-        subject_ids[selected_index],
-        trial_ids[selected_index],
-        np.asarray(labels[selected_index]).tolist(),
+        "level=%s subject=%s trial=%s true=%d valid_windows=%d",
+        classification_level,
+        selection["subject_id"],
+        selection["trial_id"],
+        selection["true_class"],
+        selection["n_valid_windows"],
     )
     LOGGER.info(
-        "probabilities=%s predicted=%d target=%d",
+        "original_%s_probabilities=%s predicted=%d target=%d",
+        classification_level,
         np.array2string(original_probabilities, precision=5),
         predicted_class,
         target_class,
@@ -697,18 +897,31 @@ def main(argv: list[str] | None = None) -> int:
         signal_proximity_weight=args.signal_proximity_weight,
         target_probability=args.target_probability,
         feature_log_interval=args.feature_log_interval,
+        signal_metric=args.signal_metric,
+        stop_on_success=args.stop_on_success,
         seed=args.seed,
         verbose=args.verbose,
     )
     result = optimizer.optimize(
         inputs=x,
         target_class=target_class,
+        window_mask=window_mask,
+        true_class=selection["true_class"],
     )
     if not isinstance(result, dict):
         raise TypeError(
             "CounterfactualOptimizer.optimize must return a dictionary."
         )
     result = _to_numpy(result)
+
+    LOGGER.info(
+        "%s_metrics=%s",
+        classification_level,
+        json.dumps(
+            _jsonable(result.get("classification_metrics", {})),
+            sort_keys=True,
+        ),
+    )
 
     output_dir = (
         args.output_dir.expanduser().resolve()
@@ -717,12 +930,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = (
-        f"sample_{selected_index:05d}"
-        f"_subject_{subject_ids[selected_index]}"
-        f"_trial_{trial_ids[selected_index]}"
-        f"_to_class_{target_class}"
-    )
+    if classification_level == "trial":
+        stem = (
+            f"subject_{selection['subject_id']}"
+            f"_trial_{selection['trial_id']}"
+            f"_to_class_{target_class}"
+        )
+    else:
+        stem = (
+            f"sample_{selection['selection_index']:05d}"
+            f"_subject_{selection['subject_id']}"
+            f"_trial_{selection['trial_id']}"
+            f"_to_class_{target_class}"
+        )
     npz_path = output_dir / f"{stem}.npz"
     json_path = output_dir / f"{stem}.json"
 
@@ -736,15 +956,16 @@ def main(argv: list[str] | None = None) -> int:
         DREAMER_CHANNELS
         if x_numpy.shape[-1] == len(DREAMER_CHANNELS)
         else np.asarray(
-            [f"channel_{index}" for index in range(x_numpy.shape[-1])],
+            [f"feature_{index}" for index in range(x_numpy.shape[-1])],
             dtype=str,
         )
     )
+    timestep_count = x_numpy.shape[-2]
 
     arrays: dict[str, np.ndarray] = {
         "input_eeg": x_numpy,
         "time_seconds": np.arange(
-            x_numpy.shape[1],
+            timestep_count,
             dtype=np.float32,
         ) / sampling_rate_hz,
         "channel_names": channel_names,
@@ -752,21 +973,33 @@ def main(argv: list[str] | None = None) -> int:
             sampling_rate_hz,
             dtype=np.float32,
         ),
+        "source_window_indices": np.asarray(
+            selection["source_indices"],
+            dtype=np.int64,
+        ),
         "original_probabilities": original_probabilities,
         "original_z_mean": original["z_mean"].numpy(),
         "original_z_log_var": original["z_log_var"].numpy(),
         "original_reconstruction": original["reconstruction"].numpy(),
     }
+    if window_mask_numpy is not None:
+        arrays["window_mask"] = np.asarray(window_mask_numpy, dtype=bool)
     _flatten_arrays(result, arrays, "result")
     np.savez_compressed(npz_path, **arrays)
 
     summary = {
         "run_dir": run_dir,
         "checkpoint": checkpoint_name,
-        "sample_index": selected_index,
-        "subject_id": subject_ids[selected_index],
-        "trial_id": trial_ids[selected_index],
-        "true_label": labels[selected_index],
+        "classification_level": classification_level,
+        "selection_index": selection["selection_index"],
+        "subject_id": selection["subject_id"],
+        "trial_id": selection["trial_id"],
+        "true_label": selection["true_label"],
+        "true_class": selection["true_class"],
+        "n_valid_windows": selection["n_valid_windows"],
+        "n_windows_per_trial": n_windows_per_trial,
+        "trial_crop": trial_crop,
+        "source_window_indices": selection["source_indices"],
         "predicted_class": predicted_class,
         "target_class": target_class,
         "original_probabilities": original_probabilities,
@@ -778,9 +1011,16 @@ def main(argv: list[str] | None = None) -> int:
             "validity_weight": args.validity_weight,
             "signal_proximity_weight": args.signal_proximity_weight,
             "target_probability": args.target_probability,
+            "signal_metric": args.signal_metric,
+            "stop_on_success": args.stop_on_success,
             "feature_log_interval": args.feature_log_interval,
             "seed": args.seed,
         },
+        "trial_level_metrics": (
+            result.get("classification_metrics", {})
+            if classification_level == "trial"
+            else None
+        ),
         "result": result,
         "arrays_file": npz_path,
     }

@@ -1,4 +1,10 @@
-"""Counterfactual optimization in reconstructed EEG space."""
+"""Counterfactual optimization in reconstructed EEG space.
+
+Window-level models optimize one latent sequence per EEG window. Trial-level
+models optimize the complete ordered latent tensor for one or more
+subject-trials: the decoder still reconstructs each window independently while
+the classifier pools each window latent and applies its BiLSTM across windows.
+"""
 
 from __future__ import annotations
 
@@ -26,10 +32,11 @@ from .counterfactual_state import (
 
 LOGGER = logging.getLogger(__name__)
 DistanceMetric = Literal["mse", "mae", "rmse"]
+ClassificationLevel = Literal["window", "trial"]
 
 
 class CounterfactualOptimizer:
-    """Optimize a latent sequence using reconstructed-input proximity."""
+    """Optimize window or subject-trial latent means with a frozen model."""
 
     def __init__(
         self,
@@ -45,7 +52,7 @@ class CounterfactualOptimizer:
         gradient_clip_norm: float | None = 5.0,
         signal_metric: DistanceMetric = "mse",
         feature_log_interval: int = 1,
-        stop_on_success: bool = False,
+        stop_on_success: bool = True,
     ) -> None:
         self._validate_config(
             model,
@@ -58,6 +65,7 @@ class CounterfactualOptimizer:
             feature_log_interval,
         )
         self.model = model
+        self.classification_level: ClassificationLevel = self._model_level(model)
         self.learning_rate = float(learning_rate)
         self.max_steps = int(max_steps)
         self.target_probability = float(target_probability)
@@ -77,14 +85,38 @@ class CounterfactualOptimizer:
         *,
         inputs: tf.Tensor | np.ndarray,
         target_class: int | tf.Tensor,
+        window_mask: tf.Tensor | np.ndarray | None = None,
+        true_class: int | tf.Tensor | None = None,
     ) -> dict[str, Any]:
+        """Generate a counterfactual for windows or complete subject-trials.
+
+        Parameters
+        ----------
+        inputs:
+            Window mode: ``(batch, timesteps, features)``.
+            Trial mode: ``(batch, windows, timesteps, features)``.
+        target_class:
+            Scalar target or one target per classification sample. Trial mode
+            emits one classification sample per subject-trial.
+        window_mask:
+            Optional ``(batch, windows)`` Boolean mask. Required only when the
+            trial tensor contains padding that cannot be identified by zeros.
+        true_class:
+            Optional true class used only for reported classification metrics.
+        """
         self._set_seed()
         inputs = self._prepare_inputs(inputs)
+        window_mask = self._prepare_window_mask(inputs, window_mask)
 
         original_latent = self._encode(inputs)
-        original = self._forward(original_latent)
+        original = self._forward(original_latent, window_mask)
         self._check_reconstruction_shape(inputs, original.reconstruction)
         targets = self._prepare_targets(target_class, original.logits)
+        true_targets = (
+            None
+            if true_class is None
+            else self._prepare_targets(true_class, original.logits)
+        )
 
         latent = tf.Variable(
             original_latent,
@@ -101,8 +133,13 @@ class CounterfactualOptimizer:
 
         for step in range(self.max_steps + 1):
             with tf.GradientTape() as tape:
-                current = self._forward(latent)
-                losses = self._losses(current, inputs, targets)
+                current = self._forward(latent, window_mask)
+                losses = self._losses(
+                    current,
+                    inputs,
+                    targets,
+                    window_mask,
+                )
 
             gradient = tape.gradient(losses["total"], latent)
             if gradient is None:
@@ -171,40 +208,115 @@ class CounterfactualOptimizer:
         return self._result(
             inputs=inputs,
             targets=targets,
+            true_targets=true_targets,
             original=original,
             latent=latent,
+            window_mask=window_mask,
             stop_reason=stop_reason,
             steps_completed=history.steps[-1],
             history=history,
         )
 
     def _encode(self, inputs: tf.Tensor) -> tf.Tensor:
-        outputs = self.model(
-            inputs,
-            training=False,
-            sample_latent=False,
-        )
+        try:
+            outputs = self.model(
+                inputs,
+                training=False,
+                sample_latent=False,
+                include_reconstruction=False,
+                include_subject_adversarial=False,
+            )
+        except TypeError:
+            try:
+                outputs = self.model(
+                    inputs,
+                    training=False,
+                    sample_latent=False,
+                )
+            except TypeError:
+                outputs = self.model(inputs, training=False)
+
         if not isinstance(outputs, dict) or "z_mean" not in outputs:
             raise TypeError("Joint model output must contain z_mean.")
-        return tf.stop_gradient(
-            tf.cast(outputs["z_mean"], inputs.dtype)
-        )
+        latent = tf.cast(outputs["z_mean"], inputs.dtype)
+        expected_rank = 3 if self.classification_level == "window" else 4
+        if latent.shape.rank != expected_rank:
+            raise ValueError(
+                f"{self.classification_level}-level z_mean must have rank "
+                f"{expected_rank}; received {latent.shape}."
+            )
+        return tf.stop_gradient(latent)
 
-    def _forward(self, latent: tf.Tensor) -> ForwardPass:
-        embedding = self.model.classification_model(
-            latent,
+    def _forward(
+        self,
+        latent: tf.Tensor,
+        window_mask: tf.Tensor | None,
+    ) -> ForwardPass:
+        if self.classification_level == "window":
+            classification_sequence = latent
+            embedding = self.model.classification_model(
+                classification_sequence,
+                training=False,
+            )
+            reconstruction = self.model.decoder(
+                latent,
+                training=False,
+            )
+        else:
+            if window_mask is None:
+                raise RuntimeError("Trial optimization requires a window mask.")
+            # The training model classifies posterior-mean embeddings obtained
+            # by averaging each window across its latent-time axis.
+            window_embeddings = tf.reduce_mean(latent, axis=2)
+            mask_float = tf.cast(
+                window_mask[..., tf.newaxis],
+                window_embeddings.dtype,
+            )
+            classification_sequence = window_embeddings * mask_float
+            try:
+                embedding = self.model.classification_model(
+                    classification_sequence,
+                    training=False,
+                    mask=window_mask,
+                )
+            except TypeError:
+                embedding = self.model.classification_model(
+                    classification_sequence,
+                    training=False,
+                )
+
+            latent_shape = tf.shape(latent)
+            flat_latent = tf.reshape(
+                latent,
+                [
+                    latent_shape[0] * latent_shape[1],
+                    latent_shape[2],
+                    latent_shape[3],
+                ],
+            )
+            flat_reconstruction = self.model.decoder(
+                flat_latent,
+                training=False,
+            )
+            reconstruction_shape = tf.shape(flat_reconstruction)
+            reconstruction = tf.reshape(
+                flat_reconstruction,
+                [
+                    latent_shape[0],
+                    latent_shape[1],
+                    reconstruction_shape[1],
+                    reconstruction_shape[2],
+                ],
+            )
+
+        logits = self.model.variational_classifier(
+            embedding,
             training=False,
         )
         return ForwardPass(
-            reconstruction=self.model.decoder(
-                latent,
-                training=False,
-            ),
+            reconstruction=reconstruction,
             embedding=embedding,
-            logits=self.model.variational_classifier(
-                embedding,
-                training=False,
-            ),
+            logits=logits,
         )
 
     def _losses(
@@ -212,6 +324,7 @@ class CounterfactualOptimizer:
         forward: ForwardPass,
         inputs: tf.Tensor,
         targets: tf.Tensor,
+        window_mask: tf.Tensor | None,
     ) -> dict[str, tf.Tensor]:
         return counterfactual_objective(
             logits=forward.logits,
@@ -221,6 +334,7 @@ class CounterfactualOptimizer:
             weights=self.loss_weights,
             target_probability=self.target_probability,
             signal_metric=self.signal_metric,
+            sample_mask=window_mask,
         )
 
     def _result(
@@ -228,17 +342,20 @@ class CounterfactualOptimizer:
         *,
         inputs: tf.Tensor,
         targets: tf.Tensor,
+        true_targets: tf.Tensor | None,
         original: ForwardPass,
         latent: tf.Variable,
+        window_mask: tf.Tensor | None,
         stop_reason: str,
         steps_completed: int,
         history: OptimizationHistory,
     ) -> dict[str, Any]:
-        counterfactual = self._forward(latent)
+        counterfactual = self._forward(latent, window_mask)
         final_losses = self._losses(
             counterfactual,
             inputs,
             targets,
+            window_mask,
         )
         original_target = target_probabilities(
             original.logits,
@@ -252,16 +369,21 @@ class CounterfactualOptimizer:
             counterfactual_target >= self.target_probability
         )
 
-        return {
-            "mode": "deterministic_reconstructed_space",
+        result: dict[str, Any] = {
+            "mode": (
+                "deterministic_subject_trial_reconstructed_space"
+                if self.classification_level == "trial"
+                else "deterministic_window_reconstructed_space"
+            ),
+            "classification_level": self.classification_level,
+            "stop_on_success": self.stop_on_success,
             "success": bool(tf.reduce_all(success_mask).numpy()),
             "success_mask": success_mask.numpy(),
             "stop_reason": stop_reason,
             "steps_completed": steps_completed,
+            "target_probability_threshold": self.target_probability,
             "target_class": scalar_or_array(targets.numpy()),
-            "original_predicted_class": predicted_class(
-                original.logits
-            ),
+            "original_predicted_class": predicted_class(original.logits),
             "counterfactual_predicted_class": predicted_class(
                 counterfactual.logits
             ),
@@ -286,9 +408,12 @@ class CounterfactualOptimizer:
             "original_reconstruction_distance_to_input": self._distance(
                 original.reconstruction,
                 inputs,
+                window_mask,
             ),
-            "counterfactual_reconstruction_distance_to_input": (
-                self._distance(counterfactual.reconstruction, inputs)
+            "counterfactual_reconstruction_distance_to_input": self._distance(
+                counterfactual.reconstruction,
+                inputs,
+                window_mask,
             ),
             "reconstruction_change": float(
                 decoded_change_distance(
@@ -297,6 +422,7 @@ class CounterfactualOptimizer:
                     ),
                     original_reconstruction=original.reconstruction,
                     metric=self.signal_metric,
+                    sample_mask=window_mask,
                 ).numpy()
             ),
             "final_losses": {
@@ -306,18 +432,171 @@ class CounterfactualOptimizer:
             "history": history.to_arrays(),
         }
 
+        if self.classification_level == "trial":
+            if window_mask is None:
+                raise RuntimeError("Trial result requires a window mask.")
+            result.update(
+                {
+                    "n_trials": int(tf.shape(inputs)[0].numpy()),
+                    "n_windows_per_trial": int(tf.shape(inputs)[1].numpy()),
+                    "valid_windows_per_trial": tf.reduce_sum(
+                        tf.cast(window_mask, tf.int32),
+                        axis=1,
+                    ).numpy(),
+                    "window_mask": window_mask.numpy(),
+                    "per_window_original_distance_to_input": (
+                        self._per_window_distance(
+                            original.reconstruction,
+                            inputs,
+                            window_mask,
+                        )
+                    ),
+                    "per_window_counterfactual_distance_to_input": (
+                        self._per_window_distance(
+                            counterfactual.reconstruction,
+                            inputs,
+                            window_mask,
+                        )
+                    ),
+                    "per_window_reconstruction_change": (
+                        self._per_window_distance(
+                            counterfactual.reconstruction,
+                            original.reconstruction,
+                            window_mask,
+                        )
+                    ),
+                }
+            )
+
+        classification_metrics = self._classification_metrics(
+            original=original,
+            counterfactual=counterfactual,
+            targets=targets,
+            true_targets=true_targets,
+        )
+        result["classification_metrics"] = classification_metrics
+        if self.classification_level == "trial":
+            result["trial_level_metrics"] = classification_metrics
+        return result
+
+    def _classification_metrics(
+        self,
+        *,
+        original: ForwardPass,
+        counterfactual: ForwardPass,
+        targets: tf.Tensor,
+        true_targets: tf.Tensor | None,
+    ) -> dict[str, Any]:
+        prefix = "trial" if self.classification_level == "trial" else "window"
+        original_probabilities = original.probabilities
+        counterfactual_probabilities = counterfactual.probabilities
+        original_prediction = tf.argmax(
+            original_probabilities,
+            axis=-1,
+            output_type=tf.int32,
+        )
+        counterfactual_prediction = tf.argmax(
+            counterfactual_probabilities,
+            axis=-1,
+            output_type=tf.int32,
+        )
+        original_target = target_probabilities(original.logits, targets)
+        counterfactual_target = target_probabilities(
+            counterfactual.logits,
+            targets,
+        )
+
+        metrics: dict[str, Any] = {
+            f"{prefix}_count": int(tf.shape(original.logits)[0].numpy()),
+            f"{prefix}_prediction_flipped": (
+                original_prediction != counterfactual_prediction
+            ).numpy(),
+            f"{prefix}_target_reached": (
+                counterfactual_target >= self.target_probability
+            ).numpy(),
+            f"{prefix}_original_confidence": tf.reduce_max(
+                original_probabilities,
+                axis=-1,
+            ).numpy(),
+            f"{prefix}_counterfactual_confidence": tf.reduce_max(
+                counterfactual_probabilities,
+                axis=-1,
+            ).numpy(),
+            f"{prefix}_original_target_probability": original_target.numpy(),
+            f"{prefix}_counterfactual_target_probability": (
+                counterfactual_target.numpy()
+            ),
+            f"{prefix}_target_probability_gain": (
+                counterfactual_target - original_target
+            ).numpy(),
+        }
+
+        if true_targets is not None:
+            indices = tf.stack(
+                [
+                    tf.range(tf.shape(true_targets)[0], dtype=tf.int32),
+                    true_targets,
+                ],
+                axis=1,
+            )
+            metrics.update(
+                {
+                    f"{prefix}_true_class": true_targets.numpy(),
+                    f"{prefix}_original_accuracy": tf.cast(
+                        original_prediction == true_targets,
+                        tf.float32,
+                    ).numpy(),
+                    f"{prefix}_counterfactual_accuracy": tf.cast(
+                        counterfactual_prediction == true_targets,
+                        tf.float32,
+                    ).numpy(),
+                    f"{prefix}_original_true_class_probability": tf.gather_nd(
+                        original_probabilities,
+                        indices,
+                    ).numpy(),
+                    f"{prefix}_counterfactual_true_class_probability": (
+                        tf.gather_nd(
+                            counterfactual_probabilities,
+                            indices,
+                        ).numpy()
+                    ),
+                }
+            )
+        return metrics
+
     def _distance(
         self,
         reconstruction: tf.Tensor,
         inputs: tf.Tensor,
+        window_mask: tf.Tensor | None,
     ) -> float:
         return float(
             reconstructed_input_proximity_loss(
                 counterfactual_reconstruction=reconstruction,
                 original_features=inputs,
                 metric=self.signal_metric,
+                sample_mask=window_mask,
             ).numpy()
         )
+
+    def _per_window_distance(
+        self,
+        candidate: tf.Tensor,
+        reference: tf.Tensor,
+        window_mask: tf.Tensor,
+    ) -> np.ndarray:
+        difference = candidate - reference
+        if self.signal_metric == "mse":
+            distance = tf.reduce_mean(tf.square(difference), axis=(2, 3))
+        elif self.signal_metric == "mae":
+            distance = tf.reduce_mean(tf.abs(difference), axis=(2, 3))
+        else:
+            distance = tf.sqrt(
+                tf.reduce_mean(tf.square(difference), axis=(2, 3))
+                + tf.cast(1e-8, difference.dtype)
+            )
+        nan = tf.cast(np.nan, distance.dtype)
+        return tf.where(window_mask, distance, nan).numpy()
 
     def _prepare_targets(
         self,
@@ -335,6 +614,54 @@ class CounterfactualOptimizer:
                 f"target_class must be in [0, {n_classes - 1}]."
             )
         return targets
+
+    def _prepare_inputs(
+        self,
+        inputs: tf.Tensor | np.ndarray,
+    ) -> tf.Tensor:
+        inputs = tf.convert_to_tensor(inputs)
+        if not inputs.dtype.is_floating:
+            inputs = tf.cast(inputs, tf.float32)
+        expected_rank = 3 if self.classification_level == "window" else 4
+        if inputs.shape.rank != expected_rank:
+            expected = (
+                "(batch, timesteps, features)"
+                if expected_rank == 3
+                else "(batch, windows, timesteps, features)"
+            )
+            raise ValueError(
+                f"{self.classification_level}-level inputs must have shape "
+                f"{expected}; received {inputs.shape}."
+            )
+        return inputs
+
+    def _prepare_window_mask(
+        self,
+        inputs: tf.Tensor,
+        window_mask: tf.Tensor | np.ndarray | None,
+    ) -> tf.Tensor | None:
+        if self.classification_level == "window":
+            if window_mask is not None:
+                raise ValueError("window_mask is only valid in trial mode.")
+            return None
+
+        if window_mask is None:
+            mask = tf.reduce_any(
+                tf.not_equal(inputs, tf.zeros((), dtype=inputs.dtype)),
+                axis=(2, 3),
+            )
+        else:
+            mask = tf.cast(tf.convert_to_tensor(window_mask), tf.bool)
+        tf.debugging.assert_equal(
+            tf.shape(mask),
+            tf.shape(inputs)[:2],
+            message="window_mask must have shape (batch, windows).",
+        )
+        tf.debugging.assert_positive(
+            tf.reduce_sum(tf.cast(mask, tf.int32), axis=1),
+            message="Every subject-trial must contain at least one valid window.",
+        )
+        return mask
 
     def _is_success(
         self,
@@ -374,7 +701,9 @@ class CounterfactualOptimizer:
             return
 
         LOGGER.info(
-            "step=%d loss=%.6f target_p=%.5f signal=%.6f success=%s",
+            "level=%s step=%d loss=%.6f target_p=%.5f signal=%.6f "
+            "success=%s",
+            self.classification_level,
             step,
             history.total[-1],
             history.target_probability[-1],
@@ -394,19 +723,6 @@ class CounterfactualOptimizer:
             np.random.seed(self.seed)
 
     @staticmethod
-    def _prepare_inputs(
-        inputs: tf.Tensor | np.ndarray,
-    ) -> tf.Tensor:
-        inputs = tf.convert_to_tensor(inputs)
-        if not inputs.dtype.is_floating:
-            inputs = tf.cast(inputs, tf.float32)
-        if inputs.shape.rank != 3:
-            raise ValueError(
-                "inputs must have shape (batch, timesteps, features)."
-            )
-        return inputs
-
-    @staticmethod
     def _check_reconstruction_shape(
         inputs: tf.Tensor,
         reconstruction: tf.Tensor,
@@ -420,6 +736,16 @@ class CounterfactualOptimizer:
     @staticmethod
     def _finite(value: tf.Tensor) -> bool:
         return bool(tf.reduce_all(tf.math.is_finite(value)).numpy())
+
+    @staticmethod
+    def _model_level(model: tf.keras.Model) -> ClassificationLevel:
+        level = str(getattr(model, "classification_level", "window")).lower()
+        if level not in {"window", "trial"}:
+            raise ValueError(
+                "model.classification_level must be 'window' or 'trial'; "
+                f"received {level!r}."
+            )
+        return level  # type: ignore[return-value]
 
     @staticmethod
     def _validate_config(

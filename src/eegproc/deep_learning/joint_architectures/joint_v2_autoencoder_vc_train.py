@@ -114,7 +114,7 @@ class JointV2TrainingConfig:
     encoder_type: str = "cnn1d"
     n_channels: int = 14
     n_bands: int | None = None
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e-4
     optimizer_name: str = "adamw"
     weight_decay: float = 1e-4
     batch_size: int = 64
@@ -2378,7 +2378,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument(
         "--optimizer",
         choices=("adam", "adamw"),
