@@ -211,17 +211,17 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
     --window-overlap 0.5 \
-    --label-threshold-mode subject_median \
     --use-class-weight \
-    --early-stopping-monitor val_trial_balanced_accuracy \
+    --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode max \
     --selection-level trial \
-    --selection-metric balanced_accuracy \
+    --selection-metric accuracy \
+    --final-epoch-strategy median \
     --hyperparameters-json '{
         "use_subject_adversarial": [true],
         "subject_adversarial_weight": [0.8],
         "subject_loss_weight": [1.0],
-        "subject_hidden_units": [32, 64],
+        "subject_hidden_units": [64],
         "subject_dropout": [0.0],
 
         "subject_latent_mode": ["mean"],
@@ -272,14 +272,14 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            128, 256
+            256
         ],
         "bilstm_layers": [
             1
         ],
         "bilstm_dropout": [
             0.4
-        ]
+        ],
         "classifier_head": [
             "hybrid"
         ]
