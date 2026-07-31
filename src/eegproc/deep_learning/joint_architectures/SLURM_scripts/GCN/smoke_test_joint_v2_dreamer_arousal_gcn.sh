@@ -188,49 +188,43 @@ TF_PY
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
     --raw-eeg-npy datasets/dreamer_eeg.npy \
     --raw-labels-npy datasets/dreamer_labels.npy \
-    --label-dimension arousal \
+    --label-dimension valence \
     --encoder-type gcn \
     --n-channels 14 \
     --n-bands 4 \
     --out-dir runs/joint_autoencoder_vc_v2/GCN \
-    --run-name dreamer_arousal_vaevc_gcn \
+    --run-name dreamer_valence_vaevc_gcn \
     --max-folds 1 \
     --n-jobs 1 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
-    --prediction-latent-samples 20 \
+    --prediction-latent-samples 12 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --decision-thresholds 0.35 0.40 0.45 0.50 0.55 0.60 0.65 \
-    --threshold-selection-metric accuracy \
-    --threshold-selection-level trial \
     --validation-subjects 4 \
     --validation-seed 42 \
+    --label-threshold-mode global \
+    --median-label 3 \
+    --threshold-selection-level trial \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
     --window-overlap 0.5 \
     --label-threshold-mode subject_median \
     --use-class-weight \
+    --early-stopping-monitor val_trial_balanced_accuracy \
+    --early-stopping-mode max \
     --selection-level trial \
-    --selection-metric accuracy \
-    --early-stopping-monitor val_joint_loss \
-    --early-stopping-mode min \
-    --final-epoch-strategy median \
+    --selection-metric balanced_accuracy \
     --hyperparameters-json '{
-        "use_supcon": [true],
-        "supcon_weight": [0.4],
-        "supcon_temperature": [0.1],
-        "supcon_cross_subject_only": [true],
-
         "use_subject_adversarial": [true],
-        "subject_adversarial_weight": [0.6],
-        "subject_loss_weight": [0.6],
-        "subject_hidden_units": [32],
+        "subject_adversarial_weight": [0.8],
+        "subject_loss_weight": [1.0],
+        "subject_hidden_units": [32, 64],
         "subject_dropout": [0.0],
-        "subject_latent_mode": ["mean"],
 
+        "subject_latent_mode": ["mean"],
         "epochs": [
             400
         ],
@@ -245,24 +239,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "weight_decay": [0.0001],
         "label_smoothing": [0.05],
 
-        "ae_loss_weight": [
-            0.6
-        ],
-        "vc_loss_weight": [
-            1.0
-        ],
-        "vc_alpha": [
-            1.0
-        ],
-        "vc_beta": [
-            0.3
-        ],
-        "vc_gamma": [
-            0.0
-        ],
-        "vc_lambda": [
-            0.0
-        ],
+        "ae_loss_weight": [0.6],
+        "vc_loss_weight": [1.0],
+        "vc_alpha": [1.0],
+        "vc_beta": [0.5],
+        "vc_gamma": [0.0],
+        "vc_lambda": [0.1],
         "vae_beta": [
             0.3
         ],
@@ -273,13 +255,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             64
         ],
         "dropout": [
-            0.2
+            0.1
         ],
         "gcn_units": [
-            [
-                64,
-                32
-            ]
+            [128, 64]
         ],
         "temporal_pool_sizes": [
             [
@@ -293,14 +272,14 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            64
+            128, 256
         ],
         "bilstm_layers": [
             1
         ],
         "bilstm_dropout": [
             0.4
-        ],
+        ]
         "classifier_head": [
             "hybrid"
         ]
