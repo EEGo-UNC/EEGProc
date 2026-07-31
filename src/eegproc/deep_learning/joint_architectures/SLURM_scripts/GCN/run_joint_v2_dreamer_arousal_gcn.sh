@@ -210,8 +210,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --validation-seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
-    --threshold-selection-metric accuracy \
-    --threshold-selection-level trial \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \

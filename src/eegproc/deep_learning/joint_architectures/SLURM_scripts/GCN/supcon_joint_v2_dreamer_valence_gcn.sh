@@ -197,7 +197,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --encoder-type gcn \
     --n-channels 14 \
     --n-bands 4 \
-    --out-dir runs/joint_autoencoder_vc_v2/GCN \
+    --out-dir runs/joint_autoencoder_vc_v2/GCN_supcon \
     --run-name dreamer_valence_vaevc_gcn \
     --n-jobs 4 \
     --cpus-per-worker 2 \
@@ -210,8 +210,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --validation-seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
-    --threshold-selection-metric accuracy \
-    --threshold-selection-level trial \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
@@ -221,6 +219,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
+    --final-epoch-strategy median \
     --hyperparameters-json '{
         "use_subject_adversarial": [false],
         "use_supcon": [true],
