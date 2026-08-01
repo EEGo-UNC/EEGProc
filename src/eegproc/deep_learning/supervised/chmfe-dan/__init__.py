@@ -1,6 +1,6 @@
 """Supervised deep-learning components for EEGProc."""
 
-from .cmhfe_dan import (
+from .chmfe.cmhfe_dan import (
 	CMHFEConfig,
 	CMHFEFeatureExtractor,
 	CMHFEModel,
