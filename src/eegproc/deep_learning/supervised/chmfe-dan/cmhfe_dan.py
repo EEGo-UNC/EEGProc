@@ -13,7 +13,7 @@ from collections.abc import Sequence
 import tensorflow as tf
 from tensorflow.keras import Model, layers
 
-from ..unsupervised.utils import _ensure_tuple
+from ...unsupervised.utils import _ensure_tuple
 
 
 def binarize_ratings(ratings, threshold: float):

@@ -33,3 +33,7 @@
     - Added adversarial subject identifiability goal which penalizes the VAE loss in order to reduce subject-unique representations. This fixed the optimization direction and has higher accuracy on subject 1, but it takes too many epochs (over 300) and the val_acc was still around 0.4 by the end.
     - Added supervised contrastive learning to penalize differences in user distributions.
     - Trial-level runs work better.
+- 07/30/2026
+    - Finally achieved reasonable accuracies (63% valence, 65% arousal, but classifier collapsed—those values were basically the baseline). But ran on subject median thresholds. Running global median now.
+    - Testing adversarial vs supcon.
+    - Current models are spatio-spectral encodings with temporal modeling. Looking into spatio-spectral + spatio-temporal encoding.
