@@ -37,3 +37,6 @@
     - Finally achieved reasonable accuracies (63% valence, 65% arousal, but classifier collapsed—those values were basically the baseline). But ran on subject median thresholds. Running global median now.
     - Testing adversarial vs supcon.
     - Current models are spatio-spectral encodings with temporal modeling. Looking into spatio-spectral + spatio-temporal encoding.
+- 8/1/2026
+    - Accuracies are still bad when using the imbalanced classes (60% valence, 64% arousal, 64 emb dim and 128 bilstm best). 
+    - Supcon con barely performed above average (52% valence).

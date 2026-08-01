@@ -20,7 +20,7 @@ from ..joint_architectures.joint_v2_data import (
     zscore_subject_eeg,
 )
 from ..archival_cv import loso_cv
-from .cmhfe_dan import CMHFEConfig, build_cmhfe_model
+from .chmfe.cmhfe_dan import CMHFEConfig, build_cmhfe_model
 
 
 DATASET_PRESETS: dict[str, dict[str, float | int]] = {
