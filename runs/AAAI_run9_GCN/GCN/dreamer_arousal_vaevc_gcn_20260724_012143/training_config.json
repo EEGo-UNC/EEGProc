@@ -1,0 +1,120 @@
+{
+  "output_dir": "runs/joint_autoencoder_vc_v2/GCN",
+  "run_name": "dreamer_arousal_vaevc_gcn",
+  "dataset": "dreamer",
+  "encoder_type": "gcn",
+  "n_channels": 14,
+  "n_bands": 4,
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "cv_max_epochs": 50,
+  "final_epoch_strategy": "median",
+  "final_epochs": null,
+  "selection_metric": "f1",
+  "selection_level": "trial",
+  "maximize_metric": null,
+  "prediction_latent_samples": 15,
+  "latent_sampling_seed": 42,
+  "validation_subjects_per_fold": 4,
+  "validation_seed": 42,
+  "outer_verbose": 0,
+  "final_verbose": 2,
+  "early_stopping_patience": 50,
+  "early_stopping_min_delta": 0.005,
+  "early_stopping_monitor": "val_trial_f1",
+  "early_stopping_mode": "max",
+  "use_early_stopping": true,
+  "save_full_model": true,
+  "save_weights": true,
+  "save_final_history_csv": true,
+  "seed": 42,
+  "bilstm_units": 64,
+  "n_bilstm_layers": 2,
+  "bilstm_dropout": 0.1,
+  "bilstm_kwargs": {},
+  "encoder_kwargs": {},
+  "decoder_kwargs": {},
+  "classifier_kwargs": {},
+  "model_kwargs": {
+    "ae_loss_weight": 0.5,
+    "vc_loss_weight": 0.5,
+    "vae_beta": 1.0,
+    "vc_alpha": 1.0,
+    "vc_beta": 1.0,
+    "vc_gamma": 0.0,
+    "vc_lambda": 1.0,
+    "update_discriminator": false
+  },
+  "hyperparameters": {
+    "epochs": [
+      200
+    ],
+    "batch_size": [
+      32
+    ],
+    "learning_rate": [
+      0.0001
+    ],
+    "ae_loss_weight": [
+      0.0
+    ],
+    "vc_loss_weight": [
+      1.0
+    ],
+    "vc_alpha": [
+      1.0
+    ],
+    "vc_beta": [
+      0.0,
+      0.5
+    ],
+    "vc_gamma": [
+      0.0
+    ],
+    "vc_lambda": [
+      0.0,
+      0.1
+    ],
+    "vae_beta": [
+      0.0
+    ],
+    "t_down": [
+      2
+    ],
+    "emb_dim": [
+      32
+    ],
+    "dropout": [
+      0.1
+    ],
+    "gcn_units": [
+      [
+        64,
+        32
+      ]
+    ],
+    "temporal_pool_sizes": [
+      [
+        2
+      ]
+    ],
+    "activation": [
+      "relu"
+    ],
+    "use_batch_norm": [
+      true
+    ],
+    "bilstm_units": [
+      512
+    ],
+    "bilstm_layers": [
+      1
+    ],
+    "bilstm_dropout": [
+      0.2
+    ]
+  },
+  "n_jobs": 4,
+  "cpus_per_worker": 2,
+  "max_folds": null
+}

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# Joint-loss variant: early stopping may monitor ``val_loss`` and flat/nested
+# hyperparameter search may rank configurations by ``joint_loss``, the complete
+# weighted Keras VAE + variational-classifier objective.
+
 import gc
 import itertools
 import multiprocessing as mp
@@ -13,45 +17,142 @@ from typing import Callable, Literal, Mapping
 import numpy as np
 import tensorflow as tf
 from joblib.externals import cloudpickle
-from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    log_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
-_CLASSIFICATION_METRICS = frozenset({"accuracy", "f1", "precision", "recall"})
-
-# These values describe one encoder architecture and must therefore remain
-# intact when represented as a flat JSON list. A nested list represents several
-# candidate architectures. For example:
-#
-#   "conv_filters": [16, 32]                 -> one candidate
-#   "conv_filters": [[16, 32], [32, 64]]    -> two candidates
-_SEQUENCE_HYPERPARAMETER_KEYS = frozenset(
+_CLASSIFICATION_METRICS = frozenset(
     {
-        "conv_filters",
-        "kernel_sizes",
-        "pool_after_layers",
-        "pool_sizes",
+        "accuracy",
+        # Existing class-balanced metrics. These remain macro averaged.
+        "f1",
+        "precision",
+        "recall",
+        # Paper-comparison metrics commonly reported for binary DREAMER tasks.
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
     }
 )
+
+# Sequence-valued encoder settings need architecture-aware nesting rules.
+# The integer is the nesting depth of one architecture value:
+#   depth 1: [16, 32] or [2, 2]
+#   depth 2: [[3, 3], [3, 3]]
+# One additional outer level enumerates multiple candidate architectures.
+_DEFAULT_SEQUENCE_HYPERPARAMETER_DEPTHS = {
+    "conv_filters": 1,
+    "kernel_sizes": 1,
+    "pool_after_layers": 1,
+    "pool_sizes": 1,
+    "gcn_units": 1,
+    "temporal_pool_sizes": 1,
+    "spatial_pool_sizes": 2,
+}
 _EMPTY_SEQUENCE_ALLOWED_KEYS = frozenset(
     {
         "pool_after_layers",
         "pool_sizes",
+        "spatial_pool_sizes",
+    }
+)
+
+# Changing these coefficients changes the numerical scale and definition of
+# the complete joint objective. Direct joint-loss comparisons are therefore
+# most interpretable when these values remain fixed across configurations.
+_JOINT_LOSS_WEIGHT_KEYS = frozenset(
+    {
+        "ae_loss_weight",
+        "vc_loss_weight",
+        "vae_beta",
+        "vc_alpha",
+        "vc_beta",
+        "vc_gamma",
+        "vc_lambda",
+        "subject_loss_weight",
+        "use_subject_adversarial",
+        "label_smoothing",
     }
 )
 
 
-def _hyperparameter_candidates(key: str, value) -> list:
+def _warn_if_joint_loss_weights_vary(
+    grid_configs: list[dict],
+    selection_metric: str,
+) -> None:
+    """Warn when direct joint-loss comparisons change the objective itself."""
+    if selection_metric != "joint_loss" or len(grid_configs) < 2:
+        return
+
+    varying_keys: list[str] = []
+    for key in sorted(_JOINT_LOSS_WEIGHT_KEYS):
+        explicit_values = {
+            repr(config[key])
+            for config in grid_configs
+            if key in config
+        }
+        if len(explicit_values) > 1:
+            varying_keys.append(key)
+
+    if varying_keys:
+        print(
+            "Warning: selecting hyperparameters by joint_loss while varying "
+            f"{varying_keys} compares differently weighted objectives. Lower "
+            "scores may reflect smaller penalty coefficients rather than a "
+            "better model. Keep these weights fixed for an apples-to-apples "
+            "joint-loss search, or treat the result as exploratory.",
+            flush=True,
+        )
+
+
+def _sequence_structure_depth(value) -> int:
+    """Return the maximum list/tuple nesting depth of one value."""
+    if not isinstance(value, (list, tuple)):
+        return 0
+    if not value:
+        return 1
+    return 1 + max(_sequence_structure_depth(item) for item in value)
+
+
+def _copy_sequence_value(value):
+    """Copy nested list/tuple values into JSON-friendly lists."""
+    if isinstance(value, (list, tuple)):
+        return [_copy_sequence_value(item) for item in value]
+    return value
+
+
+def _hyperparameter_candidates(
+    key: str,
+    value,
+    sequence_hyperparameter_depths: Mapping[str, int] | None = None,
+) -> list:
     """Return candidate values while preserving architecture sequences.
 
-    Ordinary scalar hyperparameters use a list/tuple to enumerate candidates.
-    Sequence-valued encoder parameters are different: a flat list describes
-    one architecture, while a nested list enumerates multiple architectures.
-
-    A list of dictionaries remains an ordinary candidate list, which supports
-    bundled ``encoder_kwargs`` configurations for architectures with different
-    numbers of convolutional layers.
+    ``sequence_hyperparameter_depths`` resolves otherwise ambiguous nested
+    values. For CNN2D, for example, one ``kernel_sizes`` architecture has
+    depth two (``[[3, 3], [3, 3]]``), while a depth-three value enumerates
+    several kernel schedules. For CNN1D the same key has depth one.
     """
-    if key not in _SEQUENCE_HYPERPARAMETER_KEYS:
+    sequence_depths = dict(_DEFAULT_SEQUENCE_HYPERPARAMETER_DEPTHS)
+    if sequence_hyperparameter_depths:
+        for sequence_key, expected_depth in sequence_hyperparameter_depths.items():
+            expected_depth = int(expected_depth)
+            if expected_depth < 1:
+                raise ValueError(
+                    "Sequence hyperparameter depths must be >= 1; got "
+                    f"{sequence_key!r}: {expected_depth}."
+                )
+            sequence_depths[str(sequence_key)] = expected_depth
+
+    if key not in sequence_depths:
         if isinstance(value, (list, tuple)):
             if not value:
                 raise ValueError(
@@ -70,41 +171,48 @@ def _hyperparameter_candidates(key: str, value) -> list:
             return [[]]
         raise ValueError(f"Sequence hyperparameter {key!r} cannot be empty.")
 
-    nested_flags = [isinstance(item, (list, tuple)) for item in value]
-    if all(nested_flags):
-        candidates = [list(item) for item in value]
+    expected_depth = sequence_depths[key]
+    actual_depth = _sequence_structure_depth(value)
+
+    # A shallower representation is accepted for reusable atomic settings,
+    # such as CNN2D kernel_sizes=[3, 3] or spatial_pool_sizes=[2, 2].
+    if actual_depth <= expected_depth:
+        return [_copy_sequence_value(value)]
+
+    if actual_depth == expected_depth + 1:
+        candidates = [_copy_sequence_value(item) for item in value]
         if (
             key not in _EMPTY_SEQUENCE_ALLOWED_KEYS
-            and any(not candidate for candidate in candidates)
+            and any(isinstance(candidate, list) and not candidate for candidate in candidates)
         ):
             raise ValueError(
                 f"Sequence hyperparameter {key!r} contains an empty candidate."
             )
         return candidates
 
-    if any(nested_flags):
-        raise ValueError(
-            f"Sequence hyperparameter {key!r} mixes scalar and sequence "
-            f"values: {value!r}. Use a flat sequence for one architecture or "
-            "a nested sequence for multiple architectures."
-        )
-
-    return [list(value)]
+    raise ValueError(
+        f"Sequence hyperparameter {key!r} has nesting depth {actual_depth}, "
+        f"but one architecture expects depth {expected_depth}. Use depth "
+        f"{expected_depth} for one architecture or {expected_depth + 1} "
+        "to enumerate candidates."
+    )
 
 
-def _expand_hyperparameter_grid(hp: dict | None) -> list[dict]:
-    """Expand a hyperparameter dictionary into a Cartesian-product grid.
-
-    Scalar settings use the usual ``[candidate_1, candidate_2]`` syntax.
-    Encoder sequence settings listed in ``_SEQUENCE_HYPERPARAMETER_KEYS`` use
-    a flat list for one architecture and a nested list for multiple candidates.
-    """
+def _expand_hyperparameter_grid(
+    hp: dict | None,
+    sequence_hyperparameter_depths: Mapping[str, int] | None = None,
+) -> list[dict]:
+    """Expand a hyperparameter dictionary into a Cartesian-product grid."""
     if not hp:
         return [{}]
 
     keys = list(hp)
     candidate_values = [
-        _hyperparameter_candidates(key, hp[key])
+        _hyperparameter_candidates(
+            key,
+            hp[key],
+            sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+        )
         for key in keys
     ]
     return [
@@ -119,6 +227,25 @@ def _split_config(config: dict) -> tuple[dict, dict]:
     model_hp = {k: v for k, v in config.items() if k not in _FIT_RESERVED_KEYS}
     fit_hp = {k: v for k, v in config.items() if k in _FIT_RESERVED_KEYS}
     return model_hp, fit_hp
+
+
+def _prepare_fit_inputs_with_subject_ids(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    subject_ids: np.ndarray,
+):
+    """Attach fold-local subject labels only when the model requests them.
+
+    Subject-adversarial models expose ``prepare_fit_inputs``. The method maps
+    the fitting subjects to contiguous fold-local classes and returns a Keras
+    input dictionary. Ordinary models continue receiving the original EEG
+    tensor unchanged. Validation and test inputs are intentionally left raw so
+    held-out identities never contribute to the adversarial loss.
+    """
+    prepare = getattr(model, "prepare_fit_inputs", None)
+    if prepare is None or not getattr(model, "use_subject_adversarial", False):
+        return X
+    return prepare(X, subject_ids)
 
 
 def _choose_best_config_index(
@@ -366,29 +493,629 @@ def _predict_probabilities(
     return _to_probabilities(raw_pred)
 
 
-def _predict_labels(probabilities: np.ndarray) -> np.ndarray:
-    """Convert probabilities to integer class predictions."""
+def _normalize_decision_thresholds(
+    thresholds: list[float] | tuple[float, ...] | np.ndarray,
+) -> tuple[float, ...]:
+    """Validate, deduplicate, and sort binary class-1 thresholds."""
+    values = np.asarray(thresholds, dtype=np.float64).reshape(-1)
+    if values.size == 0:
+        raise ValueError("decision_thresholds must contain at least one value.")
+    if not np.isfinite(values).all():
+        raise ValueError("decision_thresholds must contain only finite values.")
+    if np.any(values <= 0.0) or np.any(values >= 1.0):
+        raise ValueError("Every decision threshold must be strictly between 0 and 1.")
+    return tuple(float(value) for value in np.unique(values))
+
+
+def _predict_labels(
+    probabilities: np.ndarray,
+    decision_threshold: float = 0.5,
+) -> np.ndarray:
+    """Convert probabilities to labels using a binary class-1 threshold."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    if probabilities.ndim != 2:
+        raise ValueError(
+            "probabilities must have shape (n_samples, n_classes); got "
+            f"{probabilities.shape}."
+        )
+    if probabilities.shape[1] == 2:
+        threshold = float(decision_threshold)
+        if not 0.0 < threshold < 1.0:
+            raise ValueError("decision_threshold must be strictly between 0 and 1.")
+        return (probabilities[:, 1] >= threshold).astype(np.int64)
+    if not np.isclose(float(decision_threshold), 0.5):
+        raise ValueError(
+            "Custom decision thresholds are supported only for binary models."
+        )
     return np.argmax(probabilities, axis=1).astype(np.int64)
+
+
+def _threshold_metric_value(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    metric: str,
+) -> float:
+    """Score one validation threshold without using test labels."""
+    y_true = _as_numpy_1d(y_true).astype(np.int64)
+    y_pred = _as_numpy_1d(y_pred).astype(np.int64)
+    if metric == "accuracy":
+        return float(accuracy_score(y_true, y_pred))
+    if metric == "f1":
+        return float(
+            f1_score(
+                y_true,
+                y_pred,
+                average="macro",
+                labels=[0, 1],
+                zero_division=0,
+            )
+        )
+    if metric == "balanced_accuracy":
+        return float(
+            recall_score(
+                y_true,
+                y_pred,
+                average="macro",
+                labels=[0, 1],
+                zero_division=0,
+            )
+        )
+    if metric == "binary_f1":
+        return float(
+            f1_score(
+                y_true,
+                y_pred,
+                average="binary",
+                pos_label=1,
+                zero_division=0,
+            )
+        )
+    raise ValueError(
+        "threshold_selection_metric must be accuracy, f1, "
+        "balanced_accuracy, or binary_f1."
+    )
+
+
+def _select_binary_decision_threshold(
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    thresholds: tuple[float, ...],
+    metric: str,
+) -> tuple[float, float, list[dict]]:
+    """Select a threshold on validation data with deterministic tie-breaking."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    if probabilities.ndim != 2 or probabilities.shape[1] != 2:
+        if len(thresholds) > 1 or not np.isclose(thresholds[0], 0.5):
+            raise ValueError(
+                "Threshold search requires a binary two-probability output."
+            )
+        return 0.5, float("nan"), []
+
+    rows: list[dict] = []
+    for threshold in thresholds:
+        y_pred = _predict_labels(
+            probabilities,
+            decision_threshold=threshold,
+        )
+        score = _threshold_metric_value(y_true, y_pred, metric)
+        rows.append(
+            {
+                "threshold": float(threshold),
+                "score": float(score),
+                "predicted_class_1_fraction": float(np.mean(y_pred == 1)),
+            }
+        )
+
+    # Maximize score; ties prefer the threshold closest to the conventional 0.5,
+    # then the lower threshold for a stable deterministic result.
+    best = min(
+        rows,
+        key=lambda row: (
+            -row["score"],
+            abs(row["threshold"] - 0.5),
+            row["threshold"],
+        ),
+    )
+    return float(best["threshold"]), float(best["score"]), rows
+
+
+def _stratified_diagnostic_indices(
+    y: np.ndarray,
+    max_samples: int,
+    seed: int | None,
+) -> np.ndarray:
+    """Choose a deterministic approximately class-balanced diagnostic subset."""
+    y_ids = _as_numpy_1d(y).astype(np.int64)
+    if max_samples < 1:
+        raise ValueError("max_samples must be at least 1.")
+    if len(y_ids) <= max_samples:
+        return np.arange(len(y_ids), dtype=np.int64)
+
+    rng = np.random.default_rng(seed)
+    classes = np.unique(y_ids)
+    per_class = max(1, max_samples // max(1, len(classes)))
+    selected: list[int] = []
+
+    for class_id in classes:
+        class_indices = np.where(y_ids == class_id)[0]
+        take = min(per_class, len(class_indices))
+        selected.extend(
+            rng.choice(class_indices, size=take, replace=False).tolist()
+        )
+
+    selected_array = np.asarray(sorted(set(selected)), dtype=np.int64)
+    remaining_slots = max_samples - len(selected_array)
+    if remaining_slots > 0:
+        remaining = np.setdiff1d(
+            np.arange(len(y_ids), dtype=np.int64),
+            selected_array,
+            assume_unique=False,
+        )
+        if len(remaining):
+            extra = rng.choice(
+                remaining,
+                size=min(remaining_slots, len(remaining)),
+                replace=False,
+            )
+            selected_array = np.sort(
+                np.concatenate([selected_array, extra.astype(np.int64)])
+            )
+
+    return selected_array[:max_samples]
+
+
+def _numpy_value(value):
+    """Convert tensors and array-like values to numpy arrays."""
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value)
+
+
+def _diagnostic_model_outputs(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    batch_size: int | None,
+) -> dict[str, np.ndarray]:
+    """Return probabilities and any available internal classifier tensors."""
+    if hasattr(model, "predict_diagnostics"):
+        raw_outputs = model.predict_diagnostics(X, batch_size=batch_size)
+    else:
+        inputs = tf.convert_to_tensor(X, dtype=tf.float32)
+        try:
+            raw_outputs = model(
+                inputs,
+                training=False,
+                sample_latent=False,
+                include_reconstruction=False,
+            )
+        except TypeError:
+            raw_outputs = model(inputs, training=False)
+
+    if isinstance(raw_outputs, Mapping):
+        outputs = {
+            str(key): _numpy_value(value)
+            for key, value in raw_outputs.items()
+            if value is not None
+        }
+        if "probabilities" in outputs:
+            probabilities = _to_probabilities(outputs["probabilities"])
+        elif "logits" in outputs:
+            probabilities = _to_probabilities(outputs["logits"])
+        else:
+            classifier_output = _extract_classifier_output(raw_outputs)
+            probabilities = _to_probabilities(_numpy_value(classifier_output))
+        outputs["probabilities"] = probabilities
+        return outputs
+
+    classifier_output = _extract_classifier_output(raw_outputs)
+    return {
+        "probabilities": _to_probabilities(_numpy_value(classifier_output)),
+    }
+
+
+def _prediction_diagnostic_summary(
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    threshold_tolerance: float = 0.01,
+    internal_outputs: Mapping[str, np.ndarray] | None = None,
+) -> dict[str, float | int]:
+    """Summarize confidence, threshold collapse, and internal feature spread."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    y_ids = _as_numpy_1d(y_true).astype(np.int64)
+    if probabilities.ndim != 2 or len(probabilities) != len(y_ids):
+        raise ValueError(
+            "Diagnostic probabilities must have shape (n, c) and align with "
+            f"labels; got {probabilities.shape} and {len(y_ids)} labels."
+        )
+    if threshold_tolerance < 0.0:
+        raise ValueError("threshold_tolerance must be non-negative.")
+
+    clipped = np.clip(probabilities, 1e-12, 1.0)
+    y_pred = _predict_labels(probabilities)
+    confidence = np.max(probabilities, axis=1)
+    entropy = -np.sum(clipped * np.log(clipped), axis=1)
+    sorted_probabilities = np.sort(probabilities, axis=1)
+    top_two_margin = (
+        sorted_probabilities[:, -1] - sorted_probabilities[:, -2]
+        if probabilities.shape[1] > 1
+        else np.zeros(len(probabilities), dtype=np.float64)
+    )
+
+    summary: dict[str, float | int] = {
+        "n_samples": int(len(y_ids)),
+        "accuracy": float(np.mean(y_pred == y_ids)),
+        "confidence_mean": float(np.mean(confidence)),
+        "confidence_std": float(np.std(confidence)),
+        "confidence_min": float(np.min(confidence)),
+        "confidence_max": float(np.max(confidence)),
+        "entropy_mean": float(np.mean(entropy)),
+        "entropy_std": float(np.std(entropy)),
+        "top_two_margin_mean": float(np.mean(top_two_margin)),
+        "top_two_margin_std": float(np.std(top_two_margin)),
+        "near_uniform_fraction": float(
+            np.mean(
+                np.max(
+                    np.abs(probabilities - 1.0 / probabilities.shape[1]),
+                    axis=1,
+                )
+                < threshold_tolerance
+            )
+        ),
+    }
+
+    for class_index in range(probabilities.shape[1]):
+        class_probabilities = probabilities[:, class_index]
+        summary[f"p_class_{class_index}_min"] = float(np.min(class_probabilities))
+        summary[f"p_class_{class_index}_mean"] = float(np.mean(class_probabilities))
+        summary[f"p_class_{class_index}_median"] = float(
+            np.median(class_probabilities)
+        )
+        summary[f"p_class_{class_index}_max"] = float(np.max(class_probabilities))
+        summary[f"p_class_{class_index}_std"] = float(np.std(class_probabilities))
+        summary[f"p_class_{class_index}_q05"] = float(
+            np.quantile(class_probabilities, 0.05)
+        )
+        summary[f"p_class_{class_index}_q95"] = float(
+            np.quantile(class_probabilities, 0.95)
+        )
+        summary[f"true_class_{class_index}_fraction"] = float(
+            np.mean(y_ids == class_index)
+        )
+        summary[f"predicted_class_{class_index}_fraction"] = float(
+            np.mean(y_pred == class_index)
+        )
+
+    if probabilities.shape[1] == 2:
+        p1 = probabilities[:, 1]
+        signed_margin = probabilities[:, 1] - probabilities[:, 0]
+        summary.update(
+            {
+                "p1_distance_from_0_5_mean": float(np.mean(np.abs(p1 - 0.5))),
+                "near_0_5_fraction": float(
+                    np.mean(np.abs(p1 - 0.5) < threshold_tolerance)
+                ),
+                "binary_margin_mean": float(np.mean(signed_margin)),
+                "binary_margin_std": float(np.std(signed_margin)),
+                "binary_margin_min": float(np.min(signed_margin)),
+                "binary_margin_max": float(np.max(signed_margin)),
+            }
+        )
+
+    if internal_outputs:
+        diagnostic_keys = (
+            "encoder_output",
+            "z_mean",
+            "z_log_var",
+            "classification_latent_sequence",
+            "classification_latent",
+            "window_classification_latent",
+            "logits",
+            "logit_margin",
+        )
+        for key in diagnostic_keys:
+            if key not in internal_outputs:
+                continue
+            values = np.asarray(internal_outputs[key], dtype=np.float64)
+            if values.size == 0:
+                continue
+            summary[f"{key}_mean"] = float(np.mean(values))
+            summary[f"{key}_std"] = float(np.std(values))
+            summary[f"{key}_min"] = float(np.min(values))
+            summary[f"{key}_max"] = float(np.max(values))
+            if values.ndim >= 2:
+                flattened = values.reshape(values.shape[0], -1)
+                summary[f"{key}_sample_std_mean"] = float(
+                    np.mean(np.std(flattened, axis=1))
+                )
+
+    return summary
+
+
+def _print_probability_diagnostics(
+    label: str,
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    threshold_tolerance: float = 0.01,
+) -> dict[str, float | int]:
+    """Print a compact probability-distribution diagnostic line."""
+    summary = _prediction_diagnostic_summary(
+        probabilities=probabilities,
+        y_true=y_true,
+        threshold_tolerance=threshold_tolerance,
+    )
+    parts = [
+        f"n={summary['n_samples']}",
+        f"accuracy={summary['accuracy']:.4f}",
+        f"confidence={summary['confidence_mean']:.4f}",
+        f"margin_std={summary['top_two_margin_std']:.6f}",
+        f"near_uniform={summary['near_uniform_fraction']:.4f}",
+    ]
+    if probabilities.shape[1] == 2:
+        parts.extend(
+            [
+                f"p1={summary['p_class_1_min']:.6f}/"
+                f"{summary['p_class_1_mean']:.6f}/"
+                f"{summary['p_class_1_max']:.6f}",
+                f"p1_std={summary['p_class_1_std']:.6f}",
+                f"near_0.5={summary['near_0_5_fraction']:.4f}",
+                f"pred1={summary['predicted_class_1_fraction']:.4f}",
+                f"true1={summary['true_class_1_fraction']:.4f}",
+            ]
+        )
+    print(f"\nPrediction diagnostics [{label}]: " + "  ".join(parts), flush=True)
+    return summary
+
+
+class PredictionDiagnostics(tf.keras.callbacks.Callback):
+    """Inspect deterministic train/validation predictions during training.
+
+    Only a fixed, approximately class-balanced subset is evaluated, so the
+    callback remains inexpensive relative to a full validation pass. It records
+    exact probability spread and, when the model exposes ``predict_diagnostics``,
+    latent and logit spread as well.
+    """
+
+    def __init__(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray | None = None,
+        y_val: np.ndarray | None = None,
+        fold_number: int | None = None,
+        batch_size: int | None = None,
+        every_n_epochs: int = 1,
+        max_samples: int = 256,
+        threshold_tolerance: float = 0.01,
+        seed: int | None = 42,
+    ) -> None:
+        super().__init__()
+        if every_n_epochs < 1:
+            raise ValueError("every_n_epochs must be at least 1.")
+        if max_samples < 1:
+            raise ValueError("max_samples must be at least 1.")
+        if threshold_tolerance < 0.0:
+            raise ValueError("threshold_tolerance must be non-negative.")
+
+        train_indices = _stratified_diagnostic_indices(
+            y_train,
+            max_samples=max_samples,
+            seed=seed,
+        )
+        self.X_train = np.asarray(X_train)[train_indices]
+        self.y_train = np.asarray(y_train)[train_indices]
+
+        self.X_val = None
+        self.y_val = None
+        if X_val is not None and y_val is not None and len(X_val):
+            validation_seed = None if seed is None else int(seed) + 1
+            val_indices = _stratified_diagnostic_indices(
+                y_val,
+                max_samples=max_samples,
+                seed=validation_seed,
+            )
+            self.X_val = np.asarray(X_val)[val_indices]
+            self.y_val = np.asarray(y_val)[val_indices]
+
+        self.fold_number = fold_number
+        self.batch_size = batch_size
+        self.every_n_epochs = int(every_n_epochs)
+        self.threshold_tolerance = float(threshold_tolerance)
+        self.history: list[dict] = []
+
+    def _report_split(
+        self,
+        split: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        epoch_number: int,
+        logs: dict,
+    ) -> None:
+        internal_outputs = _diagnostic_model_outputs(
+            model=self.model,
+            X=X,
+            batch_size=self.batch_size,
+        )
+        summary = _prediction_diagnostic_summary(
+            probabilities=internal_outputs["probabilities"],
+            y_true=y,
+            threshold_tolerance=self.threshold_tolerance,
+            internal_outputs=internal_outputs,
+        )
+        row = {
+            "fold": None if self.fold_number is None else int(self.fold_number),
+            "epoch": int(epoch_number),
+            "split": split,
+            **summary,
+        }
+        self.history.append(row)
+
+        log_keys = (
+            "accuracy",
+            "confidence_mean",
+            "entropy_mean",
+            "top_two_margin_std",
+            "near_uniform_fraction",
+            "p_class_1_mean",
+            "p_class_1_std",
+            "near_0_5_fraction",
+            "binary_margin_std",
+            "z_mean_std",
+            "classification_latent_std",
+            "logits_std",
+            "logit_margin_std",
+        )
+        for key in log_keys:
+            if key in summary:
+                logs[f"diag_{split}_{key}"] = float(summary[key])
+
+        fold_text = "?" if self.fold_number is None else str(self.fold_number)
+        parts = [
+            f"n={summary['n_samples']}",
+            f"acc={summary['accuracy']:.4f}",
+            f"conf={summary['confidence_mean']:.4f}",
+            f"margin_std={summary['top_two_margin_std']:.6f}",
+            f"near_uniform={summary['near_uniform_fraction']:.4f}",
+        ]
+        if "p_class_1_mean" in summary:
+            parts.extend(
+                [
+                    f"p1={summary['p_class_1_min']:.6f}/"
+                    f"{summary['p_class_1_mean']:.6f}/"
+                    f"{summary['p_class_1_max']:.6f}",
+                    f"p1_std={summary['p_class_1_std']:.6f}",
+                    f"near_0.5={summary['near_0_5_fraction']:.4f}",
+                ]
+            )
+        for key, short_name in (
+            ("z_mean_std", "z_mean_std"),
+            ("classification_latent_std", "cls_latent_std"),
+            ("logits_std", "logits_std"),
+            ("logit_margin_std", "logit_margin_std"),
+        ):
+            if key in summary:
+                parts.append(f"{short_name}={summary[key]:.6f}")
+
+        print(
+            f"\n[Prediction diagnostics][fold={fold_text}]"
+            f"[epoch={epoch_number}][{split}] " + "  ".join(parts),
+            flush=True,
+        )
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        epoch_number = int(epoch) + 1
+        if epoch_number % self.every_n_epochs != 0:
+            return
+        if logs is None:
+            logs = {}
+
+        self._report_split(
+            split="train",
+            X=self.X_train,
+            y=self.y_train,
+            epoch_number=epoch_number,
+            logs=logs,
+        )
+        if self.X_val is not None and self.y_val is not None:
+            self._report_split(
+                split="validation",
+                X=self.X_val,
+                y=self.y_val,
+                epoch_number=epoch_number,
+                logs=logs,
+            )
+
+
+def _is_trial_tensor(X: np.ndarray) -> bool:
+    """Return True for hierarchical inputs shaped ``(N, W, T, F)``."""
+    return np.asarray(X).ndim == 4
+
+
+def _count_windows_for_indices(
+    feature_array: np.ndarray,
+    indices: np.ndarray,
+) -> int:
+    """Count underlying windows represented by selected samples.
+
+    Rank-4 hierarchical inputs contain one trial per first-axis sample and one
+    window axis at position 1. Rank-3 legacy inputs contain one window per
+    first-axis sample.
+    """
+    features = np.asarray(feature_array)
+    selected_count = int(len(indices))
+    if features.ndim == 4:
+        return selected_count * int(features.shape[1])
+    if features.ndim == 3:
+        return selected_count
+    raise ValueError(
+        "feature_array must be rank 3 or 4 when counting windows; "
+        f"got {features.shape}."
+    )
+
+
+def _direct_trial_aggregation(
+    probabilities: np.ndarray,
+    y_true: np.ndarray,
+    subject_ids: np.ndarray,
+    trial_ids: np.ndarray,
+    n_windows_per_trial: int,
+    decision_threshold: float = 0.5,
+) -> dict:
+    """Build the trial-log structure when the model already predicts trials."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    y_true = _as_numpy_1d(y_true).astype(np.int64)
+    subject_ids = np.asarray(subject_ids)
+    trial_ids = np.asarray(trial_ids)
+    lengths = (len(probabilities), len(y_true), len(subject_ids), len(trial_ids))
+    if len(set(lengths)) != 1:
+        raise ValueError(
+            "Trial probabilities, labels, subject IDs, and trial IDs must "
+            f"align; got lengths {lengths}."
+        )
+    return {
+        "probabilities": probabilities,
+        "y_true": y_true,
+        "y_pred": _predict_labels(
+            probabilities,
+            decision_threshold=decision_threshold,
+        ),
+        "subject_ids": subject_ids,
+        "trial_ids": trial_ids,
+        "n_windows": np.full(len(y_true), int(n_windows_per_trial), dtype=np.int64),
+        "window_indices": [],
+    }
 
 
 def _classification_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
+    probabilities: np.ndarray,
     metrics: list[str] | tuple[str, ...],
     n_classes: int,
 ) -> dict:
-    """Compute selected classification metrics across all expected classes.
+    """Compute selected classification metrics.
 
-    F1, precision, and recall use macro averaging so every class contributes
-    equally. ``n_classes`` must come from the model output width rather than
-    from the labels observed in one fold, because a validation/test fold may
-    contain no examples of one of the expected classes.
+    ``f1``, ``precision``, and ``recall`` preserve the existing macro-averaged
+    definitions so every expected class contributes equally. The additional
+    ``binary_*`` metrics treat class 1 as the positive class, matching the
+    common reporting convention in DREAMER papers such as STSNet. ``roc_auc``
+    uses the predicted probability for class 1.
+
+    Binary paper-comparison metrics require exactly two output classes. AUC is
+    undefined when a fold contains only one ground-truth class; in that case
+    ``roc_auc`` is reported as NaN rather than inventing a score.
     """
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
+    probabilities = np.asarray(probabilities, dtype=np.float64)
 
     if n_classes < 2:
         raise ValueError(f"n_classes must be >= 2, got {n_classes}.")
+    if probabilities.ndim != 2 or probabilities.shape != (len(y_true), n_classes):
+        raise ValueError(
+            "probabilities must have shape (n_samples, n_classes); got "
+            f"{probabilities.shape} for {len(y_true)} labels and "
+            f"{n_classes} classes."
+        )
 
     expected_labels = list(range(n_classes))
 
@@ -401,6 +1128,18 @@ def _classification_metrics(
         raise ValueError(
             f"y_pred contains labels outside the expected range "
             f"[0, {n_classes - 1}]."
+        )
+
+    binary_metric_names = {
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
+    }
+    if n_classes != 2 and any(metric in binary_metric_names for metric in metrics):
+        raise ValueError(
+            "binary_f1, binary_precision, binary_recall, and roc_auc require "
+            f"exactly two classes; got n_classes={n_classes}."
         )
 
     scores: dict[str, float] = {}
@@ -448,6 +1187,60 @@ def _classification_metrics(
                 )
             )
 
+        elif metric == "balanced_accuracy":
+            # For binary/multiclass classification this is macro recall over
+            # the complete expected label set, including an absent class as 0.
+            scores["balanced_accuracy"] = float(
+                recall_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "binary_f1":
+            scores["binary_f1"] = float(
+                f1_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "binary_precision":
+            scores["binary_precision"] = float(
+                precision_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "binary_recall":
+            scores["binary_recall"] = float(
+                recall_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            )
+
+        elif metric == "roc_auc":
+            if len(np.unique(y_true)) < 2:
+                scores["roc_auc"] = float("nan")
+            else:
+                scores["roc_auc"] = float(
+                    roc_auc_score(y_true, probabilities[:, 1])
+                )
+
     return scores
 
 
@@ -457,6 +1250,7 @@ def _aggregate_window_probabilities_by_trial(
     y_true: np.ndarray,
     subject_ids: np.ndarray,
     trial_ids: np.ndarray,
+    decision_threshold: float = 0.5,
 ) -> dict:
     """Aggregate window probabilities into one prediction per subject/trial.
 
@@ -523,7 +1317,10 @@ def _aggregate_window_probabilities_by_trial(
     return {
         "probabilities": trial_probabilities_array,
         "y_true": np.asarray(trial_y_true, dtype=np.int64),
-        "y_pred": _predict_labels(trial_probabilities_array),
+        "y_pred": _predict_labels(
+            trial_probabilities_array,
+            decision_threshold=decision_threshold,
+        ),
         "subject_ids": np.asarray(trial_subject_ids),
         "trial_ids": np.asarray(output_trial_ids),
         "n_windows": np.asarray(trial_window_counts, dtype=np.int64),
@@ -553,6 +1350,81 @@ def _probability_log_loss(
     )
 
 
+class TrialValidationMetrics(tf.keras.callbacks.Callback):
+    """Compute deterministic trial-level validation metrics each epoch.
+
+    Hierarchical models are scored directly from one output per trial. Legacy
+    window models are still aggregated within each (subject_id, trial_id) pair.
+    The resulting values are added
+    to the Keras epoch logs as ``val_trial_f1`` and ``val_trial_loss`` so that
+    callbacks such as EarlyStopping can monitor them.
+    """
+
+    def __init__(
+        self,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        subject_ids_val: np.ndarray,
+        trial_ids_val: np.ndarray,
+        batch_size: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.X_val = np.asarray(X_val)
+        self.y_val = np.asarray(y_val)
+        self.subject_ids_val = np.asarray(subject_ids_val)
+        self.trial_ids_val = np.asarray(trial_ids_val)
+        self.batch_size = batch_size
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        if logs is None:
+            return
+
+        # Use posterior-mean inference here. It is deterministic, inexpensive,
+        # and avoids Monte Carlo sampling noise in the stopping decision.
+        probabilities_model = _predict_probabilities(
+            model=self.model,
+            X=self.X_val,
+            batch_size=self.batch_size,
+            n_prediction_latent_samples=0,
+            latent_sampling_seed=None,
+        )
+
+        if _is_trial_tensor(self.X_val):
+            trial_aggregation = _direct_trial_aggregation(
+                probabilities=probabilities_model,
+                y_true=self.y_val,
+                subject_ids=self.subject_ids_val,
+                trial_ids=self.trial_ids_val,
+                n_windows_per_trial=self.X_val.shape[1],
+            )
+        else:
+            trial_aggregation = _aggregate_window_probabilities_by_trial(
+                probabilities=probabilities_model,
+                y_true=self.y_val,
+                subject_ids=self.subject_ids_val,
+                trial_ids=self.trial_ids_val,
+            )
+
+        probabilities_trial = trial_aggregation["probabilities"]
+        y_true_trial = trial_aggregation["y_true"]
+        y_pred_trial = trial_aggregation["y_pred"]
+        expected_labels = list(range(probabilities_trial.shape[1]))
+
+        logs["val_trial_f1"] = float(
+            f1_score(
+                y_true_trial,
+                y_pred_trial,
+                average="macro",
+                labels=expected_labels,
+                zero_division=0,
+            )
+        )
+        logs["val_trial_loss"] = _probability_log_loss(
+            y_true=y_true_trial,
+            probabilities=probabilities_trial,
+        )
+
+
 def _level_scores(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -567,6 +1439,7 @@ def _level_scores(
         _classification_metrics(
             y_true=y_true,
             y_pred=y_pred,
+            probabilities=probabilities,
             metrics=metrics,
             n_classes=probabilities.shape[1],
         )
@@ -594,24 +1467,24 @@ def _validate_processed_alignment(
     trial_ids: np.ndarray,
     partition_name: str,
 ) -> None:
-    """Ensure fold-local preprocessing preserved window order and count."""
+    """Ensure fold-local preprocessing preserved sample order and count."""
     lengths = (len(X), len(y), len(subject_ids), len(trial_ids))
     if len(set(lengths)) != 1:
         raise ValueError(
-            f"Preprocessing changed the number of {partition_name} windows or "
-            "misaligned labels/IDs. Window creation, removal, reordering, and "
+            f"Preprocessing changed the number of {partition_name} samples or "
+            "misaligned labels/IDs. Sample creation, removal, reordering, and "
             "resampling must occur before nested_lnso_cv. Got lengths "
             f"X/y/subject/trial={lengths}."
         )
 
 
-def _keras_loss_value(
+def _keras_evaluation_results(
     model: tf.keras.Model,
     X: np.ndarray,
     y: np.ndarray,
     batch_size: int | None = None,
-) -> float:
-    """Evaluate and return the Keras loss value."""
+) -> dict[str, float]:
+    """Evaluate once and return all scalar Keras metrics as Python floats."""
     eval_output = model.evaluate(
         X,
         y,
@@ -625,7 +1498,32 @@ def _keras_loss_value(
             f"model.evaluate(..., return_dict=True) did not return 'loss': {eval_output}"
         )
 
-    return float(eval_output["loss"])
+    scalar_results: dict[str, float] = {}
+    for metric_name, metric_value in eval_output.items():
+        value_array = np.asarray(metric_value)
+        if value_array.ndim != 0:
+            raise ValueError(
+                "Keras evaluation metrics must be scalar. "
+                f"Metric {metric_name!r} returned shape {value_array.shape}."
+            )
+        scalar_results[str(metric_name)] = float(value_array)
+
+    return scalar_results
+
+
+def _keras_loss_value(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    y: np.ndarray,
+    batch_size: int | None = None,
+) -> float:
+    """Evaluate and return the Keras loss value."""
+    return _keras_evaluation_results(
+        model=model,
+        X=X,
+        y=y,
+        batch_size=batch_size,
+    )["loss"]
 
 
 def _make_prediction_log(
@@ -653,8 +1551,26 @@ def _make_prediction_log(
             "trial_id": _python_scalar(trial_ids[i]),
             "y_true": int(y_true[i]),
             "y_pred": pred_class,
+            "correct": int(pred_class == int(y_true[i])),
             "p_pred": float(probabilities[i, pred_class]),
+            "confidence": float(np.max(probabilities[i])),
+            "entropy": float(
+                -np.sum(
+                    np.clip(probabilities[i], 1e-12, 1.0)
+                    * np.log(np.clip(probabilities[i], 1e-12, 1.0))
+                )
+            ),
+            "top_two_margin": float(
+                np.sort(probabilities[i])[-1] - np.sort(probabilities[i])[-2]
+            ),
         }
+        if probabilities.shape[1] == 2:
+            row["class_1_margin"] = float(
+                probabilities[i, 1] - probabilities[i, 0]
+            )
+            row["distance_from_0_5"] = float(
+                abs(probabilities[i, 1] - 0.5)
+            )
 
         for class_idx in range(probabilities.shape[1]):
             row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
@@ -684,8 +1600,26 @@ def _make_trial_prediction_log(
             "n_windows": int(trial_aggregation["n_windows"][i]),
             "y_true": int(y_true[i]),
             "y_pred": pred_class,
+            "correct": int(pred_class == int(y_true[i])),
             "p_pred": float(probabilities[i, pred_class]),
+            "confidence": float(np.max(probabilities[i])),
+            "entropy": float(
+                -np.sum(
+                    np.clip(probabilities[i], 1e-12, 1.0)
+                    * np.log(np.clip(probabilities[i], 1e-12, 1.0))
+                )
+            ),
+            "top_two_margin": float(
+                np.sort(probabilities[i])[-1] - np.sort(probabilities[i])[-2]
+            ),
         }
+        if probabilities.shape[1] == 2:
+            row["class_1_margin"] = float(
+                probabilities[i, 1] - probabilities[i, 0]
+            )
+            row["distance_from_0_5"] = float(
+                abs(probabilities[i, 1] - 0.5)
+            )
 
         for class_idx in range(probabilities.shape[1]):
             row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
@@ -722,6 +1656,7 @@ def _make_variational_interval_logs(
     fold_index: int,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    decision_threshold: float = 0.5,
 ) -> tuple[list[dict], list[dict]]:
     """Estimate stochastic probability intervals for windows and trials.
 
@@ -735,6 +1670,53 @@ def _make_variational_interval_logs(
         )
 
     y_true = _as_numpy_1d(y_true).astype(np.int64)
+
+    if _is_trial_tensor(X):
+        trial_samples = _predict_mc_probability_samples(
+            model=model,
+            X=X,
+            n_samples=n_uncertainty_samples,
+            batch_size=None,
+            seed=None,
+        )
+        trial_mean = trial_samples.mean(axis=0)
+        alpha = 1.0 - ci_level
+        trial_low = np.quantile(trial_samples, alpha / 2.0, axis=0)
+        trial_high = np.quantile(trial_samples, 1.0 - alpha / 2.0, axis=0)
+        trial_pred = _predict_labels(
+            trial_mean, decision_threshold=decision_threshold
+        )
+
+        trial_rows: list[dict] = []
+        for i in range(len(y_true)):
+            pred_class = int(trial_pred[i])
+            row = {
+                "fold": int(fold_index),
+                "trial_index": int(i),
+                "subject_id": _python_scalar(subject_ids[i]),
+                "trial_id": _python_scalar(trial_ids[i]),
+                "n_windows": int(X.shape[1]),
+                "y_true": int(y_true[i]),
+                "y_pred": pred_class,
+                "p_pred_mean": float(trial_mean[i, pred_class]),
+                "p_pred_ci_low": float(trial_low[i, pred_class]),
+                "p_pred_ci_high": float(trial_high[i, pred_class]),
+                "ci_level": float(ci_level),
+                "n_uncertainty_samples": int(n_uncertainty_samples),
+            }
+            for class_idx in range(trial_mean.shape[1]):
+                row[f"p_class_{class_idx}_mean"] = float(
+                    trial_mean[i, class_idx]
+                )
+                row[f"p_class_{class_idx}_ci_low"] = float(
+                    trial_low[i, class_idx]
+                )
+                row[f"p_class_{class_idx}_ci_high"] = float(
+                    trial_high[i, class_idx]
+                )
+            trial_rows.append(row)
+        return [], trial_rows
+
     window_samples = _predict_mc_probability_samples(
         model=model,
         X=X,
@@ -747,7 +1729,9 @@ def _make_variational_interval_logs(
     alpha = 1.0 - ci_level
     window_low = np.quantile(window_samples, alpha / 2.0, axis=0)
     window_high = np.quantile(window_samples, 1.0 - alpha / 2.0, axis=0)
-    window_pred = _predict_labels(window_mean)
+    window_pred = _predict_labels(
+        window_mean, decision_threshold=decision_threshold
+    )
 
     window_rows: list[dict] = []
     for i in range(len(y_true)):
@@ -777,6 +1761,7 @@ def _make_variational_interval_logs(
         y_true=y_true,
         subject_ids=subject_ids,
         trial_ids=trial_ids,
+        decision_threshold=decision_threshold,
     )
 
     trial_sample_list: list[np.ndarray] = []
@@ -795,7 +1780,9 @@ def _make_variational_interval_logs(
     trial_mean = trial_samples.mean(axis=0)
     trial_low = np.quantile(trial_samples, alpha / 2.0, axis=0)
     trial_high = np.quantile(trial_samples, 1.0 - alpha / 2.0, axis=0)
-    trial_pred = _predict_labels(trial_mean)
+    trial_pred = _predict_labels(
+        trial_mean, decision_threshold=decision_threshold
+    )
 
     trial_rows: list[dict] = []
     for i in range(len(reference_aggregation["y_true"])):
@@ -886,8 +1873,15 @@ def _mean_std_rows(rows: list[dict], metric_names: list[str]) -> tuple[dict, dic
         if not values:
             continue
 
-        mean_scores[metric_name] = float(np.mean(values))
-        std_scores[metric_name] = float(np.std(values))
+        numeric_values = np.asarray(values, dtype=np.float64)
+        finite_values = numeric_values[np.isfinite(numeric_values)]
+        if not len(finite_values):
+            mean_scores[metric_name] = float("nan")
+            std_scores[metric_name] = float("nan")
+            continue
+
+        mean_scores[metric_name] = float(np.mean(finite_values))
+        std_scores[metric_name] = float(np.std(finite_values))
 
     return mean_scores, std_scores
 
@@ -895,6 +1889,175 @@ def _mean_std_rows(rows: list[dict], metric_names: list[str]) -> tuple[dict, dic
 # ---------------------------------------------------------------------
 # Fold evaluation
 # ---------------------------------------------------------------------
+
+
+def _evaluate_trial_tensor_fold(
+    model: tf.keras.Model,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    subject_ids_test: np.ndarray,
+    trial_ids_test: np.ndarray,
+    fold_index: int,
+    metrics: list[str] | tuple[str, ...],
+    batch_size: int | None,
+    n_prediction_latent_samples: int,
+    latent_sampling_seed: int | None,
+    log_predictions: bool,
+    log_variational_intervals: bool,
+    n_uncertainty_samples: int,
+    ci_level: float,
+    decision_threshold: float = 0.5,
+) -> dict:
+    """Evaluate a model that emits one classifier prediction per trial."""
+    y_true_trial = _as_numpy_1d(y_test).astype(np.int64)
+    probabilities_trial = _predict_probabilities(
+        model=model,
+        X=X_test,
+        batch_size=batch_size,
+        n_prediction_latent_samples=n_prediction_latent_samples,
+        latent_sampling_seed=latent_sampling_seed,
+    )
+    y_pred_trial = _predict_labels(
+        probabilities_trial,
+        decision_threshold=decision_threshold,
+    )
+    _print_probability_diagnostics(
+        label=f"fold {fold_index} test trial",
+        probabilities=probabilities_trial,
+        y_true=y_true_trial,
+    )
+    keras_evaluation = _keras_evaluation_results(
+        model=model,
+        X=X_test,
+        y=y_test,
+        batch_size=batch_size,
+    )
+    keras_model_loss = float(keras_evaluation["loss"])
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+
+    trial_scores = _level_scores(
+        y_true=y_true_trial,
+        y_pred=y_pred_trial,
+        probabilities=probabilities_trial,
+        metrics=metrics,
+    )
+    trial_scores["joint_loss"] = keras_model_loss
+    if decoder_accuracy is not None:
+        trial_scores["decoder_accuracy"] = float(decoder_accuracy)
+
+    n_trials = int(len(y_true_trial))
+    n_windows_per_trial = int(X_test.shape[1])
+    n_windows = n_trials * n_windows_per_trial
+    fold_scores = {
+        "fold": int(fold_index),
+        "evaluation_level": "trial",
+        "classification_level": "trial",
+        "n_samples": n_trials,
+        "n_windows": n_windows,
+        "n_trials": n_trials,
+        "windows_per_trial": n_windows_per_trial,
+        "keras_model_loss": keras_model_loss,
+        "joint_loss": keras_model_loss,
+        **(
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
+            else {}
+        ),
+        "prediction_latent_samples": int(n_prediction_latent_samples),
+        "decision_threshold": float(decision_threshold),
+        **trial_scores,
+        **_prefix_scores(trial_scores, "trial"),
+    }
+
+    window_fold_metrics = {
+        "fold": int(fold_index),
+        "n_windows": n_windows,
+        "classification_available": False,
+        "joint_loss": keras_model_loss,
+        **(
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
+            else {}
+        ),
+    }
+    trial_fold_metrics = {
+        "fold": int(fold_index),
+        "n_trials": n_trials,
+        "windows_per_trial": n_windows_per_trial,
+        **trial_scores,
+    }
+
+    user_rows: list[dict] = []
+    for subject_id in np.unique(subject_ids_test):
+        trial_mask = subject_ids_test == subject_id
+        user_trial_scores = _level_scores(
+            y_true=y_true_trial[trial_mask],
+            y_pred=y_pred_trial[trial_mask],
+            probabilities=probabilities_trial[trial_mask],
+            metrics=metrics,
+        )
+        user_rows.append(
+            {
+                "fold": int(fold_index),
+                "subject_id": _python_scalar(subject_id),
+                "evaluation_level": "trial",
+                "classification_level": "trial",
+                "n_samples": int(trial_mask.sum()),
+                "n_windows": int(trial_mask.sum()) * n_windows_per_trial,
+                "n_trials": int(trial_mask.sum()),
+                **user_trial_scores,
+                **_prefix_scores(user_trial_scores, "trial"),
+            }
+        )
+
+    trial_aggregation = _direct_trial_aggregation(
+        probabilities=probabilities_trial,
+        y_true=y_true_trial,
+        subject_ids=subject_ids_test,
+        trial_ids=trial_ids_test,
+        n_windows_per_trial=n_windows_per_trial,
+        decision_threshold=decision_threshold,
+    )
+    trial_prediction_rows = (
+        _make_trial_prediction_log(fold_index, trial_aggregation)
+        if log_predictions
+        else []
+    )
+
+    window_interval_rows: list[dict] = []
+    trial_interval_rows: list[dict] = []
+    if log_variational_intervals:
+        window_interval_rows, trial_interval_rows = _make_variational_interval_logs(
+            model=model,
+            X=X_test,
+            y_true=y_true_trial,
+            subject_ids=subject_ids_test,
+            trial_ids=trial_ids_test,
+            fold_index=fold_index,
+            n_uncertainty_samples=n_uncertainty_samples,
+            ci_level=ci_level,
+            decision_threshold=decision_threshold,
+        )
+
+    _print_metric_row(
+        title=f"Fold {fold_index} metrics (trial primary)",
+        row=fold_scores,
+    )
+    _print_user_metrics(user_rows)
+
+    return {
+        "fold_metrics": fold_scores,
+        "window_fold_metrics": window_fold_metrics,
+        "trial_fold_metrics": trial_fold_metrics,
+        "user_metrics": user_rows,
+        # There are no window-level classifier predictions in hierarchical mode.
+        "prediction_log": trial_prediction_rows,
+        "window_prediction_log": [],
+        "trial_prediction_log": trial_prediction_rows,
+        "variational_interval_log": trial_interval_rows,
+        "window_variational_interval_log": window_interval_rows,
+        "trial_variational_interval_log": trial_interval_rows,
+    }
 
 
 def _evaluate_classification_fold(
@@ -913,9 +2076,33 @@ def _evaluate_classification_fold(
     log_variational_intervals: bool = False,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    decision_threshold: float = 0.5,
 ) -> dict:
-    """Evaluate one outer fold at both window and trial levels."""
+    """Evaluate one outer fold at the model's native classification level."""
     _validate_evaluation_level(evaluation_level, "evaluation_level")
+    if _is_trial_tensor(X_test):
+        if evaluation_level != "trial":
+            raise ValueError(
+                "Hierarchical rank-4 inputs produce trial-level classifier "
+                "outputs; evaluation_level must be 'trial'."
+            )
+        return _evaluate_trial_tensor_fold(
+            model=model,
+            X_test=X_test,
+            y_test=y_test,
+            subject_ids_test=subject_ids_test,
+            trial_ids_test=trial_ids_test,
+            fold_index=fold_index,
+            metrics=metrics,
+            batch_size=batch_size,
+            n_prediction_latent_samples=n_prediction_latent_samples,
+            latent_sampling_seed=latent_sampling_seed,
+            log_predictions=log_predictions,
+            log_variational_intervals=log_variational_intervals,
+            n_uncertainty_samples=n_uncertainty_samples,
+            ci_level=ci_level,
+            decision_threshold=decision_threshold,
+        )
     y_true_window = _as_numpy_1d(y_test).astype(np.int64)
 
     probabilities_window = _predict_probabilities(
@@ -925,16 +2112,27 @@ def _evaluate_classification_fold(
         n_prediction_latent_samples=n_prediction_latent_samples,
         latent_sampling_seed=latent_sampling_seed,
     )
-    y_pred_window = _predict_labels(probabilities_window)
+    y_pred_window = _predict_labels(
+        probabilities_window,
+        decision_threshold=decision_threshold,
+    )
+    _print_probability_diagnostics(
+        label=f"fold {fold_index} test window",
+        probabilities=probabilities_window,
+        y_true=y_true_window,
+    )
 
     # model.evaluate() is retained as a diagnostic because joint Keras models
     # may include reconstruction/regularization terms beyond classification.
-    keras_model_loss = _keras_loss_value(
+    # It also exposes decoder_accuracy for continuous reconstruction quality.
+    keras_evaluation = _keras_evaluation_results(
         model=model,
         X=X_test,
         y=y_test,
         batch_size=batch_size,
     )
+    keras_model_loss = keras_evaluation["loss"]
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
 
     window_scores = _level_scores(
         y_true=y_true_window,
@@ -942,12 +2140,23 @@ def _evaluate_classification_fold(
         probabilities=probabilities_window,
         metrics=metrics,
     )
+    # ``loss`` above is classifier probability log loss. ``joint_loss`` is
+    # the model's complete weighted VAE + VC objective returned by Keras.
+    window_scores["joint_loss"] = float(keras_model_loss)
+    if decoder_accuracy is not None:
+        window_scores["decoder_accuracy"] = float(decoder_accuracy)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
         y_true=y_true_window,
         subject_ids=subject_ids_test,
         trial_ids=trial_ids_test,
+        decision_threshold=decision_threshold,
+    )
+    _print_probability_diagnostics(
+        label=f"fold {fold_index} test trial-aggregated",
+        probabilities=trial_aggregation["probabilities"],
+        y_true=trial_aggregation["y_true"],
     )
     trial_scores = _level_scores(
         y_true=trial_aggregation["y_true"],
@@ -968,7 +2177,14 @@ def _evaluate_classification_fold(
         "n_windows": int(len(y_true_window)),
         "n_trials": int(len(trial_aggregation["y_true"])),
         "keras_model_loss": float(keras_model_loss),
+        "joint_loss": float(keras_model_loss),
+        **(
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
+            else {}
+        ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
+        "decision_threshold": float(decision_threshold),
         **primary_scores,
         **_prefix_scores(window_scores, "window"),
         **_prefix_scores(trial_scores, "trial"),
@@ -978,11 +2194,14 @@ def _evaluate_classification_fold(
         "fold": int(fold_index),
         "n_windows": int(len(y_true_window)),
         "keras_model_loss": float(keras_model_loss),
+        "joint_loss": float(keras_model_loss),
+        "decision_threshold": float(decision_threshold),
         **window_scores,
     }
     trial_fold_metrics = {
         "fold": int(fold_index),
         "n_trials": int(len(trial_aggregation["y_true"])),
+        "decision_threshold": float(decision_threshold),
         **trial_scores,
     }
 
@@ -1085,8 +2304,51 @@ def _evaluate_inner_config(
     n_prediction_latent_samples: int = 0,
     latent_sampling_seed: int | None = None,
 ) -> dict:
-    """Evaluate an inner fold at both levels and expose selection-level scores."""
+    """Evaluate an inner fold at the model's native classification level."""
     _validate_evaluation_level(selection_level, "selection_level")
+    if _is_trial_tensor(X_val):
+        if selection_level != "trial":
+            raise ValueError(
+                "Hierarchical rank-4 inputs produce trial-level classifier "
+                "outputs; selection_level must be 'trial'."
+            )
+        y_true_trial = _as_numpy_1d(y_val).astype(np.int64)
+        probabilities_trial = _predict_probabilities(
+            model,
+            X_val,
+            batch_size=batch_size,
+            n_prediction_latent_samples=n_prediction_latent_samples,
+            latent_sampling_seed=latent_sampling_seed,
+        )
+        y_pred_trial = _predict_labels(probabilities_trial)
+        trial_scores = _level_scores(
+            y_true=y_true_trial,
+            y_pred=y_pred_trial,
+            probabilities=probabilities_trial,
+            metrics=metrics,
+        )
+        keras_evaluation = _keras_evaluation_results(
+            model, X_val, y_val, batch_size=batch_size
+        )
+        trial_scores["joint_loss"] = float(keras_evaluation["loss"])
+        decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+        if decoder_accuracy is not None:
+            trial_scores["decoder_accuracy"] = float(decoder_accuracy)
+        primary_metric_keys = ["loss", "joint_loss", *metrics]
+        return {
+            **{key: trial_scores[key] for key in primary_metric_keys},
+            **(
+                {"decoder_accuracy": float(decoder_accuracy)}
+                if decoder_accuracy is not None
+                else {}
+            ),
+            **_prefix_scores(trial_scores, "trial"),
+            "selection_level": "trial",
+            "classification_level": "trial",
+            "n_val_windows": int(len(y_true_trial) * X_val.shape[1]),
+            "n_val_trials": int(len(y_true_trial)),
+        }
+
     y_true_window = _as_numpy_1d(y_val).astype(np.int64)
     probabilities_window = _predict_probabilities(
         model,
@@ -1103,9 +2365,14 @@ def _evaluate_inner_config(
         probabilities=probabilities_window,
         metrics=metrics,
     )
-    window_scores["keras_model_loss"] = _keras_loss_value(
+    keras_evaluation = _keras_evaluation_results(
         model, X_val, y_val, batch_size=batch_size
     )
+    window_scores["keras_model_loss"] = keras_evaluation["loss"]
+    window_scores["joint_loss"] = keras_evaluation["loss"]
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+    if decoder_accuracy is not None:
+        window_scores["decoder_accuracy"] = float(decoder_accuracy)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
@@ -1121,8 +2388,17 @@ def _evaluate_inner_config(
     )
 
     primary_scores = trial_scores if selection_level == "trial" else window_scores
+    primary_metric_keys = ["loss", *metrics]
+    if "joint_loss" in primary_scores:
+        primary_metric_keys.append("joint_loss")
+
     return {
-        **{key: primary_scores[key] for key in ["loss", *metrics]},
+        **{key: primary_scores[key] for key in primary_metric_keys},
+        **(
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
+            else {}
+        ),
         **_prefix_scores(window_scores, "window"),
         **_prefix_scores(trial_scores, "trial"),
         "selection_level": selection_level,
@@ -1548,12 +2824,13 @@ def _run_outer_fold(
         combinations(unique_outer_train_subjects, n_inner_subjects_to_leave_out)
     )
 
+    sample_level = "trials" if feature_array.ndim == 4 else "windows"
     _print_fold_header(
         outer_fold_number,
         total_outer_folds,
         f"outer test subjects={outer_test_subjects.tolist()} "
         f"(outer_train={len(outer_train_indices)}, "
-        f"outer_test={len(outer_test_indices)} windows)",
+        f"outer_test={len(outer_test_indices)} {sample_level})",
     )
 
     inner_scores_by_config: list[list[dict]] = [[] for _ in grid_configs]
@@ -1620,6 +2897,11 @@ def _run_outer_fold(
             model = model_builder_function(**model_hp)
 
             try:
+                X_inner_train_for_fit = _prepare_fit_inputs_with_subject_ids(
+                    model,
+                    X_inner_train,
+                    subject_ids_inner_train,
+                )
                 fit_kwargs = dict(fit_hp)
                 fit_kwargs["validation_data"] = (X_inner_val, y_inner_val)
 
@@ -1632,7 +2914,7 @@ def _run_outer_fold(
                 }
 
                 model.fit(
-                    X_inner_train,
+                    X_inner_train_for_fit,
                     y_inner_train,
                     class_weight=class_weight,
                     verbose=verbose,
@@ -1675,8 +2957,8 @@ def _run_outer_fold(
                 "outer_fold": int(outer_fold_number),
                 "inner_fold": int(inner_fold_number),
                 "left_out_subjects": inner_val_subjects.tolist(),
-                "n_train_windows": int(len(inner_train_indices)),
-                "n_val_windows": int(len(inner_val_indices)),
+                "n_train_windows": _count_windows_for_indices(feature_array, inner_train_indices),
+                "n_val_windows": _count_windows_for_indices(feature_array, inner_val_indices),
                 "n_train_trials": int(len(set(zip(
                     subject_ids_inner_train.tolist(), trial_ids_inner_train.tolist()
                 )))),
@@ -1693,9 +2975,11 @@ def _run_outer_fold(
     inner_mean_scores: list[dict] = []
     inner_std_scores: list[dict] = []
     score_metric_names = [
-        "loss", *metrics, "window_loss", "window_keras_model_loss",
+        "loss", "joint_loss", *metrics, "decoder_accuracy",
+        "window_loss", "window_joint_loss", "window_keras_model_loss", "window_decoder_accuracy",
         *[f"window_{metric}" for metric in metrics],
-        "trial_loss", *[f"trial_{metric}" for metric in metrics],
+        "trial_loss", "trial_joint_loss", "trial_decoder_accuracy",
+        *[f"trial_{metric}" for metric in metrics],
     ]
 
     for config_index, config in enumerate(grid_configs):
@@ -1795,6 +3079,11 @@ def _run_outer_fold(
     final_model = model_builder_function(**model_hp)
 
     try:
+        X_outer_train_for_fit = _prepare_fit_inputs_with_subject_ids(
+            final_model,
+            X_outer_train,
+            subject_ids_outer_train,
+        )
         y_outer_train_ids = _as_numpy_1d(y_outer_train)
         classes, counts = np.unique(y_outer_train_ids, return_counts=True)
 
@@ -1804,7 +3093,7 @@ def _run_outer_fold(
         }
 
         final_model.fit(
-            X_outer_train,
+            X_outer_train_for_fit,
             y_outer_train,
             class_weight=class_weight,
             verbose=verbose,
@@ -1838,8 +3127,8 @@ def _run_outer_fold(
     outer_fold_result = {
         "outer_fold_number": int(outer_fold_number),
         "left_out_subjects": outer_test_subjects.tolist(),
-        "n_outer_train_windows": int(len(outer_train_indices)),
-        "n_outer_test_windows": int(len(outer_test_indices)),
+        "n_outer_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
+        "n_outer_test_windows": _count_windows_for_indices(feature_array, outer_test_indices),
         "n_outer_train_trials": int(len(set(zip(
             subject_ids_outer_train.tolist(), trial_ids_outer_train.tolist()
         )))),
@@ -1887,14 +3176,24 @@ def nested_lnso_cv(
     n_outer_subjects_to_leave_out: int = 1,
     n_inner_subjects_to_leave_out: int = 1,
     n_epochs: int = 50,
-    batch_size: int = 32,
+    batch_size: int = 2,
     hyperparameters: dict | None = None,
     preprocessing_strategy: Callable | None = None,
-    selection_metric: str = "loss",
+    selection_metric: str = "f1",
     selection_level: Literal["window", "trial"] = "trial",
     evaluation_level: Literal["window", "trial"] = "trial",
     maximize_metric: bool | None = None,
-    metrics: list[str] | tuple[str, ...] = ("accuracy", "f1", "precision", "recall"),
+    metrics: list[str] | tuple[str, ...] = (
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
+    ),
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
     n_prediction_latent_samples: int = 0,
@@ -1915,12 +3214,10 @@ def nested_lnso_cv(
 
     Trial-level evaluation
     ----------------------
-    ``trial_id_array`` must contain one trial ID per input window. Predictions
-    are made per window, then probabilities are averaged within each
-    ``(subject_id, trial_id)`` group. ``selection_level`` controls inner-CV
-    hyperparameter selection and ``evaluation_level`` controls the unprefixed
-    primary metrics. Both window- and trial-level metrics/logs are always
-    returned.
+    Rank-4 inputs contain one complete trial per sample and one trial ID per
+    sample. The classifier is evaluated directly at trial level while decoder
+    diagnostics remain window based. Rank-3 legacy inputs retain the previous
+    behavior of averaging window probabilities within each trial.
 
     Parameters added for concurrency
     --------------------------------
@@ -1955,7 +3252,7 @@ def nested_lnso_cv(
     if trial_id_array is None:
         raise ValueError(
             "trial_id_array is required for trial-level prediction and metrics. "
-            "Pass one trial ID per window, aligned with feature_array."
+            "Pass one trial ID per sample, aligned with feature_array."
         )
 
     _validate_evaluation_level(selection_level, "selection_level")
@@ -1965,6 +3262,21 @@ def nested_lnso_cv(
     label_array = np.asarray(label_array)
     subject_id_array = np.asarray(subject_id_array)
     trial_id_array = np.asarray(trial_id_array)
+
+    if feature_array.ndim not in {3, 4}:
+        raise ValueError(
+            "feature_array must be rank 3 for window samples or rank 4 for "
+            f"grouped trial samples; got {feature_array.shape}."
+        )
+    if feature_array.ndim == 4:
+        if selection_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require selection_level='trial'."
+            )
+        if evaluation_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require evaluation_level='trial'."
+            )
 
     input_lengths = (
         len(feature_array), len(label_array), len(subject_id_array), len(trial_id_array)
@@ -1985,16 +3297,27 @@ def nested_lnso_cv(
                 f"{sorted(_CLASSIFICATION_METRICS)}"
             )
 
-    allowed_selection_metrics = {"loss", *metrics}
+    allowed_selection_metrics = {"loss", "joint_loss", *metrics}
 
     if selection_metric not in allowed_selection_metrics:
         raise ValueError(
             f"selection_metric='{selection_metric}' is not available. "
-            f"Use 'loss' or one of metrics={list(metrics)}."
+            f"Use 'loss', 'joint_loss', or one of metrics={list(metrics)}."
+        )
+
+    if (
+        feature_array.ndim == 3
+        and selection_metric == "joint_loss"
+        and selection_level != "window"
+    ):
+        raise ValueError(
+            "Window-level models require selection_level='window' when "
+            "selecting by joint_loss. Hierarchical rank-4 models may select "
+            "trial-level joint_loss directly."
         )
 
     if maximize_metric is None:
-        maximize_metric = selection_metric != "loss"
+        maximize_metric = selection_metric not in {"loss", "joint_loss"}
 
     if n_prediction_latent_samples < 0:
         raise ValueError("n_prediction_latent_samples must be >= 0.")
@@ -2042,7 +3365,16 @@ def nested_lnso_cv(
         **hyperparameters,
     }
 
-    grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    sequence_hyperparameter_depths = getattr(
+        model_builder_function,
+        "_sequence_hyperparameter_depths",
+        None,
+    )
+    grid_configs = _expand_hyperparameter_grid(
+        effective_hyperparameters,
+        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+    )
+    _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
     outer_subject_splits = list(
         combinations(unique_subjects, n_outer_subjects_to_leave_out)
     )
@@ -2203,17 +3535,19 @@ def nested_lnso_cv(
 
     mean_scores, std_scores = _mean_std_rows(
         results["fold_metrics"],
-        ["loss", *metrics],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
 
     results["mean_scores"] = mean_scores
     results["std_scores"] = std_scores
 
     window_mean_scores, window_std_scores = _mean_std_rows(
-        results["window_fold_metrics"], ["loss", *metrics]
+        results["window_fold_metrics"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
-        results["trial_fold_metrics"], ["loss", *metrics]
+        results["trial_fold_metrics"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     results["window_mean_scores"] = window_mean_scores
     results["window_std_scores"] = window_std_scores
@@ -2259,60 +3593,185 @@ def _run_loso_fold(
     latent_sampling_seed: int | None,
     n_uncertainty_samples: int,
     ci_level: float,
+    validation_subjects_per_fold: int,
+    validation_seed: int | None,
+    early_stopping_patience: int | None,
+    early_stopping_min_delta: float,
+    early_stopping_monitor: str,
+    early_stopping_mode: Literal["auto", "min", "max"],
+    restore_best_weights: bool,
+    prediction_diagnostics: bool,
+    prediction_diagnostics_every_n_epochs: int,
+    prediction_diagnostics_max_samples: int,
+    prediction_diagnostics_threshold_tolerance: float,
+    prediction_diagnostics_seed: int | None,
+    decision_thresholds: tuple[float, ...],
+    threshold_selection_metric: str,
+    threshold_selection_level: Literal["window", "trial"],
     verbose: int,
     extra_fit_kwargs: dict,
+    test_indices_override: np.ndarray | None = None,
+    left_out_subjects_override: list | tuple | np.ndarray | None = None,
+    held_out_trials: list[dict] | None = None,
+    validation_excluded_subjects: list | tuple | np.ndarray | None = None,
+    fold_description: str | None = None,
+    cv_strategy: str = "loso",
 ) -> dict:
-    """Train and evaluate one ordinary LOSO fold.
+    """Train and evaluate one LOSO fold with optional seeded validation.
 
-    No inner folds or hyperparameter selection occur here. ``fixed_config`` is
-    applied unchanged in every fold.
+    The LOSO test subject is never used by ``model.fit``. When
+    ``validation_subjects_per_fold`` is positive, that many subjects are drawn
+    deterministically from the outer-training pool and excluded from gradient
+    updates. They provide ``validation_data`` for early stopping without adding
+    another model fit.
     """
-    test_mask = subject_id_array == test_subject
-    train_mask = ~test_mask
+    if test_indices_override is None:
+        test_mask = subject_id_array == test_subject
+        test_indices = np.where(test_mask)[0]
+    else:
+        test_indices = np.asarray(test_indices_override, dtype=np.int64).reshape(-1)
+        if len(test_indices) == 0:
+            raise ValueError("test_indices_override must contain at least one index.")
+        if np.any(test_indices < 0) or np.any(test_indices >= len(feature_array)):
+            raise ValueError(
+                "test_indices_override contains an index outside the feature array."
+            )
+        test_indices = np.unique(test_indices)
+        test_mask = np.zeros(len(feature_array), dtype=bool)
+        test_mask[test_indices] = True
 
-    train_indices = np.where(train_mask)[0]
-    test_indices = np.where(test_mask)[0]
+    outer_train_mask = ~test_mask
+    outer_train_indices = np.where(outer_train_mask)[0]
 
-    if len(train_indices) == 0 or len(test_indices) == 0:
+    if len(outer_train_indices) == 0 or len(test_indices) == 0:
+        split_name = "LOSO" if test_indices_override is None else cv_strategy
         raise ValueError(
-            f"Invalid LOSO split for subject {test_subject!r}: "
-            f"train={len(train_indices)}, test={len(test_indices)} windows."
+            f"Invalid {split_name} split: train={len(outer_train_indices)}, "
+            f"test={len(test_indices)} samples."
         )
 
+    outer_train_subjects = np.sort(
+        np.unique(subject_id_array[outer_train_indices])
+    )
+    validation_candidate_subjects = outer_train_subjects
+    if validation_excluded_subjects is not None:
+        validation_candidate_subjects = np.setdiff1d(
+            outer_train_subjects,
+            np.asarray(validation_excluded_subjects),
+            assume_unique=False,
+        )
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if (
+        validation_subjects_per_fold > 0
+        and validation_subjects_per_fold >= len(validation_candidate_subjects)
+    ):
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one eligible "
+            "subject outside validation. Got "
+            f"{validation_subjects_per_fold} validation subjects from "
+            f"{len(validation_candidate_subjects)} eligible subjects."
+        )
+
+    if validation_subjects_per_fold > 0:
+        base_seed = 0 if validation_seed is None else int(validation_seed)
+        fold_seed = np.random.SeedSequence([base_seed, int(fold_number)])
+        rng = np.random.default_rng(fold_seed)
+        validation_subjects = np.sort(
+            rng.choice(
+                validation_candidate_subjects,
+                size=validation_subjects_per_fold,
+                replace=False,
+            )
+        )
+        validation_mask_relative = np.isin(
+            subject_id_array[outer_train_indices],
+            validation_subjects,
+        )
+        validation_indices = outer_train_indices[validation_mask_relative]
+        fit_train_indices = outer_train_indices[~validation_mask_relative]
+    else:
+        validation_subjects = np.asarray([], dtype=outer_train_subjects.dtype)
+        validation_indices = np.asarray([], dtype=np.int64)
+        fit_train_indices = outer_train_indices
+
+    sample_level = "trials" if feature_array.ndim == 4 else "windows"
+    if fold_description is None:
+        fold_description = (
+            f"LOSO test subject={_python_scalar(test_subject)!r} "
+            f"(fit_train={len(fit_train_indices)}, "
+            f"validation={len(validation_indices)}, "
+            f"test={len(test_indices)} {sample_level})"
+        )
+    else:
+        fold_description = (
+            f"{fold_description} (fit_train={len(fit_train_indices)}, "
+            f"validation={len(validation_indices)}, "
+            f"test={len(test_indices)} {sample_level})"
+        )
     _print_fold_header(
         fold_number,
         total_folds,
-        f"LOSO test subject={_python_scalar(test_subject)!r} "
-        f"(train={len(train_indices)}, test={len(test_indices)} windows)",
+        fold_description,
     )
+    if len(validation_subjects):
+        print(
+            "Seeded validation subjects: "
+            f"{[_python_scalar(value) for value in validation_subjects]}",
+            flush=True,
+        )
 
-    X_train = feature_array[train_indices]
-    y_train = label_array[train_indices]
+    # The current preprocessing callback API supports only one train/eval pair.
+    # Refuse an ambiguous three-way fit rather than leaking validation subjects
+    # into a fitted transform or fitting inconsistent transforms for val/test.
+    if validation_subjects_per_fold > 0 and preprocessing_strategy is not None:
+        raise ValueError(
+            "Seeded subject-level validation currently requires "
+            "preprocessing_strategy=None. Preprocess before loso_cv or extend "
+            "the strategy API to transform train/validation/test from one "
+            "fold-local fitted state."
+        )
+
+    X_fit_train = feature_array[fit_train_indices]
+    y_fit_train = label_array[fit_train_indices]
+    X_validation = feature_array[validation_indices]
+    y_validation = label_array[validation_indices]
     X_test = feature_array[test_indices]
     y_test = label_array[test_indices]
 
-    subject_ids_train = subject_id_array[train_indices]
+    subject_ids_fit_train = subject_id_array[fit_train_indices]
+    subject_ids_validation = subject_id_array[validation_indices]
     subject_ids_test = subject_id_array[test_indices]
-    trial_ids_train = trial_id_array[train_indices]
+    trial_ids_fit_train = trial_id_array[fit_train_indices]
+    trial_ids_validation = trial_id_array[validation_indices]
     trial_ids_test = trial_id_array[test_indices]
 
-    X_train, y_train, X_test, y_test = _apply_preprocessing_strategy(
-        preprocessing_strategy=preprocessing_strategy,
-        X_train=X_train,
-        y_train=y_train,
-        X_eval=X_test,
-        y_eval=y_test,
-        train_indices=train_indices,
-        eval_indices=test_indices,
-    )
+    if validation_subjects_per_fold == 0:
+        X_fit_train, y_fit_train, X_test, y_test = _apply_preprocessing_strategy(
+            preprocessing_strategy=preprocessing_strategy,
+            X_train=X_fit_train,
+            y_train=y_fit_train,
+            X_eval=X_test,
+            y_eval=y_test,
+            train_indices=fit_train_indices,
+            eval_indices=test_indices,
+        )
 
     _validate_processed_alignment(
-        X_train,
-        y_train,
-        subject_ids_train,
-        trial_ids_train,
-        "LOSO-training",
+        X_fit_train,
+        y_fit_train,
+        subject_ids_fit_train,
+        trial_ids_fit_train,
+        "LOSO-fit-training",
     )
+    if validation_subjects_per_fold > 0:
+        _validate_processed_alignment(
+            X_validation,
+            y_validation,
+            subject_ids_validation,
+            trial_ids_validation,
+            "LOSO-validation",
+        )
     _validate_processed_alignment(
         X_test,
         y_test,
@@ -2331,26 +3790,179 @@ def _run_loso_fold(
             f"configuration and extra_fit_kwargs: {sorted(duplicate_fit_keys)}"
         )
 
+    fit_call_kwargs = dict(extra_fit_kwargs)
+    callbacks = list(fit_call_kwargs.pop("callbacks", []))
+    prediction_diagnostics_callback: PredictionDiagnostics | None = None
+
+    if prediction_diagnostics:
+        prediction_diagnostics_callback = PredictionDiagnostics(
+            X_train=X_fit_train,
+            y_train=y_fit_train,
+            X_val=(X_validation if validation_subjects_per_fold > 0 else None),
+            y_val=(y_validation if validation_subjects_per_fold > 0 else None),
+            fold_number=fold_number,
+            batch_size=current_batch_size,
+            every_n_epochs=prediction_diagnostics_every_n_epochs,
+            max_samples=prediction_diagnostics_max_samples,
+            threshold_tolerance=prediction_diagnostics_threshold_tolerance,
+            seed=(
+                None
+                if prediction_diagnostics_seed is None
+                else int(prediction_diagnostics_seed) + int(fold_number)
+            ),
+        )
+        callbacks.append(prediction_diagnostics_callback)
+
+    if validation_subjects_per_fold > 0:
+        if early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}:
+            # This callback must run before EarlyStopping so the custom metric
+            # is present in the shared epoch logs when EarlyStopping inspects it.
+            callbacks.append(
+                TrialValidationMetrics(
+                    X_val=X_validation,
+                    y_val=y_validation,
+                    subject_ids_val=subject_ids_validation,
+                    trial_ids_val=trial_ids_validation,
+                    batch_size=current_batch_size,
+                )
+            )
+
+        if early_stopping_patience is not None:
+            callbacks.append(
+                tf.keras.callbacks.EarlyStopping(
+                    monitor=early_stopping_monitor,
+                    patience=int(early_stopping_patience),
+                    min_delta=float(early_stopping_min_delta),
+                    mode=early_stopping_mode,
+                    restore_best_weights=bool(restore_best_weights),
+                    verbose=1 if verbose else 0,
+                )
+            )
+
+    if callbacks:
+        fit_call_kwargs["callbacks"] = callbacks
+
     tf.keras.backend.clear_session()
     model = model_builder_function(**model_hp)
+    X_fit_train_for_fit = _prepare_fit_inputs_with_subject_ids(
+        model,
+        X_fit_train,
+        subject_ids_fit_train,
+    )
+
+    epochs_ran = 0
+    best_epoch: int | None = None
+    best_monitored_value: float | None = None
+    stopped_early = False
 
     try:
-        y_train_ids = _as_numpy_1d(y_train)
-        classes, counts = np.unique(y_train_ids, return_counts=True)
+        y_fit_train_ids = _as_numpy_1d(y_fit_train)
+        classes, counts = np.unique(y_fit_train_ids, return_counts=True)
 
         class_weight = {
-            int(class_id): len(y_train_ids) / (len(classes) * count)
+            int(class_id): len(y_fit_train_ids) / (len(classes) * count)
             for class_id, count in zip(classes, counts)
         }
 
-        model.fit(
-            X_train,
-            y_train,
+        validation_data = (
+            (X_validation, y_validation)
+            if validation_subjects_per_fold > 0
+            else None
+        )
+        history = model.fit(
+            X_fit_train_for_fit,
+            y_fit_train,
+            validation_data=validation_data,
             class_weight=class_weight,
             verbose=verbose,
             **fit_hp,
-            **extra_fit_kwargs,
+            **fit_call_kwargs,
         )
+
+        epochs_ran = int(len(history.history.get("loss", [])))
+        requested_epochs = int(fit_hp.get("epochs", epochs_ran))
+        stopped_early = bool(epochs_ran < requested_epochs)
+
+        monitored_history = history.history.get(early_stopping_monitor)
+        if monitored_history:
+            monitored_values = np.asarray(monitored_history, dtype=np.float64)
+            finite_mask = np.isfinite(monitored_values)
+            if np.any(finite_mask):
+                candidate_indices = np.where(finite_mask)[0]
+                candidate_values = monitored_values[finite_mask]
+                if early_stopping_mode == "max":
+                    local_best = int(np.argmax(candidate_values))
+                elif early_stopping_mode == "min":
+                    local_best = int(np.argmin(candidate_values))
+                else:
+                    maximize_tokens = (
+                        "acc", "auc", "f1", "precision", "recall"
+                    )
+                    maximize = any(
+                        token in early_stopping_monitor.lower()
+                        for token in maximize_tokens
+                    )
+                    local_best = int(
+                        np.argmax(candidate_values)
+                        if maximize
+                        else np.argmin(candidate_values)
+                    )
+                best_index = int(candidate_indices[local_best])
+                best_epoch = best_index + 1
+                best_monitored_value = float(monitored_values[best_index])
+        if best_epoch is None and epochs_ran > 0:
+            best_epoch = epochs_ran
+
+        selected_decision_threshold = float(decision_thresholds[0])
+        threshold_validation_score: float | None = None
+        threshold_search_results: list[dict] = []
+        if validation_subjects_per_fold > 0:
+            validation_probabilities = _predict_probabilities(
+                model=model,
+                X=X_validation,
+                batch_size=current_batch_size,
+                n_prediction_latent_samples=n_prediction_latent_samples,
+                latent_sampling_seed=latent_sampling_seed,
+            )
+            if threshold_selection_level == "trial":
+                if _is_trial_tensor(X_validation):
+                    threshold_validation = _direct_trial_aggregation(
+                        probabilities=validation_probabilities,
+                        y_true=y_validation,
+                        subject_ids=subject_ids_validation,
+                        trial_ids=trial_ids_validation,
+                        n_windows_per_trial=X_validation.shape[1],
+                    )
+                else:
+                    threshold_validation = _aggregate_window_probabilities_by_trial(
+                        probabilities=validation_probabilities,
+                        y_true=y_validation,
+                        subject_ids=subject_ids_validation,
+                        trial_ids=trial_ids_validation,
+                    )
+                threshold_probabilities = threshold_validation["probabilities"]
+                threshold_y_true = threshold_validation["y_true"]
+            else:
+                threshold_probabilities = validation_probabilities
+                threshold_y_true = _as_numpy_1d(y_validation).astype(np.int64)
+
+            (
+                selected_decision_threshold,
+                threshold_validation_score,
+                threshold_search_results,
+            ) = _select_binary_decision_threshold(
+                probabilities=threshold_probabilities,
+                y_true=threshold_y_true,
+                thresholds=decision_thresholds,
+                metric=threshold_selection_metric,
+            )
+            print(
+                f"Fold {fold_number} selected decision threshold "
+                f"{selected_decision_threshold:.4f} from validation "
+                f"{threshold_selection_level}_{threshold_selection_metric}="
+                f"{threshold_validation_score:.6f}",
+                flush=True,
+            )
 
         evaluation = _evaluate_classification_fold(
             model=model,
@@ -2368,62 +3980,94 @@ def _run_loso_fold(
             log_variational_intervals=log_variational_intervals,
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
+            decision_threshold=selected_decision_threshold,
         )
     finally:
         del model
         gc.collect()
         tf.keras.backend.clear_session()
 
+    def count_trials(subject_ids: np.ndarray, trial_ids: np.ndarray) -> int:
+        return int(len(set(zip(subject_ids.tolist(), trial_ids.tolist()))))
+
+    subject_ids_outer_train = subject_id_array[outer_train_indices]
+    trial_ids_outer_train = trial_id_array[outer_train_indices]
+
+    if left_out_subjects_override is None:
+        left_out_subjects = [_python_scalar(test_subject)]
+        left_out_subject = _python_scalar(test_subject)
+    else:
+        left_out_subjects = [
+            _python_scalar(value)
+            for value in np.asarray(left_out_subjects_override).reshape(-1).tolist()
+        ]
+        left_out_subject = (
+            left_out_subjects[0] if len(left_out_subjects) == 1 else None
+        )
+
     fold_record = {
         "fold_number": int(fold_number),
         "outer_fold_number": int(fold_number),
-        "left_out_subject": _python_scalar(test_subject),
-        "left_out_subjects": [_python_scalar(test_subject)],
-        "outer_test_subjects": [_python_scalar(test_subject)],
-        "n_train_windows": int(len(train_indices)),
-        "n_test_windows": int(len(test_indices)),
+        "cv_strategy": cv_strategy,
+        "left_out_subject": left_out_subject,
+        "left_out_subjects": left_out_subjects,
+        "outer_test_subjects": left_out_subjects,
+        "held_out_trials": [] if held_out_trials is None else held_out_trials,
+        "validation_subjects": [
+            _python_scalar(value) for value in validation_subjects.tolist()
+        ],
+        "validation_seed": validation_seed,
+        "n_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
+        "n_fit_train_windows": _count_windows_for_indices(feature_array, fit_train_indices),
+        "n_validation_windows": _count_windows_for_indices(feature_array, validation_indices),
+        "n_test_windows": _count_windows_for_indices(feature_array, test_indices),
         # Compatibility aliases for code that previously consumed nested CV.
-        "n_outer_train_windows": int(len(train_indices)),
-        "n_outer_test_windows": int(len(test_indices)),
-        "n_train_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_train.tolist(),
-                        trial_ids_train.tolist(),
-                    )
-                )
-            )
+        "n_outer_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
+        "n_outer_test_windows": _count_windows_for_indices(feature_array, test_indices),
+        "n_train_trials": count_trials(
+            subject_ids_outer_train, trial_ids_outer_train
         ),
-        "n_test_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_test.tolist(),
-                        trial_ids_test.tolist(),
-                    )
-                )
-            )
+        "n_fit_train_trials": count_trials(
+            subject_ids_fit_train, trial_ids_fit_train
         ),
-        "n_outer_train_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_train.tolist(),
-                        trial_ids_train.tolist(),
-                    )
-                )
-            )
+        "n_validation_trials": count_trials(
+            subject_ids_validation, trial_ids_validation
         ),
-        "n_outer_test_trials": int(
-            len(
-                set(
-                    zip(
-                        subject_ids_test.tolist(),
-                        trial_ids_test.tolist(),
-                    )
-                )
-            )
+        "n_test_trials": count_trials(subject_ids_test, trial_ids_test),
+        "n_outer_train_trials": count_trials(
+            subject_ids_outer_train, trial_ids_outer_train
+        ),
+        "n_outer_test_trials": count_trials(subject_ids_test, trial_ids_test),
+        "early_stopping_monitor": (
+            early_stopping_monitor if validation_subjects_per_fold > 0 else None
+        ),
+        "early_stopping_patience": (
+            early_stopping_patience if validation_subjects_per_fold > 0 else None
+        ),
+        "early_stopping_min_delta": (
+            float(early_stopping_min_delta)
+            if validation_subjects_per_fold > 0
+            else None
+        ),
+        "restore_best_weights": (
+            bool(restore_best_weights)
+            if validation_subjects_per_fold > 0
+            else None
+        ),
+        "epochs_ran": int(epochs_ran),
+        "best_epoch": None if best_epoch is None else int(best_epoch),
+        "best_monitored_value": best_monitored_value,
+        "stopped_early": bool(stopped_early),
+        "decision_threshold": float(selected_decision_threshold),
+        "decision_threshold_candidates": list(decision_thresholds),
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
+        "threshold_validation_score": threshold_validation_score,
+        "threshold_search_results": threshold_search_results,
+        "prediction_diagnostics_log": (
+            []
+            if prediction_diagnostics_callback is None
+            else list(prediction_diagnostics_callback.history)
         ),
         "evaluation_level": evaluation_level,
         "selection_level": None,
@@ -2473,9 +4117,9 @@ def _run_loso_fold(
         "outer_fold_result": fold_record,
         "best_config_result": fixed_config_record,
         "inner_cv_result": empty_inner_cv_record,
+        "prediction_diagnostics_log": fold_record["prediction_diagnostics_log"],
         **evaluation,
     }
-
 
 def _loso_fold_process_main(
     worker_state_payload: bytes,
@@ -2526,14 +4170,7 @@ def _loso_fold_process_main(
         gc.collect()
 
 def _compact_loso_fold_result(fold_output: dict) -> dict:
-    """Return one LOSO fold record without large prediction logs.
-
-    Every hyperparameter configuration retains its per-subject metrics so the
-    complete grid search can be inspected later. Window/trial prediction rows
-    are retained only for the globally selected configuration at the top level
-    of the ``loso_cv`` result, preventing the result JSON from growing by one
-    full prediction log per configuration.
-    """
+    """Return one LOSO fold record without large prediction logs."""
     fold_record = fold_output["fold_record"]
     return {
         "fold_number": int(fold_record["fold_number"]),
@@ -2541,17 +4178,44 @@ def _compact_loso_fold_result(fold_output: dict) -> dict:
         "left_out_subject": fold_record["left_out_subject"],
         "left_out_subjects": list(fold_record["left_out_subjects"]),
         "outer_test_subjects": list(fold_record["outer_test_subjects"]),
+        "cv_strategy": fold_record.get("cv_strategy", "loso"),
+        "held_out_trials": [
+            dict(row) for row in fold_record.get("held_out_trials", [])
+        ],
+        "n_subjects_with_trials_left_out": int(
+            fold_record.get("n_subjects_with_trials_left_out", 0)
+        ),
+        "k_trials_left_out_per_subject": fold_record.get(
+            "k_trials_left_out_per_subject"
+        ),
+        "validation_subjects": list(fold_record["validation_subjects"]),
+        "validation_seed": fold_record["validation_seed"],
         "n_train_windows": int(fold_record["n_train_windows"]),
+        "n_fit_train_windows": int(fold_record["n_fit_train_windows"]),
+        "n_validation_windows": int(fold_record["n_validation_windows"]),
         "n_test_windows": int(fold_record["n_test_windows"]),
         "n_train_trials": int(fold_record["n_train_trials"]),
+        "n_fit_train_trials": int(fold_record["n_fit_train_trials"]),
+        "n_validation_trials": int(fold_record["n_validation_trials"]),
         "n_test_trials": int(fold_record["n_test_trials"]),
+        "early_stopping_monitor": fold_record["early_stopping_monitor"],
+        "early_stopping_patience": fold_record["early_stopping_patience"],
+        "early_stopping_min_delta": fold_record["early_stopping_min_delta"],
+        "restore_best_weights": fold_record["restore_best_weights"],
+        "epochs_ran": int(fold_record["epochs_ran"]),
+        "best_epoch": fold_record["best_epoch"],
+        "best_monitored_value": fold_record["best_monitored_value"],
+        "stopped_early": bool(fold_record["stopped_early"]),
+        "decision_threshold": float(fold_record["decision_threshold"]),
+        "threshold_selection_metric": fold_record["threshold_selection_metric"],
+        "threshold_selection_level": fold_record["threshold_selection_level"],
+        "threshold_validation_score": fold_record["threshold_validation_score"],
         "evaluation_level": fold_record["evaluation_level"],
         "fold_metrics": dict(fold_output["fold_metrics"]),
         "window_fold_metrics": dict(fold_output["window_fold_metrics"]),
         "trial_fold_metrics": dict(fold_output["trial_fold_metrics"]),
         "user_metrics": [dict(row) for row in fold_output["user_metrics"]],
     }
-
 
 def _aggregate_loso_config_result(
     config_index: int,
@@ -2577,15 +4241,15 @@ def _aggregate_loso_config_result(
 
     mean_scores, std_scores = _mean_std_rows(
         fold_metrics,
-        ["loss", *metrics],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     window_mean_scores, window_std_scores = _mean_std_rows(
         window_fold_metrics,
-        ["loss", *metrics],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
         trial_fold_metrics,
-        ["loss", *metrics],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
 
     selection_means = (
@@ -2700,7 +4364,7 @@ def loso_cv(
     subject_id_array: np.ndarray,
     trial_id_array: np.ndarray | None = None,
     n_epochs: int = 50,
-    batch_size: int = 32,
+    batch_size: int = 2,
     hyperparameters: dict | None = None,
     preprocessing_strategy: Callable | None = None,
     evaluation_level: Literal["window", "trial"] = "trial",
@@ -2712,6 +4376,11 @@ def loso_cv(
         "f1",
         "precision",
         "recall",
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
     ),
     log_predictions: bool = True,
     log_variational_intervals: bool = False,
@@ -2719,6 +4388,23 @@ def loso_cv(
     latent_sampling_seed: int | None = None,
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
+    validation_subjects_per_fold: int = 0,
+    validation_seed: int | None = 42,
+    early_stopping_patience: int | None = 5,
+    early_stopping_min_delta: float = 0.0,
+    early_stopping_monitor: str = "val_loss",
+    early_stopping_mode: Literal["auto", "min", "max"] = "min",
+    restore_best_weights: bool = True,
+    prediction_diagnostics: bool = False,
+    prediction_diagnostics_every_n_epochs: int = 1,
+    prediction_diagnostics_max_samples: int = 256,
+    prediction_diagnostics_threshold_tolerance: float = 0.01,
+    prediction_diagnostics_seed: int | None = 42,
+    decision_thresholds: list[float] | tuple[float, ...] = (0.5,),
+    threshold_selection_metric: Literal[
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    ] = "f1",
+    threshold_selection_level: Literal["window", "trial"] = "trial",
     verbose: int = 0,
     extra_fit_kwargs: dict | None = None,
     n_jobs: int = 1,
@@ -2743,22 +4429,33 @@ def loso_cv(
     Scalar values may be supplied directly or as candidate lists/tuples. The
     Cartesian product is evaluated with a complete LOSO run per configuration.
 
-    Sequence-valued encoder settings use a flat list for one architecture and
-    a nested list for multiple candidates. For example, ``conv_filters=[16, 32]``
-    is one two-layer encoder, whereas
-    ``conv_filters=[[16, 32], [32, 64]]`` evaluates two encoders. The same rule
-    applies to ``kernel_sizes``, ``pool_after_layers``, and ``pool_sizes``.
-    Architectures with different layer counts can instead be bundled as a list
-    of complete ``encoder_kwargs`` dictionaries.
+    Sequence-valued encoder settings preserve one complete architecture before
+    the Cartesian product is expanded. ``sequence_hyperparameter_depths``
+    specifies the nesting depth of one value, resolving CNN1D/CNN2D ambiguity
+    for keys such as ``kernel_sizes``. GCN ``gcn_units`` and temporal/spatial
+    pooling schedules are preserved in the same way. One additional outer list
+    level enumerates multiple architecture candidates.
 
     ``n_epochs`` and ``batch_size`` provide defaults and are overridden when
     ``hyperparameters`` contains ``epochs`` or ``batch_size``.
 
+    Seeded validation and early stopping
+    ------------------------------------
+    When ``validation_subjects_per_fold`` is positive, that many subjects are
+    sampled deterministically from each outer-training pool. They are excluded
+    from gradient updates and passed to ``model.fit`` as ``validation_data``.
+    The same fold-local validation subjects are reused for every hyperparameter
+    configuration, while the LOSO test subject remains untouched. This adds no
+    extra fits; it only changes each fit from train/test to train/validation/test.
+
     Selection
     ---------
     ``selection_level`` determines whether configurations are ranked using
-    window- or trial-level scores. ``selection_metric`` defaults to macro-F1.
-    Classification metrics are maximized and loss is minimized unless
+    window- or trial-level scores. Hierarchical rank-4 inputs require trial-level
+    selection. ``selection_metric`` defaults to macro-F1. ``f1``, ``precision``,
+    and ``recall`` are macro averaged; the ``binary_*`` metrics treat class 1 as
+    positive, and ``roc_auc`` uses the class-1 probability for paper comparison.
+    Classification metrics are maximized; probability loss and joint loss are minimized unless
     ``maximize_metric`` is explicitly supplied. Ties use lower between-subject
     standard deviation, lower mean log loss, then the earlier grid index.
 
@@ -2795,7 +4492,7 @@ def loso_cv(
     if trial_id_array is None:
         raise ValueError(
             "trial_id_array is required for trial-level prediction and metrics. "
-            "Pass one trial ID per window, aligned with feature_array."
+            "Pass one trial ID per sample, aligned with feature_array."
         )
 
     _validate_evaluation_level(evaluation_level, "evaluation_level")
@@ -2805,6 +4502,21 @@ def loso_cv(
     label_array = np.asarray(label_array)
     subject_id_array = np.asarray(subject_id_array)
     trial_id_array = np.asarray(trial_id_array)
+
+    if feature_array.ndim not in {3, 4}:
+        raise ValueError(
+            "feature_array must be rank 3 for window samples or rank 4 for "
+            f"grouped trial samples; got {feature_array.shape}."
+        )
+    if feature_array.ndim == 4:
+        if selection_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require selection_level='trial'."
+            )
+        if evaluation_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require evaluation_level='trial'."
+            )
 
     input_lengths = (
         len(feature_array),
@@ -2827,15 +4539,26 @@ def loso_cv(
                 f"{sorted(_CLASSIFICATION_METRICS)}"
             )
 
-    allowed_selection_metrics = {"loss", *metrics}
+    allowed_selection_metrics = {"loss", "joint_loss", *metrics}
     if selection_metric not in allowed_selection_metrics:
         raise ValueError(
             f"selection_metric={selection_metric!r} is unavailable. "
-            f"Use 'loss' or one of metrics={list(metrics)}."
+            f"Use 'loss', 'joint_loss', or one of metrics={list(metrics)}."
+        )
+
+    if (
+        feature_array.ndim == 3
+        and selection_metric == "joint_loss"
+        and selection_level != "window"
+    ):
+        raise ValueError(
+            "Window-level models require selection_level='window' when "
+            "selecting by joint_loss. Hierarchical rank-4 models may select "
+            "trial-level joint_loss directly."
         )
 
     if maximize_metric is None:
-        maximize_metric = selection_metric != "loss"
+        maximize_metric = selection_metric not in {"loss", "joint_loss"}
 
     if n_prediction_latent_samples < 0:
         raise ValueError("n_prediction_latent_samples must be >= 0.")
@@ -2849,11 +4572,69 @@ def loso_cv(
     if cpus_per_worker is not None and cpus_per_worker < 1:
         raise ValueError("cpus_per_worker must be >= 1 when provided.")
 
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if validation_seed is not None and validation_seed < 0:
+        raise ValueError("validation_seed must be >= 0 or None.")
+    if early_stopping_patience is not None and early_stopping_patience < 0:
+        raise ValueError("early_stopping_patience must be >= 0 or None.")
+    if early_stopping_min_delta < 0.0:
+        raise ValueError("early_stopping_min_delta must be >= 0.")
+    if early_stopping_mode not in {"auto", "min", "max"}:
+        raise ValueError(
+            "early_stopping_mode must be 'auto', 'min', or 'max'."
+        )
+    if not early_stopping_monitor:
+        raise ValueError("early_stopping_monitor must be a non-empty string.")
+    if prediction_diagnostics_every_n_epochs < 1:
+        raise ValueError(
+            "prediction_diagnostics_every_n_epochs must be at least 1."
+        )
+    if prediction_diagnostics_max_samples < 1:
+        raise ValueError("prediction_diagnostics_max_samples must be at least 1.")
+    if prediction_diagnostics_threshold_tolerance < 0.0:
+        raise ValueError(
+            "prediction_diagnostics_threshold_tolerance must be non-negative."
+        )
+    decision_thresholds = _normalize_decision_thresholds(decision_thresholds)
+    if threshold_selection_metric not in {
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    }:
+        raise ValueError(
+            "threshold_selection_metric must be accuracy, f1, "
+            "balanced_accuracy, or binary_f1."
+        )
+    _validate_evaluation_level(
+        threshold_selection_level,
+        "threshold_selection_level",
+    )
+    if len(decision_thresholds) > 1 and validation_subjects_per_fold == 0:
+        raise ValueError(
+            "Testing multiple decision thresholds requires fold-local validation "
+            "subjects. Set validation_subjects_per_fold >= 1."
+        )
+    if (
+        early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
+        and validation_subjects_per_fold == 0
+        and early_stopping_patience is not None
+    ):
+        raise ValueError(
+            f"{early_stopping_monitor} requires at least one fold-local "
+            "validation subject. Set validation_subjects_per_fold >= 1."
+        )
+
     unique_subjects = np.sort(np.unique(subject_id_array))
     if len(unique_subjects) < 2:
         raise ValueError(
             "LOSO CV requires at least two unique subjects. "
             f"Got {len(unique_subjects)}."
+        )
+    if validation_subjects_per_fold >= len(unique_subjects) - 1:
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one gradient-"
+            "training subject after the LOSO test subject is removed. Got "
+            f"{validation_subjects_per_fold} validation subjects for "
+            f"{len(unique_subjects)} total subjects."
         )
 
     if max_folds is not None:
@@ -2868,7 +4649,16 @@ def loso_cv(
         "batch_size": batch_size,
         **(hyperparameters or {}),
     }
-    grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    sequence_hyperparameter_depths = getattr(
+        model_builder_function,
+        "_sequence_hyperparameter_depths",
+        None,
+    )
+    grid_configs = _expand_hyperparameter_grid(
+        effective_hyperparameters,
+        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+    )
+    _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
     if not grid_configs:
         raise ValueError("The hyperparameter grid produced no configurations.")
 
@@ -2916,13 +4706,29 @@ def loso_cv(
     )
     print(f"Primary reported metrics: {evaluation_level}-level")
     print(f"Prediction logging: {log_predictions}")
+    print(f"Prediction diagnostics: {prediction_diagnostics}")
     print(f"Variational interval logging: {log_variational_intervals}")
+    print(
+        "Decision thresholds: "
+        f"{list(decision_thresholds)}; selection="
+        f"{threshold_selection_level}_{threshold_selection_metric}"
+    )
     prediction_mode = (
         "posterior mean"
         if n_prediction_latent_samples == 0
         else f"MC average over {n_prediction_latent_samples} latent sample(s)"
     )
     print(f"Prediction latent mode: {prediction_mode}")
+    if validation_subjects_per_fold > 0:
+        print(
+            "Per-fold validation: "
+            f"{validation_subjects_per_fold} seeded subject(s), "
+            f"seed={validation_seed}, monitor={early_stopping_monitor}, "
+            f"patience={early_stopping_patience}, "
+            f"restore_best_weights={restore_best_weights}"
+        )
+    else:
+        print("Per-fold validation: disabled")
     print(f"Fold workers: {effective_n_jobs}")
 
     if effective_n_jobs > 1 and normalized_gpu_ids is None:
@@ -2954,6 +4760,27 @@ def loso_cv(
         "latent_sampling_seed": latent_sampling_seed,
         "n_uncertainty_samples": n_uncertainty_samples,
         "ci_level": ci_level,
+        "validation_subjects_per_fold": validation_subjects_per_fold,
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": early_stopping_min_delta,
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": restore_best_weights,
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": decision_thresholds,
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
         "verbose": verbose,
         "extra_fit_kwargs": extra_fit_kwargs,
     }
@@ -3073,6 +4900,27 @@ def loso_cv(
         "maximize_metric": bool(maximize_metric),
         "n_prediction_latent_samples": int(n_prediction_latent_samples),
         "latent_sampling_seed": latent_sampling_seed,
+        "validation_subjects_per_fold": int(validation_subjects_per_fold),
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": float(early_stopping_min_delta),
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": bool(restore_best_weights),
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": list(decision_thresholds),
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,
@@ -3088,6 +4936,7 @@ def loso_cv(
         "variational_interval_log": [],
         "window_variational_interval_log": [],
         "trial_variational_interval_log": [],
+        "prediction_diagnostics_log": [],
         "fold_results": [],
         "best_configs": [],
         "inner_cv_results": [],
@@ -3158,6 +5007,9 @@ def loso_cv(
         results["trial_variational_interval_log"].extend(
             fold_output["trial_variational_interval_log"]
         )
+        results["prediction_diagnostics_log"].extend(
+            fold_output.get("prediction_diagnostics_log", [])
+        )
         results["fold_results"].append(fold_record)
         results["outer_fold_results"].append(fold_record)
         results["best_configs"].append(global_best_record)
@@ -3213,3 +5065,1232 @@ def loso_cv(
     )
 
     return results
+
+
+# ---------------------------------------------------------------------
+# Leave-N-Subjects-and-K-Trials-Out cross-validation
+# ---------------------------------------------------------------------
+
+
+def _stable_scalar_sort_key(value) -> tuple[str, str]:
+    """Return a deterministic ordering key for mixed scalar ID types."""
+    value = _python_scalar(value)
+    return type(value).__name__, repr(value)
+
+
+def _trial_metadata_by_subject(
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+) -> tuple[dict, dict, tuple[int, ...]]:
+    """Return subject-to-trials and one class label per subject/trial key."""
+    y_ids = _as_numpy_1d(label_array).astype(np.int64)
+    subject_to_trials: dict = {}
+    labels_by_key: dict[tuple, int] = {}
+
+    grouped_labels: dict[tuple, set[int]] = {}
+    for subject_id, trial_id, label in zip(
+        subject_id_array,
+        trial_id_array,
+        y_ids,
+    ):
+        subject_value = _python_scalar(subject_id)
+        trial_value = _python_scalar(trial_id)
+        key = (subject_value, trial_value)
+        grouped_labels.setdefault(key, set()).add(int(label))
+
+    for (subject_id, trial_id), labels in grouped_labels.items():
+        if len(labels) != 1:
+            raise ValueError(
+                "Every (subject_id, trial_id) group must have one label. "
+                f"Subject {subject_id!r}, trial {trial_id!r} has labels "
+                f"{sorted(labels)}."
+            )
+        labels_by_key[(subject_id, trial_id)] = int(next(iter(labels)))
+        subject_to_trials.setdefault(subject_id, []).append(trial_id)
+
+    for subject_id, trial_ids in subject_to_trials.items():
+        subject_to_trials[subject_id] = tuple(
+            sorted(set(trial_ids), key=_stable_scalar_sort_key)
+        )
+
+    classes = tuple(sorted(set(labels_by_key.values())))
+    return subject_to_trials, labels_by_key, classes
+
+
+def _lnskto_split_signature(held_out_trials: list[dict]) -> tuple:
+    """Create a hashable canonical signature for one LNSKTO test split."""
+    rows = []
+    for row in held_out_trials:
+        subject_id = _python_scalar(row["subject_id"])
+        trial_ids = tuple(
+            sorted(
+                (_python_scalar(value) for value in row["trial_ids"]),
+                key=_stable_scalar_sort_key,
+            )
+        )
+        rows.append((subject_id, trial_ids))
+    rows.sort(key=lambda item: _stable_scalar_sort_key(item[0]))
+    return tuple(rows)
+
+
+def _generate_lnskto_fold_specs(
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+    n_subjects: int = 3,
+    k_trials: int = 3,
+    n_folds: int | None = None,
+    split_seed: int | None = 42,
+    require_all_classes_in_test: bool = True,
+    candidate_pool_size: int = 256,
+) -> list[dict]:
+    """Generate reproducible, globally trial-disjoint LNSKTO folds.
+
+    Each fold selects ``n_subjects`` subjects and exactly ``k_trials`` complete
+    trials from each selected subject. The selected subjects remain represented
+    in the fold's training data through all of their non-held-out trials.
+
+    A ``(subject_id, trial_id)`` key may be used as test data in at most one
+    fold. Consequently, the test-trial sets of every pair of generated folds
+    are disjoint. The same subject may appear in several folds, but each time it
+    must contribute previously untested trials.
+    """
+    subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
+    label_array = np.asarray(label_array)
+
+    if n_subjects < 1:
+        raise ValueError("n_subjects must be at least 1.")
+    if k_trials < 1:
+        raise ValueError("k_trials must be at least 1.")
+    if candidate_pool_size < 1:
+        raise ValueError("candidate_pool_size must be at least 1.")
+    if split_seed is not None and split_seed < 0:
+        raise ValueError("split_seed must be non-negative or None.")
+
+    subject_to_trials, labels_by_key, global_classes = _trial_metadata_by_subject(
+        label_array=label_array,
+        subject_id_array=subject_id_array,
+        trial_id_array=trial_id_array,
+    )
+    unique_subjects = tuple(
+        sorted(subject_to_trials, key=_stable_scalar_sort_key)
+    )
+
+    if n_subjects > len(unique_subjects):
+        raise ValueError(
+            f"n_subjects={n_subjects} exceeds the {len(unique_subjects)} "
+            "available subjects."
+        )
+
+    insufficient = {
+        subject_id: len(trials)
+        for subject_id, trials in subject_to_trials.items()
+        if len(trials) <= k_trials
+    }
+    if insufficient:
+        details = ", ".join(
+            f"{subject_id!r}:{count}"
+            for subject_id, count in sorted(
+                insufficient.items(),
+                key=lambda item: _stable_scalar_sort_key(item[0]),
+            )
+        )
+        raise ValueError(
+            f"Every selectable subject needs at least {k_trials + 1} unique "
+            f"trials so that k_trials={k_trials} can be tested while at least "
+            f"one other trial remains in that fold's training data. "
+            f"Insufficient subjects: {details}."
+        )
+
+    if n_folds is None:
+        # For DREAMER this produces 23 folds. With N=3 and K=3, that consumes
+        # 207 of the 414 unique subject-trial keys without test-set reuse.
+        n_folds = len(unique_subjects)
+    n_folds = int(n_folds)
+    if n_folds < 1:
+        raise ValueError("n_folds must be at least 1.")
+
+    # Each subject can contribute at most floor(number_of_trials / k_trials)
+    # disjoint K-trial groups. Each fold consumes one group from n_subjects.
+    max_disjoint_folds_upper_bound = (
+        sum(len(trials) // k_trials for trials in subject_to_trials.values())
+        // n_subjects
+    )
+    if n_folds > max_disjoint_folds_upper_bound:
+        raise ValueError(
+            f"Requested n_folds={n_folds}, but at most "
+            f"{max_disjoint_folds_upper_bound} folds can be formed without "
+            "reusing a tested (subject_id, trial_id) key for "
+            f"n_subjects={n_subjects} and k_trials={k_trials}."
+        )
+
+    if require_all_classes_in_test and len(global_classes) < 2:
+        raise ValueError(
+            "require_all_classes_in_test=True requires at least two classes."
+        )
+    if require_all_classes_in_test and n_subjects * k_trials < len(global_classes):
+        raise ValueError(
+            "The test fold is too small to contain all classes: "
+            f"n_subjects * k_trials={n_subjects * k_trials}, "
+            f"n_classes={len(global_classes)}."
+        )
+
+    rng = np.random.default_rng(split_seed)
+    subject_use_count = {subject_id: 0 for subject_id in unique_subjects}
+    used_test_trial_keys: set[tuple] = set()
+    all_trial_keys = set(labels_by_key)
+    fold_specs: list[dict] = []
+
+    for fold_number in range(1, n_folds + 1):
+        best_candidate: tuple | None = None
+        best_score: tuple | None = None
+
+        unused_trials_by_subject = {
+            subject_id: tuple(
+                trial_id
+                for trial_id in subject_to_trials[subject_id]
+                if (subject_id, trial_id) not in used_test_trial_keys
+            )
+            for subject_id in unique_subjects
+        }
+        eligible_subjects = tuple(
+            subject_id
+            for subject_id in unique_subjects
+            if len(unused_trials_by_subject[subject_id]) >= k_trials
+        )
+        if len(eligible_subjects) < n_subjects:
+            remaining = {
+                _python_scalar(subject_id): len(unused_trials_by_subject[subject_id])
+                for subject_id in unique_subjects
+            }
+            raise RuntimeError(
+                "Could not generate another globally trial-disjoint LNSKTO "
+                f"fold {fold_number}/{n_folds}: only {len(eligible_subjects)} "
+                f"subjects retain at least {k_trials} never-tested trials. "
+                f"Remaining unused trials by subject: {remaining}. Reduce "
+                "n_folds or k_trials."
+            )
+
+        # Draw many valid candidates and select the candidate that best balances
+        # test labels and subject reuse. Trial reuse is impossible because every
+        # candidate is drawn only from globally unused subject-trial keys.
+        attempts = max(candidate_pool_size, 64)
+        for _ in range(attempts):
+            selected_subject_indices = rng.choice(
+                len(eligible_subjects),
+                size=n_subjects,
+                replace=False,
+            )
+            selected_subjects = [
+                eligible_subjects[int(index)]
+                for index in selected_subject_indices
+            ]
+
+            held_out_trials: list[dict] = []
+            held_out_keys: set[tuple] = set()
+            for subject_id in selected_subjects:
+                available_trials = unused_trials_by_subject[subject_id]
+                selected_trial_indices = rng.choice(
+                    len(available_trials),
+                    size=k_trials,
+                    replace=False,
+                )
+                selected_trials = sorted(
+                    (
+                        available_trials[int(index)]
+                        for index in selected_trial_indices
+                    ),
+                    key=_stable_scalar_sort_key,
+                )
+                held_out_trials.append(
+                    {
+                        "subject_id": _python_scalar(subject_id),
+                        "trial_ids": [
+                            _python_scalar(value) for value in selected_trials
+                        ],
+                    }
+                )
+                held_out_keys.update(
+                    (subject_id, trial_id) for trial_id in selected_trials
+                )
+
+            if held_out_keys.intersection(used_test_trial_keys):
+                raise RuntimeError(
+                    "Internal LNSKTO error: a candidate contains a previously "
+                    "tested subject-trial key."
+                )
+
+            held_out_trials.sort(
+                key=lambda row: _stable_scalar_sort_key(row["subject_id"])
+            )
+            test_labels = [labels_by_key[key] for key in held_out_keys]
+            train_keys = all_trial_keys.difference(held_out_keys)
+            train_labels = {labels_by_key[key] for key in train_keys}
+            if train_labels != set(global_classes):
+                continue
+            if (
+                require_all_classes_in_test
+                and set(test_labels) != set(global_classes)
+            ):
+                continue
+
+            class_counts = np.asarray(
+                [test_labels.count(class_id) for class_id in global_classes],
+                dtype=np.int64,
+            )
+            class_imbalance = int(class_counts.max() - class_counts.min())
+            subject_counts = [
+                subject_use_count[subject_id]
+                for subject_id in selected_subjects
+            ]
+            remaining_after_selection = [
+                len(unused_trials_by_subject[subject_id]) - k_trials
+                for subject_id in selected_subjects
+            ]
+            score = (
+                class_imbalance,
+                max(subject_counts, default=0),
+                sum(subject_counts),
+                # Prefer candidates that do not strand a subject with fewer
+                # than K unused trials when another balanced choice exists.
+                sum(0 < remaining < k_trials for remaining in remaining_after_selection),
+                -min(remaining_after_selection, default=0),
+                float(rng.random()),
+            )
+
+            if best_score is None or score < best_score:
+                best_score = score
+                best_candidate = (
+                    held_out_trials,
+                    held_out_keys,
+                    test_labels,
+                )
+
+        if best_candidate is None:
+            raise RuntimeError(
+                "Could not generate another valid globally trial-disjoint "
+                "LNSKTO fold. Reduce n_folds, disable "
+                "require_all_classes_in_test, increase candidate_pool_size, "
+                "or change split_seed."
+            )
+
+        held_out_trials, held_out_keys, test_labels = best_candidate
+        overlap = held_out_keys.intersection(used_test_trial_keys)
+        if overlap:
+            raise RuntimeError(
+                "Internal LNSKTO split-generation error: accepted fold reuses "
+                f"previously tested keys {sorted(overlap, key=repr)}."
+            )
+        used_test_trial_keys.update(held_out_keys)
+
+        selected_subjects = [row["subject_id"] for row in held_out_trials]
+        for subject_id in selected_subjects:
+            subject_use_count[subject_id] += 1
+
+        test_mask = np.zeros(len(subject_id_array), dtype=bool)
+        for row in held_out_trials:
+            subject_mask = subject_id_array == row["subject_id"]
+            trial_mask = np.isin(trial_id_array, row["trial_ids"])
+            test_mask |= subject_mask & trial_mask
+        test_indices = np.where(test_mask)[0].astype(np.int64)
+
+        observed_test_keys = set(
+            zip(
+                subject_id_array[test_indices].tolist(),
+                trial_id_array[test_indices].tolist(),
+            )
+        )
+        expected_test_keys = {
+            (_python_scalar(subject_id), _python_scalar(trial_id))
+            for subject_id, trial_id in held_out_keys
+        }
+        if observed_test_keys != expected_test_keys:
+            raise RuntimeError(
+                "Internal LNSKTO split-generation error: selected trial keys "
+                "did not map exactly to the test samples."
+            )
+
+        fold_specs.append(
+            {
+                "fold_number": int(fold_number),
+                "test_indices": test_indices,
+                "test_subjects": selected_subjects,
+                "held_out_trials": held_out_trials,
+                "test_trial_keys": [
+                    {
+                        "subject_id": _python_scalar(subject_id),
+                        "trial_id": _python_scalar(trial_id),
+                    }
+                    for subject_id, trial_id in sorted(
+                        held_out_keys,
+                        key=lambda key: (
+                            _stable_scalar_sort_key(key[0]),
+                            _stable_scalar_sort_key(key[1]),
+                        ),
+                    )
+                ],
+                "n_test_trials": int(len(held_out_keys)),
+                "test_class_counts": {
+                    int(class_id): int(test_labels.count(class_id))
+                    for class_id in global_classes
+                },
+                "cumulative_unique_test_trials": int(
+                    len(used_test_trial_keys)
+                ),
+            }
+        )
+
+    # Independent final verification: no test key may occur in two fold specs.
+    verified_test_keys: set[tuple] = set()
+    for fold_spec in fold_specs:
+        fold_keys = {
+            (row["subject_id"], trial_id)
+            for row in fold_spec["held_out_trials"]
+            for trial_id in row["trial_ids"]
+        }
+        overlap = verified_test_keys.intersection(fold_keys)
+        if overlap:
+            raise RuntimeError(
+                "Generated LNSKTO folds are not test-trial disjoint. Repeated "
+                f"keys: {sorted(overlap, key=repr)}."
+            )
+        verified_test_keys.update(fold_keys)
+
+    expected_unique_test_trials = n_folds * n_subjects * k_trials
+    if len(verified_test_keys) != expected_unique_test_trials:
+        raise RuntimeError(
+            "Generated LNSKTO fold count does not match the number of unique "
+            f"test trial keys: expected {expected_unique_test_trials}, got "
+            f"{len(verified_test_keys)}."
+        )
+
+    return fold_specs
+
+
+def _run_lnskto_fold_task(
+    fold_number: int,
+    fold_spec: dict,
+    n_subjects: int,
+    k_trials: int,
+    **worker_state,
+) -> dict:
+    """Execute one LNSKTO split through the shared fold-training pipeline."""
+    test_subjects = list(fold_spec["test_subjects"])
+    held_out_trials = [dict(row) for row in fold_spec["held_out_trials"]]
+
+    # Verify the intended partial-subject holdout before any model is built:
+    # current test trials are absent from training, while the same subjects'
+    # other trials remain available for gradient training.
+    subject_id_array = np.asarray(worker_state["subject_id_array"])
+    trial_id_array = np.asarray(worker_state["trial_id_array"])
+    test_indices = np.asarray(fold_spec["test_indices"], dtype=np.int64)
+    test_mask = np.zeros(len(subject_id_array), dtype=bool)
+    test_mask[test_indices] = True
+    train_mask = ~test_mask
+    for row in held_out_trials:
+        subject_id = row["subject_id"]
+        held_out_trial_ids = np.asarray(row["trial_ids"])
+        subject_mask = subject_id_array == subject_id
+        held_out_mask = subject_mask & np.isin(trial_id_array, held_out_trial_ids)
+        if np.any(train_mask & held_out_mask):
+            raise RuntimeError(
+                "LNSKTO leakage: a held-out subject-trial group remains in "
+                f"training for subject={subject_id!r}, "
+                f"trials={row['trial_ids']}."
+            )
+        same_subject_non_test_mask = (
+            train_mask
+            & subject_mask
+            & ~np.isin(trial_id_array, held_out_trial_ids)
+        )
+        if not np.any(same_subject_non_test_mask):
+            raise RuntimeError(
+                "LNSKTO split removed the selected subject completely instead "
+                f"of retaining non-test trials: subject={subject_id!r}."
+            )
+
+    trial_summary = "; ".join(
+        f"subject={row['subject_id']!r}: trials={row['trial_ids']}"
+        for row in held_out_trials
+    )
+    fold_output = _run_loso_fold(
+        fold_number=fold_number,
+        test_subject=f"LNSKTO-{fold_number}",
+        test_indices_override=np.asarray(fold_spec["test_indices"], dtype=np.int64),
+        left_out_subjects_override=test_subjects,
+        held_out_trials=held_out_trials,
+        validation_excluded_subjects=test_subjects,
+        fold_description=(
+            f"LNSKTO n={n_subjects}, k={k_trials}; {trial_summary}"
+        ),
+        cv_strategy="leave_n_subjects_k_trials_out",
+        **worker_state,
+    )
+
+    fold_record = fold_output["fold_record"]
+    fold_record.update(
+        {
+            "n_subjects_with_trials_left_out": int(n_subjects),
+            "k_trials_left_out_per_subject": int(k_trials),
+            "test_class_counts": dict(fold_spec["test_class_counts"]),
+            "test_trial_keys": [
+                dict(row) for row in fold_spec["test_trial_keys"]
+            ],
+            "cumulative_unique_test_trials": int(
+                fold_spec["cumulative_unique_test_trials"]
+            ),
+            "selected_subjects_remain_in_training": True,
+            "same_subject_non_test_trials_are_training_eligible": True,
+            "test_trial_keys_are_globally_unique": True,
+        }
+    )
+    fold_output["outer_fold_result"] = fold_record
+    return fold_output
+
+
+def _lnskto_fold_process_main(
+    worker_state_payload: bytes,
+    task_queue,
+    result_queue,
+    gpu_id: int | None,
+    cpus_per_worker: int | None,
+    assigned_device_label: str | None,
+) -> None:
+    """Run LNSKTO folds in one persistent spawned process."""
+    try:
+        _configure_tensorflow_worker(
+            gpu_id=gpu_id,
+            cpus_per_worker=cpus_per_worker,
+            assigned_device_label=assigned_device_label,
+        )
+        worker_state = cloudpickle.loads(worker_state_payload)
+
+        while True:
+            task = task_queue.get()
+            if task is None:
+                return
+            fold_number, fold_spec = task
+            try:
+                fold_output = _run_lnskto_fold_task(
+                    fold_number=fold_number,
+                    fold_spec=fold_spec,
+                    **worker_state,
+                )
+                result_queue.put(("ok", int(fold_number), fold_output))
+            except BaseException:
+                result_queue.put(
+                    ("error", int(fold_number), traceback.format_exc())
+                )
+                return
+    except BaseException:
+        result_queue.put(("error", -1, traceback.format_exc()))
+    finally:
+        tf.keras.backend.clear_session()
+        gc.collect()
+
+
+def lnskto_cv(
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray | None = None,
+    n_subjects: int = 3,
+    k_trials: int = 3,
+    n_folds: int | None = None,
+    split_seed: int | None = 42,
+    require_all_classes_in_test: bool = True,
+    n_epochs: int = 50,
+    batch_size: int = 2,
+    hyperparameters: dict | None = None,
+    preprocessing_strategy: Callable | None = None,
+    evaluation_level: Literal["window", "trial"] = "trial",
+    selection_metric: str = "f1",
+    selection_level: Literal["window", "trial"] = "trial",
+    maximize_metric: bool | None = None,
+    metrics: list[str] | tuple[str, ...] = (
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "balanced_accuracy",
+        "binary_f1",
+        "binary_precision",
+        "binary_recall",
+        "roc_auc",
+    ),
+    log_predictions: bool = True,
+    log_variational_intervals: bool = False,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
+    n_uncertainty_samples: int = 30,
+    ci_level: float = 0.95,
+    validation_subjects_per_fold: int = 0,
+    validation_seed: int | None = 42,
+    early_stopping_patience: int | None = 5,
+    early_stopping_min_delta: float = 0.0,
+    early_stopping_monitor: str = "val_loss",
+    early_stopping_mode: Literal["auto", "min", "max"] = "min",
+    restore_best_weights: bool = True,
+    prediction_diagnostics: bool = False,
+    prediction_diagnostics_every_n_epochs: int = 1,
+    prediction_diagnostics_max_samples: int = 256,
+    prediction_diagnostics_threshold_tolerance: float = 0.01,
+    prediction_diagnostics_seed: int | None = 42,
+    decision_thresholds: list[float] | tuple[float, ...] = (0.5,),
+    threshold_selection_metric: Literal[
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    ] = "f1",
+    threshold_selection_level: Literal["window", "trial"] = "trial",
+    verbose: int = 0,
+    extra_fit_kwargs: dict | None = None,
+    n_jobs: int = 1,
+    gpu_ids: list[int] | tuple[int, ...] | None = None,
+    cpus_per_worker: int | None = None,
+) -> dict:
+    """Run flat Leave-N-Subjects-and-K-Trials-Out cross-validation.
+
+    In every fold, ``n_subjects`` subjects are selected and exactly
+    ``k_trials`` complete trials are placed in the test set for each selected
+    subject. The selected subjects are *not* removed completely: their other
+    trials remain in the training pool. Thus this protocol measures
+    generalization to unseen trials from partly observed subjects, not strict
+    cross-subject generalization. Use ``loso_cv`` or ``nested_lnso_cv`` for a
+    subject-independent estimate.
+
+    The defaults are ``n_subjects=3`` and ``k_trials=3``, producing nine held-
+    out trials per fold. When ``n_folds`` is ``None``, the number of folds is
+    set to the total number of subjects (23 for DREAMER). Fold generation is
+    deterministic for a fixed ``split_seed``. Subjects may recur across folds,
+    but a ``(subject_id, trial_id)`` test key is globally consumed after one
+    use and can never appear in another fold's test set. Entire trial groups are
+    kept together, so rank-3 window data never leaks windows from the current
+    fold's held-out trials into that fold's training data.
+
+    Hyperparameter selection follows the same flat-search semantics as
+    ``loso_cv``: every configuration is evaluated on all generated folds, and
+    the globally best configuration is selected from the mean requested metric.
+    This is not nested CV because the same folds are used for model selection
+    and final performance reporting.
+
+    When fold-local validation subjects are requested, subjects contributing
+    held-out test trials are excluded from validation selection. Their remaining
+    non-test trials therefore stay in gradient training, preserving the intended
+    partial-subject holdout design.
+    """
+    extra_fit_kwargs = extra_fit_kwargs or {}
+
+    if "validation_data" in extra_fit_kwargs:
+        raise ValueError(
+            "Do not pass a fixed validation_data array to lnskto_cv. It would "
+            "not be reconstructed fold-locally and could create leakage."
+        )
+    if subject_id_array is None:
+        raise ValueError("subject_id_array is required for LNSKTO CV.")
+    if trial_id_array is None:
+        raise ValueError(
+            "trial_id_array is required. Pass one trial ID per sample, aligned "
+            "with feature_array."
+        )
+
+    _validate_evaluation_level(evaluation_level, "evaluation_level")
+    _validate_evaluation_level(selection_level, "selection_level")
+
+    feature_array = np.asarray(feature_array)
+    label_array = np.asarray(label_array)
+    subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
+
+    if feature_array.ndim not in {3, 4}:
+        raise ValueError(
+            "feature_array must be rank 3 for window samples or rank 4 for "
+            f"grouped trial samples; got {feature_array.shape}."
+        )
+    if feature_array.ndim == 4:
+        if selection_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require selection_level='trial'."
+            )
+        if evaluation_level != "trial":
+            raise ValueError(
+                "Grouped rank-4 trial inputs require evaluation_level='trial'."
+            )
+
+    input_lengths = (
+        len(feature_array),
+        len(label_array),
+        len(subject_id_array),
+        len(trial_id_array),
+    )
+    if len(set(input_lengths)) != 1:
+        raise ValueError(
+            "feature_array, label_array, subject_id_array, and trial_id_array "
+            f"must have the same first dimension. Got lengths {input_lengths}."
+        )
+
+    metrics = tuple(metrics)
+    for metric in metrics:
+        if metric not in _CLASSIFICATION_METRICS:
+            raise ValueError(
+                f"Unsupported metric: {metric}. Supported metrics: "
+                f"{sorted(_CLASSIFICATION_METRICS)}"
+            )
+
+    allowed_selection_metrics = {"loss", "joint_loss", *metrics}
+    if selection_metric not in allowed_selection_metrics:
+        raise ValueError(
+            f"selection_metric={selection_metric!r} is unavailable. Use "
+            f"'loss', 'joint_loss', or one of metrics={list(metrics)}."
+        )
+    if (
+        feature_array.ndim == 3
+        and selection_metric == "joint_loss"
+        and selection_level != "window"
+    ):
+        raise ValueError(
+            "Window-level models require selection_level='window' when "
+            "selecting by joint_loss."
+        )
+    if maximize_metric is None:
+        maximize_metric = selection_metric not in {"loss", "joint_loss"}
+
+    if n_subjects < 1:
+        raise ValueError("n_subjects must be at least 1.")
+    if k_trials < 1:
+        raise ValueError("k_trials must be at least 1.")
+    if n_folds is not None and n_folds < 1:
+        raise ValueError("n_folds must be at least 1 or None.")
+    if split_seed is not None and split_seed < 0:
+        raise ValueError("split_seed must be non-negative or None.")
+    if n_prediction_latent_samples < 0:
+        raise ValueError("n_prediction_latent_samples must be >= 0.")
+    if not (0.0 < ci_level < 1.0):
+        raise ValueError("ci_level must be between 0 and 1.")
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be >= 1.")
+    if cpus_per_worker is not None and cpus_per_worker < 1:
+        raise ValueError("cpus_per_worker must be >= 1 when provided.")
+
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if validation_seed is not None and validation_seed < 0:
+        raise ValueError("validation_seed must be >= 0 or None.")
+    if early_stopping_patience is not None and early_stopping_patience < 0:
+        raise ValueError("early_stopping_patience must be >= 0 or None.")
+    if early_stopping_min_delta < 0.0:
+        raise ValueError("early_stopping_min_delta must be >= 0.")
+    if early_stopping_mode not in {"auto", "min", "max"}:
+        raise ValueError(
+            "early_stopping_mode must be 'auto', 'min', or 'max'."
+        )
+    if not early_stopping_monitor:
+        raise ValueError("early_stopping_monitor must be a non-empty string.")
+    if prediction_diagnostics_every_n_epochs < 1:
+        raise ValueError(
+            "prediction_diagnostics_every_n_epochs must be at least 1."
+        )
+    if prediction_diagnostics_max_samples < 1:
+        raise ValueError(
+            "prediction_diagnostics_max_samples must be at least 1."
+        )
+    if prediction_diagnostics_threshold_tolerance < 0.0:
+        raise ValueError(
+            "prediction_diagnostics_threshold_tolerance must be non-negative."
+        )
+
+    decision_thresholds = _normalize_decision_thresholds(decision_thresholds)
+    if threshold_selection_metric not in {
+        "accuracy", "f1", "balanced_accuracy", "binary_f1"
+    }:
+        raise ValueError(
+            "threshold_selection_metric must be accuracy, f1, "
+            "balanced_accuracy, or binary_f1."
+        )
+    _validate_evaluation_level(
+        threshold_selection_level,
+        "threshold_selection_level",
+    )
+    if len(decision_thresholds) > 1 and validation_subjects_per_fold == 0:
+        raise ValueError(
+            "Testing multiple decision thresholds requires fold-local "
+            "validation subjects. Set validation_subjects_per_fold >= 1."
+        )
+    if (
+        early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
+        and validation_subjects_per_fold == 0
+        and early_stopping_patience is not None
+    ):
+        raise ValueError(
+            f"{early_stopping_monitor} requires at least one fold-local "
+            "validation subject."
+        )
+
+    unique_subjects = np.unique(subject_id_array)
+    if n_subjects > len(unique_subjects):
+        raise ValueError(
+            f"n_subjects={n_subjects} exceeds the {len(unique_subjects)} "
+            "available subjects."
+        )
+    validation_candidate_count = len(unique_subjects) - n_subjects
+    if (
+        validation_subjects_per_fold > 0
+        and validation_subjects_per_fold >= validation_candidate_count
+    ):
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one non-test "
+            "subject outside validation. With "
+            f"{len(unique_subjects)} subjects and n_subjects={n_subjects}, "
+            f"only {validation_candidate_count} validation candidates remain."
+        )
+
+    fold_specs = _generate_lnskto_fold_specs(
+        label_array=label_array,
+        subject_id_array=subject_id_array,
+        trial_id_array=trial_id_array,
+        n_subjects=n_subjects,
+        k_trials=k_trials,
+        n_folds=n_folds,
+        split_seed=split_seed,
+        require_all_classes_in_test=require_all_classes_in_test,
+    )
+    total_folds = len(fold_specs)
+
+    effective_hyperparameters = {
+        "epochs": n_epochs,
+        "batch_size": batch_size,
+        **(hyperparameters or {}),
+    }
+    sequence_hyperparameter_depths = getattr(
+        model_builder_function,
+        "_sequence_hyperparameter_depths",
+        None,
+    )
+    grid_configs = _expand_hyperparameter_grid(
+        effective_hyperparameters,
+        sequence_hyperparameter_depths=sequence_hyperparameter_depths,
+    )
+    _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
+    if not grid_configs:
+        raise ValueError("The hyperparameter grid produced no configurations.")
+
+    total_model_fits = len(grid_configs) * total_folds
+    effective_n_jobs = min(n_jobs, total_folds)
+    normalized_gpu_ids: tuple[int, ...] | None = None
+    if gpu_ids is None and effective_n_jobs > 1:
+        normalized_gpu_ids = _auto_assign_gpu_ids(effective_n_jobs)
+        if normalized_gpu_ids is not None:
+            effective_n_jobs = len(normalized_gpu_ids)
+    elif gpu_ids is not None:
+        normalized_gpu_ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
+        if not normalized_gpu_ids:
+            raise ValueError("gpu_ids must contain at least one GPU index.")
+        if len(set(normalized_gpu_ids)) != len(normalized_gpu_ids):
+            raise ValueError("gpu_ids must not contain duplicate GPU indices.")
+        if effective_n_jobs > len(normalized_gpu_ids):
+            raise ValueError(
+                f"n_jobs={effective_n_jobs} requires at least that many GPU "
+                f"IDs, but gpu_ids={normalized_gpu_ids}."
+            )
+        normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
+
+    print(
+        f"\nFlat LNSKTO hyperparameter search — n={n_subjects}, "
+        f"k={k_trials}, {len(grid_configs)} configuration"
+        f"{'s' if len(grid_configs) != 1 else ''}, {total_folds} fold"
+        f"{'s' if total_folds != 1 else ''} each"
+    )
+    print(
+        f"Each test fold contains {n_subjects * k_trials} complete trials; "
+        "selected subjects' remaining trials stay in training."
+    )
+    print(f"Split seed: {split_seed}")
+    print(f"Require all classes in test: {require_all_classes_in_test}")
+    print(f"Total model fits: {total_model_fits}")
+    print(f"Requested metrics: {list(metrics)}")
+    print(
+        f"Configuration selection: {selection_level}-level "
+        f"{selection_metric} "
+        f"({'maximize' if maximize_metric else 'minimize'})"
+    )
+    print(f"Primary reported metrics: {evaluation_level}-level")
+    print(f"Prediction logging: {log_predictions}")
+    print(f"Prediction diagnostics: {prediction_diagnostics}")
+    print(f"Variational interval logging: {log_variational_intervals}")
+    print(
+        "Decision thresholds: "
+        f"{list(decision_thresholds)}; selection="
+        f"{threshold_selection_level}_{threshold_selection_metric}"
+    )
+    prediction_mode = (
+        "posterior mean"
+        if n_prediction_latent_samples == 0
+        else f"MC average over {n_prediction_latent_samples} latent sample(s)"
+    )
+    print(f"Prediction latent mode: {prediction_mode}")
+    if validation_subjects_per_fold > 0:
+        print(
+            "Per-fold validation: "
+            f"{validation_subjects_per_fold} seeded non-test subject(s), "
+            f"seed={validation_seed}, monitor={early_stopping_monitor}, "
+            f"patience={early_stopping_patience}, "
+            f"restore_best_weights={restore_best_weights}"
+        )
+    else:
+        print("Per-fold validation: disabled")
+    print(f"Fold workers: {effective_n_jobs}")
+    if effective_n_jobs > 1 and normalized_gpu_ids is None:
+        print("Worker devices: CPU-only")
+    elif normalized_gpu_ids is not None:
+        print(f"Worker devices: GPUs {list(normalized_gpu_ids)}")
+    else:
+        print("Worker device: current TensorFlow default")
+
+    tasks = [
+        (int(spec["fold_number"]), spec)
+        for spec in fold_specs
+    ]
+    common_worker_state = {
+        "n_subjects": int(n_subjects),
+        "k_trials": int(k_trials),
+        "total_folds": total_folds,
+        "model_builder_function": model_builder_function,
+        "feature_array": feature_array,
+        "label_array": label_array,
+        "subject_id_array": subject_id_array,
+        "trial_id_array": trial_id_array,
+        "batch_size": batch_size,
+        "preprocessing_strategy": preprocessing_strategy,
+        "evaluation_level": evaluation_level,
+        "metrics": metrics,
+        "log_predictions": log_predictions,
+        "log_variational_intervals": log_variational_intervals,
+        "n_prediction_latent_samples": n_prediction_latent_samples,
+        "latent_sampling_seed": latent_sampling_seed,
+        "n_uncertainty_samples": n_uncertainty_samples,
+        "ci_level": ci_level,
+        "validation_subjects_per_fold": validation_subjects_per_fold,
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": early_stopping_min_delta,
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": restore_best_weights,
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": decision_thresholds,
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
+        "verbose": verbose,
+        "extra_fit_kwargs": extra_fit_kwargs,
+    }
+
+    config_results: list[dict] = []
+    best_so_far_result: dict | None = None
+    best_fold_outputs: list[dict] | None = None
+
+    for config_index, config in enumerate(grid_configs):
+        print("\n" + "#" * 80)
+        print(
+            f"Configuration {config_index + 1} / {len(grid_configs)} "
+            f"({total_folds} LNSKTO fits)"
+        )
+        _print_config("Configuration:", config)
+        worker_state = {
+            **common_worker_state,
+            "fixed_config": config,
+        }
+
+        if effective_n_jobs == 1 and normalized_gpu_ids is None:
+            fold_outputs = [
+                _run_lnskto_fold_task(
+                    fold_number=fold_number,
+                    fold_spec=fold_spec,
+                    **worker_state,
+                )
+                for fold_number, fold_spec in tasks
+            ]
+        else:
+            fold_outputs = _run_spawned_fold_pool(
+                worker_target=_lnskto_fold_process_main,
+                worker_state=worker_state,
+                tasks=tasks,
+                n_workers=effective_n_jobs,
+                gpu_ids=normalized_gpu_ids,
+                cpus_per_worker=cpus_per_worker,
+                worker_name_prefix=f"LNSKTOConfig{config_index + 1}Worker",
+                worker_description=(
+                    f"LNSKTO fold for configuration {config_index + 1}"
+                ),
+            )
+
+        fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+        config_result = _aggregate_loso_config_result(
+            config_index=config_index,
+            config=config,
+            fold_outputs=fold_outputs,
+            metrics=metrics,
+            selection_metric=selection_metric,
+            selection_level=selection_level,
+        )
+        config_results.append(config_result)
+
+        if (
+            best_so_far_result is None
+            or _loso_config_sort_key(
+                config_result=config_result,
+                selection_metric=selection_metric,
+                selection_level=selection_level,
+                maximize_metric=bool(maximize_metric),
+            )
+            < _loso_config_sort_key(
+                config_result=best_so_far_result,
+                selection_metric=selection_metric,
+                selection_level=selection_level,
+                maximize_metric=bool(maximize_metric),
+            )
+        ):
+            best_so_far_result = config_result
+            best_fold_outputs = fold_outputs
+
+        print(
+            f"\nConfiguration {config_index + 1} complete: mean "
+            f"{selection_level}_{selection_metric}="
+            f"{config_result['selection_score']:.6f} ± "
+            f"{config_result['selection_score_std']:.6f}",
+            flush=True,
+        )
+
+    best_config_index = _choose_best_loso_config_index(
+        config_results=config_results,
+        selection_metric=selection_metric,
+        selection_level=selection_level,
+        maximize_metric=bool(maximize_metric),
+    )
+    best_config_result = config_results[best_config_index]
+    best_config = dict(best_config_result["config"])
+    if (
+        best_so_far_result is None
+        or best_fold_outputs is None
+        or int(best_so_far_result["config_index"]) != best_config_index
+    ):
+        raise RuntimeError(
+            "Internal LNSKTO grid-search error: selected configuration logs "
+            "were not retained correctly."
+        )
+
+    results = {
+        "cv_strategy": "flat_leave_n_subjects_k_trials_out_hyperparameter_search",
+        "hyperparameter_search": True,
+        "n_subjects": int(n_subjects),
+        "k_trials": int(k_trials),
+        "n_test_trials_per_fold": int(n_subjects * k_trials),
+        "n_folds": int(total_folds),
+        "split_seed": split_seed,
+        "require_all_classes_in_test": bool(require_all_classes_in_test),
+        "selected_subjects_remain_in_training": True,
+        "test_trial_keys_are_globally_unique": True,
+        "n_unique_test_trial_keys": int(total_folds * n_subjects * k_trials),
+        "fold_definitions": [
+            {
+                "fold_number": int(spec["fold_number"]),
+                "test_subjects": list(spec["test_subjects"]),
+                "held_out_trials": [
+                    dict(row) for row in spec["held_out_trials"]
+                ],
+                "test_trial_keys": [
+                    dict(row) for row in spec["test_trial_keys"]
+                ],
+                "n_test_trials": int(spec["n_test_trials"]),
+                "cumulative_unique_test_trials": int(
+                    spec["cumulative_unique_test_trials"]
+                ),
+                "test_class_counts": dict(spec["test_class_counts"]),
+            }
+            for spec in fold_specs
+        ],
+        "grid_configs": [dict(config) for config in grid_configs],
+        "n_configs": int(len(grid_configs)),
+        "n_total_cv_fits": int(total_model_fits),
+        "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "maximize_metric": bool(maximize_metric),
+        "n_prediction_latent_samples": int(n_prediction_latent_samples),
+        "latent_sampling_seed": latent_sampling_seed,
+        "validation_subjects_per_fold": int(validation_subjects_per_fold),
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": float(early_stopping_min_delta),
+        "early_stopping_monitor": early_stopping_monitor,
+        "early_stopping_mode": early_stopping_mode,
+        "restore_best_weights": bool(restore_best_weights),
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
+        "decision_thresholds": list(decision_thresholds),
+        "threshold_selection_metric": threshold_selection_metric,
+        "threshold_selection_level": threshold_selection_level,
+        "config_results": config_results,
+        "best_config_index": int(best_config_index),
+        "best_config": best_config,
+        "best_config_result": best_config_result,
+        "fixed_config": best_config,
+        "fold_metrics": [],
+        "window_fold_metrics": [],
+        "trial_fold_metrics": [],
+        "user_metrics": [],
+        "prediction_log": [],
+        "window_prediction_log": [],
+        "trial_prediction_log": [],
+        "variational_interval_log": [],
+        "window_variational_interval_log": [],
+        "trial_variational_interval_log": [],
+        "prediction_diagnostics_log": [],
+        "fold_results": [],
+        "best_configs": [],
+        "inner_cv_results": [],
+        "outer_fold_results": [],
+        "mean_scores": dict(best_config_result["mean_scores"]),
+        "std_scores": dict(best_config_result["std_scores"]),
+        "window_mean_scores": dict(best_config_result["window_mean_scores"]),
+        "window_std_scores": dict(best_config_result["window_std_scores"]),
+        "trial_mean_scores": dict(best_config_result["trial_mean_scores"]),
+        "trial_std_scores": dict(best_config_result["trial_std_scores"]),
+    }
+
+    for fold_output in best_fold_outputs:
+        fold_number = int(fold_output["outer_fold_number"])
+        fold_record = dict(fold_output["fold_record"])
+        fold_record.update(
+            {
+                "config_index": int(best_config_index),
+                "fixed_config": dict(best_config),
+                "best_config": dict(best_config),
+                "selection_metric": selection_metric,
+                "selection_level": selection_level,
+                "selection_score": float(best_config_result["selection_score"]),
+                "configuration_source": "global_flat_lnskto_grid_search",
+            }
+        )
+        global_best_record = {
+            "outer_fold": fold_number,
+            "best_config_index": int(best_config_index),
+            "best_config": dict(best_config),
+            "selection_metric": selection_metric,
+            "selection_level": selection_level,
+            "selection_score": float(best_config_result["selection_score"]),
+            "configuration_source": "global_flat_lnskto_grid_search",
+        }
+        empty_inner_record = {
+            "outer_fold": fold_number,
+            "inner_fold_results": [],
+            "inner_mean_scores": [],
+            "inner_std_scores": [],
+            "configuration_source": (
+                "not_applicable_for_flat_lnskto_grid_search"
+            ),
+        }
+
+        results["fold_metrics"].append(fold_output["fold_metrics"])
+        results["window_fold_metrics"].append(
+            fold_output["window_fold_metrics"]
+        )
+        results["trial_fold_metrics"].append(
+            fold_output["trial_fold_metrics"]
+        )
+        results["user_metrics"].extend(fold_output["user_metrics"])
+        results["prediction_log"].extend(fold_output["prediction_log"])
+        results["window_prediction_log"].extend(
+            fold_output["window_prediction_log"]
+        )
+        results["trial_prediction_log"].extend(
+            fold_output["trial_prediction_log"]
+        )
+        results["variational_interval_log"].extend(
+            fold_output["variational_interval_log"]
+        )
+        results["window_variational_interval_log"].extend(
+            fold_output["window_variational_interval_log"]
+        )
+        results["trial_variational_interval_log"].extend(
+            fold_output["trial_variational_interval_log"]
+        )
+        results["prediction_diagnostics_log"].extend(
+            fold_output.get("prediction_diagnostics_log", [])
+        )
+        results["fold_results"].append(fold_record)
+        results["outer_fold_results"].append(fold_record)
+        results["best_configs"].append(global_best_record)
+        results["inner_cv_results"].append(empty_inner_record)
+
+    print("\nFlat LNSKTO hyperparameter search complete")
+    print("=" * 80)
+    print(
+        f"Selected configuration {best_config_index + 1} / "
+        f"{len(grid_configs)} using {selection_level}-level "
+        f"{selection_metric}."
+    )
+    _print_config("Best configuration:", best_config)
+    print(
+        f"Selection score: {best_config_result['selection_score']:.6f} ± "
+        f"{best_config_result['selection_score_std']:.6f}"
+    )
+    print("Selected configuration primary mean scores:")
+    print(
+        pformat(
+            results["mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration primary score standard deviations:")
+    print(
+        pformat(
+            results["std_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration window-level mean scores:")
+    print(
+        pformat(
+            results["window_mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    print("Selected configuration trial-level mean scores:")
+    print(
+        pformat(
+            results["trial_mean_scores"],
+            indent=4,
+            width=120,
+            sort_dicts=False,
+        )
+    )
+    return results
+
+
+# Descriptive alias for callers that prefer the full protocol name.
+leave_n_subjects_k_trials_out_cv = lnskto_cv

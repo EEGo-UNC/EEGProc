@@ -1,8 +1,12 @@
-"""
-Variational Classification fusion head for neural networks.
+"""Classification heads used by EEGProc joint and standalone models.
 
-Maintains learned Gaussian class priors and classifies via Bayes' rule,
-with an optional auxiliary discriminator for latent-space alignment.
+``VariationalClassifier`` maintains learned Gaussian class priors and
+classifies via Bayes' rule, with an optional auxiliary discriminator for
+latent-space alignment. ``DenseClassifier`` is a standard trainable linear
+logit head. ``HybridClassifier`` predicts with dense logits while retaining
+the variational latent, discriminator, and class-prior regularizers. All three
+heads expose the same loss-component interface, allowing the joint pipeline to
+switch heads without changing its custom train/test steps.
 """
 
 from __future__ import annotations
@@ -11,13 +15,190 @@ import numpy as np
 import tensorflow as tf
 
 
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
+class DenseClassifier(tf.keras.layers.Layer):
+    """Standard dense logit head with the VC-compatible loss interface.
+
+    The joint model historically expects its classification head to expose
+    ``n_classes``, ``vc_loss_components()``, and ``discriminator_loss()``.
+    This adapter provides those methods while optimizing only weighted sparse
+    categorical cross-entropy. All variational regularization components are
+    returned as exact zeros, regardless of the supplied beta/gamma/lambda
+    values, so selecting this head is an unambiguous dense-classifier ablation.
+    """
+
+    supports_variational_regularization = False
+    supports_discriminator = False
+
+    def __init__(
+        self,
+        n_classes: int = 2,
+        use_bias: bool = True,
+        kernel_initializer: str | dict = "glorot_uniform",
+        bias_initializer: str | dict = "zeros",
+        label_smoothing: float = 0.0,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        if n_classes < 2:
+            raise ValueError("n_classes must be at least 2.")
+        self.n_classes = int(n_classes)
+        self.label_smoothing = float(label_smoothing)
+        if not 0.0 <= self.label_smoothing < 1.0:
+            raise ValueError("label_smoothing must be in [0, 1).")
+        self.use_bias = bool(use_bias)
+        self.kernel_initializer = tf.keras.initializers.get(kernel_initializer)
+        self.bias_initializer = tf.keras.initializers.get(bias_initializer)
+        self.logits_layer = tf.keras.layers.Dense(
+            self.n_classes,
+            use_bias=self.use_bias,
+            kernel_initializer=self.kernel_initializer,
+            bias_initializer=self.bias_initializer,
+            name="dense_class_logits",
+        )
+
+    def call(self, features: tf.Tensor, training: bool = False) -> tf.Tensor:
+        return self.logits_layer(features, training=training)
+
+    @staticmethod
+    def _class_ids(y: tf.Tensor) -> tf.Tensor:
+        y_tensor = tf.convert_to_tensor(y)
+        if (
+            y_tensor.shape.rank == 2
+            and y_tensor.shape[-1] is not None
+            and y_tensor.shape[-1] > 1
+        ):
+            return tf.argmax(y_tensor, axis=-1, output_type=tf.int32)
+        return tf.cast(tf.reshape(y_tensor, [-1]), tf.int32)
+
+    @staticmethod
+    def _weighted_mean(
+        values: tf.Tensor,
+        sample_weight: tf.Tensor | None = None,
+    ) -> tf.Tensor:
+        values = tf.reshape(tf.convert_to_tensor(values), [-1])
+        if sample_weight is None:
+            return tf.reduce_mean(values)
+
+        weights = tf.cast(tf.reshape(sample_weight, [-1]), values.dtype)
+        tf.debugging.assert_equal(
+            tf.shape(values)[0],
+            tf.shape(weights)[0],
+            message="sample_weight must align with the batch.",
+        )
+        return tf.math.divide_no_nan(
+            tf.reduce_sum(values * weights),
+            tf.reduce_sum(weights),
+        )
+
+    def vc_loss_components(
+        self,
+        mh: tf.Tensor,
+        y: tf.Tensor,
+        alpha: float = 1.0,
+        beta: float = 0.0,
+        gamma: float = 0.0,
+        lambda_: float = 0.0,
+        logits: tf.Tensor | None = None,
+        sample_weight: tf.Tensor | None = None,
+    ) -> dict[str, tf.Tensor]:
+        """Return cross-entropy plus zero-valued VC regularization terms."""
+        del beta, gamma, lambda_
+        y = self._class_ids(y)
+        if logits is None:
+            logits = self(mh, training=True)
+
+        hard_targets = tf.one_hot(
+            y,
+            depth=self.n_classes,
+            dtype=logits.dtype,
+        )
+        smoothing = tf.cast(self.label_smoothing, logits.dtype)
+        smoothed_targets = (
+            (1.0 - smoothing) * hard_targets
+            + smoothing / tf.cast(self.n_classes, logits.dtype)
+        )
+        per_sample_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+            labels=smoothed_targets,
+            logits=logits,
+        )
+        cross_entropy = self._weighted_mean(
+            per_sample_cross_entropy,
+            sample_weight=sample_weight,
+        )
+        weighted_cross_entropy = (
+            tf.cast(alpha, cross_entropy.dtype) * cross_entropy
+        )
+        zero = tf.zeros((), dtype=cross_entropy.dtype)
+
+        return {
+            "total_loss": weighted_cross_entropy,
+            "cross_entropy": cross_entropy,
+            "weighted_cross_entropy": weighted_cross_entropy,
+            "latent_posterior_kl": zero,
+            "weighted_latent_posterior_kl": zero,
+            "discriminator_kl": zero,
+            "weighted_discriminator_kl": zero,
+            "class_prior_kl": zero,
+            "weighted_class_prior_kl": zero,
+        }
+
+    def vc_loss(
+        self,
+        mh: tf.Tensor,
+        y: tf.Tensor,
+        alpha: float = 1.0,
+        beta: float = 0.0,
+        gamma: float = 0.0,
+        lambda_: float = 0.0,
+        logits: tf.Tensor | None = None,
+        sample_weight: tf.Tensor | None = None,
+    ) -> tf.Tensor:
+        return self.vc_loss_components(
+            mh=mh,
+            y=y,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            lambda_=lambda_,
+            logits=logits,
+            sample_weight=sample_weight,
+        )["total_loss"]
+
+    def discriminator_loss(self, mh: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
+        del y
+        return tf.zeros((), dtype=mh.dtype)
+
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config.update(
+            {
+                "n_classes": self.n_classes,
+                "label_smoothing": self.label_smoothing,
+                "use_bias": self.use_bias,
+                "kernel_initializer": tf.keras.initializers.serialize(
+                    self.kernel_initializer
+                ),
+                "bias_initializer": tf.keras.initializers.serialize(
+                    self.bias_initializer
+                ),
+            }
+        )
+        return config
+
+
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
 class VariationalClassifier(tf.keras.layers.Layer):
     """Variational classification head with separately reportable loss terms."""
+
+    supports_variational_regularization = True
+    supports_discriminator = True
 
     def __init__(
         self,
         n_classes: int = 2,
         latent_dim: int | None = None,
+        label_smoothing: float = 0.0,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -25,6 +206,9 @@ class VariationalClassifier(tf.keras.layers.Layer):
             raise ValueError("n_classes must be at least 2.")
         self.n_classes = int(n_classes)
         self.latent_dim = latent_dim
+        self.label_smoothing = float(label_smoothing)
+        if not 0.0 <= self.label_smoothing < 1.0:
+            raise ValueError("label_smoothing must be in [0, 1).")
         self._last_mh = None
 
     def build(self, input_shape) -> None:
@@ -239,11 +423,14 @@ class VariationalClassifier(tf.keras.layers.Layer):
         if logits is None:
             logits = self(mh, training=True)
 
-        cross_entropy_per_sample = (
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=y,
-                logits=logits,
-            )
+        smoothing = tf.cast(self.label_smoothing, logits.dtype)
+        smoothed_targets = (
+            (1.0 - smoothing) * tf.cast(y_onehot, logits.dtype)
+            + smoothing / tf.cast(self.n_classes, logits.dtype)
+        )
+        cross_entropy_per_sample = tf.nn.softmax_cross_entropy_with_logits(
+            labels=smoothed_targets,
+            logits=logits,
         )
         cross_entropy = self._weighted_mean(
             cross_entropy_per_sample,
@@ -413,5 +600,87 @@ class VariationalClassifier(tf.keras.layers.Layer):
 
     def get_config(self) -> dict:
         config = super().get_config()
-        config.update({"n_classes": self.n_classes})
+        config.update(
+            {
+                "n_classes": self.n_classes,
+                "label_smoothing": self.label_smoothing,
+            }
+        )
         return config
+
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
+class HybridClassifier(VariationalClassifier):
+    """Dense prediction head with variational representation regularization.
+
+    Predictions are produced by a conventional trainable dense layer::
+
+        logits = W h + b
+
+    The inherited ``vc_loss_components`` method then combines weighted dense
+    cross-entropy with the same class-conditional latent KL, discriminator,
+    and class-prior terms used by :class:`VariationalClassifier`::
+
+        L = alpha * CE_dense
+            + beta * KL_latent
+            + gamma * L_discriminator
+            + lambda * KL_class_prior
+
+    Thus, unlike ``VariationalClassifier``, Gaussian likelihoods do not define
+    the decision boundary. The Gaussian class parameters instead regularize
+    the BiLSTM embedding. ``vc_lambda=0`` is recommended for the first hybrid
+    diagnostic because the learned class-prior parameter is auxiliary to the
+    dense logits.
+    """
+
+    supports_variational_regularization = True
+    supports_discriminator = True
+
+    def __init__(
+        self,
+        n_classes: int = 2,
+        latent_dim: int | None = None,
+        use_bias: bool = True,
+        kernel_initializer: str | dict = "glorot_uniform",
+        bias_initializer: str | dict = "zeros",
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            n_classes=n_classes,
+            latent_dim=latent_dim,
+            **kwargs,
+        )
+        self.use_bias = bool(use_bias)
+        self.kernel_initializer = tf.keras.initializers.get(kernel_initializer)
+        self.bias_initializer = tf.keras.initializers.get(bias_initializer)
+        self.logits_layer = tf.keras.layers.Dense(
+            self.n_classes,
+            use_bias=self.use_bias,
+            kernel_initializer=self.kernel_initializer,
+            bias_initializer=self.bias_initializer,
+            name="hybrid_dense_class_logits",
+        )
+
+    def build(self, input_shape) -> None:
+        # Build the nested dense layer before the parent marks this layer built.
+        self.logits_layer.build(input_shape)
+        super().build(input_shape)
+
+    def call(self, mh: tf.Tensor, training: bool = False) -> tf.Tensor:
+        self._last_mh = mh
+        return self.logits_layer(mh, training=training)
+
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config.update(
+            {
+                "use_bias": self.use_bias,
+                "kernel_initializer": tf.keras.initializers.serialize(
+                    self.kernel_initializer
+                ),
+                "bias_initializer": tf.keras.initializers.serialize(
+                    self.bias_initializer
+                ),
+            }
+        )
+        return config
+

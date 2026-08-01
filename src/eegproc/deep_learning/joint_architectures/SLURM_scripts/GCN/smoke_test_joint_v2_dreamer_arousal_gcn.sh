@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=smoke_joint_v2_dreamer_arousal_gcn
-#SBATCH --output=smoke_joint_v2_dreamer_arousal_gcn_%j.out
-#SBATCH --error=smoke_joint_v2_dreamer_arousal_gcn_%j.err
+#SBATCH --job-name=smoke_dreamer_arousal_gcn
+#SBATCH --output=smoke_dreamer_arousal_gcn_%j.out
+#SBATCH --error=smoke_dreamer_arousal_gcn_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:2
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --time=08:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G
+#SBATCH --time=01:00:00
 
 set -euo pipefail
 
@@ -21,9 +21,12 @@ VENV_DIR="$PROJECT_DIR/venv312"
 
 cd "$PROJECT_DIR"
 
-# Reuse the virtual environment instead of recreating it on every job.
+# Reuse the existing environment so the smoke test starts quickly. If it does
+# not exist yet, create it and install the project requirements once.
+CREATED_VENV=0
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     python -m venv "$VENV_DIR"
+    CREATED_VENV=1
 fi
 
 source "$VENV_DIR/bin/activate"
@@ -31,15 +34,7 @@ source "$VENV_DIR/bin/activate"
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 
-# Serialize environment updates so concurrent encoder/label jobs do not write
-# to the same virtual environment at the same time.
-if command -v flock >/dev/null 2>&1; then
-    (
-        flock -x 9
-        python -m pip install --upgrade pip
-        python -m pip install -r requirements.txt
-    ) 9>"$PROJECT_DIR/.venv312_install.lock"
-else
+if [[ "$CREATED_VENV" -eq 1 ]]; then
     python -m pip install --upgrade pip
     python -m pip install -r requirements.txt
 fi
@@ -188,81 +183,103 @@ with tf.device("/GPU:0"):
 print("GPU exp-gradient test:", gradient.numpy())
 TF_PY
 
-# Encoder-specific end-to-end smoke test.
-# Monte Carlo prediction averages 5 posterior latent samples.
+# Fast end-to-end smoke test matching the official GCN run configuration.
+# One fold, one hyperparameter configuration, and two latent samples keep it quick.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train \
-    --raw-eeg-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_eeg.npy \
-    --raw-labels-npy src/eegproc/deep_learning/supervised/stsnet/data/dreamer_labels.npy \
-    --label-dimension arousal \
+    --raw-eeg-npy datasets/dreamer_eeg.npy \
+    --raw-labels-npy datasets/dreamer_labels.npy \
+    --label-dimension valence \
     --encoder-type gcn \
     --n-channels 14 \
-    --n-bands 1 \
-    --out-dir runs/joint_autoencoder_vc_v2/GCN \
-    --run-name joint_v2_dreamer_arousal_gcn \
-    --max-folds 4 \
-    --n-jobs 2 \
+    --n-bands 4 \
+    --out-dir runs/smoke_ICRL1/GCN \
+    --run-name dreamer_valence_vaevc_gcn \
+    --max-folds 1 \
+    --n-jobs 1 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
-    --selection-level trial \
-    --selection-metric accuracy \
-    --prediction-latent-samples 5 \
+    --prediction-latent-samples 12 \
     --latent-sampling-seed 42 \
     --seed 42 \
+    --validation-subjects 4 \
+    --validation-seed 42 \
+    --label-threshold-mode global \
+    --median-label 3 \
+    --early-stopping-patience 40 \
+    --early-stopping-min-delta 0.002 \
+    --window-sec 4.0 \
+    --window-overlap 0.5 \
+    --use-class-weight \
+    --early-stopping-monitor val_trial_f1 \
+    --early-stopping-mode max \
+    --selection-level trial \
+    --selection-metric accuracy \
+    --final-epoch-strategy median \
     --hyperparameters-json '{
-    "epochs": [
-        5
-    ],
-    "batch_size": [
-        64
-    ],
-    "learning_rate": [
-        0.001
-    ],
-    "ae_loss_weight": [
-        0.3
-    ],
-    "vc_loss_weight": [
-        0.7
-    ],
-    "vae_beta": [
-        1.0
-    ],
-    "t_down": [
-        2
-    ],
-    "emb_dim": [
-        32
-    ],
-    "dropout": [
-        0.2
-    ],
-    "gcn_units": [
-        [
-            4,
-            8
+        "use_subject_adversarial": [true],
+        "subject_adversarial_weight": [0.8],
+        "subject_loss_weight": [1.0],
+        "subject_hidden_units": [64],
+        "subject_dropout": [0.0],
+
+        "subject_latent_mode": ["mean"],
+        "epochs": [
+            400
         ],
-        [
-            8,
+        "batch_size": [
             16
+        ],
+        "learning_rate": [
+            0.0001
+        ],
+
+        "optimizer": ["adamw"],
+        "weight_decay": [0.0001],
+        "label_smoothing": [0.05],
+
+        "ae_loss_weight": [0.6],
+        "vc_loss_weight": [1.0],
+        "vc_alpha": [1.0],
+        "vc_beta": [0.5],
+        "vc_gamma": [0.0],
+        "vc_lambda": [0.1],
+        "vae_beta": [
+            0.3
+        ],
+        "t_down": [
+            2
+        ],
+        "emb_dim": [
+            64
+        ],
+        "dropout": [
+            0.1
+        ],
+        "gcn_units": [
+            [128, 64]
+        ],
+        "temporal_pool_sizes": [
+            [
+                2
+            ]
+        ],
+        "activation": [
+            "relu"
+        ],
+        "use_batch_norm": [
+            false
+        ],
+        "bilstm_units": [
+            256
+        ],
+        "bilstm_layers": [
+            1
+        ],
+        "bilstm_dropout": [
+            0.4
+        ],
+        "classifier_head": [
+            "hybrid"
         ]
-    ],
-    "temporal_pool_sizes": [
-        [2]
-    ],
-    "activation": [
-        "relu"
-    ],
-    "use_batch_norm": [
-        false
-    ],
-    "bilstm_units": [
-        128
-    ],
-    "bilstm_layers": [
-        2
-    ],
-    "bilstm_dropout": [
-        0.2
-    ]
-}'
+    }'
