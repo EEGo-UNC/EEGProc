@@ -245,19 +245,19 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "vc_gamma": [0.0],
         "vc_lambda": [0.1],
         "vae_beta": [
-            0.3
+            0.2
         ],
         "t_down": [
             2
         ],
         "emb_dim": [
-            64
+            128
         ],
         "dropout": [
             0.4
         ],
         "gcn_units": [
-            [128, 64]
+            [256, 128]
         ],
         "temporal_pool_sizes": [
             [
@@ -265,7 +265,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             ]
         ],
         "activation": [
-            "relu"
+            "leaky_relu"
         ],
         "use_batch_norm": [
             false
@@ -277,7 +277,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             1
         ],
         "bilstm_dropout": [
-            0.4
+            0.5
         ],
         "classifier_head": [
             "hybrid"
