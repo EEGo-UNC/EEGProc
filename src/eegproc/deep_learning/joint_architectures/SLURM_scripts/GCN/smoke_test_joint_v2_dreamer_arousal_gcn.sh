@@ -220,8 +220,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
         "use_subject_adversarial": [true],
         "subject_adversarial_weight": [0.8],
         "subject_loss_weight": [1.0],
-        "subject_hidden_units": [64],
-        "subject_dropout": [0.0],
+        "subject_hidden_units": [128],
+        "subject_dropout": [0.3],
 
         "subject_latent_mode": ["mean"],
         "epochs": [
@@ -254,7 +254,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             64
         ],
         "dropout": [
-            0.1
+            0.4
         ],
         "gcn_units": [
             [128, 64]
@@ -271,7 +271,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             false
         ],
         "bilstm_units": [
-            256
+            128
         ],
         "bilstm_layers": [
             1
