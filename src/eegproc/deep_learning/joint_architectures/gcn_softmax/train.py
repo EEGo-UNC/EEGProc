@@ -15,7 +15,7 @@ import numpy as np
 import tensorflow as tf
 
 from eegproc.deep_learning.cross_val import loso_cv
-from eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_train import (
+from eegproc.deep_learning.joint_architectures.joint_v2_vae_vc.joint_v2_autoencoder_vc_train import (
     load_joint_v2_training_data,
 )
 

@@ -14,7 +14,7 @@ from collections.abc import Mapping
 import numpy as np
 import tensorflow as tf
 
-from ..unsupervised.VariationalAutoencoderLoss import (
+from ...unsupervised.VariationalAutoencoderLoss import (
     GradientReversal,
     VariationalAutoencoderLoss,
 )

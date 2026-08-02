@@ -265,7 +265,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v2_autoencoder_vc_
             ]
         ],
         "activation": [
-            "leaky_relu"
+            "relu"
         ],
         "use_batch_norm": [
             false

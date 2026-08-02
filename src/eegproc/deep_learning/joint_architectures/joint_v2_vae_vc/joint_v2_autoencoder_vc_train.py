@@ -32,7 +32,7 @@ import tensorflow as tf
 
 try:
     from .joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
-    from .joint_v2_data import (
+    from ..joint_v2_data import (
         DatasetConfig,
         DEFAULT_DREAMER_EEG_PATH,
         DEFAULT_DREAMER_LABELS_PATH,
@@ -46,7 +46,7 @@ except ImportError:
     if str(CURRENT_DIR) not in sys.path:
         sys.path.insert(0, str(CURRENT_DIR))
 
-    from joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
+    from eegproc.deep_learning.joint_architectures.joint_v2_vae_vc.joint_v2_autoencoder_vc import JointAutoencoderVariationalClassifierV2
     from joint_v2_data import (
         DatasetConfig,
         DEFAULT_DREAMER_EEG_PATH,
@@ -59,20 +59,20 @@ except ImportError:
 
 try:
     try:
-        from ..cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
+        from ...cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
     except ImportError:
         # Supports replacing the repository's ordinary cross_val.py with this
         # variant while retaining the standard module name.
-        from ..cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
-    from ..supervised.rnn_architectures import BiLSTMClassifier
-    from ..supervised.variational_classifier import (
+        from ...cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
+    from ...supervised.rnn_architectures import BiLSTMClassifier
+    from ...supervised.variational_classifier import (
         DenseClassifier,
         HybridClassifier,
         VariationalClassifier,
     )
-    from ..unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
-    from ..unsupervised.Convolutions.CNN2D import CNN2DDecoder, CNN2DEncoder
-    from ..unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
+    from ...unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
+    from ...unsupervised.Convolutions.CNN2D import CNN2DDecoder, CNN2DEncoder
+    from ...unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
 except ImportError:
     SRC_ROOT = Path(__file__).resolve().parents[3]
     if str(SRC_ROOT) not in sys.path:
