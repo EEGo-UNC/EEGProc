@@ -4,10 +4,10 @@
 #SBATCH --error=joint_sts_dreamer_arousal_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=128G
-#SBATCH --time=48:00:00
+#SBATCH --time=1:00:00
 
 set -euo pipefail
 
@@ -234,7 +234,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --n-bands 4 \
     --out-dir runs/joint_sts/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
-    --n-jobs 4 \
+    --max-folds 1 \
+    --n-jobs 1 \
     --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
@@ -258,8 +259,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
-    --threshold-selection-level trial \
-    --threshold-selection-metric f1 \
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
@@ -365,7 +364,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "bilstm_units": [
-            128,
             256
         ],
         "bilstm_layers": [
