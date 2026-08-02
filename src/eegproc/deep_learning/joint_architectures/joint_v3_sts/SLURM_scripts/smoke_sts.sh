@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
-#SBATCH --time=1:30:00
+#SBATCH --time=2:00:00
 
 set -euo pipefail
 
@@ -260,7 +260,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
-            40
+            100
         ],
         "batch_size": [
             16
