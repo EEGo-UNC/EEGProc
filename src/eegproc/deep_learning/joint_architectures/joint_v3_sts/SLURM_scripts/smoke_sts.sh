@@ -4,10 +4,10 @@
 #SBATCH --error=smoke_sts_dreamer_arousal_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=2
+#SBATCH --gres=gpu:2
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
-#SBATCH --time=1:00:00
+#SBATCH --time=1:30:00
 
 set -euo pipefail
 
@@ -234,9 +234,9 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --n-bands 4 \
     --out-dir runs/smoke/joint_sts/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
-    --max-folds 1 \
+    --max-folds 2 \
     --n-jobs 1 \
-    --cpus-per-worker 2 \
+    --cpus-per-worker 4 \
     --outer-verbose 2 \
     --final-verbose 2 \
     --prediction-latent-samples 20 \
@@ -249,7 +249,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
-    --window-overlap 0.5 \
+    --window-overlap 0.0 \
     --window-normalization global_rms \
     --use-class-weight \
     --supcon-cross-subject-only \
@@ -260,7 +260,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
-            200
+            40
         ],
         "batch_size": [
             16
@@ -349,7 +349,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.0
         ],
         "vc_lambda": [
-            0.1
+            0.0
         ],
 
         "t_down": [
