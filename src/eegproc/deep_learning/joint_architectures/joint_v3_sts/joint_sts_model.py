@@ -17,16 +17,19 @@ The two principal objectives are optimized *alternately* inside every Keras
    the optional subject-adversarial head, and optional SupCon regularization.
 2. VAE phase
    Recomputes the fused posterior after the classification update and updates
-   both encoders, fusion/posterior layers, and the single graph-aware decoder
-   with reconstruction + beta-weighted KL loss.
+   both encoders, fusion/posterior layers, and a dual-path decoder with
+   reconstruction + beta-weighted KL loss.
 
-The decoder therefore reconstructs from the *fused* latent sequence rather
-than from either branch independently. Classification defaults to a standard
+The decoder reconstructs from the *fused* latent sequence through parallel
+temporal-BiLSTM and spatial-spectral-GCN branches. Their decoded feature
+sequences are fused before the final channel-band EEG projection. Classification defaults to a standard
 DenseClassifier (dense logits + softmax probabilities), while the existing
 HybridClassifier and VariationalClassifier remain selectable ablations.
 """
 
 from __future__ import annotations
+
+JOINT_STS_BUILDER_API_VERSION = 2
 
 import importlib
 from collections.abc import Mapping, Sequence
@@ -36,14 +39,15 @@ import numpy as np
 import tensorflow as tf
 
 try:
-    from ..supervised.rnn_architectures import BiLSTMClassifier
-    from ..supervised.variational_classifier import (
+    from ...supervised.rnn_architectures import BiLSTMClassifier
+    from ...supervised.variational_classifier import (
         DenseClassifier,
         HybridClassifier,
         VariationalClassifier,
     )
-    from ..unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
-    from ..unsupervised.VariationalAutoencoderLoss import (
+    from ...unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
+    from ...unsupervised.GraphConv import GraphConv
+    from ...unsupervised.VariationalAutoencoderLoss import (
         GradientReversal,
         VariationalAutoencoderLoss,
     )
@@ -62,6 +66,7 @@ except ImportError:
         GCNDecoder,
         GCNEncoder,
     )
+    from eegproc.deep_learning.unsupervised.GraphConv import GraphConv
     from eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss import (
         GradientReversal,
         VariationalAutoencoderLoss,
@@ -231,6 +236,496 @@ def build_spatiotemporal_bilstm_encoder(
         name=f"{name}_sequence_projection",
     )(sequence)
     return tf.keras.Model(inputs, sequence, name=name)
+
+
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
+class DualPathSTSDecoder(tf.keras.Model):
+    """Decode one fused latent sequence through temporal and graph pathways.
+
+    The temporal branch restores temporal resolution and then applies one or
+    more BiLSTM refinement layers. The graph branch independently restores
+    temporal resolution, creates one feature vector per electrode, and applies
+    residual graph convolutions. The two decoded feature sequences are fused
+    before a final Conv1D projection reconstructs ``channels x bands`` values.
+
+    This is deliberately one cooperative decoder rather than two independent
+    autoencoders: neither branch owns a separate reconstruction target. Both
+    pathways must contribute to the final reconstruction loss.
+    """
+
+    def __init__(
+        self,
+        *,
+        timesteps: int,
+        n_channels: int,
+        n_bands: int,
+        t_down: int,
+        temporal_pool_sizes: Sequence[int] | None,
+        gcn_units: Sequence[int] = (64, 32),
+        temporal_decoder_units: int = 64,
+        n_temporal_decoder_bilstm_layers: int = 1,
+        graph_output_units: int = 16,
+        branch_feature_dim: int = 64,
+        fusion_units: int = 64,
+        dropout: float = 0.20,
+        activation: str = "relu",
+        use_batch_norm: bool = False,
+        graph_self_loop_bias: float = 2.0,
+        graph_identity_mix: float = 0.0,
+        graph_adjacency_reg_weight: float = 1e-4,
+        name: str = "sts_dual_path_decoder",
+        **kwargs,
+    ) -> None:
+        super().__init__(name=name, **kwargs)
+        self.timesteps = int(timesteps)
+        self.n_channels = int(n_channels)
+        self.n_bands = int(n_bands)
+        self.t_down = int(t_down)
+        self.temporal_pool_sizes = _resolve_temporal_pool_sizes(
+            temporal_pool_sizes,
+            self.t_down,
+        )
+        self.gcn_units = _as_positive_int_tuple("gcn_units", gcn_units)
+        self.temporal_decoder_units = int(temporal_decoder_units)
+        self.n_temporal_decoder_bilstm_layers = int(
+            n_temporal_decoder_bilstm_layers
+        )
+        self.graph_output_units = int(graph_output_units)
+        self.branch_feature_dim = int(branch_feature_dim)
+        self.fusion_units = int(fusion_units)
+        self.dropout_rate = float(dropout)
+        self.activation_name = str(activation)
+        self.use_batch_norm = bool(use_batch_norm)
+        self.graph_self_loop_bias = float(graph_self_loop_bias)
+        self.graph_identity_mix = float(graph_identity_mix)
+        self.graph_adjacency_reg_weight = float(graph_adjacency_reg_weight)
+
+        if self.timesteps < 1 or self.n_channels < 1 or self.n_bands < 1:
+            raise ValueError("Decoder dimensions must be positive.")
+        if self.temporal_decoder_units < 1:
+            raise ValueError("temporal_decoder_units must be positive.")
+        if self.n_temporal_decoder_bilstm_layers < 1:
+            raise ValueError(
+                "n_temporal_decoder_bilstm_layers must be positive."
+            )
+        if self.graph_output_units < 1:
+            raise ValueError("graph_output_units must be positive.")
+        if self.branch_feature_dim < 1 or self.fusion_units < 1:
+            raise ValueError("Decoder feature dimensions must be positive.")
+        if not 0.0 <= self.dropout_rate < 1.0:
+            raise ValueError("Decoder dropout must be in [0, 1).")
+        if self.graph_self_loop_bias < 0.0:
+            raise ValueError("graph_self_loop_bias must be non-negative.")
+        if not 0.0 <= self.graph_identity_mix <= 1.0:
+            raise ValueError("graph_identity_mix must be in [0, 1].")
+        if self.graph_adjacency_reg_weight < 0.0:
+            raise ValueError(
+                "graph_adjacency_reg_weight must be non-negative."
+            )
+
+        # Temporal decoder branch.
+        self.temporal_input_projection = tf.keras.layers.Conv1D(
+            self.temporal_decoder_units,
+            kernel_size=1,
+            padding="same",
+            activation=None,
+            name="temporal_input_projection",
+        )
+        self.temporal_upsample_layers = []
+        self.temporal_upsample_convs = []
+        self.temporal_upsample_norms = []
+        self.temporal_upsample_activations = []
+        self.temporal_upsample_dropouts = []
+        for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
+            self.temporal_upsample_layers.append(
+                tf.keras.layers.UpSampling1D(
+                    size=pool_size,
+                    name=f"temporal_upsample_{index}",
+                )
+            )
+            self.temporal_upsample_convs.append(
+                tf.keras.layers.Conv1D(
+                    self.temporal_decoder_units,
+                    kernel_size=3,
+                    padding="same",
+                    activation=None,
+                    name=f"temporal_upsample_conv_{index}",
+                )
+            )
+            self.temporal_upsample_norms.append(
+                tf.keras.layers.LayerNormalization(
+                    axis=-1,
+                    name=f"temporal_upsample_norm_{index}",
+                )
+            )
+            self.temporal_upsample_activations.append(
+                tf.keras.layers.Activation(
+                    self.activation_name,
+                    name=f"temporal_upsample_activation_{index}",
+                )
+            )
+            self.temporal_upsample_dropouts.append(
+                tf.keras.layers.Dropout(
+                    self.dropout_rate,
+                    name=f"temporal_upsample_dropout_{index}",
+                )
+            )
+
+        self.temporal_bilstm_layers = []
+        self.temporal_bilstm_norms = []
+        self.temporal_bilstm_dropouts = []
+        for index in range(self.n_temporal_decoder_bilstm_layers):
+            self.temporal_bilstm_layers.append(
+                tf.keras.layers.Bidirectional(
+                    tf.keras.layers.LSTM(
+                        self.temporal_decoder_units,
+                        return_sequences=True,
+                        name=f"temporal_decoder_lstm_{index}",
+                    ),
+                    merge_mode="concat",
+                    name=f"temporal_decoder_bilstm_{index}",
+                )
+            )
+            self.temporal_bilstm_norms.append(
+                tf.keras.layers.LayerNormalization(
+                    axis=-1,
+                    name=f"temporal_decoder_norm_{index}",
+                )
+            )
+            self.temporal_bilstm_dropouts.append(
+                tf.keras.layers.Dropout(
+                    self.dropout_rate,
+                    name=f"temporal_decoder_dropout_{index}",
+                )
+            )
+        self.temporal_feature_projection = tf.keras.layers.Conv1D(
+            self.branch_feature_dim,
+            kernel_size=1,
+            padding="same",
+            activation=None,
+            name="temporal_feature_projection",
+        )
+
+        # Graph decoder branch.
+        graph_seed_units = self.gcn_units[-1]
+        self.graph_input_projection = tf.keras.layers.Conv1D(
+            graph_seed_units,
+            kernel_size=1,
+            padding="same",
+            activation=None,
+            name="graph_input_projection",
+        )
+        self.graph_upsample_layers = []
+        self.graph_upsample_convs = []
+        self.graph_upsample_norms = []
+        self.graph_upsample_activations = []
+        self.graph_upsample_dropouts = []
+        for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
+            self.graph_upsample_layers.append(
+                tf.keras.layers.UpSampling1D(
+                    size=pool_size,
+                    name=f"graph_upsample_{index}",
+                )
+            )
+            self.graph_upsample_convs.append(
+                tf.keras.layers.Conv1D(
+                    graph_seed_units,
+                    kernel_size=3,
+                    padding="same",
+                    activation=None,
+                    name=f"graph_upsample_conv_{index}",
+                )
+            )
+            self.graph_upsample_norms.append(
+                tf.keras.layers.LayerNormalization(
+                    axis=-1,
+                    name=f"graph_upsample_norm_{index}",
+                )
+            )
+            self.graph_upsample_activations.append(
+                tf.keras.layers.Activation(
+                    self.activation_name,
+                    name=f"graph_upsample_activation_{index}",
+                )
+            )
+            self.graph_upsample_dropouts.append(
+                tf.keras.layers.Dropout(
+                    self.dropout_rate,
+                    name=f"graph_upsample_dropout_{index}",
+                )
+            )
+
+        self.node_seed_projection = tf.keras.layers.Dense(
+            self.n_channels * graph_seed_units,
+            activation=None,
+            name="graph_node_seed_projection",
+        )
+        self.graph_layers = []
+        self.graph_norms = []
+        self.graph_residual_projections = []
+        self.graph_activations = []
+        self.graph_dropouts = []
+        graph_input_units = graph_seed_units
+        for index, units in enumerate(reversed(self.gcn_units[:-1])):
+            self.graph_layers.append(
+                GraphConv(
+                    units=units,
+                    n_nodes=self.n_channels,
+                    activation=None,
+                    self_loop_bias=self.graph_self_loop_bias,
+                    identity_mix=self.graph_identity_mix,
+                    adjacency_reg_weight=self.graph_adjacency_reg_weight,
+                    name=f"decoder_graph_conv_{index}",
+                )
+            )
+            self.graph_norms.append(
+                tf.keras.layers.BatchNormalization(
+                    name=f"decoder_graph_bn_{index}"
+                )
+                if self.use_batch_norm
+                else tf.keras.layers.LayerNormalization(
+                    axis=-1,
+                    name=f"decoder_graph_ln_{index}",
+                )
+            )
+            self.graph_residual_projections.append(
+                tf.keras.layers.Dense(
+                    units,
+                    use_bias=False,
+                    name=f"decoder_graph_residual_projection_{index}",
+                )
+                if graph_input_units != units
+                else None
+            )
+            self.graph_activations.append(
+                tf.keras.layers.Activation(
+                    self.activation_name,
+                    name=f"decoder_graph_activation_{index}",
+                )
+            )
+            self.graph_dropouts.append(
+                tf.keras.layers.SpatialDropout2D(
+                    self.dropout_rate,
+                    name=f"decoder_graph_dropout_{index}",
+                )
+            )
+            graph_input_units = units
+
+        self.graph_output_mixed = GraphConv(
+            units=self.graph_output_units,
+            n_nodes=self.n_channels,
+            activation=None,
+            self_loop_bias=self.graph_self_loop_bias,
+            identity_mix=self.graph_identity_mix,
+            adjacency_reg_weight=self.graph_adjacency_reg_weight,
+            name="decoder_graph_output_mixed",
+        )
+        self.graph_output_local = tf.keras.layers.Dense(
+            self.graph_output_units,
+            activation=None,
+            name="decoder_graph_output_local",
+        )
+        self.graph_feature_projection = tf.keras.layers.Conv1D(
+            self.branch_feature_dim,
+            kernel_size=1,
+            padding="same",
+            activation=None,
+            name="graph_feature_projection",
+        )
+
+        # Cooperative decoder fusion and final reconstruction.
+        self.decoder_fusion = tf.keras.layers.Concatenate(
+            axis=-1,
+            name="decoder_feature_fusion",
+        )
+        self.decoder_fusion_conv = tf.keras.layers.Conv1D(
+            self.fusion_units,
+            kernel_size=3,
+            padding="same",
+            activation=None,
+            name="decoder_fusion_conv",
+        )
+        self.decoder_fusion_norm = tf.keras.layers.LayerNormalization(
+            axis=-1,
+            name="decoder_fusion_norm",
+        )
+        self.decoder_fusion_activation = tf.keras.layers.Activation(
+            self.activation_name,
+            name="decoder_fusion_activation",
+        )
+        self.decoder_fusion_dropout = tf.keras.layers.Dropout(
+            self.dropout_rate,
+            name="decoder_fusion_dropout",
+        )
+        self.output_projection = tf.keras.layers.Conv1D(
+            self.n_channels * self.n_bands,
+            kernel_size=1,
+            padding="same",
+            activation=None,
+            name="decoder_channel_band_output",
+        )
+
+    @property
+    def n_features(self) -> int:
+        return self.n_channels * self.n_bands
+
+    def _fix_length(self, sequence: tf.Tensor) -> tf.Tensor:
+        sequence = sequence[:, : self.timesteps, :]
+        current_timesteps = tf.shape(sequence)[1]
+        pad_amount = tf.maximum(0, self.timesteps - current_timesteps)
+        return tf.pad(sequence, [[0, 0], [0, pad_amount], [0, 0]])
+
+    def _temporal_branch(self, inputs: tf.Tensor, training: bool) -> tf.Tensor:
+        sequence = self.temporal_input_projection(inputs)
+        for upsample, conv, norm, activation, dropout in zip(
+            self.temporal_upsample_layers,
+            self.temporal_upsample_convs,
+            self.temporal_upsample_norms,
+            self.temporal_upsample_activations,
+            self.temporal_upsample_dropouts,
+        ):
+            sequence = upsample(sequence)
+            residual = sequence
+            sequence = conv(sequence)
+            sequence = norm(sequence + residual)
+            sequence = activation(sequence)
+            sequence = dropout(sequence, training=training)
+        sequence = self._fix_length(sequence)
+        for bilstm, norm, dropout in zip(
+            self.temporal_bilstm_layers,
+            self.temporal_bilstm_norms,
+            self.temporal_bilstm_dropouts,
+        ):
+            sequence = bilstm(sequence, training=training)
+            sequence = norm(sequence)
+            sequence = dropout(sequence, training=training)
+        return self.temporal_feature_projection(sequence)
+
+    def _graph_branch(self, inputs: tf.Tensor, training: bool) -> tf.Tensor:
+        sequence = self.graph_input_projection(inputs)
+        for upsample, conv, norm, activation, dropout in zip(
+            self.graph_upsample_layers,
+            self.graph_upsample_convs,
+            self.graph_upsample_norms,
+            self.graph_upsample_activations,
+            self.graph_upsample_dropouts,
+        ):
+            sequence = upsample(sequence)
+            residual = sequence
+            sequence = conv(sequence)
+            sequence = norm(sequence + residual)
+            sequence = activation(sequence)
+            sequence = dropout(sequence, training=training)
+        sequence = self._fix_length(sequence)
+        node_sequence = self.node_seed_projection(sequence)
+        batch_size = tf.shape(node_sequence)[0]
+        time_steps = tf.shape(node_sequence)[1]
+        node_sequence = tf.reshape(
+            node_sequence,
+            [batch_size, time_steps, self.n_channels, self.gcn_units[-1]],
+        )
+        for graph, norm, residual_projection, activation, dropout in zip(
+            self.graph_layers,
+            self.graph_norms,
+            self.graph_residual_projections,
+            self.graph_activations,
+            self.graph_dropouts,
+        ):
+            residual = node_sequence
+            node_sequence = graph(node_sequence, training=training)
+            if isinstance(norm, tf.keras.layers.BatchNormalization):
+                node_sequence = norm(node_sequence, training=training)
+            else:
+                node_sequence = norm(node_sequence)
+            if residual_projection is not None:
+                residual = residual_projection(residual)
+            node_sequence = activation(node_sequence + residual)
+            node_sequence = dropout(node_sequence, training=training)
+        node_sequence = (
+            self.graph_output_mixed(node_sequence, training=training)
+            + self.graph_output_local(node_sequence)
+        )
+        graph_features = tf.reshape(
+            node_sequence,
+            [batch_size, time_steps, self.n_channels * self.graph_output_units],
+        )
+        return self.graph_feature_projection(graph_features)
+
+    def call(self, inputs, training: bool = False):
+        inputs = tf.convert_to_tensor(inputs)
+        if inputs.shape.rank != 3:
+            raise ValueError(
+                "DualPathSTSDecoder expects (batch, latent_time, features); "
+                f"got {inputs.shape}."
+            )
+        temporal_features = self._temporal_branch(inputs, training=training)
+        graph_features = self._graph_branch(inputs, training=training)
+        fused = self.decoder_fusion([temporal_features, graph_features])
+        fused = self.decoder_fusion_conv(fused)
+        fused = self.decoder_fusion_norm(fused)
+        fused = self.decoder_fusion_activation(fused)
+        fused = self.decoder_fusion_dropout(fused, training=training)
+        return self.output_projection(fused)
+
+    def decode_features(
+        self,
+        inputs,
+        training: bool = False,
+    ) -> dict[str, tf.Tensor]:
+        """Expose branch features for ablations and decoder diagnostics."""
+        inputs = tf.convert_to_tensor(inputs)
+        temporal_features = self._temporal_branch(inputs, training=training)
+        graph_features = self._graph_branch(inputs, training=training)
+        fused_features = self.decoder_fusion(
+            [temporal_features, graph_features]
+        )
+        return {
+            "temporal_decoder_features": temporal_features,
+            "graph_decoder_features": graph_features,
+            "fused_decoder_features": fused_features,
+        }
+
+    def get_adjacency_matrices(self) -> dict[str, tf.Tensor]:
+        matrices = {
+            layer.name: layer.normalized_adjacency()
+            for layer in self.graph_layers
+        }
+        matrices[self.graph_output_mixed.name] = (
+            self.graph_output_mixed.normalized_adjacency()
+        )
+        return matrices
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], self.timesteps, self.n_features)
+
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config.update(
+            {
+                "timesteps": self.timesteps,
+                "n_channels": self.n_channels,
+                "n_bands": self.n_bands,
+                "t_down": self.t_down,
+                "temporal_pool_sizes": self.temporal_pool_sizes,
+                "gcn_units": self.gcn_units,
+                "temporal_decoder_units": self.temporal_decoder_units,
+                "n_temporal_decoder_bilstm_layers": (
+                    self.n_temporal_decoder_bilstm_layers
+                ),
+                "graph_output_units": self.graph_output_units,
+                "branch_feature_dim": self.branch_feature_dim,
+                "fusion_units": self.fusion_units,
+                "dropout": self.dropout_rate,
+                "activation": self.activation_name,
+                "use_batch_norm": self.use_batch_norm,
+                "graph_self_loop_bias": self.graph_self_loop_bias,
+                "graph_identity_mix": self.graph_identity_mix,
+                "graph_adjacency_reg_weight": (
+                    self.graph_adjacency_reg_weight
+                ),
+            }
+        )
+        return config
 
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
@@ -1814,6 +2309,12 @@ def build_joint_sts_model(
     fusion_dim: int = 64,
     latent_features: int = 32,
     fusion_dropout: float = 0.20,
+    decoder_temporal_units: int = 64,
+    decoder_bilstm_layers: int = 1,
+    decoder_graph_output_units: int = 16,
+    decoder_branch_feature_dim: int = 64,
+    decoder_fusion_units: int = 64,
+    decoder_dropout: float = 0.20,
     classification_hidden_units: int = 64,
     classification_dropout: float = 0.30,
     activation: str = "relu",
@@ -1854,8 +2355,11 @@ def build_joint_sts_model(
     """Build and compile the fused STS model.
 
     The default classifier is ``DenseClassifier`` to match the requested dense
-    softmax design. ``classifier_head='hybrid'`` or ``'variational'`` retains
-    the existing VC regularizers without changing the alternating optimizer.
+    softmax design. The decoder contains parallel temporal-BiLSTM and
+    spatial-spectral-GCN pathways whose features are fused before the final
+    reconstruction projection. ``classifier_head='hybrid'`` or
+    ``'variational'`` retains the existing VC regularizers without changing
+    the alternating optimizer.
     """
     timesteps, n_features = map(int, input_shape)
     n_channels = int(n_channels)
@@ -1894,9 +2398,25 @@ def build_joint_sts_model(
         graph_adjacency_reg_weight=float(graph_adjacency_reg_weight),
         name="sts_spatiospectral_gcn",
     )
-    decoder = GCNDecoder.from_encoder(
-        spectral_encoder,
-        name="sts_fused_graph_decoder",
+    decoder = DualPathSTSDecoder(
+        timesteps=timesteps,
+        n_channels=n_channels,
+        n_bands=n_bands,
+        t_down=t_down,
+        temporal_pool_sizes=pools,
+        gcn_units=tuple(int(value) for value in gcn_units),
+        temporal_decoder_units=int(decoder_temporal_units),
+        n_temporal_decoder_bilstm_layers=int(decoder_bilstm_layers),
+        graph_output_units=int(decoder_graph_output_units),
+        branch_feature_dim=int(decoder_branch_feature_dim),
+        fusion_units=int(decoder_fusion_units),
+        dropout=float(decoder_dropout),
+        activation=activation,
+        use_batch_norm=bool(gcn_use_batch_norm),
+        graph_self_loop_bias=float(graph_self_loop_bias),
+        graph_identity_mix=float(graph_identity_mix),
+        graph_adjacency_reg_weight=float(graph_adjacency_reg_weight),
+        name="sts_dual_path_fused_decoder",
     )
 
     classifier_config = {
@@ -1994,6 +2514,7 @@ def build_joint_sts_model(
 
 __all__ = [
     "DecoderReconstructionR2",
+    "DualPathSTSDecoder",
     "JointSTSModel",
     "build_joint_sts_model",
     "build_spatiotemporal_bilstm_encoder",

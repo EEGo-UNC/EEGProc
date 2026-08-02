@@ -42,7 +42,7 @@ except ImportError:
     CURRENT_DIR = Path(__file__).resolve().parent
     if str(CURRENT_DIR) not in sys.path:
         sys.path.insert(0, str(CURRENT_DIR))
-    from eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_model import JointSTSModel, build_joint_sts_model
+    from joint_sts_model import JointSTSModel, build_joint_sts_model
     from joint_v2_data import (
         DatasetConfig,
         DEFAULT_DREAMER_EEG_PATH,

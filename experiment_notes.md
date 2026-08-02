@@ -40,3 +40,5 @@
 - 8/1/2026
     - Accuracies are still bad when using the imbalanced classes (60% valence, 64% arousal, 64 emb dim and 128 bilstm best). 
     - Supcon con barely performed above average (52% valence).
+- 8/2/2026
+    - Created an BiLSTM-GCN STS feature fusion model that uses a joint mirror decoder for reconstruction but maintains the multidimensional loss function.
