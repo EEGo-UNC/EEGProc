@@ -258,8 +258,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
-    --threshold-selection-level trial \
-    --threshold-selection-metric f1 \
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [

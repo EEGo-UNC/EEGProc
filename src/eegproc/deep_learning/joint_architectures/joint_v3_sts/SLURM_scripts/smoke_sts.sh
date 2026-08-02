@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=joint_sts_dreamer_arousal
-#SBATCH --output=joint_sts_dreamer_arousal_%j.out
-#SBATCH --error=joint_sts_dreamer_arousal_%j.err
+#SBATCH --job-name=smoke_sts_dreamer_arousal
+#SBATCH --output=smoke_sts_dreamer_arousal_%j.out
+#SBATCH --error=smoke_sts_dreamer_arousal_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:1
@@ -232,7 +232,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 4 \
-    --out-dir runs/joint_sts/DREAMER/arousal \
+    --out-dir runs/smoke/joint_sts/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
     --max-folds 1 \
     --n-jobs 1 \
@@ -252,8 +252,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-overlap 0.5 \
     --window-normalization global_rms \
     --use-class-weight \
-    --use-subject-adversarial \
-    --use-supcon \
     --supcon-cross-subject-only \
     --early-stopping-monitor val_trial_f1 \
     --early-stopping-mode max \
@@ -307,7 +305,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "use_supcon": [
-            true
+            false
         ],
         "supcon_weight": [
             0.03
@@ -345,7 +343,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vc_beta": [
-            0.0
+            0.5
         ],
         "vc_gamma": [
             0.0
