@@ -730,104 +730,24 @@ def _prediction_diagnostic_summary(
     if threshold_tolerance < 0.0:
         raise ValueError("threshold_tolerance must be non-negative.")
 
-    clipped = np.clip(probabilities, 1e-12, 1.0)
     y_pred = _predict_labels(probabilities)
     confidence = np.max(probabilities, axis=1)
-    entropy = -np.sum(clipped * np.log(clipped), axis=1)
-    sorted_probabilities = np.sort(probabilities, axis=1)
-    top_two_margin = (
-        sorted_probabilities[:, -1] - sorted_probabilities[:, -2]
-        if probabilities.shape[1] > 1
-        else np.zeros(len(probabilities), dtype=np.float64)
-    )
 
     summary: dict[str, float | int] = {
         "n_samples": int(len(y_ids)),
         "accuracy": float(np.mean(y_pred == y_ids)),
         "confidence_mean": float(np.mean(confidence)),
         "confidence_std": float(np.std(confidence)),
-        "confidence_min": float(np.min(confidence)),
-        "confidence_max": float(np.max(confidence)),
-        "entropy_mean": float(np.mean(entropy)),
-        "entropy_std": float(np.std(entropy)),
-        "top_two_margin_mean": float(np.mean(top_two_margin)),
-        "top_two_margin_std": float(np.std(top_two_margin)),
-        "near_uniform_fraction": float(
-            np.mean(
-                np.max(
-                    np.abs(probabilities - 1.0 / probabilities.shape[1]),
-                    axis=1,
-                )
-                < threshold_tolerance
-            )
-        ),
     }
 
     for class_index in range(probabilities.shape[1]):
         class_probabilities = probabilities[:, class_index]
-        summary[f"p_class_{class_index}_min"] = float(np.min(class_probabilities))
-        summary[f"p_class_{class_index}_mean"] = float(np.mean(class_probabilities))
-        summary[f"p_class_{class_index}_median"] = float(
-            np.median(class_probabilities)
-        )
-        summary[f"p_class_{class_index}_max"] = float(np.max(class_probabilities))
-        summary[f"p_class_{class_index}_std"] = float(np.std(class_probabilities))
-        summary[f"p_class_{class_index}_q05"] = float(
-            np.quantile(class_probabilities, 0.05)
-        )
-        summary[f"p_class_{class_index}_q95"] = float(
-            np.quantile(class_probabilities, 0.95)
-        )
         summary[f"true_class_{class_index}_fraction"] = float(
             np.mean(y_ids == class_index)
         )
         summary[f"predicted_class_{class_index}_fraction"] = float(
             np.mean(y_pred == class_index)
         )
-
-    if probabilities.shape[1] == 2:
-        p1 = probabilities[:, 1]
-        signed_margin = probabilities[:, 1] - probabilities[:, 0]
-        summary.update(
-            {
-                "p1_distance_from_0_5_mean": float(np.mean(np.abs(p1 - 0.5))),
-                "near_0_5_fraction": float(
-                    np.mean(np.abs(p1 - 0.5) < threshold_tolerance)
-                ),
-                "binary_margin_mean": float(np.mean(signed_margin)),
-                "binary_margin_std": float(np.std(signed_margin)),
-                "binary_margin_min": float(np.min(signed_margin)),
-                "binary_margin_max": float(np.max(signed_margin)),
-            }
-        )
-
-    if internal_outputs:
-        diagnostic_keys = (
-            "encoder_output",
-            "z_mean",
-            "z_log_var",
-            "classification_latent_sequence",
-            "classification_latent",
-            "window_classification_latent",
-            "logits",
-            "logit_margin",
-        )
-        for key in diagnostic_keys:
-            if key not in internal_outputs:
-                continue
-            values = np.asarray(internal_outputs[key], dtype=np.float64)
-            if values.size == 0:
-                continue
-            summary[f"{key}_mean"] = float(np.mean(values))
-            summary[f"{key}_std"] = float(np.std(values))
-            summary[f"{key}_min"] = float(np.min(values))
-            summary[f"{key}_max"] = float(np.max(values))
-            if values.ndim >= 2:
-                flattened = values.reshape(values.shape[0], -1)
-                summary[f"{key}_sample_std_mean"] = float(
-                    np.mean(np.std(flattened, axis=1))
-                )
-
     return summary
 
 
@@ -847,17 +767,10 @@ def _print_probability_diagnostics(
         f"n={summary['n_samples']}",
         f"accuracy={summary['accuracy']:.4f}",
         f"confidence={summary['confidence_mean']:.4f}",
-        f"margin_std={summary['top_two_margin_std']:.6f}",
-        f"near_uniform={summary['near_uniform_fraction']:.4f}",
     ]
     if probabilities.shape[1] == 2:
         parts.extend(
             [
-                f"p1={summary['p_class_1_min']:.6f}/"
-                f"{summary['p_class_1_mean']:.6f}/"
-                f"{summary['p_class_1_max']:.6f}",
-                f"p1_std={summary['p_class_1_std']:.6f}",
-                f"near_0.5={summary['near_0_5_fraction']:.4f}",
                 f"pred1={summary['predicted_class_1_fraction']:.4f}",
                 f"true1={summary['true_class_1_fraction']:.4f}",
             ]
@@ -949,51 +862,12 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         }
         self.history.append(row)
 
-        log_keys = (
-            "accuracy",
-            "confidence_mean",
-            "entropy_mean",
-            "top_two_margin_std",
-            "near_uniform_fraction",
-            "p_class_1_mean",
-            "p_class_1_std",
-            "near_0_5_fraction",
-            "binary_margin_std",
-            "z_mean_std",
-            "classification_latent_std",
-            "logits_std",
-            "logit_margin_std",
-        )
-        for key in log_keys:
-            if key in summary:
-                logs[f"diag_{split}_{key}"] = float(summary[key])
-
         fold_text = "?" if self.fold_number is None else str(self.fold_number)
         parts = [
             f"n={summary['n_samples']}",
             f"acc={summary['accuracy']:.4f}",
             f"conf={summary['confidence_mean']:.4f}",
-            f"margin_std={summary['top_two_margin_std']:.6f}",
-            f"near_uniform={summary['near_uniform_fraction']:.4f}",
         ]
-        if "p_class_1_mean" in summary:
-            parts.extend(
-                [
-                    f"p1={summary['p_class_1_min']:.6f}/"
-                    f"{summary['p_class_1_mean']:.6f}/"
-                    f"{summary['p_class_1_max']:.6f}",
-                    f"p1_std={summary['p_class_1_std']:.6f}",
-                    f"near_0.5={summary['near_0_5_fraction']:.4f}",
-                ]
-            )
-        for key, short_name in (
-            ("z_mean_std", "z_mean_std"),
-            ("classification_latent_std", "cls_latent_std"),
-            ("logits_std", "logits_std"),
-            ("logit_margin_std", "logit_margin_std"),
-        ):
-            if key in summary:
-                parts.append(f"{short_name}={summary[key]:.6f}")
 
         print(
             f"\n[Prediction diagnostics][fold={fold_text}]"
@@ -1452,6 +1326,16 @@ def _prefix_scores(scores: dict, prefix: str) -> dict:
     return {f"{prefix}_{key}": value for key, value in scores.items()}
 
 
+def _scores_with_prefix(scores: Mapping[str, float], prefix: str) -> dict:
+    """Return prefixed score fields with the prefix removed from their keys."""
+    token = f"{prefix}_"
+    return {
+        key[len(token):]: value
+        for key, value in scores.items()
+        if key.startswith(token)
+    }
+
+
 def _validate_evaluation_level(level: str, parameter_name: str) -> None:
     """Validate a window/trial evaluation-level parameter."""
     if level not in {"window", "trial"}:
@@ -1554,24 +1438,7 @@ def _make_prediction_log(
             "correct": int(pred_class == int(y_true[i])),
             "p_pred": float(probabilities[i, pred_class]),
             "confidence": float(np.max(probabilities[i])),
-            "entropy": float(
-                -np.sum(
-                    np.clip(probabilities[i], 1e-12, 1.0)
-                    * np.log(np.clip(probabilities[i], 1e-12, 1.0))
-                )
-            ),
-            "top_two_margin": float(
-                np.sort(probabilities[i])[-1] - np.sort(probabilities[i])[-2]
-            ),
         }
-        if probabilities.shape[1] == 2:
-            row["class_1_margin"] = float(
-                probabilities[i, 1] - probabilities[i, 0]
-            )
-            row["distance_from_0_5"] = float(
-                abs(probabilities[i, 1] - 0.5)
-            )
-
         for class_idx in range(probabilities.shape[1]):
             row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
 
@@ -1603,24 +1470,7 @@ def _make_trial_prediction_log(
             "correct": int(pred_class == int(y_true[i])),
             "p_pred": float(probabilities[i, pred_class]),
             "confidence": float(np.max(probabilities[i])),
-            "entropy": float(
-                -np.sum(
-                    np.clip(probabilities[i], 1e-12, 1.0)
-                    * np.log(np.clip(probabilities[i], 1e-12, 1.0))
-                )
-            ),
-            "top_two_margin": float(
-                np.sort(probabilities[i])[-1] - np.sort(probabilities[i])[-2]
-            ),
         }
-        if probabilities.shape[1] == 2:
-            row["class_1_margin"] = float(
-                probabilities[i, 1] - probabilities[i, 0]
-            )
-            row["distance_from_0_5"] = float(
-                abs(probabilities[i, 1] - 0.5)
-            )
-
         for class_idx in range(probabilities.shape[1]):
             row[f"p_class_{class_idx}"] = float(probabilities[i, class_idx])
 
@@ -1658,11 +1508,11 @@ def _make_variational_interval_logs(
     ci_level: float = 0.95,
     decision_threshold: float = 0.5,
 ) -> tuple[list[dict], list[dict]]:
-    """Estimate stochastic probability intervals for windows and trials.
+    """Log Monte Carlo mean probabilities for windows and trials.
 
-    Trial intervals are calculated correctly by first averaging window
-    probabilities within each trial for every stochastic forward pass, then
-    taking quantiles across those trial-level samples.
+    Trial means are calculated by averaging windows within each stochastic
+    forward pass before averaging across posterior samples. ``ci_level`` is
+    retained for call compatibility but is no longer serialized or used.
     """
     if n_uncertainty_samples < 2:
         raise ValueError(
@@ -1680,9 +1530,6 @@ def _make_variational_interval_logs(
             seed=None,
         )
         trial_mean = trial_samples.mean(axis=0)
-        alpha = 1.0 - ci_level
-        trial_low = np.quantile(trial_samples, alpha / 2.0, axis=0)
-        trial_high = np.quantile(trial_samples, 1.0 - alpha / 2.0, axis=0)
         trial_pred = _predict_labels(
             trial_mean, decision_threshold=decision_threshold
         )
@@ -1699,20 +1546,10 @@ def _make_variational_interval_logs(
                 "y_true": int(y_true[i]),
                 "y_pred": pred_class,
                 "p_pred_mean": float(trial_mean[i, pred_class]),
-                "p_pred_ci_low": float(trial_low[i, pred_class]),
-                "p_pred_ci_high": float(trial_high[i, pred_class]),
-                "ci_level": float(ci_level),
-                "n_uncertainty_samples": int(n_uncertainty_samples),
             }
             for class_idx in range(trial_mean.shape[1]):
                 row[f"p_class_{class_idx}_mean"] = float(
                     trial_mean[i, class_idx]
-                )
-                row[f"p_class_{class_idx}_ci_low"] = float(
-                    trial_low[i, class_idx]
-                )
-                row[f"p_class_{class_idx}_ci_high"] = float(
-                    trial_high[i, class_idx]
                 )
             trial_rows.append(row)
         return [], trial_rows
@@ -1726,9 +1563,6 @@ def _make_variational_interval_logs(
     )
     window_mean = window_samples.mean(axis=0)
 
-    alpha = 1.0 - ci_level
-    window_low = np.quantile(window_samples, alpha / 2.0, axis=0)
-    window_high = np.quantile(window_samples, 1.0 - alpha / 2.0, axis=0)
     window_pred = _predict_labels(
         window_mean, decision_threshold=decision_threshold
     )
@@ -1745,15 +1579,9 @@ def _make_variational_interval_logs(
             "y_true": int(y_true[i]),
             "y_pred": pred_class,
             "p_pred_mean": float(window_mean[i, pred_class]),
-            "p_pred_ci_low": float(window_low[i, pred_class]),
-            "p_pred_ci_high": float(window_high[i, pred_class]),
-            "ci_level": float(ci_level),
-            "n_uncertainty_samples": int(n_uncertainty_samples),
         }
         for class_idx in range(window_mean.shape[1]):
             row[f"p_class_{class_idx}_mean"] = float(window_mean[i, class_idx])
-            row[f"p_class_{class_idx}_ci_low"] = float(window_low[i, class_idx])
-            row[f"p_class_{class_idx}_ci_high"] = float(window_high[i, class_idx])
         window_rows.append(row)
 
     reference_aggregation = _aggregate_window_probabilities_by_trial(
@@ -1778,8 +1606,6 @@ def _make_variational_interval_logs(
 
     trial_samples = np.stack(trial_sample_list, axis=0)
     trial_mean = trial_samples.mean(axis=0)
-    trial_low = np.quantile(trial_samples, alpha / 2.0, axis=0)
-    trial_high = np.quantile(trial_samples, 1.0 - alpha / 2.0, axis=0)
     trial_pred = _predict_labels(
         trial_mean, decision_threshold=decision_threshold
     )
@@ -1796,15 +1622,9 @@ def _make_variational_interval_logs(
             "y_true": int(reference_aggregation["y_true"][i]),
             "y_pred": pred_class,
             "p_pred_mean": float(trial_mean[i, pred_class]),
-            "p_pred_ci_low": float(trial_low[i, pred_class]),
-            "p_pred_ci_high": float(trial_high[i, pred_class]),
-            "ci_level": float(ci_level),
-            "n_uncertainty_samples": int(n_uncertainty_samples),
         }
         for class_idx in range(trial_mean.shape[1]):
             row[f"p_class_{class_idx}_mean"] = float(trial_mean[i, class_idx])
-            row[f"p_class_{class_idx}_ci_low"] = float(trial_low[i, class_idx])
-            row[f"p_class_{class_idx}_ci_high"] = float(trial_high[i, class_idx])
         trial_rows.append(row)
 
     return window_rows, trial_rows
@@ -2050,11 +1870,8 @@ def _evaluate_trial_tensor_fold(
         "window_fold_metrics": window_fold_metrics,
         "trial_fold_metrics": trial_fold_metrics,
         "user_metrics": user_rows,
-        # There are no window-level classifier predictions in hierarchical mode.
-        "prediction_log": trial_prediction_rows,
         "window_prediction_log": [],
         "trial_prediction_log": trial_prediction_rows,
-        "variational_interval_log": trial_interval_rows,
         "window_variational_interval_log": window_interval_rows,
         "trial_variational_interval_log": trial_interval_rows,
     }
@@ -2168,7 +1985,6 @@ def _evaluate_classification_fold(
     primary_scores = trial_scores if evaluation_level == "trial" else window_scores
     fold_scores = {
         "fold": int(fold_index),
-        "evaluation_level": evaluation_level,
         "n_samples": int(
             len(trial_aggregation["y_true"])
             if evaluation_level == "trial"
@@ -2281,12 +2097,8 @@ def _evaluate_classification_fold(
         "window_fold_metrics": window_fold_metrics,
         "trial_fold_metrics": trial_fold_metrics,
         "user_metrics": user_rows,
-        # Backwards-compatible name: prediction_log remains window-level.
-        "prediction_log": window_prediction_rows,
         "window_prediction_log": window_prediction_rows,
         "trial_prediction_log": trial_prediction_rows,
-        # Backwards-compatible name: variational_interval_log remains window-level.
-        "variational_interval_log": window_interval_rows,
         "window_variational_interval_log": window_interval_rows,
         "trial_variational_interval_log": trial_interval_rows,
     }
@@ -2936,12 +2748,14 @@ def _run_outer_fold(
                 )
 
                 config_result = {
-                    "outer_fold": int(outer_fold_number),
-                    "inner_fold": int(inner_fold_number),
-                    "left_out_subjects": inner_val_subjects.tolist(),
                     "config_index": int(config_index),
-                    "config": dict(config),
-                    **val_scores,
+                    "window_scores": _scores_with_prefix(val_scores, "window"),
+                    "trial_scores": _scores_with_prefix(val_scores, "trial"),
+                }
+                config_result = {
+                    key: value
+                    for key, value in config_result.items()
+                    if value != {}
                 }
 
                 config_results_this_inner_fold.append(config_result)
@@ -2954,7 +2768,6 @@ def _run_outer_fold(
 
         inner_fold_results.append(
             {
-                "outer_fold": int(outer_fold_number),
                 "inner_fold": int(inner_fold_number),
                 "left_out_subjects": inner_val_subjects.tolist(),
                 "n_train_windows": _count_windows_for_indices(feature_array, inner_train_indices),
@@ -2991,14 +2804,12 @@ def _run_outer_fold(
         inner_mean_scores.append(
             {
                 "config_index": int(config_index),
-                "config": dict(config),
                 **mean_scores_for_config,
             }
         )
         inner_std_scores.append(
             {
                 "config_index": int(config_index),
-                "config": dict(config),
                 **std_scores_for_config,
             }
         )
@@ -3009,6 +2820,22 @@ def _run_outer_fold(
         maximize_metric=maximize_metric,
     )
     best_config = grid_configs[best_config_index]
+    inner_config_scores = []
+    for config_index in range(len(grid_configs)):
+        mean_row = inner_mean_scores[config_index]
+        std_row = inner_std_scores[config_index]
+        score_row = {
+            "config_index": int(config_index),
+            "selection_score": float(mean_row[selection_metric]),
+            "selection_score_std": float(std_row[selection_metric]),
+            "window_mean_scores": _scores_with_prefix(mean_row, "window"),
+            "window_std_scores": _scores_with_prefix(std_row, "window"),
+            "trial_mean_scores": _scores_with_prefix(mean_row, "trial"),
+            "trial_std_scores": _scores_with_prefix(std_row, "trial"),
+        }
+        inner_config_scores.append(
+            {key: value for key, value in score_row.items() if value != {}}
+        )
 
     print(
         f"\nBest config from inner CV for outer fold {outer_fold_number}: "
@@ -3021,9 +2848,6 @@ def _run_outer_fold(
     best_config_result = {
         "outer_fold": int(outer_fold_number),
         "best_config_index": int(best_config_index),
-        "best_config": dict(best_config),
-        "selection_metric": selection_metric,
-        "selection_level": selection_level,
         "selection_score": float(
             inner_mean_scores[best_config_index][selection_metric]
         ),
@@ -3032,8 +2856,7 @@ def _run_outer_fold(
     inner_cv_result = {
         "outer_fold": int(outer_fold_number),
         "inner_fold_results": inner_fold_results,
-        "inner_mean_scores": inner_mean_scores,
-        "inner_std_scores": inner_std_scores,
+        "inner_config_scores": inner_config_scores,
     }
 
     # -----------------------------------------------------------------
@@ -3124,40 +2947,28 @@ def _run_outer_fold(
         gc.collect()
         tf.keras.backend.clear_session()
 
-    outer_fold_result = {
+    fold_record = {
         "outer_fold_number": int(outer_fold_number),
         "left_out_subjects": outer_test_subjects.tolist(),
-        "n_outer_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
-        "n_outer_test_windows": _count_windows_for_indices(feature_array, outer_test_indices),
+        "n_outer_train_windows": _count_windows_for_indices(
+            feature_array, outer_train_indices
+        ),
+        "n_outer_test_windows": _count_windows_for_indices(
+            feature_array, outer_test_indices
+        ),
         "n_outer_train_trials": int(len(set(zip(
             subject_ids_outer_train.tolist(), trial_ids_outer_train.tolist()
         )))),
         "n_outer_test_trials": int(len(set(zip(
             subject_ids_outer_test.tolist(), trial_ids_outer_test.tolist()
         )))),
-        "selection_level": selection_level,
-        "evaluation_level": evaluation_level,
-        "best_config": dict(best_config),
-        "inner_fold_results": inner_fold_results,
-        "inner_mean_scores": inner_mean_scores,
-        "inner_std_scores": inner_std_scores,
-        "fold_metrics": fold_result["fold_metrics"],
-        "window_fold_metrics": fold_result["window_fold_metrics"],
-        "trial_fold_metrics": fold_result["trial_fold_metrics"],
-        "user_metrics": fold_result["user_metrics"],
-        "prediction_log": fold_result["prediction_log"],
-        "window_prediction_log": fold_result["window_prediction_log"],
-        "trial_prediction_log": fold_result["trial_prediction_log"],
-        "variational_interval_log": fold_result["variational_interval_log"],
-        "window_variational_interval_log": fold_result["window_variational_interval_log"],
-        "trial_variational_interval_log": fold_result["trial_variational_interval_log"],
     }
 
     return {
         "outer_fold_number": int(outer_fold_number),
+        "fold_record": fold_record,
         "best_config_result": best_config_result,
         "inner_cv_result": inner_cv_result,
-        "outer_fold_result": outer_fold_result,
         **fold_result,
     }
 
@@ -3403,26 +3214,29 @@ def nested_lnso_cv(
         normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
 
     results = {
+        "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "evaluation_level": evaluation_level,
+        "configs": [dict(config) for config in grid_configs],
         "fold_metrics": [],
-        "window_fold_metrics": [],
-        "trial_fold_metrics": [],
         "user_metrics": [],
-        "prediction_log": [],
-        "window_prediction_log": [],
-        "trial_prediction_log": [],
-        "variational_interval_log": [],
-        "window_variational_interval_log": [],
-        "trial_variational_interval_log": [],
         "best_configs": [],
         "inner_cv_results": [],
-        "outer_fold_results": [],
-        "mean_scores": {},
-        "std_scores": {},
+        "fold_results": [],
         "window_mean_scores": {},
         "window_std_scores": {},
         "trial_mean_scores": {},
         "trial_std_scores": {},
     }
+
+    if log_predictions:
+        if feature_array.ndim == 3:
+            results["window_prediction_log"] = []
+        results["trial_prediction_log"] = []
+    if log_variational_intervals:
+        if feature_array.ndim == 3:
+            results["window_variational_interval_log"] = []
+        results["trial_variational_interval_log"] = []
 
     print(
         f"\nNested LNSO CV — {total_outer_folds} outer folds, "
@@ -3511,42 +3325,40 @@ def nested_lnso_cv(
 
     # Results arrive in completion order, so restore deterministic fold order.
     fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+    window_fold_metric_rows: list[dict] = []
+    trial_fold_metric_rows: list[dict] = []
 
     for fold_output in fold_outputs:
         results["fold_metrics"].append(fold_output["fold_metrics"])
-        results["window_fold_metrics"].append(fold_output["window_fold_metrics"])
-        results["trial_fold_metrics"].append(fold_output["trial_fold_metrics"])
+        window_fold_metric_rows.append(fold_output["window_fold_metrics"])
+        trial_fold_metric_rows.append(fold_output["trial_fold_metrics"])
         results["user_metrics"].extend(fold_output["user_metrics"])
-        results["prediction_log"].extend(fold_output["prediction_log"])
-        results["window_prediction_log"].extend(fold_output["window_prediction_log"])
-        results["trial_prediction_log"].extend(fold_output["trial_prediction_log"])
-        results["variational_interval_log"].extend(
-            fold_output["variational_interval_log"]
-        )
-        results["window_variational_interval_log"].extend(
-            fold_output["window_variational_interval_log"]
-        )
-        results["trial_variational_interval_log"].extend(
-            fold_output["trial_variational_interval_log"]
-        )
+        if log_predictions:
+            if feature_array.ndim == 3:
+                results["window_prediction_log"].extend(
+                    fold_output["window_prediction_log"]
+                )
+            results["trial_prediction_log"].extend(
+                fold_output["trial_prediction_log"]
+            )
+        if log_variational_intervals:
+            if feature_array.ndim == 3:
+                results["window_variational_interval_log"].extend(
+                    fold_output["window_variational_interval_log"]
+                )
+            results["trial_variational_interval_log"].extend(
+                fold_output["trial_variational_interval_log"]
+            )
         results["best_configs"].append(fold_output["best_config_result"])
         results["inner_cv_results"].append(fold_output["inner_cv_result"])
-        results["outer_fold_results"].append(fold_output["outer_fold_result"])
-
-    mean_scores, std_scores = _mean_std_rows(
-        results["fold_metrics"],
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
-    )
-
-    results["mean_scores"] = mean_scores
-    results["std_scores"] = std_scores
+        results["fold_results"].append(fold_output["fold_record"])
 
     window_mean_scores, window_std_scores = _mean_std_rows(
-        results["window_fold_metrics"],
+        window_fold_metric_rows,
         ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
-        results["trial_fold_metrics"],
+        trial_fold_metric_rows,
         ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     results["window_mean_scores"] = window_mean_scores
@@ -3556,10 +3368,16 @@ def nested_lnso_cv(
 
     print("\nNested LNSO CV complete")
     print("=" * 80)
-    print("Mean outer scores:")
-    print(pformat(mean_scores, indent=4, width=120, sort_dicts=False))
-    print("Std outer scores:")
-    print(pformat(std_scores, indent=4, width=120, sort_dicts=False))
+    primary_mean_scores = (
+        trial_mean_scores if evaluation_level == "trial" else window_mean_scores
+    )
+    primary_std_scores = (
+        trial_std_scores if evaluation_level == "trial" else window_std_scores
+    )
+    print("Primary-level mean scores:")
+    print(pformat(primary_mean_scores, indent=4, width=120, sort_dicts=False))
+    print("Primary-level score standard deviations:")
+    print(pformat(primary_std_scores, indent=4, width=120, sort_dicts=False))
     print("Window-level mean scores:")
     print(pformat(window_mean_scores, indent=4, width=120, sort_dicts=False))
     print("Trial-level mean scores:")
@@ -4007,23 +3825,15 @@ def _run_loso_fold(
 
     fold_record = {
         "fold_number": int(fold_number),
-        "outer_fold_number": int(fold_number),
-        "cv_strategy": cv_strategy,
-        "left_out_subject": left_out_subject,
         "left_out_subjects": left_out_subjects,
-        "outer_test_subjects": left_out_subjects,
         "held_out_trials": [] if held_out_trials is None else held_out_trials,
         "validation_subjects": [
             _python_scalar(value) for value in validation_subjects.tolist()
         ],
-        "validation_seed": validation_seed,
         "n_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
         "n_fit_train_windows": _count_windows_for_indices(feature_array, fit_train_indices),
         "n_validation_windows": _count_windows_for_indices(feature_array, validation_indices),
         "n_test_windows": _count_windows_for_indices(feature_array, test_indices),
-        # Compatibility aliases for code that previously consumed nested CV.
-        "n_outer_train_windows": _count_windows_for_indices(feature_array, outer_train_indices),
-        "n_outer_test_windows": _count_windows_for_indices(feature_array, test_indices),
         "n_train_trials": count_trials(
             subject_ids_outer_train, trial_ids_outer_train
         ),
@@ -4034,90 +3844,23 @@ def _run_loso_fold(
             subject_ids_validation, trial_ids_validation
         ),
         "n_test_trials": count_trials(subject_ids_test, trial_ids_test),
-        "n_outer_train_trials": count_trials(
-            subject_ids_outer_train, trial_ids_outer_train
-        ),
-        "n_outer_test_trials": count_trials(subject_ids_test, trial_ids_test),
-        "early_stopping_monitor": (
-            early_stopping_monitor if validation_subjects_per_fold > 0 else None
-        ),
-        "early_stopping_patience": (
-            early_stopping_patience if validation_subjects_per_fold > 0 else None
-        ),
-        "early_stopping_min_delta": (
-            float(early_stopping_min_delta)
-            if validation_subjects_per_fold > 0
-            else None
-        ),
-        "restore_best_weights": (
-            bool(restore_best_weights)
-            if validation_subjects_per_fold > 0
-            else None
-        ),
         "epochs_ran": int(epochs_ran),
         "best_epoch": None if best_epoch is None else int(best_epoch),
         "best_monitored_value": best_monitored_value,
         "stopped_early": bool(stopped_early),
         "decision_threshold": float(selected_decision_threshold),
-        "decision_threshold_candidates": list(decision_thresholds),
-        "threshold_selection_metric": threshold_selection_metric,
-        "threshold_selection_level": threshold_selection_level,
-        "threshold_validation_score": threshold_validation_score,
-        "threshold_search_results": threshold_search_results,
-        "prediction_diagnostics_log": (
-            []
-            if prediction_diagnostics_callback is None
-            else list(prediction_diagnostics_callback.history)
-        ),
-        "evaluation_level": evaluation_level,
-        "selection_level": None,
-        "fixed_config": dict(fixed_config),
-        # Compatibility aliases: there was no inner search in plain LOSO.
-        "best_config": dict(fixed_config),
-        "inner_fold_results": [],
-        "inner_mean_scores": [],
-        "inner_std_scores": [],
-        "fold_metrics": evaluation["fold_metrics"],
-        "window_fold_metrics": evaluation["window_fold_metrics"],
-        "trial_fold_metrics": evaluation["trial_fold_metrics"],
-        "user_metrics": evaluation["user_metrics"],
-        "prediction_log": evaluation["prediction_log"],
-        "window_prediction_log": evaluation["window_prediction_log"],
-        "trial_prediction_log": evaluation["trial_prediction_log"],
-        "variational_interval_log": evaluation["variational_interval_log"],
-        "window_variational_interval_log": evaluation[
-            "window_variational_interval_log"
-        ],
-        "trial_variational_interval_log": evaluation[
-            "trial_variational_interval_log"
-        ],
     }
 
-    fixed_config_record = {
-        "outer_fold": int(fold_number),
-        "best_config_index": 0,
-        "best_config": dict(fixed_config),
-        "selection_metric": None,
-        "selection_level": None,
-        "selection_score": None,
-        "configuration_source": "fixed",
-    }
-
-    empty_inner_cv_record = {
-        "outer_fold": int(fold_number),
-        "inner_fold_results": [],
-        "inner_mean_scores": [],
-        "inner_std_scores": [],
-        "configuration_source": "not_applicable_for_loso",
-    }
+    prediction_diagnostics_log = (
+        []
+        if prediction_diagnostics_callback is None
+        else list(prediction_diagnostics_callback.history)
+    )
 
     return {
         "outer_fold_number": int(fold_number),
         "fold_record": fold_record,
-        "outer_fold_result": fold_record,
-        "best_config_result": fixed_config_record,
-        "inner_cv_result": empty_inner_cv_record,
-        "prediction_diagnostics_log": fold_record["prediction_diagnostics_log"],
+        "prediction_diagnostics_log": prediction_diagnostics_log,
         **evaluation,
     }
 
@@ -4169,52 +3912,16 @@ def _loso_fold_process_main(
         tf.keras.backend.clear_session()
         gc.collect()
 
-def _compact_loso_fold_result(fold_output: dict) -> dict:
-    """Return one LOSO fold record without large prediction logs."""
+def _compact_loso_training_result(fold_output: dict) -> dict:
+    """Return the small per-fold training summary for one configuration."""
     fold_record = fold_output["fold_record"]
     return {
         "fold_number": int(fold_record["fold_number"]),
-        "outer_fold_number": int(fold_record["outer_fold_number"]),
-        "left_out_subject": fold_record["left_out_subject"],
-        "left_out_subjects": list(fold_record["left_out_subjects"]),
-        "outer_test_subjects": list(fold_record["outer_test_subjects"]),
-        "cv_strategy": fold_record.get("cv_strategy", "loso"),
-        "held_out_trials": [
-            dict(row) for row in fold_record.get("held_out_trials", [])
-        ],
-        "n_subjects_with_trials_left_out": int(
-            fold_record.get("n_subjects_with_trials_left_out", 0)
-        ),
-        "k_trials_left_out_per_subject": fold_record.get(
-            "k_trials_left_out_per_subject"
-        ),
-        "validation_subjects": list(fold_record["validation_subjects"]),
-        "validation_seed": fold_record["validation_seed"],
-        "n_train_windows": int(fold_record["n_train_windows"]),
-        "n_fit_train_windows": int(fold_record["n_fit_train_windows"]),
-        "n_validation_windows": int(fold_record["n_validation_windows"]),
-        "n_test_windows": int(fold_record["n_test_windows"]),
-        "n_train_trials": int(fold_record["n_train_trials"]),
-        "n_fit_train_trials": int(fold_record["n_fit_train_trials"]),
-        "n_validation_trials": int(fold_record["n_validation_trials"]),
-        "n_test_trials": int(fold_record["n_test_trials"]),
-        "early_stopping_monitor": fold_record["early_stopping_monitor"],
-        "early_stopping_patience": fold_record["early_stopping_patience"],
-        "early_stopping_min_delta": fold_record["early_stopping_min_delta"],
-        "restore_best_weights": fold_record["restore_best_weights"],
         "epochs_ran": int(fold_record["epochs_ran"]),
         "best_epoch": fold_record["best_epoch"],
         "best_monitored_value": fold_record["best_monitored_value"],
         "stopped_early": bool(fold_record["stopped_early"]),
         "decision_threshold": float(fold_record["decision_threshold"]),
-        "threshold_selection_metric": fold_record["threshold_selection_metric"],
-        "threshold_selection_level": fold_record["threshold_selection_level"],
-        "threshold_validation_score": fold_record["threshold_validation_score"],
-        "evaluation_level": fold_record["evaluation_level"],
-        "fold_metrics": dict(fold_output["fold_metrics"]),
-        "window_fold_metrics": dict(fold_output["window_fold_metrics"]),
-        "trial_fold_metrics": dict(fold_output["trial_fold_metrics"]),
-        "user_metrics": [dict(row) for row in fold_output["user_metrics"]],
     }
 
 def _aggregate_loso_config_result(
@@ -4269,22 +3976,15 @@ def _aggregate_loso_config_result(
     return {
         "config_index": int(config_index),
         "config": dict(config),
-        "n_folds": int(len(fold_outputs)),
-        "selection_metric": selection_metric,
-        "selection_level": selection_level,
         "selection_score": float(selection_means[selection_metric]),
         "selection_score_std": float(selection_stds[selection_metric]),
-        "mean_scores": mean_scores,
-        "std_scores": std_scores,
         "window_mean_scores": window_mean_scores,
         "window_std_scores": window_std_scores,
         "trial_mean_scores": trial_mean_scores,
         "trial_std_scores": trial_std_scores,
         "fold_metrics": fold_metrics,
-        "window_fold_metrics": window_fold_metrics,
-        "trial_fold_metrics": trial_fold_metrics,
-        "fold_results": [
-            _compact_loso_fold_result(row) for row in fold_outputs
+        "fold_training": [
+            _compact_loso_training_result(row) for row in fold_outputs
         ],
     }
 
@@ -4462,10 +4162,9 @@ def loso_cv(
     Returned results
     ----------------
     ``config_results`` contains per-fold and aggregate metrics for every
-    configuration. For backwards compatibility, top-level fold metrics,
-    prediction logs, ``best_configs``, and ``outer_fold_results`` correspond
-    only to the globally selected configuration. This lets the existing joint
-    training script select and fit the correct final full-data model unchanged.
+    configuration. Top-level prediction logs, user metrics, and fold metadata
+    correspond only to the globally selected configuration. Selected fold
+    metrics remain available through ``config_results[best_config_index]``.
 
     Concurrency
     -----------
@@ -4881,23 +4580,21 @@ def loso_cv(
             "were not retained correctly."
         )
 
-    # Only the selected configuration's full prediction logs are surfaced at
-    # the top level. Per-fold metrics for all configurations remain available
-    # in config_results.
+    # Surface one canonical copy of each selected-configuration artifact.
     results = {
         "cv_strategy": "flat_loso_hyperparameter_search",
         "hyperparameter_search": True,
-        "grid_configs": [dict(config) for config in grid_configs],
         "n_configs": int(len(grid_configs)),
         "n_subjects": int(len(unique_subjects)),
         "n_evaluated_folds_per_config": int(total_folds),
-        # Compatibility with the previous fixed-config result schema.
-        "n_evaluated_folds": int(total_folds),
         "n_total_loso_fits": int(total_model_fits),
         "max_folds": max_folds,
         "selection_metric": selection_metric,
         "selection_level": selection_level,
+        "evaluation_level": evaluation_level,
         "maximize_metric": bool(maximize_metric),
+        "selection_score": float(best_config_result["selection_score"]),
+        "selection_score_std": float(best_config_result["selection_score_std"]),
         "n_prediction_latent_samples": int(n_prediction_latent_samples),
         "latent_sampling_seed": latent_sampling_seed,
         "validation_subjects_per_fold": int(validation_subjects_per_fold),
@@ -4907,113 +4604,46 @@ def loso_cv(
         "early_stopping_monitor": early_stopping_monitor,
         "early_stopping_mode": early_stopping_mode,
         "restore_best_weights": bool(restore_best_weights),
-        "prediction_diagnostics": bool(prediction_diagnostics),
-        "prediction_diagnostics_every_n_epochs": int(
-            prediction_diagnostics_every_n_epochs
-        ),
-        "prediction_diagnostics_max_samples": int(
-            prediction_diagnostics_max_samples
-        ),
-        "prediction_diagnostics_threshold_tolerance": float(
-            prediction_diagnostics_threshold_tolerance
-        ),
-        "prediction_diagnostics_seed": prediction_diagnostics_seed,
-        "decision_thresholds": list(decision_thresholds),
-        "threshold_selection_metric": threshold_selection_metric,
-        "threshold_selection_level": threshold_selection_level,
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,
-        "best_config_result": best_config_result,
-        "fixed_config": best_config,
-        "fold_metrics": [],
-        "window_fold_metrics": [],
-        "trial_fold_metrics": [],
         "user_metrics": [],
-        "prediction_log": [],
-        "window_prediction_log": [],
-        "trial_prediction_log": [],
-        "variational_interval_log": [],
-        "window_variational_interval_log": [],
-        "trial_variational_interval_log": [],
-        "prediction_diagnostics_log": [],
         "fold_results": [],
-        "best_configs": [],
-        "inner_cv_results": [],
-        "outer_fold_results": [],
-        "mean_scores": dict(best_config_result["mean_scores"]),
-        "std_scores": dict(best_config_result["std_scores"]),
-        "window_mean_scores": dict(best_config_result["window_mean_scores"]),
-        "window_std_scores": dict(best_config_result["window_std_scores"]),
-        "trial_mean_scores": dict(best_config_result["trial_mean_scores"]),
-        "trial_std_scores": dict(best_config_result["trial_std_scores"]),
     }
+    if log_predictions:
+        if feature_array.ndim == 3:
+            results["window_prediction_log"] = []
+        results["trial_prediction_log"] = []
+    if log_variational_intervals:
+        if feature_array.ndim == 3:
+            results["window_variational_interval_log"] = []
+        results["trial_variational_interval_log"] = []
+    if prediction_diagnostics:
+        results["prediction_diagnostics_log"] = []
 
     for fold_output in best_fold_outputs:
-        fold_number = int(fold_output["outer_fold_number"])
-        fold_record = dict(fold_output["fold_record"])
-        fold_record.update(
-            {
-                "config_index": int(best_config_index),
-                "fixed_config": dict(best_config),
-                "best_config": dict(best_config),
-                "selection_metric": selection_metric,
-                "selection_level": selection_level,
-                "selection_score": float(
-                    best_config_result["selection_score"]
-                ),
-                "configuration_source": "global_flat_loso_grid_search",
-            }
-        )
-
-        global_best_record = {
-            "outer_fold": fold_number,
-            "best_config_index": int(best_config_index),
-            "best_config": dict(best_config),
-            "selection_metric": selection_metric,
-            "selection_level": selection_level,
-            "selection_score": float(best_config_result["selection_score"]),
-            "configuration_source": "global_flat_loso_grid_search",
-        }
-        empty_inner_record = {
-            "outer_fold": fold_number,
-            "inner_fold_results": [],
-            "inner_mean_scores": [],
-            "inner_std_scores": [],
-            "configuration_source": "not_applicable_for_flat_loso_grid_search",
-        }
-
-        results["fold_metrics"].append(fold_output["fold_metrics"])
-        results["window_fold_metrics"].append(
-            fold_output["window_fold_metrics"]
-        )
-        results["trial_fold_metrics"].append(
-            fold_output["trial_fold_metrics"]
-        )
         results["user_metrics"].extend(fold_output["user_metrics"])
-        results["prediction_log"].extend(fold_output["prediction_log"])
-        results["window_prediction_log"].extend(
-            fold_output["window_prediction_log"]
-        )
-        results["trial_prediction_log"].extend(
-            fold_output["trial_prediction_log"]
-        )
-        results["variational_interval_log"].extend(
-            fold_output["variational_interval_log"]
-        )
-        results["window_variational_interval_log"].extend(
-            fold_output["window_variational_interval_log"]
-        )
-        results["trial_variational_interval_log"].extend(
-            fold_output["trial_variational_interval_log"]
-        )
-        results["prediction_diagnostics_log"].extend(
-            fold_output.get("prediction_diagnostics_log", [])
-        )
-        results["fold_results"].append(fold_record)
-        results["outer_fold_results"].append(fold_record)
-        results["best_configs"].append(global_best_record)
-        results["inner_cv_results"].append(empty_inner_record)
+        if log_predictions:
+            if feature_array.ndim == 3:
+                results["window_prediction_log"].extend(
+                    fold_output["window_prediction_log"]
+                )
+            results["trial_prediction_log"].extend(
+                fold_output["trial_prediction_log"]
+            )
+        if log_variational_intervals:
+            if feature_array.ndim == 3:
+                results["window_variational_interval_log"].extend(
+                    fold_output["window_variational_interval_log"]
+                )
+            results["trial_variational_interval_log"].extend(
+                fold_output["trial_variational_interval_log"]
+            )
+        if prediction_diagnostics:
+            results["prediction_diagnostics_log"].extend(
+                fold_output.get("prediction_diagnostics_log", [])
+            )
+        results["fold_results"].append(dict(fold_output["fold_record"]))
 
     print("\nFlat LOSO hyperparameter search complete")
     print("=" * 80)
@@ -5030,7 +4660,7 @@ def loso_cv(
     print("Selected configuration primary mean scores:")
     print(
         pformat(
-            results["mean_scores"],
+            best_config_result[f"{evaluation_level}_mean_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
@@ -5039,7 +4669,7 @@ def loso_cv(
     print("Selected configuration primary score standard deviations:")
     print(
         pformat(
-            results["std_scores"],
+            best_config_result[f"{evaluation_level}_std_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
@@ -5048,7 +4678,7 @@ def loso_cv(
     print("Selected configuration window-level mean scores:")
     print(
         pformat(
-            results["window_mean_scores"],
+            best_config_result["window_mean_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
@@ -5057,7 +4687,7 @@ def loso_cv(
     print("Selected configuration trial-level mean scores:")
     print(
         pformat(
-            results["trial_mean_scores"],
+            best_config_result["trial_mean_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
@@ -5532,21 +5162,9 @@ def _run_lnskto_fold_task(
     fold_record = fold_output["fold_record"]
     fold_record.update(
         {
-            "n_subjects_with_trials_left_out": int(n_subjects),
-            "k_trials_left_out_per_subject": int(k_trials),
             "test_class_counts": dict(fold_spec["test_class_counts"]),
-            "test_trial_keys": [
-                dict(row) for row in fold_spec["test_trial_keys"]
-            ],
-            "cumulative_unique_test_trials": int(
-                fold_spec["cumulative_unique_test_trials"]
-            ),
-            "selected_subjects_remain_in_training": True,
-            "same_subject_non_test_trials_are_training_eligible": True,
-            "test_trial_keys_are_globally_unique": True,
         }
     )
-    fold_output["outer_fold_result"] = fold_record
     return fold_output
 
 
@@ -6101,30 +5719,14 @@ def lnskto_cv(
         "selected_subjects_remain_in_training": True,
         "test_trial_keys_are_globally_unique": True,
         "n_unique_test_trial_keys": int(total_folds * n_subjects * k_trials),
-        "fold_definitions": [
-            {
-                "fold_number": int(spec["fold_number"]),
-                "test_subjects": list(spec["test_subjects"]),
-                "held_out_trials": [
-                    dict(row) for row in spec["held_out_trials"]
-                ],
-                "test_trial_keys": [
-                    dict(row) for row in spec["test_trial_keys"]
-                ],
-                "n_test_trials": int(spec["n_test_trials"]),
-                "cumulative_unique_test_trials": int(
-                    spec["cumulative_unique_test_trials"]
-                ),
-                "test_class_counts": dict(spec["test_class_counts"]),
-            }
-            for spec in fold_specs
-        ],
-        "grid_configs": [dict(config) for config in grid_configs],
         "n_configs": int(len(grid_configs)),
         "n_total_cv_fits": int(total_model_fits),
         "selection_metric": selection_metric,
         "selection_level": selection_level,
+        "evaluation_level": evaluation_level,
         "maximize_metric": bool(maximize_metric),
+        "selection_score": float(best_config_result["selection_score"]),
+        "selection_score_std": float(best_config_result["selection_score_std"]),
         "n_prediction_latent_samples": int(n_prediction_latent_samples),
         "latent_sampling_seed": latent_sampling_seed,
         "validation_subjects_per_fold": int(validation_subjects_per_fold),
@@ -6134,112 +5736,46 @@ def lnskto_cv(
         "early_stopping_monitor": early_stopping_monitor,
         "early_stopping_mode": early_stopping_mode,
         "restore_best_weights": bool(restore_best_weights),
-        "prediction_diagnostics": bool(prediction_diagnostics),
-        "prediction_diagnostics_every_n_epochs": int(
-            prediction_diagnostics_every_n_epochs
-        ),
-        "prediction_diagnostics_max_samples": int(
-            prediction_diagnostics_max_samples
-        ),
-        "prediction_diagnostics_threshold_tolerance": float(
-            prediction_diagnostics_threshold_tolerance
-        ),
-        "prediction_diagnostics_seed": prediction_diagnostics_seed,
-        "decision_thresholds": list(decision_thresholds),
-        "threshold_selection_metric": threshold_selection_metric,
-        "threshold_selection_level": threshold_selection_level,
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,
-        "best_config_result": best_config_result,
-        "fixed_config": best_config,
-        "fold_metrics": [],
-        "window_fold_metrics": [],
-        "trial_fold_metrics": [],
         "user_metrics": [],
-        "prediction_log": [],
-        "window_prediction_log": [],
-        "trial_prediction_log": [],
-        "variational_interval_log": [],
-        "window_variational_interval_log": [],
-        "trial_variational_interval_log": [],
-        "prediction_diagnostics_log": [],
         "fold_results": [],
-        "best_configs": [],
-        "inner_cv_results": [],
-        "outer_fold_results": [],
-        "mean_scores": dict(best_config_result["mean_scores"]),
-        "std_scores": dict(best_config_result["std_scores"]),
-        "window_mean_scores": dict(best_config_result["window_mean_scores"]),
-        "window_std_scores": dict(best_config_result["window_std_scores"]),
-        "trial_mean_scores": dict(best_config_result["trial_mean_scores"]),
-        "trial_std_scores": dict(best_config_result["trial_std_scores"]),
     }
+    if log_predictions:
+        if feature_array.ndim == 3:
+            results["window_prediction_log"] = []
+        results["trial_prediction_log"] = []
+    if log_variational_intervals:
+        if feature_array.ndim == 3:
+            results["window_variational_interval_log"] = []
+        results["trial_variational_interval_log"] = []
+    if prediction_diagnostics:
+        results["prediction_diagnostics_log"] = []
 
     for fold_output in best_fold_outputs:
-        fold_number = int(fold_output["outer_fold_number"])
-        fold_record = dict(fold_output["fold_record"])
-        fold_record.update(
-            {
-                "config_index": int(best_config_index),
-                "fixed_config": dict(best_config),
-                "best_config": dict(best_config),
-                "selection_metric": selection_metric,
-                "selection_level": selection_level,
-                "selection_score": float(best_config_result["selection_score"]),
-                "configuration_source": "global_flat_lnskto_grid_search",
-            }
-        )
-        global_best_record = {
-            "outer_fold": fold_number,
-            "best_config_index": int(best_config_index),
-            "best_config": dict(best_config),
-            "selection_metric": selection_metric,
-            "selection_level": selection_level,
-            "selection_score": float(best_config_result["selection_score"]),
-            "configuration_source": "global_flat_lnskto_grid_search",
-        }
-        empty_inner_record = {
-            "outer_fold": fold_number,
-            "inner_fold_results": [],
-            "inner_mean_scores": [],
-            "inner_std_scores": [],
-            "configuration_source": (
-                "not_applicable_for_flat_lnskto_grid_search"
-            ),
-        }
-
-        results["fold_metrics"].append(fold_output["fold_metrics"])
-        results["window_fold_metrics"].append(
-            fold_output["window_fold_metrics"]
-        )
-        results["trial_fold_metrics"].append(
-            fold_output["trial_fold_metrics"]
-        )
         results["user_metrics"].extend(fold_output["user_metrics"])
-        results["prediction_log"].extend(fold_output["prediction_log"])
-        results["window_prediction_log"].extend(
-            fold_output["window_prediction_log"]
-        )
-        results["trial_prediction_log"].extend(
-            fold_output["trial_prediction_log"]
-        )
-        results["variational_interval_log"].extend(
-            fold_output["variational_interval_log"]
-        )
-        results["window_variational_interval_log"].extend(
-            fold_output["window_variational_interval_log"]
-        )
-        results["trial_variational_interval_log"].extend(
-            fold_output["trial_variational_interval_log"]
-        )
-        results["prediction_diagnostics_log"].extend(
-            fold_output.get("prediction_diagnostics_log", [])
-        )
-        results["fold_results"].append(fold_record)
-        results["outer_fold_results"].append(fold_record)
-        results["best_configs"].append(global_best_record)
-        results["inner_cv_results"].append(empty_inner_record)
+        if log_predictions:
+            if feature_array.ndim == 3:
+                results["window_prediction_log"].extend(
+                    fold_output["window_prediction_log"]
+                )
+            results["trial_prediction_log"].extend(
+                fold_output["trial_prediction_log"]
+            )
+        if log_variational_intervals:
+            if feature_array.ndim == 3:
+                results["window_variational_interval_log"].extend(
+                    fold_output["window_variational_interval_log"]
+                )
+            results["trial_variational_interval_log"].extend(
+                fold_output["trial_variational_interval_log"]
+            )
+        if prediction_diagnostics:
+            results["prediction_diagnostics_log"].extend(
+                fold_output.get("prediction_diagnostics_log", [])
+            )
+        results["fold_results"].append(dict(fold_output["fold_record"]))
 
     print("\nFlat LNSKTO hyperparameter search complete")
     print("=" * 80)
@@ -6256,7 +5792,7 @@ def lnskto_cv(
     print("Selected configuration primary mean scores:")
     print(
         pformat(
-            results["mean_scores"],
+            best_config_result[f"{evaluation_level}_mean_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
@@ -6265,7 +5801,7 @@ def lnskto_cv(
     print("Selected configuration primary score standard deviations:")
     print(
         pformat(
-            results["std_scores"],
+            best_config_result[f"{evaluation_level}_std_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
@@ -6274,7 +5810,7 @@ def lnskto_cv(
     print("Selected configuration window-level mean scores:")
     print(
         pformat(
-            results["window_mean_scores"],
+            best_config_result["window_mean_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
@@ -6283,7 +5819,7 @@ def lnskto_cv(
     print("Selected configuration trial-level mean scores:")
     print(
         pformat(
-            results["trial_mean_scores"],
+            best_config_result["trial_mean_scores"],
             indent=4,
             width=120,
             sort_dicts=False,
