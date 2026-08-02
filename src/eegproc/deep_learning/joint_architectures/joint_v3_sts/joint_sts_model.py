@@ -36,14 +36,14 @@ import numpy as np
 import tensorflow as tf
 
 try:
-    from ...supervised.rnn_architectures import BiLSTMClassifier
-    from ...supervised.variational_classifier import (
+    from ..supervised.rnn_architectures import BiLSTMClassifier
+    from ..supervised.variational_classifier import (
         DenseClassifier,
         HybridClassifier,
         VariationalClassifier,
     )
-    from ...unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
-    from ...unsupervised.VariationalAutoencoderLoss import (
+    from ..unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
+    from ..unsupervised.VariationalAutoencoderLoss import (
         GradientReversal,
         VariationalAutoencoderLoss,
     )
