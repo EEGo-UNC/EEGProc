@@ -253,7 +253,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-normalization global_rms \
     --use-class-weight \
     --supcon-cross-subject-only \
-    --early-stopping-monitor val_accuracy\
+    --early-stopping-monitor val_trial_f1\
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
@@ -349,7 +349,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.0
         ],
         "vc_lambda": [
-            0.0
+            0.1
         ],
 
         "t_down": [
