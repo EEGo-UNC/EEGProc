@@ -227,11 +227,11 @@ TF_PY
 #
 # Four outer-fold workers are requested for the four allocated L40S GPUs.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_model_train \
-    --raw-eeg-npy datasets/dreamer_eeg.npy \
-    --raw-labels-npy datasets/dreamer_labels.npy \
+    --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
+    --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension arousal \
     --n-channels 14 \
-    --n-bands 4 \
+    --n-bands 3 \
     --out-dir runs/smoke/joint_sts/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
     --max-folds 2 \
@@ -248,15 +248,20 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --median-label 3 \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
-    --window-sec 2.0 \
+    --window-sec 4.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --use-class-weight \
     --supcon-cross-subject-only \
-    --early-stopping-monitor val_trial_f1\
+    --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
+    --decision-thresholds \
+        0.20 0.25 0.30 0.35 0.40 0.45 0.50 \
+        0.55 0.60 0.65 0.70 0.75 0.80 \
+    --threshold-selection-level trial \
+    --threshold-selection-metric balanced_accuracy \
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
@@ -265,7 +270,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         "batch_size": [
             16
         ],
-
         "optimizer": [
             "adamw"
         ],
@@ -295,7 +299,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "subject_hidden_units": [
-            64
+            128
         ],
         "subject_dropout": [
             0.0
@@ -308,7 +312,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             false
         ],
         "supcon_weight": [
-            0.03
+            0.0
         ],
         "supcon_temperature": [
             0.1
@@ -337,7 +341,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             128
         ],
         "classification_dropout": [
-            0.4
+            0.5
         ],
         "vc_alpha": [
             1.0
@@ -349,7 +353,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.0
         ],
         "vc_lambda": [
-            0.1
+            0.0
         ],
 
         "t_down": [
@@ -381,7 +385,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             ]
         ],
         "spectral_emb_dim": [
-            64
+            128
         ],
         "gcn_dropout": [
             0.2
@@ -403,10 +407,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "fusion_dim": [
-            128
+            256
         ],
         "latent_features": [
-            64
+            128
         ],
         "fusion_dropout": [
             0.2
