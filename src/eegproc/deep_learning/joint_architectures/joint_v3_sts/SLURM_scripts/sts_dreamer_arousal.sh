@@ -259,14 +259,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --selection-level trial \
     --selection-metric accuracy \
     --final-epoch-strategy median \
-    --hyperparameters-json '{
+     --hyperparameters-json '{
         "epochs": [
-            200
+            100
         ],
         "batch_size": [
             16
         ],
-
         "optimizer": [
             "adamw"
         ],
@@ -296,7 +295,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "subject_hidden_units": [
-            64
+            128
         ],
         "subject_dropout": [
             0.0
@@ -306,10 +305,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "use_supcon": [
-            true
+            false
         ],
         "supcon_weight": [
-            0.03
+            0.00
         ],
         "supcon_temperature": [
             0.1
@@ -328,23 +327,23 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
         "label_smoothing": [
-            0.05
+            0.0, 0.05
         ],
 
         "classifier_head": [
-            "dense"
+            "hybrid"
         ],
         "classification_hidden_units": [
             128
         ],
         "classification_dropout": [
-            0.4
+            0.5
         ],
         "vc_alpha": [
             1.0
         ],
         "vc_beta": [
-            0.0
+            0.25, 0.5
         ],
         "vc_gamma": [
             0.0
@@ -363,7 +362,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "bilstm_units": [
-            128,
             256
         ],
         "bilstm_layers": [
