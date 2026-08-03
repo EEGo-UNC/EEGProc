@@ -256,12 +256,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --early-stopping-monitor val_trial_balanced_accuracy \
     --early-stopping-mode max \
     --selection-level trial \
-    --selection-metric balanced_accuracy \
+    --selection-metric accuracy \
     --decision-thresholds \
         0.20 0.25 0.30 0.35 0.40 0.45 0.50 \
         0.55 0.60 0.65 0.70 0.75 0.80 \
     --threshold-selection-level trial \
-    --threshold-selection-metric balanced_accuracy \
+    --threshold-selection-metric accuracy \
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
@@ -293,7 +293,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             true
         ],
         "subject_adversarial_weight": [
-            0.2
+            0.6
         ],
         "subject_loss_weight": [
             1.0
