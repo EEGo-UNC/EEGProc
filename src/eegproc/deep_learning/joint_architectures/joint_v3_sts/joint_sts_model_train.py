@@ -84,7 +84,7 @@ class JointSTSTrainingConfig:
     run_name: str = "joint_sts"
     dataset: str = "dreamer"
     n_channels: int = 14
-    n_bands: int | None = 4
+    n_bands: int | None = 3
 
     # Alternating optimizer configuration.
     optimizer_name: str = "adamw"
@@ -1360,8 +1360,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--n-bands",
         type=int,
-        default=4,
-        help="Features per electrode; omit only when inference is desired.",
+        default=3,
+        help="Features per electrode; DREAMER theta/alpha/beta preprocessing uses 3.",
     )
 
     parser.add_argument("--epochs", type=int, default=100)

@@ -227,11 +227,11 @@ TF_PY
 #
 # Four outer-fold workers are requested for the four allocated L40S GPUs.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_model_train \
-    --raw-eeg-npy datasets/dreamer_eeg.npy \
-    --raw-labels-npy datasets/dreamer_labels.npy \
+    --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
+    --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension arousal \
     --n-channels 14 \
-    --n-bands 4 \
+    --n-bands 3 \
     --out-dir runs/joint_sts/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
     --n-jobs 4 \
@@ -251,15 +251,18 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --use-class-weight \
-    --use-subject-adversarial \
-    --use-supcon \
     --supcon-cross-subject-only \
     --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
+    --decision-thresholds \
+        0.20 0.25 0.30 0.35 0.40 0.45 0.50 \
+        0.55 0.60 0.65 0.70 0.75 0.80 \
+    --threshold-selection-level trial \
+    --threshold-selection-metric balanced_accuracy \
     --final-epoch-strategy median \
-     --hyperparameters-json '{
+    --hyperparameters-json '{
         "epochs": [
             100
         ],
@@ -308,7 +311,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             false
         ],
         "supcon_weight": [
-            0.00
+            0.0
         ],
         "supcon_temperature": [
             0.1
@@ -327,7 +330,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
         "label_smoothing": [
-            0.0, 0.05
+            0.0,
+            0.05
         ],
 
         "classifier_head": [
@@ -343,7 +347,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vc_beta": [
-            0.25, 0.5
+            0.25,
+            0.5
         ],
         "vc_gamma": [
             0.0
@@ -381,7 +386,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             ]
         ],
         "spectral_emb_dim": [
-            64
+            128
         ],
         "gcn_dropout": [
             0.2
@@ -403,10 +408,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "fusion_dim": [
-            128
+            256
         ],
         "latent_features": [
-            64
+            128
         ],
         "fusion_dropout": [
             0.2

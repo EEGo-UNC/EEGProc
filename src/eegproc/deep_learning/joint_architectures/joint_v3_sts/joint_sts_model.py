@@ -2291,7 +2291,7 @@ def build_joint_sts_model(
     *,
     n_classes: int = 2,
     n_channels: int = 14,
-    n_bands: int = 4,
+    n_bands: int = 3,
     t_down: int = 2,
     temporal_pool_sizes: Sequence[int] | None = (2,),
     bilstm_units: int = 64,

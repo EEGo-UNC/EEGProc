@@ -58,16 +58,17 @@ DREAMER (dreamer_joined.csv):
     This script groups by subject_id/trial_id, keeps the 14 EEG channels, and
     selects only the contiguous stimulus segment for each subject/trial and
     applies EEGProc's preprocessing.bandpass_filter to that stimulus recording.
-    The retained waveforms are theta (4-8 Hz), alpha (8-13 Hz),
-    beta (13-30 Hz), and gamma (30-43 Hz); delta is omitted. A 50 Hz notch
-    is applied before the band-pass filters. The 14 x 4 channel-band outputs
-    are flattened channel-major, for example AF3_theta, AF3_alpha,
-    AF3_beta, AF3_gamma, F7_theta, ... .
+    The retained waveforms are theta (4-8 Hz), alpha (8-13 Hz), and
+    beta (13-30 Hz); delta and gamma are omitted. A 50 Hz notch is applied
+    before the band-pass filters. The 14 x 3 channel-band outputs are
+    flattened channel-major, for example AF3_theta, AF3_alpha, AF3_beta,
+    F7_theta, ... .
     Baseline rows are excluded. Stimulus lengths vary; filtering is performed
     on the full contiguous stimulus before taking its middle 60 s (7680 samples),
     which reduces boundary artifacts in the retained data.
-    If the supplied CSV was itself created from signals already low-pass filtered
-    at 30 Hz, the gamma output cannot restore the removed 30-45 Hz information.
+    This three-band representation matches DREAMER's published 4-30 Hz
+    preprocessing range and avoids constructing a gamma feature from data that
+    may already have been low-pass filtered at 30 Hz.
     NOTE: even though the CSV includes dominance, this converter writes labels
     with shape (n_subjects, 18, 2) using [valence, arousal] only.
 
@@ -142,14 +143,13 @@ DREAMER_FS = 128
 DREAMER_TRIAL_SECS = 60
 DREAMER_TRIAL_SAMPLES = DREAMER_TRIAL_SECS * DREAMER_FS  # 7680
 
-# Four waveform bands per electrode. Dictionary insertion order is preserved
+# Three waveform bands per electrode. Dictionary insertion order is preserved
 # by bandpass_filter, so the flattened feature order is channel-major and then
-# theta, alpha, beta, gamma within each channel.
+# theta, alpha, beta within each channel.
 DREAMER_FREQUENCY_BANDS = {
     "theta": (4.0, 8.0),
     "alpha": (8.0, 13.0),
     "beta": (13.0, 30.0),
-    "gamma": (30.0, 43.0),
 }
 DREAMER_N_BANDS = len(DREAMER_FREQUENCY_BANDS)
 DREAMER_N_FEATURES = DREAMER_N_CHANNELS * DREAMER_N_BANDS
@@ -313,13 +313,13 @@ def _filter_dreamer_trial(eeg_raw: np.ndarray) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Float32 array shaped ``(n_samples, 56)`` ordered as
-        ``channel x [theta, alpha, beta, gamma]``.
+        Float32 array shaped ``(n_samples, 42)`` ordered as
+        ``channel x [theta, alpha, beta]``.
 
     Notes
     -----
     EEGProc's bandpass_filter applies the 50 Hz notch once before generating
-    the four zero-phase Butterworth band-pass outputs. Common-average
+    the three zero-phase Butterworth band-pass outputs. Common-average
     rereferencing is disabled here so this conversion changes only the
     requested temporal filtering, rather than silently changing the reference.
     """
@@ -737,8 +737,8 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
     Output shapes
     -------------
     dreamer_eeg.npy
-        Float32 ``(23, 18, 56, 7680)``. The feature dimension is
-        ``14 electrodes x 4 bands`` in channel-major order.
+        Float32 ``(23, 18, 42, 7680)``. The feature dimension is
+        ``14 electrodes x 3 bands`` in channel-major order.
     dreamer_labels.npy
         Float32 ``(23, 18, 2)`` containing ``[valence, arousal]``.
 
@@ -771,8 +771,7 @@ def prepare_dreamer(input_dir: str, output_dir: str) -> None:
     )
     print(f"  Feature order: {DREAMER_BANDED_COLS}")
     print(
-        "  NOTE: gamma is meaningful only if dreamer_joined.csv retains "
-        "signal content above 30 Hz."
+        "  DREAMER representation: theta, alpha, and beta only; gamma omitted."
     )
 
     df = pd.read_csv(csv_path)
@@ -1330,7 +1329,7 @@ def verify_npy(output_dir: str, dataset: str, label_mode: str | None = None) -> 
         "dreamer": {
             "eeg": (23, 18, DREAMER_N_FEATURES, 7680),
             "labels": (23, 18, 2),
-        },  # 14 channels x 4 bands
+        },  # 14 channels x 3 bands
         "amigos": [
             {
                 "eeg": (
