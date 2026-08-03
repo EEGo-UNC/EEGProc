@@ -248,8 +248,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --median-label 3 \
     --early-stopping-patience 40 \
     --early-stopping-min-delta 0.002 \
-    --window-sec 4.0 \
-    --window-overlap 0.5 \
+    --window-sec 2.0 \
+    --window-overlap 0.0 \
     --window-normalization global_rms \
     --use-class-weight \
     --supcon-cross-subject-only \
