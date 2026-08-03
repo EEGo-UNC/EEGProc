@@ -5097,6 +5097,150 @@ def loso_cv(
     return results
 
 
+
+def fixed_loso_cv(
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+    fixed_config: dict,
+    n_epochs: int,
+    batch_size: int,
+    *,
+    preprocessing_strategy: Callable | None = None,
+    evaluation_level: Literal["window", "trial"] = "trial",
+    selection_metric: str = "balanced_accuracy",
+    selection_level: Literal["window", "trial"] = "trial",
+    maximize_metric: bool | None = None,
+    metrics: list[str] | tuple[str, ...] = (
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "balanced_accuracy",
+    ),
+    log_predictions: bool = True,
+    log_variational_intervals: bool = False,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
+    n_uncertainty_samples: int = 30,
+    ci_level: float = 0.95,
+    decision_threshold: float = 0.5,
+    prediction_diagnostics: bool = False,
+    prediction_diagnostics_every_n_epochs: int = 1,
+    prediction_diagnostics_max_samples: int = 256,
+    prediction_diagnostics_threshold_tolerance: float = 0.01,
+    prediction_diagnostics_seed: int | None = 42,
+    verbose: int = 0,
+    extra_fit_kwargs: dict | None = None,
+    n_jobs: int = 1,
+    gpu_ids: list[int] | tuple[int, ...] | None = None,
+    cpus_per_worker: int | None = None,
+    max_folds: int | None = None,
+) -> dict:
+    """Evaluate one fixed configuration with strict LOSOCV and no validation.
+
+    Every fold trains for exactly ``n_epochs`` on all non-test subjects. No
+    validation subjects are removed, no validation data are passed to Keras,
+    no early-stopping callback is installed, and the supplied decision
+    threshold is applied unchanged to every held-out subject.
+
+    This is intended as a post-selection diagnostic after another CV run has
+    already chosen the hyperparameters, epoch count, and threshold. It does not
+    perform another hyperparameter or threshold search.
+    """
+    if n_epochs < 1:
+        raise ValueError("n_epochs must be at least 1.")
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1.")
+    decision_threshold = float(decision_threshold)
+    if not 0.0 < decision_threshold < 1.0:
+        raise ValueError("decision_threshold must be strictly between 0 and 1.")
+
+    model_config = dict(fixed_config)
+    # The explicit post-selection values must override anything retained from
+    # the original search result.
+    model_config.pop("epochs", None)
+    model_config.pop("batch_size", None)
+
+    print(
+        "\nFixed-config no-validation LOSOCV — "
+        f"epochs={int(n_epochs)}, batch_size={int(batch_size)}, "
+        f"decision_threshold={decision_threshold:.4f}",
+        flush=True,
+    )
+
+    results = loso_cv(
+        model_builder_function=model_builder_function,
+        feature_array=feature_array,
+        label_array=label_array,
+        subject_id_array=subject_id_array,
+        trial_id_array=trial_id_array,
+        n_epochs=int(n_epochs),
+        batch_size=int(batch_size),
+        hyperparameters=model_config,
+        preprocessing_strategy=preprocessing_strategy,
+        evaluation_level=evaluation_level,
+        selection_metric=selection_metric,
+        selection_level=selection_level,
+        maximize_metric=maximize_metric,
+        metrics=metrics,
+        log_predictions=log_predictions,
+        log_variational_intervals=log_variational_intervals,
+        n_prediction_latent_samples=n_prediction_latent_samples,
+        latent_sampling_seed=latent_sampling_seed,
+        n_uncertainty_samples=n_uncertainty_samples,
+        ci_level=ci_level,
+        validation_subjects_per_fold=0,
+        validation_seed=None,
+        early_stopping_patience=None,
+        early_stopping_min_delta=0.0,
+        early_stopping_monitor="loss",
+        early_stopping_mode="min",
+        restore_best_weights=False,
+        prediction_diagnostics=prediction_diagnostics,
+        prediction_diagnostics_every_n_epochs=(
+            prediction_diagnostics_every_n_epochs
+        ),
+        prediction_diagnostics_max_samples=prediction_diagnostics_max_samples,
+        prediction_diagnostics_threshold_tolerance=(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        prediction_diagnostics_seed=prediction_diagnostics_seed,
+        decision_thresholds=(decision_threshold,),
+        threshold_selection_metric="balanced_accuracy",
+        threshold_selection_level=selection_level,
+        verbose=verbose,
+        extra_fit_kwargs=extra_fit_kwargs,
+        n_jobs=n_jobs,
+        gpu_ids=gpu_ids,
+        cpus_per_worker=cpus_per_worker,
+        max_folds=max_folds,
+    )
+
+    if int(results.get("n_configs", 0)) != 1:
+        raise RuntimeError(
+            "fixed_loso_cv expected exactly one configuration, but loso_cv "
+            f"reported {results.get('n_configs')}."
+        )
+
+    results.update(
+        {
+            "cv_strategy": "fixed_loso_no_validation",
+            "hyperparameter_search": False,
+            "post_selection_diagnostic": True,
+            "fixed_epochs": int(n_epochs),
+            "fixed_batch_size": int(batch_size),
+            "fixed_decision_threshold": decision_threshold,
+            "validation_subjects_per_fold": 0,
+            "early_stopping_patience": None,
+            "restore_best_weights": False,
+        }
+    )
+    return results
+
+
 # ---------------------------------------------------------------------
 # Leave-N-Subjects-and-K-Trials-Out cross-validation
 # ---------------------------------------------------------------------

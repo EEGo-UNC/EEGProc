@@ -55,9 +55,9 @@ except ImportError:
 
 try:
     try:
-        from ...cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
+        from ...cross_val import PredictionDiagnostics, fixed_loso_cv, lnskto_cv, loso_cv
     except ImportError:
-        from ...cross_val import PredictionDiagnostics, lnskto_cv, loso_cv
+        from ...cross_val import PredictionDiagnostics, fixed_loso_cv, lnskto_cv, loso_cv
 except ImportError:
     SRC_ROOT = Path(__file__).resolve().parents[3]
     if str(SRC_ROOT) not in sys.path:
@@ -65,12 +65,14 @@ except ImportError:
     try:
         from eegproc.deep_learning.cross_val import (
             PredictionDiagnostics,
+            fixed_loso_cv,
             lnskto_cv,
             loso_cv,
         )
     except ImportError:
         from eegproc.deep_learning.cross_val import (
             PredictionDiagnostics,
+            fixed_loso_cv,
             lnskto_cv,
             loso_cv,
         )
@@ -105,6 +107,7 @@ class JointSTSTrainingConfig:
     lnskto_require_all_classes_in_test: bool = True
     final_epoch_strategy: str = "median"
     final_epochs: int | None = None
+    run_no_validation_loso_before_final: bool = True
     selection_metric: str = "f1"
     selection_level: str = "trial"
     maximize_metric: bool | None = None
@@ -559,12 +562,22 @@ def _grid_summary_rows(cv_results: dict) -> list[dict]:
     return rows
 
 
+def _cv_fold_records(cv_results: dict) -> list[dict]:
+    """Return canonical per-fold records across current and legacy schemas."""
+    for key in ("fold_results", "outer_fold_results"):
+        rows = cv_results.get(key)
+        if rows:
+            return list(rows)
+    rows = cv_results.get("best_config_result", {}).get("fold_results", [])
+    return list(rows)
+
+
 def _select_final_epochs_from_cv(
     cv_results: dict,
     strategy: str,
     fallback_epochs: int,
 ) -> tuple[int, list[int]]:
-    fold_rows = cv_results.get("best_config_result", {}).get("fold_results", [])
+    fold_rows = _cv_fold_records(cv_results)
     best_epochs = [
         int(row["best_epoch"])
         for row in fold_rows
@@ -1115,7 +1128,7 @@ def train_joint_sts_model(
         raise ValueError("cv_strategy must be loso or lnskto.")
 
     fold_rows: list[dict] = []
-    for fold_result in cv_results.get("outer_fold_results", []):
+    for fold_result in _cv_fold_records(cv_results):
         row = dict(fold_result)
         for log_key in (
             "prediction_log",
@@ -1174,7 +1187,7 @@ def train_joint_sts_model(
 
     fold_thresholds = [
         float(row["decision_threshold"])
-        for row in cv_results.get("outer_fold_results", [])
+        for row in _cv_fold_records(cv_results)
         if row.get("decision_threshold") is not None
     ]
     final_threshold = float(
@@ -1217,6 +1230,102 @@ def train_joint_sts_model(
     }
     logger.info("Selected final config: %s", selected_config)
     logger.info("Selected final epochs: %d", final_epochs)
+
+    no_validation_loso_results: dict | None = None
+    if config.run_no_validation_loso_before_final:
+        logger.info(
+            "Running fixed-config LOSOCV with no validation: epochs=%d, "
+            "batch_size=%d, threshold=%.6f",
+            final_epochs,
+            final_batch_size,
+            final_threshold,
+        )
+        no_validation_loso_results = fixed_loso_cv(
+            model_builder_function=model_builder_function,
+            feature_array=feature_array,
+            label_array=label_array,
+            subject_id_array=subject_id_array,
+            trial_id_array=trial_id_array,
+            fixed_config=final_hparams,
+            n_epochs=final_epochs,
+            batch_size=final_batch_size,
+            evaluation_level="window",
+            selection_level=config.selection_level,
+            # This stage evaluates one already-selected configuration, so the
+            # ranking field is informational only. Balanced accuracy is always
+            # available and keeps the diagnostic focused on class balance.
+            selection_metric="balanced_accuracy",
+            maximize_metric=True,
+            metrics=(
+                "accuracy",
+                "f1",
+                "precision",
+                "recall",
+                "balanced_accuracy",
+            ),
+            log_predictions=True,
+            n_prediction_latent_samples=config.prediction_latent_samples,
+            latent_sampling_seed=config.latent_sampling_seed,
+            decision_threshold=final_threshold,
+            prediction_diagnostics=config.prediction_diagnostics,
+            prediction_diagnostics_every_n_epochs=(
+                config.prediction_diagnostics_every_n_epochs
+            ),
+            prediction_diagnostics_max_samples=(
+                config.prediction_diagnostics_max_samples
+            ),
+            prediction_diagnostics_threshold_tolerance=(
+                config.prediction_diagnostics_threshold_tolerance
+            ),
+            prediction_diagnostics_seed=config.prediction_diagnostics_seed,
+            verbose=config.outer_verbose,
+            extra_fit_kwargs={
+                "callbacks": [tf.keras.callbacks.TerminateOnNaN()]
+            },
+            n_jobs=config.n_jobs,
+            cpus_per_worker=config.cpus_per_worker,
+            max_folds=config.max_folds,
+        )
+
+        no_validation_fold_rows: list[dict] = []
+        for fold_result in _cv_fold_records(no_validation_loso_results):
+            row = dict(fold_result)
+            test_subjects = row.pop("left_out_subjects", [])
+            row["outer_test_subjects"] = ",".join(map(str, test_subjects))
+            row["validation_subjects"] = ",".join(
+                map(str, row.get("validation_subjects", []))
+            )
+            row["held_out_trials"] = json.dumps(
+                row.get("held_out_trials", []),
+                sort_keys=True,
+                default=_json_default,
+            )
+            no_validation_fold_rows.append(row)
+
+        _write_json(
+            run_dir / "no_validation_loso_results.json",
+            no_validation_loso_results,
+        )
+        _write_csv(
+            run_dir / "no_validation_loso_folds.csv",
+            no_validation_fold_rows,
+        )
+        _write_csv(
+            run_dir / "no_validation_loso_grid_summary.csv",
+            _grid_summary_rows(no_validation_loso_results),
+        )
+        _write_csv(
+            run_dir / "no_validation_loso_prediction_diagnostics.csv",
+            no_validation_loso_results.get("prediction_diagnostics_log", []),
+        )
+        _write_csv(
+            run_dir / "no_validation_loso_window_predictions.csv",
+            no_validation_loso_results.get("window_prediction_log", []),
+        )
+        _write_csv(
+            run_dir / "no_validation_loso_trial_predictions.csv",
+            no_validation_loso_results.get("trial_prediction_log", []),
+        )
 
     final_model = model_builder_function(**final_hparams)
     final_callbacks: list[tf.keras.callbacks.Callback] = [
@@ -1314,6 +1423,7 @@ def train_joint_sts_model(
         "threshold_selection_level": config.threshold_selection_level,
         "cv_strategy": config.cv_strategy,
         "cv_results": cv_results,
+        "no_validation_loso_results": no_validation_loso_results,
         "final_fit_history": final_history.history,
         "final_full_dataset_metrics": final_eval,
     }
@@ -1407,6 +1517,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--final-epoch-strategy",
         choices=("median", "mean", "max"),
         default="median",
+    )
+    _add_bool_pair(
+        parser,
+        "--run-no-validation-loso-before-final",
+        "--skip-no-validation-loso-before-final",
+        "run_no_validation_loso_before_final",
+        True,
+        (
+            "Run a fixed-config LOSOCV diagnostic using the selected "
+            "hyperparameters, derived epoch count, all 22 non-test subjects, "
+            "and no validation set before fitting the final all-subject model."
+        ),
+        "Skip the fixed-config no-validation LOSOCV diagnostic.",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -1744,6 +1867,9 @@ def main(argv: list[str] | None = None) -> int:
         lnskto_require_all_classes_in_test=args.lnskto_require_all_classes,
         final_epoch_strategy=args.final_epoch_strategy,
         final_epochs=args.final_epochs,
+        run_no_validation_loso_before_final=(
+            args.run_no_validation_loso_before_final
+        ),
         selection_metric=args.selection_metric,
         selection_level=args.selection_level,
         max_folds=args.max_folds,
