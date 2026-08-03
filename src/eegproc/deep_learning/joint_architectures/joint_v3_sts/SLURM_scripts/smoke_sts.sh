@@ -274,13 +274,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             "adamw"
         ],
         "classification_learning_rate": [
-            0.0001
+            0.00005
         ],
         "vae_learning_rate": [
             0.00005
         ],
         "weight_decay": [
-            0.0001
+            0.00005
         ],
         "classification_steps_per_batch": [
             1
