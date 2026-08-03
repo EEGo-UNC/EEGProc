@@ -1054,7 +1054,13 @@ def train_joint_sts_model(
         "selection_level": config.selection_level,
         "selection_metric": config.selection_metric,
         "maximize_metric": config.maximize_metric,
-        "metrics": ("accuracy", "f1", "precision", "recall"),
+        "metrics": (
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+            "balanced_accuracy",
+        ),
         "log_predictions": True,
         "n_prediction_latent_samples": config.prediction_latent_samples,
         "latent_sampling_seed": config.latent_sampling_seed,
@@ -1405,7 +1411,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--selection-metric",
-        choices=("loss", "joint_loss", "accuracy", "f1", "precision", "recall"),
+        choices=(
+            "loss",
+            "joint_loss",
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+            "balanced_accuracy",
+        ),
         default="f1",
     )
     parser.add_argument(

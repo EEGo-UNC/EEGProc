@@ -902,6 +902,10 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         "val_accuracy",
         "trial_f1",
         "val_trial_f1",
+        "trial_balanced_accuracy",
+        "val_trial_balanced_accuracy",
+        "balanced_accuracy",
+        "val_balanced_accuracy",
         "decoder_accuracy",
         "val_decoder_accuracy",
         "subject_accuracy",
@@ -1575,9 +1579,9 @@ class TrialValidationMetrics(tf.keras.callbacks.Callback):
 
     Hierarchical models are scored directly from one output per trial. Legacy
     window models are still aggregated within each (subject_id, trial_id) pair.
-    The resulting values are added
-    to the Keras epoch logs as ``val_trial_f1`` and ``val_trial_loss`` so that
-    callbacks such as EarlyStopping can monitor them.
+    The resulting values are added to the Keras epoch logs as
+    ``val_trial_f1``, ``val_trial_balanced_accuracy``, and ``val_trial_loss``
+    so callbacks such as EarlyStopping can monitor them.
     """
 
     def __init__(
@@ -1632,6 +1636,15 @@ class TrialValidationMetrics(tf.keras.callbacks.Callback):
 
         logs["val_trial_f1"] = float(
             f1_score(
+                y_true_trial,
+                y_pred_trial,
+                average="macro",
+                labels=expected_labels,
+                zero_division=0,
+            )
+        )
+        logs["val_trial_balanced_accuracy"] = float(
+            recall_score(
                 y_true_trial,
                 y_pred_trial,
                 average="macro",
@@ -4008,7 +4021,11 @@ def _run_loso_fold(
         callbacks.append(prediction_diagnostics_callback)
 
     if validation_subjects_per_fold > 0:
-        if early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}:
+        if early_stopping_monitor in {
+            "val_trial_f1",
+            "val_trial_balanced_accuracy",
+            "val_trial_loss",
+        }:
             # This callback must run before CompactEpochLogger and EarlyStopping
             # so the custom metric is available to both callbacks.
             callbacks.append(
@@ -4692,7 +4709,11 @@ def loso_cv(
             "subjects. Set validation_subjects_per_fold >= 1."
         )
     if (
-        early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
+        early_stopping_monitor in {
+            "val_trial_f1",
+            "val_trial_balanced_accuracy",
+            "val_trial_loss",
+        }
         and validation_subjects_per_fold == 0
         and early_stopping_patience is not None
     ):
@@ -5815,7 +5836,11 @@ def lnskto_cv(
             "validation subjects. Set validation_subjects_per_fold >= 1."
         )
     if (
-        early_stopping_monitor in {"val_trial_f1", "val_trial_loss"}
+        early_stopping_monitor in {
+            "val_trial_f1",
+            "val_trial_balanced_accuracy",
+            "val_trial_loss",
+        }
         and validation_subjects_per_fold == 0
         and early_stopping_patience is not None
     ):
