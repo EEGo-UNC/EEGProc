@@ -242,7 +242,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 4 \
+    --validation-subjects 6 \
     --validation-seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
