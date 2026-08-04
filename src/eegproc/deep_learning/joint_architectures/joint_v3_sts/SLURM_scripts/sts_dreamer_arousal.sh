@@ -227,12 +227,18 @@ TF_PY
 #
 # Four outer-fold workers are requested for the four allocated L40S GPUs.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_model_train \
+    -cv-strategy loso \
+    --alternate-subject-sets \
+    --alternating-subject-seed 42 \
+    --validation-subjects 0 \
+    --no-early-stopping \
+    --skip-no-validation-loso-before-final \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/joint_sts/ICRL_focal_loss1/ \
+    --out-dir runs/joint_sts/ICRL_focal_alternating_backprop1/ \
     --run-name dreamer_arousal_joint_sts \
     --n-jobs 4 \
     --cpus-per-worker 2 \
@@ -241,8 +247,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 6 \
-    --validation-seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
     --early-stopping-patience 20 \
@@ -255,9 +259,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
-    --decision-thresholds \
-        0.20 0.25 0.30 0.35 0.40 0.45 0.50 \
-        0.55 0.60 0.65 0.70 0.75 0.80 \
+    --decision-thresholds 0.5 \
     --threshold-selection-level trial \
     --threshold-selection-metric accuracy \
     --final-epoch-strategy median \
