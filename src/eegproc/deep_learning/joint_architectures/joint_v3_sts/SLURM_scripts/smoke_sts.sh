@@ -330,7 +330,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
         "label_smoothing": [
-            0.05
+            0.0
         ],
 
         "classifier_head": [
@@ -344,10 +344,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
 
-        "focal_gamma": [2.0],
-        "focal_alpha": [
-            [0.275, 0.725]
-        ],
+        focal_alpha: [0.725, 0.275],
+        focal_gamma: 1.0,
         "vc_alpha": [
             1.0
         ],
