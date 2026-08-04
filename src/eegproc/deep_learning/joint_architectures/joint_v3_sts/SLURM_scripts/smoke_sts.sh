@@ -289,10 +289,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "use_subject_adversarial": [
-            true
+            false
         ],
         "subject_adversarial_weight": [
-            0.1
+            0.0
         ],
         "subject_loss_weight": [
             0.5
@@ -324,7 +324,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vae_loss_weight": [
-            0.5
+            0.0
         ],
         "vae_beta": [
             0.3
