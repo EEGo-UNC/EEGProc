@@ -11,8 +11,85 @@ switch heads without changing its custom train/test steps.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 import tensorflow as tf
+
+
+def _normalize_focal_alpha(
+    focal_alpha: float | Sequence[float] | None,
+    n_classes: int,
+) -> tuple[float, ...] | None:
+    """Validate optional per-class focal weights.
+
+    A scalar is treated as a uniform multiplier for every class. To apply
+    class-specific balancing, pass one non-negative value per class.
+    """
+    if focal_alpha is None:
+        return None
+
+    values = np.asarray(focal_alpha, dtype=np.float64).reshape(-1)
+    if values.size == 1:
+        values = np.repeat(values, n_classes)
+    if values.size != n_classes:
+        raise ValueError(
+            "focal_alpha must be a scalar or contain exactly "
+            f"n_classes={n_classes} values; got {values.size}."
+        )
+    if not np.isfinite(values).all() or np.any(values < 0.0):
+        raise ValueError("Every focal_alpha value must be finite and non-negative.")
+    if not np.any(values > 0.0):
+        raise ValueError("At least one focal_alpha value must be positive.")
+    return tuple(float(value) for value in values)
+
+
+def _categorical_focal_terms(
+    *,
+    y: tf.Tensor,
+    logits: tf.Tensor,
+    n_classes: int,
+    label_smoothing: float,
+    focal_gamma: float,
+    focal_alpha: tuple[float, ...] | None,
+) -> tuple[tf.Tensor, tf.Tensor]:
+    """Return per-sample base CE and focal-modulated classification loss."""
+    hard_targets = tf.one_hot(y, depth=n_classes, dtype=logits.dtype)
+    smoothing = tf.cast(label_smoothing, logits.dtype)
+    smoothed_targets = (
+        (1.0 - smoothing) * hard_targets
+        + smoothing / tf.cast(n_classes, logits.dtype)
+    )
+    base_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+        labels=smoothed_targets,
+        logits=logits,
+    )
+
+    probabilities = tf.nn.softmax(logits, axis=-1)
+    true_class_probability = tf.reduce_sum(
+        hard_targets * probabilities,
+        axis=-1,
+    )
+    if focal_gamma == 0.0:
+        modulating_factor = tf.ones_like(true_class_probability)
+    else:
+        modulating_factor = tf.pow(
+            tf.clip_by_value(
+                1.0 - true_class_probability,
+                0.0,
+                1.0,
+            ),
+            tf.cast(focal_gamma, logits.dtype),
+        )
+
+    if focal_alpha is None:
+        alpha_factor = tf.ones_like(true_class_probability)
+    else:
+        alpha_values = tf.constant(focal_alpha, dtype=logits.dtype)
+        alpha_factor = tf.gather(alpha_values, y)
+
+    focal_loss = alpha_factor * modulating_factor * base_cross_entropy
+    return base_cross_entropy, focal_loss
 
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
@@ -21,8 +98,8 @@ class DenseClassifier(tf.keras.layers.Layer):
 
     The joint model historically expects its classification head to expose
     ``n_classes``, ``vc_loss_components()``, and ``discriminator_loss()``.
-    This adapter provides those methods while optimizing only weighted sparse
-    categorical cross-entropy. All variational regularization components are
+    This adapter provides those methods while optimizing focal classification
+    loss. All variational regularization components are
     returned as exact zeros, regardless of the supplied beta/gamma/lambda
     values, so selecting this head is an unambiguous dense-classifier ablation.
     """
@@ -37,6 +114,8 @@ class DenseClassifier(tf.keras.layers.Layer):
         kernel_initializer: str | dict = "glorot_uniform",
         bias_initializer: str | dict = "zeros",
         label_smoothing: float = 0.0,
+        focal_gamma: float = 1.0,
+        focal_alpha: float | Sequence[float] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -46,6 +125,10 @@ class DenseClassifier(tf.keras.layers.Layer):
         self.label_smoothing = float(label_smoothing)
         if not 0.0 <= self.label_smoothing < 1.0:
             raise ValueError("label_smoothing must be in [0, 1).")
+        self.focal_gamma = float(focal_gamma)
+        if not np.isfinite(self.focal_gamma) or self.focal_gamma < 0.0:
+            raise ValueError("focal_gamma must be finite and non-negative.")
+        self.focal_alpha = _normalize_focal_alpha(focal_alpha, self.n_classes)
         self.use_bias = bool(use_bias)
         self.kernel_initializer = tf.keras.initializers.get(kernel_initializer)
         self.bias_initializer = tf.keras.initializers.get(bias_initializer)
@@ -102,39 +185,41 @@ class DenseClassifier(tf.keras.layers.Layer):
         logits: tf.Tensor | None = None,
         sample_weight: tf.Tensor | None = None,
     ) -> dict[str, tf.Tensor]:
-        """Return cross-entropy plus zero-valued VC regularization terms."""
+        """Return focal loss plus zero-valued VC regularization terms."""
         del beta, gamma, lambda_
         y = self._class_ids(y)
         if logits is None:
             logits = self(mh, training=True)
 
-        hard_targets = tf.one_hot(
-            y,
-            depth=self.n_classes,
-            dtype=logits.dtype,
-        )
-        smoothing = tf.cast(self.label_smoothing, logits.dtype)
-        smoothed_targets = (
-            (1.0 - smoothing) * hard_targets
-            + smoothing / tf.cast(self.n_classes, logits.dtype)
-        )
-        per_sample_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
-            labels=smoothed_targets,
+        base_ce_per_sample, focal_per_sample = _categorical_focal_terms(
+            y=y,
             logits=logits,
+            n_classes=self.n_classes,
+            label_smoothing=self.label_smoothing,
+            focal_gamma=self.focal_gamma,
+            focal_alpha=self.focal_alpha,
         )
-        cross_entropy = self._weighted_mean(
-            per_sample_cross_entropy,
+        base_cross_entropy = self._weighted_mean(
+            base_ce_per_sample,
             sample_weight=sample_weight,
         )
-        weighted_cross_entropy = (
-            tf.cast(alpha, cross_entropy.dtype) * cross_entropy
+        focal_loss = self._weighted_mean(
+            focal_per_sample,
+            sample_weight=sample_weight,
         )
-        zero = tf.zeros((), dtype=cross_entropy.dtype)
+        weighted_focal_loss = tf.cast(alpha, focal_loss.dtype) * focal_loss
+        zero = tf.zeros((), dtype=focal_loss.dtype)
 
         return {
-            "total_loss": weighted_cross_entropy,
-            "cross_entropy": cross_entropy,
-            "weighted_cross_entropy": weighted_cross_entropy,
+            "total_loss": weighted_focal_loss,
+            "classification_loss": focal_loss,
+            "weighted_classification_loss": weighted_focal_loss,
+            "focal_loss": focal_loss,
+            "weighted_focal_loss": weighted_focal_loss,
+            "base_cross_entropy": base_cross_entropy,
+            # Backward-compatible aliases for older joint models.
+            "cross_entropy": focal_loss,
+            "weighted_cross_entropy": weighted_focal_loss,
             "latent_posterior_kl": zero,
             "weighted_latent_posterior_kl": zero,
             "discriminator_kl": zero,
@@ -175,6 +260,8 @@ class DenseClassifier(tf.keras.layers.Layer):
             {
                 "n_classes": self.n_classes,
                 "label_smoothing": self.label_smoothing,
+                "focal_gamma": self.focal_gamma,
+                "focal_alpha": self.focal_alpha,
                 "use_bias": self.use_bias,
                 "kernel_initializer": tf.keras.initializers.serialize(
                     self.kernel_initializer
@@ -199,6 +286,8 @@ class VariationalClassifier(tf.keras.layers.Layer):
         n_classes: int = 2,
         latent_dim: int | None = None,
         label_smoothing: float = 0.0,
+        focal_gamma: float = 1.0,
+        focal_alpha: float | Sequence[float] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -209,6 +298,10 @@ class VariationalClassifier(tf.keras.layers.Layer):
         self.label_smoothing = float(label_smoothing)
         if not 0.0 <= self.label_smoothing < 1.0:
             raise ValueError("label_smoothing must be in [0, 1).")
+        self.focal_gamma = float(focal_gamma)
+        if not np.isfinite(self.focal_gamma) or self.focal_gamma < 0.0:
+            raise ValueError("focal_gamma must be finite and non-negative.")
+        self.focal_alpha = _normalize_focal_alpha(focal_alpha, self.n_classes)
         self._last_mh = None
 
     def build(self, input_shape) -> None:
@@ -415,7 +508,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
 
         The returned ``total_loss`` is exactly the sum of the four weighted
         terms. Passing the logits already produced by the joint model avoids a
-        duplicate classifier call and guarantees that the logged cross-entropy
+        duplicate classifier call and guarantees that the logged focal loss
         corresponds to the logits used for the accuracy metric.
         """
         y = self._class_ids(y)
@@ -423,22 +516,23 @@ class VariationalClassifier(tf.keras.layers.Layer):
         if logits is None:
             logits = self(mh, training=True)
 
-        smoothing = tf.cast(self.label_smoothing, logits.dtype)
-        smoothed_targets = (
-            (1.0 - smoothing) * tf.cast(y_onehot, logits.dtype)
-            + smoothing / tf.cast(self.n_classes, logits.dtype)
-        )
-        cross_entropy_per_sample = tf.nn.softmax_cross_entropy_with_logits(
-            labels=smoothed_targets,
+        base_ce_per_sample, focal_per_sample = _categorical_focal_terms(
+            y=y,
             logits=logits,
+            n_classes=self.n_classes,
+            label_smoothing=self.label_smoothing,
+            focal_gamma=self.focal_gamma,
+            focal_alpha=self.focal_alpha,
         )
-        cross_entropy = self._weighted_mean(
-            cross_entropy_per_sample,
+        base_cross_entropy = self._weighted_mean(
+            base_ce_per_sample,
             sample_weight=sample_weight,
         )
-        weighted_cross_entropy = (
-            tf.cast(alpha, cross_entropy.dtype) * cross_entropy
+        focal_loss = self._weighted_mean(
+            focal_per_sample,
+            sample_weight=sample_weight,
         )
+        weighted_focal_loss = tf.cast(alpha, focal_loss.dtype) * focal_loss
 
         latent_posterior_kl = self._gaussian_kl_latent_posterior(mh, y)
         weighted_latent_posterior_kl = (
@@ -478,7 +572,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         )
 
         total_loss = (
-            weighted_cross_entropy
+            weighted_focal_loss
             + weighted_latent_posterior_kl
             + weighted_discriminator_kl
             + weighted_class_prior_kl
@@ -486,8 +580,14 @@ class VariationalClassifier(tf.keras.layers.Layer):
 
         return {
             "total_loss": total_loss,
-            "cross_entropy": cross_entropy,
-            "weighted_cross_entropy": weighted_cross_entropy,
+            "classification_loss": focal_loss,
+            "weighted_classification_loss": weighted_focal_loss,
+            "focal_loss": focal_loss,
+            "weighted_focal_loss": weighted_focal_loss,
+            "base_cross_entropy": base_cross_entropy,
+            # Backward-compatible aliases for older joint models.
+            "cross_entropy": focal_loss,
+            "weighted_cross_entropy": weighted_focal_loss,
             "latent_posterior_kl": latent_posterior_kl,
             "weighted_latent_posterior_kl": weighted_latent_posterior_kl,
             "discriminator_kl": discriminator_kl,
@@ -604,6 +704,8 @@ class VariationalClassifier(tf.keras.layers.Layer):
             {
                 "n_classes": self.n_classes,
                 "label_smoothing": self.label_smoothing,
+                "focal_gamma": self.focal_gamma,
+                "focal_alpha": self.focal_alpha,
             }
         )
         return config
@@ -617,10 +719,10 @@ class HybridClassifier(VariationalClassifier):
         logits = W h + b
 
     The inherited ``vc_loss_components`` method then combines weighted dense
-    cross-entropy with the same class-conditional latent KL, discriminator,
+    focal loss with the same class-conditional latent KL, discriminator,
     and class-prior terms used by :class:`VariationalClassifier`::
 
-        L = alpha * CE_dense
+        L = alpha * Focal_dense
             + beta * KL_latent
             + gamma * L_discriminator
             + lambda * KL_class_prior

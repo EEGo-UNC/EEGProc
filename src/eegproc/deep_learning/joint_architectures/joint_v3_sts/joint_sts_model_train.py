@@ -184,6 +184,8 @@ class JointSTSTrainingConfig:
     classifier_head: str = "dense"
     classifier_kwargs: dict = field(default_factory=dict)
     label_smoothing: float = 0.0
+    focal_gamma: float = 1.0
+    focal_alpha: tuple[float, ...] | None = None
     classification_loss_weight: float = 1.0
     vae_loss_weight: float = 1.0
     vae_beta: float = 0.30
@@ -651,6 +653,8 @@ def _model_hparameter_keys() -> set[str]:
         "classifier_head",
         "classifier_kwargs",
         "label_smoothing",
+        "focal_gamma",
+        "focal_alpha",
         "classification_loss_weight",
         "vae_loss_weight",
         "vae_beta",
@@ -877,6 +881,10 @@ def train_joint_sts_model(
                 label_smoothing=float(
                     hparams.get("label_smoothing", config.label_smoothing)
                 ),
+                focal_gamma=float(
+                    hparams.get("focal_gamma", config.focal_gamma)
+                ),
+                focal_alpha=hparams.get("focal_alpha", config.focal_alpha),
                 classification_loss_weight=float(
                     hparams.get(
                         "classification_loss_weight",
@@ -1006,6 +1014,11 @@ def train_joint_sts_model(
         config.weight_decay,
     )
     logger.info("Classifier head: %s", config.classifier_head)
+    logger.info(
+        "Classification loss: focal (gamma=%s, alpha=%s)",
+        config.focal_gamma,
+        config.focal_alpha,
+    )
     logger.info("Cross-validation strategy: %s", config.cv_strategy)
     logger.info(
         "Selection: %s_%s; thresholds selected by %s_%s",
@@ -1052,6 +1065,7 @@ def train_joint_sts_model(
     model_builder_function._sequence_hyperparameter_depths = {
         "gcn_units": 1,
         "temporal_pool_sizes": 1,
+        "focal_alpha": 1,
     }
 
     common_cv_kwargs = {
@@ -1413,6 +1427,8 @@ def train_joint_sts_model(
         "classification_learning_rate": config.classification_learning_rate,
         "vae_learning_rate": config.vae_learning_rate,
         "use_class_weight": config.use_class_weight,
+        "focal_gamma": config.focal_gamma,
+        "focal_alpha": config.focal_alpha,
         "use_subject_adversarial": config.use_subject_adversarial,
         "use_supcon": config.use_supcon,
         "label_threshold_mode": config.label_threshold_mode,
@@ -1634,6 +1650,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--label-smoothing-levels", type=float, nargs="+", default=None)
+    parser.add_argument(
+        "--focal-gamma",
+        type=float,
+        default=1.0,
+        help="Focal focusing parameter; 0 exactly recovers cross-entropy.",
+    )
+    parser.add_argument(
+        "--focal-alpha",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional focal class weights. Pass one value per class; a single "
+            "value is applied uniformly. Keras class_weight still multiplies "
+            "the resulting per-sample focal loss when enabled."
+        ),
+    )
     parser.add_argument("--classification-loss-weight", type=float, default=1.0)
     parser.add_argument("--vae-loss-weight", type=float, default=1.0)
     parser.add_argument("--vae-beta", type=float, default=0.30)
@@ -1776,7 +1809,13 @@ def _validate_args(args: argparse.Namespace, hyperparameters: dict) -> None:
         not 0.0 <= value < 1.0 for value in args.label_smoothing_levels
     ):
         raise ValueError("All label-smoothing levels must be in [0, 1).")
+    if args.focal_alpha is not None:
+        if any(not np.isfinite(value) or value < 0.0 for value in args.focal_alpha):
+            raise ValueError("All --focal-alpha values must be finite and non-negative.")
+        if not any(value > 0.0 for value in args.focal_alpha):
+            raise ValueError("At least one --focal-alpha value must be positive.")
     nonnegative_fields = {
+        "focal_gamma": args.focal_gamma,
         "classification_loss_weight": args.classification_loss_weight,
         "vae_loss_weight": args.vae_loss_weight,
         "vae_beta": args.vae_beta,
@@ -1928,6 +1967,12 @@ def main(argv: list[str] | None = None) -> int:
         classification_dropout=args.classification_dropout,
         classifier_head=args.classifier_head,
         label_smoothing=args.label_smoothing,
+        focal_gamma=args.focal_gamma,
+        focal_alpha=(
+            None
+            if args.focal_alpha is None
+            else tuple(float(value) for value in args.focal_alpha)
+        ),
         classification_loss_weight=args.classification_loss_weight,
         vae_loss_weight=args.vae_loss_weight,
         vae_beta=args.vae_beta,

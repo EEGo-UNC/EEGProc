@@ -1058,11 +1058,14 @@ class JointSTSModel(tf.keras.Model):
         )
 
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
-        self.vc_cross_entropy_tracker = tf.keras.metrics.Mean(
-            name="vc_cross_entropy"
+        self.vc_focal_loss_tracker = tf.keras.metrics.Mean(
+            name="vc_focal_loss"
         )
-        self.weighted_vc_cross_entropy_tracker = tf.keras.metrics.Mean(
-            name="weighted_vc_cross_entropy"
+        self.weighted_vc_focal_loss_tracker = tf.keras.metrics.Mean(
+            name="weighted_vc_focal_loss"
+        )
+        self.vc_base_cross_entropy_tracker = tf.keras.metrics.Mean(
+            name="vc_base_cross_entropy"
         )
         self.vc_latent_kl_tracker = tf.keras.metrics.Mean(name="vc_latent_kl")
         self.weighted_vc_latent_kl_tracker = tf.keras.metrics.Mean(
@@ -1136,8 +1139,9 @@ class JointSTSModel(tf.keras.Model):
             self.classification_regularization_tracker,
             self.vae_regularization_tracker,
             self.vc_loss_tracker,
-            self.vc_cross_entropy_tracker,
-            self.weighted_vc_cross_entropy_tracker,
+            self.vc_focal_loss_tracker,
+            self.weighted_vc_focal_loss_tracker,
+            self.vc_base_cross_entropy_tracker,
             self.vc_latent_kl_tracker,
             self.weighted_vc_latent_kl_tracker,
             self.vc_discriminator_kl_tracker,
@@ -1723,8 +1727,9 @@ class JointSTSModel(tf.keras.Model):
             "objective": objective,
             "regularization_loss": regularization_loss,
             "vc_loss": vc_losses["total_loss"],
-            "vc_cross_entropy": vc_losses["cross_entropy"],
-            "weighted_vc_cross_entropy": vc_losses["weighted_cross_entropy"],
+            "vc_focal_loss": vc_losses["focal_loss"],
+            "weighted_vc_focal_loss": vc_losses["weighted_focal_loss"],
+            "vc_base_cross_entropy": vc_losses["base_cross_entropy"],
             "vc_latent_kl": vc_losses["latent_posterior_kl"],
             "weighted_vc_latent_kl": vc_losses[
                 "weighted_latent_posterior_kl"
@@ -1898,11 +1903,14 @@ class JointSTSModel(tf.keras.Model):
         )
 
         self.vc_loss_tracker.update_state(classification_losses["vc_loss"])
-        self.vc_cross_entropy_tracker.update_state(
-            classification_losses["vc_cross_entropy"]
+        self.vc_focal_loss_tracker.update_state(
+            classification_losses["vc_focal_loss"]
         )
-        self.weighted_vc_cross_entropy_tracker.update_state(
-            classification_losses["weighted_vc_cross_entropy"]
+        self.weighted_vc_focal_loss_tracker.update_state(
+            classification_losses["weighted_vc_focal_loss"]
+        )
+        self.vc_base_cross_entropy_tracker.update_state(
+            classification_losses["vc_base_cross_entropy"]
         )
         self.vc_latent_kl_tracker.update_state(
             classification_losses["vc_latent_kl"]
@@ -2321,6 +2329,8 @@ def build_joint_sts_model(
     classifier_head: str = "dense",
     classifier_kwargs: dict | None = None,
     label_smoothing: float = 0.0,
+    focal_gamma: float = 1.0,
+    focal_alpha: float | Sequence[float] | None = None,
     classification_loss_weight: float = 1.0,
     vae_loss_weight: float = 1.0,
     vae_beta: float = 0.30,
@@ -2354,8 +2364,8 @@ def build_joint_sts_model(
 ) -> JointSTSModel:
     """Build and compile the fused STS model.
 
-    The default classifier is ``DenseClassifier`` to match the requested dense
-    softmax design. The decoder contains parallel temporal-BiLSTM and
+    The default classifier is ``DenseClassifier`` with categorical focal loss.
+    The decoder contains parallel temporal-BiLSTM and
     spatial-spectral-GCN pathways whose features are fused before the final
     reconstruction projection. ``classifier_head='hybrid'`` or
     ``'variational'`` retains the existing VC regularizers without changing
@@ -2422,6 +2432,8 @@ def build_joint_sts_model(
     classifier_config = {
         "n_classes": int(n_classes),
         "label_smoothing": float(label_smoothing),
+        "focal_gamma": float(focal_gamma),
+        "focal_alpha": focal_alpha,
         "name": f"sts_{classifier_head}_classifier",
     }
     classifier_config.update(classifier_kwargs or {})
