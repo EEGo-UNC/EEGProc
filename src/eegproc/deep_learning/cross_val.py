@@ -229,6 +229,145 @@ def _split_config(config: dict) -> tuple[dict, dict]:
     return model_hp, fit_hp
 
 
+
+
+class AlternatingSubjectSetSequence(tf.keras.utils.Sequence):
+    """Yield batches alternately from two disjoint subject sets.
+
+    Each epoch shuffles samples independently inside both environments. Batch
+    index parity determines the environment: even batches come from set A and
+    odd batches from set B. The shorter environment is cycled so both sets
+    contribute the same number of optimizer updates per epoch.
+    """
+
+    def __init__(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        subject_ids: np.ndarray,
+        subject_set_a: np.ndarray,
+        subject_set_b: np.ndarray,
+        batch_size: int,
+        *,
+        model: tf.keras.Model,
+        class_weight: dict[int, float] | None = None,
+        seed: int | None = 42,
+    ) -> None:
+        super().__init__()
+        self.X = np.asarray(X)
+        self.y = np.asarray(y)
+        self.subject_ids = np.asarray(subject_ids).reshape(-1)
+        self.batch_size = int(batch_size)
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be at least 1.")
+        self.model = model
+        self.fit_inputs = _prepare_fit_inputs_with_subject_ids(
+            model,
+            self.X,
+            self.subject_ids,
+        )
+        self.class_weight = dict(class_weight or {})
+        self.rng = np.random.default_rng(seed)
+
+        self.subject_set_a = np.asarray(subject_set_a)
+        self.subject_set_b = np.asarray(subject_set_b)
+        overlap = np.intersect1d(self.subject_set_a, self.subject_set_b)
+        if len(overlap):
+            raise ValueError(f"Alternating subject sets overlap: {overlap.tolist()}.")
+        self.indices_a = np.where(np.isin(self.subject_ids, self.subject_set_a))[0]
+        self.indices_b = np.where(np.isin(self.subject_ids, self.subject_set_b))[0]
+        if not len(self.indices_a) or not len(self.indices_b):
+            raise ValueError("Both alternating subject sets must contain samples.")
+        self._order_a = self.indices_a.copy()
+        self._order_b = self.indices_b.copy()
+        self.on_epoch_end()
+
+    def __len__(self) -> int:
+        batches_a = int(np.ceil(len(self.indices_a) / self.batch_size))
+        batches_b = int(np.ceil(len(self.indices_b) / self.batch_size))
+        return 2 * max(batches_a, batches_b)
+
+    @staticmethod
+    def _cycled_batch(order: np.ndarray, batch_index: int, batch_size: int) -> np.ndarray:
+        start = batch_index * batch_size
+        positions = (np.arange(start, start + batch_size) % len(order)).astype(np.int64)
+        return order[positions]
+
+    def __getitem__(self, index: int):
+        environment_batch = int(index) // 2
+        order = self._order_a if int(index) % 2 == 0 else self._order_b
+        indices = self._cycled_batch(order, environment_batch, self.batch_size)
+        y_batch = self.y[indices]
+        if isinstance(self.fit_inputs, Mapping):
+            x_for_fit = {
+                key: np.asarray(value)[indices]
+                for key, value in self.fit_inputs.items()
+            }
+        else:
+            x_for_fit = np.asarray(self.fit_inputs)[indices]
+        if not self.class_weight:
+            return x_for_fit, y_batch
+        y_ids = _as_numpy_1d(y_batch).astype(np.int64)
+        sample_weight = np.asarray(
+            [self.class_weight.get(int(label), 1.0) for label in y_ids],
+            dtype=np.float32,
+        )
+        return x_for_fit, y_batch, sample_weight
+
+    def on_epoch_end(self) -> None:
+        self.rng.shuffle(self._order_a)
+        self.rng.shuffle(self._order_b)
+
+
+def _balanced_two_subject_sets(
+    subject_ids: np.ndarray,
+    labels: np.ndarray,
+    *,
+    seed: int | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split fold-local subjects into two nearly equal, label-balanced sets."""
+    subjects = np.asarray(subject_ids).reshape(-1)
+    y_ids = _as_numpy_1d(labels).astype(np.int64)
+    unique_subjects = np.sort(np.unique(subjects))
+    if len(unique_subjects) < 2:
+        raise ValueError("Alternating optimization requires at least two subjects.")
+
+    rows = []
+    for subject in unique_subjects:
+        mask = subjects == subject
+        subject_labels = y_ids[mask]
+        rows.append(
+            (
+                subject,
+                int(np.sum(mask)),
+                float(np.mean(subject_labels == 1)) if len(subject_labels) else 0.0,
+            )
+        )
+    rng = np.random.default_rng(seed)
+    rng.shuffle(rows)
+    rows.sort(key=lambda row: (row[2], row[1]), reverse=True)
+
+    sets = [[], []]
+    counts = [0, 0]
+    positives = [0.0, 0.0]
+    target_sizes = [len(unique_subjects) // 2, len(unique_subjects) - len(unique_subjects) // 2]
+    for subject, count, positive_fraction in rows:
+        candidates = [idx for idx in (0, 1) if len(sets[idx]) < target_sizes[idx]]
+        choice = min(
+            candidates,
+            key=lambda idx: (
+                positives[idx] / max(counts[idx], 1),
+                counts[idx],
+                len(sets[idx]),
+            ),
+        )
+        sets[choice].append(subject)
+        counts[choice] += count
+        positives[choice] += positive_fraction * count
+
+    return np.sort(np.asarray(sets[0])), np.sort(np.asarray(sets[1]))
+
+
 def _prepare_fit_inputs_with_subject_ids(
     model: tf.keras.Model,
     X: np.ndarray,
@@ -3823,6 +3962,8 @@ def _run_loso_fold(
     validation_excluded_subjects: list | tuple | np.ndarray | None = None,
     fold_description: str | None = None,
     cv_strategy: str = "loso",
+    alternate_subject_sets: bool = False,
+    alternating_subject_seed: int | None = 42,
 ) -> dict:
     """Train and evaluate one LOSO fold with optional seeded validation.
 
@@ -3869,6 +4010,11 @@ def _run_loso_fold(
         )
     if validation_subjects_per_fold < 0:
         raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if alternate_subject_sets and validation_subjects_per_fold != 0:
+        raise ValueError(
+            "alternate_subject_sets uses all non-test subjects and therefore "
+            "requires validation_subjects_per_fold=0."
+        )
     if (
         validation_subjects_per_fold > 0
         and validation_subjects_per_fold >= len(validation_candidate_subjects)
@@ -4083,15 +4229,57 @@ def _run_loso_fold(
             if validation_subjects_per_fold > 0
             else None
         )
-        history = model.fit(
-            X_fit_train_for_fit,
-            y_fit_train,
-            validation_data=validation_data,
-            class_weight=class_weight,
-            verbose=0,
-            **fit_hp,
-            **fit_call_kwargs,
-        )
+        if alternate_subject_sets:
+            if validation_subjects_per_fold > 0:
+                raise ValueError(
+                    "alternate_subject_sets requires validation_subjects_per_fold=0."
+                )
+            fold_alt_seed = (
+                None
+                if alternating_subject_seed is None
+                else int(alternating_subject_seed) + int(fold_number)
+            )
+            subject_set_a, subject_set_b = _balanced_two_subject_sets(
+                subject_ids_fit_train,
+                y_fit_train,
+                seed=fold_alt_seed,
+            )
+            print(
+                "Alternating subject sets: "
+                f"A={[_python_scalar(v) for v in subject_set_a]} | "
+                f"B={[_python_scalar(v) for v in subject_set_b]}",
+                flush=True,
+            )
+            alternating_sequence = AlternatingSubjectSetSequence(
+                X=X_fit_train,
+                y=y_fit_train,
+                subject_ids=subject_ids_fit_train,
+                subject_set_a=subject_set_a,
+                subject_set_b=subject_set_b,
+                batch_size=current_batch_size,
+                model=model,
+                class_weight=class_weight,
+                seed=fold_alt_seed,
+            )
+            history = model.fit(
+                alternating_sequence,
+                validation_data=None,
+                verbose=0,
+                **fit_hp,
+                **fit_call_kwargs,
+            )
+        else:
+            subject_set_a = np.asarray([], dtype=subject_ids_fit_train.dtype)
+            subject_set_b = np.asarray([], dtype=subject_ids_fit_train.dtype)
+            history = model.fit(
+                X_fit_train_for_fit,
+                y_fit_train,
+                validation_data=validation_data,
+                class_weight=class_weight,
+                verbose=0,
+                **fit_hp,
+                **fit_call_kwargs,
+            )
 
         epochs_ran = int(len(history.history.get("loss", [])))
         requested_epochs = int(fit_hp.get("epochs", epochs_ran))
@@ -4245,6 +4433,13 @@ def _run_loso_fold(
         "best_monitored_value": best_monitored_value,
         "stopped_early": bool(stopped_early),
         "decision_threshold": float(selected_decision_threshold),
+        "alternate_subject_sets": bool(alternate_subject_sets),
+        "subject_set_a": [
+            _python_scalar(value) for value in subject_set_a.tolist()
+        ] if alternate_subject_sets else [],
+        "subject_set_b": [
+            _python_scalar(value) for value in subject_set_b.tolist()
+        ] if alternate_subject_sets else [],
     }
 
     prediction_diagnostics_log = (
@@ -4507,6 +4702,8 @@ def loso_cv(
     gpu_ids: list[int] | tuple[int, ...] | None = None,
     cpus_per_worker: int | None = None,
     max_folds: int | None = None,
+    alternate_subject_sets: bool = False,
+    alternating_subject_seed: int | None = 42,
 ) -> dict:
     """Run a flat hyperparameter search using complete LOSO evaluations.
 
@@ -4882,6 +5079,8 @@ def loso_cv(
         "threshold_selection_level": threshold_selection_level,
         "verbose": verbose,
         "extra_fit_kwargs": extra_fit_kwargs,
+        "alternate_subject_sets": bool(alternate_subject_sets),
+        "alternating_subject_seed": alternating_subject_seed,
     }
 
     config_results: list[dict] = []
@@ -5138,6 +5337,8 @@ def fixed_loso_cv(
     gpu_ids: list[int] | tuple[int, ...] | None = None,
     cpus_per_worker: int | None = None,
     max_folds: int | None = None,
+    alternate_subject_sets: bool = False,
+    alternating_subject_seed: int | None = 42,
 ) -> dict:
     """Evaluate one fixed configuration with strict LOSOCV and no validation.
 
@@ -5217,6 +5418,8 @@ def fixed_loso_cv(
         gpu_ids=gpu_ids,
         cpus_per_worker=cpus_per_worker,
         max_folds=max_folds,
+        alternate_subject_sets=alternate_subject_sets,
+        alternating_subject_seed=alternating_subject_seed,
     )
 
     if int(results.get("n_configs", 0)) != 1:

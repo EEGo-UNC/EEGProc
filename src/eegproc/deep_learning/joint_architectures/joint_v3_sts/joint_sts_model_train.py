@@ -114,6 +114,8 @@ class JointSTSTrainingConfig:
     max_folds: int | None = None
     n_jobs: int = 1
     cpus_per_worker: int | None = None
+    alternate_subject_sets: bool = False
+    alternating_subject_seed: int | None = 42
 
     # Prediction, thresholds, and diagnostics.
     prediction_latent_samples: int = 0
@@ -1028,6 +1030,11 @@ def train_joint_sts_model(
     )
     logger.info("Cross-validation strategy: %s", config.cv_strategy)
     logger.info(
+        "Alternating two-subject-set optimization: %s (seed=%s)",
+        config.alternate_subject_sets,
+        config.alternating_subject_seed,
+    )
+    logger.info(
         "Selection: %s_%s; thresholds selected by %s_%s",
         config.selection_level,
         config.selection_metric,
@@ -1135,6 +1142,8 @@ def train_joint_sts_model(
         cv_results = loso_cv(
             **common_cv_kwargs,
             max_folds=config.max_folds,
+            alternate_subject_sets=config.alternate_subject_sets,
+            alternating_subject_seed=config.alternating_subject_seed,
         )
     elif config.cv_strategy == "lnskto":
         cv_results = lnskto_cv(
@@ -1306,6 +1315,8 @@ def train_joint_sts_model(
             n_jobs=config.n_jobs,
             cpus_per_worker=config.cpus_per_worker,
             max_folds=config.max_folds,
+            alternate_subject_sets=config.alternate_subject_sets,
+            alternating_subject_seed=config.alternating_subject_seed,
         )
 
         no_validation_fold_rows: list[dict] = []
@@ -1611,6 +1622,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     parser.add_argument("--validation-subjects", type=int, default=2)
     parser.add_argument("--validation-seed", type=int, default=None)
+    _add_bool_pair(
+        parser,
+        "--alternate-subject-sets",
+        "--no-alternate-subject-sets",
+        "alternate_subject_sets",
+        False,
+        (
+            "Split each LOSO training pool into two disjoint subject sets and "
+            "alternate optimizer batches between them. Requires zero validation subjects."
+        ),
+        "Use ordinary shuffled minibatches across all training subjects.",
+    )
+    parser.add_argument("--alternating-subject-seed", type=int, default=42)
     parser.add_argument("--no-early-stopping", action="store_true")
     parser.add_argument("--early-stopping-patience", type=int, default=20)
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.001)
@@ -1866,6 +1890,15 @@ def _validate_args(args: argparse.Namespace, hyperparameters: dict) -> None:
         raise ValueError("--prediction-latent-samples must be non-negative.")
     if args.validation_subjects < 0:
         raise ValueError("--validation-subjects must be non-negative.")
+    if args.alternate_subject_sets and args.validation_subjects != 0:
+        raise ValueError(
+            "--alternate-subject-sets requires --validation-subjects 0."
+        )
+    if args.alternate_subject_sets and not args.no_early_stopping:
+        raise ValueError(
+            "--alternate-subject-sets requires --no-early-stopping because no "
+            "validation split is used."
+        )
     if args.early_stopping_patience < 0:
         raise ValueError("--early-stopping-patience must be non-negative.")
     if args.lnskto_subjects < 1 or args.lnskto_trials < 1:
@@ -1932,6 +1965,8 @@ def main(argv: list[str] | None = None) -> int:
         max_folds=args.max_folds,
         n_jobs=args.n_jobs,
         cpus_per_worker=args.cpus_per_worker,
+        alternate_subject_sets=args.alternate_subject_sets,
+        alternating_subject_seed=args.alternating_subject_seed,
         prediction_latent_samples=args.prediction_latent_samples,
         latent_sampling_seed=args.latent_sampling_seed,
         decision_thresholds=tuple(sorted(map(float, args.decision_thresholds))),
