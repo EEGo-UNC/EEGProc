@@ -346,8 +346,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
 
-        "focal_alpha": [0.635, 0.365],
-        "focal_gamma": [1.0],
+        "focal_alpha": [0.55, 0.45],
+        "focal_gamma": [1.5],
         "vc_alpha": [
             1.0
         ],
