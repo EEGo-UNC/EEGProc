@@ -232,27 +232,27 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/joint_sts/DREAMER/arousal \
+    --out-dir runs/smoke/joint_sts/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
-    --n-jobs 4 \
-    --cpus-per-worker 2 \
-    --outer-verbose 0 \
+    --max-folds 2 \
+    --n-jobs 2 \
+    --cpus-per-worker 4 \
+    --outer-verbose 2 \
     --final-verbose 2 \
     --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 4 \
+    --validation-subjects 6 \
     --validation-seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
-    --early-stopping-patience 40 \
+    --early-stopping-patience 20 \
     --early-stopping-min-delta 0.002 \
     --window-sec 4.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
-    --use-class-weight \
-    --supcon-cross-subject-only \
-    --early-stopping-monitor val_trial_balanced_accuracy \
+    --no-class-weight \
+    --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
@@ -267,22 +267,22 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             100
         ],
         "batch_size": [
-            16
+            64
         ],
         "optimizer": [
             "adamw"
         ],
         "classification_learning_rate": [
-            0.0001
+            0.00003
         ],
         "vae_learning_rate": [
-            0.00005
+            0.00002
         ],
         "weight_decay": [
-            0.0001
+            0.00005
         ],
         "classification_steps_per_batch": [
-            1
+            2
         ],
         "vae_steps_per_batch": [
             1
@@ -292,10 +292,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             true
         ],
         "subject_adversarial_weight": [
-            0.6
+            0.5
         ],
         "subject_loss_weight": [
-            1.0
+            0.0, 0.5
         ],
         "subject_hidden_units": [
             128
@@ -324,7 +324,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vae_loss_weight": [
-            1.0
+            0.5
         ],
         "vae_beta": [
             0.3
@@ -340,13 +340,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             128
         ],
         "classification_dropout": [
-            0.5
+            0.3
         ],
         "vc_alpha": [
             1.0
         ],
         "vc_beta": [
-            0.25, 0.5
+            0.0, 0.5
         ],
         "vc_gamma": [
             0.0
@@ -371,7 +371,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1
         ],
         "bilstm_dropout": [
-            0.4
+            0.3
         ],
         "temporal_emb_dim": [
             64

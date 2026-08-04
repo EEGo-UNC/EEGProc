@@ -252,7 +252,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --no-class-weight \
-    --early-stopping-monitor val_trial_balanced_accuracy \
+    --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
