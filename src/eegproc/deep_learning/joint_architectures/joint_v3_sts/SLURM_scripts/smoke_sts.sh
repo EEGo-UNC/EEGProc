@@ -295,7 +295,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.1
         ],
         "subject_loss_weight": [
-            0.0
+            0.5
         ],
         "subject_hidden_units": [
             128
@@ -324,7 +324,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vae_loss_weight": [
-            0.0
+            0.5
         ],
         "vae_beta": [
             0.3
@@ -344,8 +344,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
 
-        focal_alpha: [0.725, 0.275],
-        focal_gamma: 1.0,
+        "focal_alpha": [0.725, 0.275],
+        "focal_gamma": [1.0],
         "vc_alpha": [
             1.0
         ],
