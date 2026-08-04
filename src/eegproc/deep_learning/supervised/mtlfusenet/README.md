@@ -59,50 +59,15 @@ A complete DREAMER cache should contain 414 trial files:
 ```bash
 find processed_trials -maxdepth 1 -name 'subj*_trial*.pkl' | wc -l
 ```
-
-## Run the SLURM smoke test
-
-Submit the included script:
-
-```bash
-cd "$HOME/EEGProc"
-sbatch scripts/smoke_mtlfusenet_dreamer_arousal.sh
-```
-
-The script requests two L40 GPUs and runs two LOSO folds concurrently. It first checks the Python/CUDA environment, TensorFlow GPU visibility, local EEGProc imports, cached inputs, packed-input adapter, and one model forward pass.
-
-Monitor the job:
-
-```bash
-squeue -u "$USER"
-tail -f smoke_mtlfusenet_arousal_<JOB_ID>.out
-```
-
-Check errors:
-
-```bash
-tail -f smoke_mtlfusenet_arousal_<JOB_ID>.err
-```
-
-A successful job should finish with SLURM state `COMPLETED` and exit code `0:0`:
-
-```bash
-sacct -j <JOB_ID> --format=JobID,State,ExitCode,Elapsed,MaxRSS
-```
-
-Smoke-test outputs are saved under:
-
-```text
-runs/smoke/mtlfusenet/DREAMER/arousal/
-```
-
-## Run full LOSO training
+## Run SLURM training
 
 ### Preprocess
 
+```bash
 cd "$HOME/EEGProc"
 
-sbatch SLURM_scripts/preprocess_mtlfusenet_dreamer.sh
+sbatch src/eegproc/deep_learning/supervised/mtlfusenet/SLURM_scripts/preprocess_mtlfusenet_dreamer.sh
+```
 
 ### Arousal
 
