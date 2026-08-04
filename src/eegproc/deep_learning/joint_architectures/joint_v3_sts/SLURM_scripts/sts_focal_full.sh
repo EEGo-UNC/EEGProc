@@ -4,7 +4,7 @@
 #SBATCH --error=loso_sts_restore075_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=1-00:00:00
@@ -125,8 +125,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --n-bands 3 \
     --out-dir runs/FULL_LOSO_FOCAL_TRAIN_VAL/DREAMER/AROUSAL \
     --run-name dreamer_arousal_restored_075 \
-    --n-jobs 2 \
-    --cpus-per-worker 4 \
+    --n-jobs 4 \
+    --cpus-per-worker 2 \
     --outer-verbose 2 \
     --final-verbose 2 \
     --prediction-latent-samples 20 \
