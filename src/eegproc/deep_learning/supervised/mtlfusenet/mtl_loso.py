@@ -14,6 +14,8 @@ import glob
 import json
 import os
 import pickle
+import sys
+from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
@@ -21,7 +23,16 @@ from sklearn.metrics import (
     accuracy_score, f1_score, precision_score, recall_score,
 )
 
-from eegproc.deep_learning.supervised.mtlfusenet.mtl_model import MTLFuseNet
+try:
+    from .mtl_model import MTLFuseNet
+except ImportError:
+    try:
+        from eegproc.deep_learning.supervised.mtlfusenet.mtl_model import MTLFuseNet
+    except ImportError:
+        CURRENT_DIR = Path(__file__).resolve().parent
+        if str(CURRENT_DIR) not in sys.path:
+            sys.path.insert(0, str(CURRENT_DIR))
+        from mtl_model import MTLFuseNet
 
 AUTOTUNE = tf.data.AUTOTUNE
 SIGNATURE = (

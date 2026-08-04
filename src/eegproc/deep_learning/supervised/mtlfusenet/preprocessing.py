@@ -1,7 +1,23 @@
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
-from eegproc import bandpass_filter, psd_bandpowers
 from sklearn.feature_selection import mutual_info_regression
+
+try:
+    from .... import bandpass_filter, psd_bandpowers
+except ImportError:
+    try:
+        from eegproc import bandpass_filter, psd_bandpowers
+    except ImportError:
+        src_root = next(
+            (parent for parent in Path(__file__).resolve().parents if parent.name == "src"),
+            None,
+        )
+        if src_root is not None and str(src_root) not in sys.path:
+            sys.path.insert(0, str(src_root))
+        from eegproc import bandpass_filter, psd_bandpowers
 
 EEG_CHANNELS = ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2',
                 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4']

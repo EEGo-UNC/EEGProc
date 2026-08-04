@@ -17,11 +17,32 @@ Forward inputs are a tuple ``(X_ST, DE, adj)``:
     adj  : (B, 3, 14, 14)   symmetric-normalized adjacency per band (per trial)
 """
 
+import sys
+from pathlib import Path
+
 import tensorflow as tf
 from tensorflow.keras import layers
 
-from eegproc.deep_learning.supervised.mtlfusenet.models import build_vae_encoder, build_vae_decoder, Sampling
-from eegproc.deep_learning.supervised.mtlfusenet.losses import focal_loss, triplet_center_loss
+try:
+    from .models import build_vae_encoder, build_vae_decoder, Sampling
+    from .losses import focal_loss, triplet_center_loss
+except ImportError:
+    try:
+        from eegproc.deep_learning.supervised.mtlfusenet.models import (
+            build_vae_encoder,
+            build_vae_decoder,
+            Sampling,
+        )
+        from eegproc.deep_learning.supervised.mtlfusenet.losses import (
+            focal_loss,
+            triplet_center_loss,
+        )
+    except ImportError:
+        CURRENT_DIR = Path(__file__).resolve().parent
+        if str(CURRENT_DIR) not in sys.path:
+            sys.path.insert(0, str(CURRENT_DIR))
+        from models import build_vae_encoder, build_vae_decoder, Sampling
+        from losses import focal_loss, triplet_center_loss
 
 
 class MTLFuseNet(tf.keras.Model):

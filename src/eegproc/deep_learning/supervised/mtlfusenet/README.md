@@ -48,7 +48,7 @@ Run from the EEGProc repository root:
 cd "$HOME/EEGProc"
 source venv312/bin/activate
 
-python -m eegproc.deep_learning.supervised.mtlfusenet.mtl_preprocess \
+python -m src.eegproc.deep_learning.supervised.mtlfusenet.mtl_preprocess \
   --csv datasets/dreamer_joined.csv \
   --out processed_trials \
   --mi-max-samples 5000

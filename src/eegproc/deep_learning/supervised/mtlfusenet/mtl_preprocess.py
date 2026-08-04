@@ -20,20 +20,49 @@ truncated to the shared minimum as a defensive guard.
 
 import os
 import pickle
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from eegproc import bandpass_filter, psd_bandpowers
-from eegproc.deep_learning.supervised.mtlfusenet.preprocessing import (
-    EEG_CHANNELS,
-    DREAMER_BANDS,
-    ELECTRODE_POSITIONS,
-    build_adjacency_matrix,
-    label_to_binary,
-    load_dreamer_csv,
-)
-from eegproc.deep_learning.supervised.mtlfusenet.models import normalize_adjacency
+try:
+    from .... import bandpass_filter, psd_bandpowers
+    from .preprocessing import (
+        EEG_CHANNELS,
+        DREAMER_BANDS,
+        ELECTRODE_POSITIONS,
+        build_adjacency_matrix,
+        label_to_binary,
+        load_dreamer_csv,
+    )
+    from .models import normalize_adjacency
+except ImportError:
+    try:
+        from eegproc import bandpass_filter, psd_bandpowers
+        from eegproc.deep_learning.supervised.mtlfusenet.preprocessing import (
+            EEG_CHANNELS,
+            DREAMER_BANDS,
+            ELECTRODE_POSITIONS,
+            build_adjacency_matrix,
+            label_to_binary,
+            load_dreamer_csv,
+        )
+        from eegproc.deep_learning.supervised.mtlfusenet.models import normalize_adjacency
+    except ImportError:
+        CURRENT_DIR = Path(__file__).resolve().parent
+        if str(CURRENT_DIR) not in sys.path:
+            sys.path.insert(0, str(CURRENT_DIR))
+        from eegproc import bandpass_filter, psd_bandpowers
+        from preprocessing import (
+            EEG_CHANNELS,
+            DREAMER_BANDS,
+            ELECTRODE_POSITIONS,
+            build_adjacency_matrix,
+            label_to_binary,
+            load_dreamer_csv,
+        )
+        from models import normalize_adjacency
 
 BANDS = ("theta", "alpha", "beta")
 FS = 128
