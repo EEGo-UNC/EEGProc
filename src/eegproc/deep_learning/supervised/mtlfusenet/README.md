@@ -98,6 +98,12 @@ runs/smoke/mtlfusenet/DREAMER/arousal/
 
 ## Run full LOSO training
 
+### Preprocess
+
+cd "$HOME/EEGProc"
+
+sbatch SLURM_scripts/preprocess_mtlfusenet_dreamer.sh
+
 ### Arousal
 
 ```bash
