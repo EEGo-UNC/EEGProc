@@ -1,0 +1,1964 @@
+Requirement already satisfied: pip in ./venv312/lib/python3.12/site-packages (26.1.2)
+Requirement already satisfied: absl-py==2.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 1)) (2.4.0)
+Requirement already satisfied: alabaster==1.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 2)) (1.0.0)
+Requirement already satisfied: astunparse==1.6.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 3)) (1.6.3)
+Requirement already satisfied: babel==2.17.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 4)) (2.17.0)
+Requirement already satisfied: backports.tarfile==1.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 5)) (1.2.0)
+Requirement already satisfied: build==1.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 6)) (1.3.0)
+Requirement already satisfied: bumpver==2025.1131 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 7)) (2025.1131)
+Requirement already satisfied: certifi==2025.8.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 8)) (2025.8.3)
+Requirement already satisfied: charset-normalizer==3.4.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 9)) (3.4.3)
+Requirement already satisfied: click==8.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 10)) (8.3.0)
+Requirement already satisfied: colorama==0.4.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 11)) (0.4.6)
+Requirement already satisfied: contourpy==1.3.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 12)) (1.3.2)
+Requirement already satisfied: coverage==7.10.7 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 13)) (7.10.7)
+Requirement already satisfied: coverage-badge==1.1.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 14)) (1.1.2)
+Requirement already satisfied: cycler==0.12.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 15)) (0.12.1)
+Requirement already satisfied: decorator==5.2.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 16)) (5.2.1)
+Requirement already satisfied: dill==0.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 17)) (0.4.0)
+Requirement already satisfied: docutils==0.21.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 18)) (0.21.2)
+Requirement already satisfied: EMD-signal==1.6.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 19)) (1.6.4)
+Requirement already satisfied: exceptiongroup==1.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 20)) (1.3.0)
+Requirement already satisfied: flatbuffers==25.12.19 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 21)) (25.12.19)
+Requirement already satisfied: fonttools==4.60.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 22)) (4.60.1)
+Requirement already satisfied: gast==0.7.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 23)) (0.7.0)
+Requirement already satisfied: google-pasta==0.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 24)) (0.2.0)
+Requirement already satisfied: grpcio==1.78.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 25)) (1.78.0)
+Requirement already satisfied: h5py==3.15.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 26)) (3.15.1)
+Requirement already satisfied: id==1.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 27)) (1.5.0)
+Requirement already satisfied: idna==3.10 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 28)) (3.10)
+Requirement already satisfied: imagesize==1.4.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 29)) (1.4.1)
+Requirement already satisfied: importlib_metadata==8.7.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 30)) (8.7.0)
+Requirement already satisfied: iniconfig==2.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 31)) (2.1.0)
+Requirement already satisfied: jaraco.classes==3.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 32)) (3.4.0)
+Requirement already satisfied: jaraco.context==6.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 33)) (6.0.1)
+Requirement already satisfied: jaraco.functools==4.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 34)) (4.3.0)
+Requirement already satisfied: Jinja2==3.1.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 35)) (3.1.6)
+Requirement already satisfied: joblib==1.5.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 36)) (1.5.2)
+Requirement already satisfied: keras==3.12.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 37)) (3.12.1)
+Requirement already satisfied: keyring==25.6.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 38)) (25.6.0)
+Requirement already satisfied: kiwisolver==1.4.9 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 39)) (1.4.9)
+Requirement already satisfied: lazy_loader==0.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 40)) (0.4)
+Requirement already satisfied: lexid==2021.1006 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 41)) (2021.1006)
+Requirement already satisfied: libclang==18.1.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 42)) (18.1.1)
+Requirement already satisfied: Markdown==3.10.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 43)) (3.10.2)
+Requirement already satisfied: markdown-it-py==3.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 44)) (3.0.0)
+Requirement already satisfied: MarkupSafe==3.0.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 45)) (3.0.3)
+Requirement already satisfied: matplotlib==3.10.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 46)) (3.10.6)
+Requirement already satisfied: mdit-py-plugins==0.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 47)) (0.5.0)
+Requirement already satisfied: mdurl==0.1.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 48)) (0.1.2)
+Requirement already satisfied: ml_dtypes==0.5.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 49)) (0.5.4)
+Requirement already satisfied: mne==1.10.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 50)) (1.10.2)
+Requirement already satisfied: more-itertools==10.8.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 51)) (10.8.0)
+Requirement already satisfied: multiprocess==0.70.18 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 52)) (0.70.18)
+Requirement already satisfied: myst-parser==4.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 53)) (4.0.1)
+Requirement already satisfied: namex==0.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 54)) (0.1.0)
+Requirement already satisfied: nh3==0.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 55)) (0.3.0)
+Requirement already satisfied: numpy==2.2.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 56)) (2.2.6)
+Requirement already satisfied: opt_einsum==3.4.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 57)) (3.4.0)
+Requirement already satisfied: optree==0.18.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 58)) (0.18.0)
+Requirement already satisfied: packaging==25.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 59)) (25.0)
+Requirement already satisfied: pandas==2.3.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 60)) (2.3.2)
+Requirement already satisfied: pathos==0.3.4 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 61)) (0.3.4)
+Requirement already satisfied: pillow==11.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 62)) (11.3.0)
+Requirement already satisfied: pip-tools==7.5.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 63)) (7.5.1)
+Requirement already satisfied: platformdirs==4.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 64)) (4.5.0)
+Requirement already satisfied: pluggy==1.6.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 65)) (1.6.0)
+Requirement already satisfied: pockets==0.9.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 66)) (0.9.1)
+Requirement already satisfied: pooch==1.8.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 67)) (1.8.2)
+Requirement already satisfied: pox==0.3.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 68)) (0.3.6)
+Requirement already satisfied: ppft==1.7.7 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 69)) (1.7.7)
+Requirement already satisfied: protobuf==6.33.5 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 70)) (6.33.5)
+Requirement already satisfied: Pygments==2.19.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 71)) (2.19.2)
+Requirement already satisfied: pyparsing==3.2.5 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 72)) (3.2.5)
+Requirement already satisfied: pyproject_hooks==1.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 73)) (1.2.0)
+Requirement already satisfied: pytest==8.4.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 74)) (8.4.2)
+Requirement already satisfied: pytest-cov==7.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 75)) (7.0.0)
+Requirement already satisfied: python-dateutil==2.9.0.post0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 76)) (2.9.0.post0)
+Requirement already satisfied: pytz==2025.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 77)) (2025.2)
+Requirement already satisfied: PyWavelets==1.8.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 78)) (1.8.0)
+Requirement already satisfied: PyYAML==6.0.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 79)) (6.0.3)
+Requirement already satisfied: readme_renderer==44.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 80)) (44.0)
+Requirement already satisfied: requests==2.32.5 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 81)) (2.32.5)
+Requirement already satisfied: requests-toolbelt==1.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 82)) (1.0.0)
+Requirement already satisfied: rfc3986==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 83)) (2.0.0)
+Requirement already satisfied: rich==14.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 84)) (14.1.0)
+Requirement already satisfied: scikit-learn==1.7.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 85)) (1.7.2)
+Requirement already satisfied: scipy==1.15.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 86)) (1.15.3)
+Requirement already satisfied: six==1.17.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 87)) (1.17.0)
+Requirement already satisfied: snowballstemmer==3.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 88)) (3.0.1)
+Requirement already satisfied: Sphinx==8.1.3 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 89)) (8.1.3)
+Requirement already satisfied: sphinx-autodoc-typehints==3.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 90)) (3.0.1)
+Requirement already satisfied: sphinx-rtd-theme==3.0.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 91)) (3.0.2)
+Requirement already satisfied: sphinxcontrib-applehelp==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 92)) (2.0.0)
+Requirement already satisfied: sphinxcontrib-devhelp==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 93)) (2.0.0)
+Requirement already satisfied: sphinxcontrib-htmlhelp==2.1.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 94)) (2.1.0)
+Requirement already satisfied: sphinxcontrib-jquery==4.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 95)) (4.1)
+Requirement already satisfied: sphinxcontrib-jsmath==1.0.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 96)) (1.0.1)
+Requirement already satisfied: sphinxcontrib-napoleon==0.7 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 97)) (0.7)
+Requirement already satisfied: sphinxcontrib-qthelp==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 98)) (2.0.0)
+Requirement already satisfied: sphinxcontrib-serializinghtml==2.0.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 99)) (2.0.0)
+Requirement already satisfied: tensorboard==2.20.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 100)) (2.20.0)
+Requirement already satisfied: tensorboard-data-server==0.7.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 101)) (0.7.2)
+Requirement already satisfied: tensorflow==2.20.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 102)) (2.20.0)
+Requirement already satisfied: termcolor==3.3.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 103)) (3.3.0)
+Requirement already satisfied: threadpoolctl==3.6.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 104)) (3.6.0)
+Requirement already satisfied: toml==0.10.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 105)) (0.10.2)
+Requirement already satisfied: tomli==2.2.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 106)) (2.2.1)
+Requirement already satisfied: tqdm==4.67.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 107)) (4.67.1)
+Requirement already satisfied: twine==6.2.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 108)) (6.2.0)
+Requirement already satisfied: typing_extensions==4.15.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 109)) (4.15.0)
+Requirement already satisfied: tzdata==2025.2 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 110)) (2025.2)
+Requirement already satisfied: urllib3==2.5.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 111)) (2.5.0)
+Requirement already satisfied: Werkzeug==3.1.6 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 112)) (3.1.6)
+Requirement already satisfied: wrapt==2.1.1 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 113)) (2.1.1)
+Requirement already satisfied: zipp==3.23.0 in ./venv312/lib/python3.12/site-packages (from -r requirements.txt (line 114)) (3.23.0)
+Requirement already satisfied: wheel<1.0,>=0.23.0 in ./venv312/lib/python3.12/site-packages (from astunparse==1.6.3->-r requirements.txt (line 3)) (0.47.0)
+Requirement already satisfied: setuptools in ./venv312/lib/python3.12/site-packages (from coverage-badge==1.1.2->-r requirements.txt (line 14)) (83.0.0)
+Requirement already satisfied: SecretStorage>=3.2 in ./venv312/lib/python3.12/site-packages (from keyring==25.6.0->-r requirements.txt (line 38)) (3.5.0)
+Requirement already satisfied: jeepney>=0.4.2 in ./venv312/lib/python3.12/site-packages (from keyring==25.6.0->-r requirements.txt (line 38)) (0.9.0)
+Requirement already satisfied: pip>=22.2 in ./venv312/lib/python3.12/site-packages (from pip-tools==7.5.1->-r requirements.txt (line 63)) (26.1.2)
+Requirement already satisfied: cryptography>=2.0 in ./venv312/lib/python3.12/site-packages (from SecretStorage>=3.2->keyring==25.6.0->-r requirements.txt (line 38)) (49.0.0)
+Requirement already satisfied: cffi>=2.0.0 in ./venv312/lib/python3.12/site-packages (from cryptography>=2.0->SecretStorage>=3.2->keyring==25.6.0->-r requirements.txt (line 38)) (2.1.0)
+Requirement already satisfied: pycparser in ./venv312/lib/python3.12/site-packages (from cffi>=2.0.0->cryptography>=2.0->SecretStorage>=3.2->keyring==25.6.0->-r requirements.txt (line 38)) (3.0)
+Job ID: 59260710
+Node: g181002.ll.unc.edu
+Python: /nas/longleaf/home/inserra/EEGProc/venv312/bin/python
+Virtual environment: /nas/longleaf/home/inserra/EEGProc/venv312
+Module CUDA root: /nas/longleaf/rhel9/apps/cuda/12.9
+XLA CUDA root: /nas/longleaf/rhel9/apps/cuda/12.9
+libdevice: /nas/longleaf/rhel9/apps/cuda/12.9/nvvm/libdevice/libdevice.10.bc
+XLA_FLAGS: --xla_gpu_cuda_data_dir=/nas/longleaf/rhel9/apps/cuda/12.9
+Python 3.12.4
+Wed Jul 15 20:22:27 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 595.58.03              Driver Version: 595.58.03      CUDA Version: 13.2     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA L40S                    On  |   00000000:19:00.0 Off |                    0 |
+| N/A   42C    P8             35W /  350W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA L40S                    On  |   00000000:B4:00.0 Off |                    0 |
+| N/A   25C    P8             31W /  350W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA L40S                    On  |   00000000:B5:00.0 Off |                    0 |
+| N/A   43C    P8             35W /  350W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA L40S                    On  |   00000000:B6:00.0 Off |                    0 |
+| N/A   43C    P8             34W /  350W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+Python executable: /nas/longleaf/home/inserra/EEGProc/venv312/bin/python
+Virtual environment: /nas/longleaf/home/inserra/EEGProc/venv312
+User site enabled: False
+TensorFlow version: 2.20.0
+TensorFlow location: /nas/longleaf/home/inserra/EEGProc/venv312/lib/python3.12/site-packages/tensorflow/__init__.py
+XLA_FLAGS: --xla_gpu_cuda_data_dir=/nas/longleaf/rhel9/apps/cuda/12.9
+Available GPUs: [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU'), PhysicalDevice(name='/physical_device:GPU:1', device_type='GPU'), PhysicalDevice(name='/physical_device:GPU:2', device_type='GPU'), PhysicalDevice(name='/physical_device:GPU:3', device_type='GPU')]
+Resolved libdevice: /nas/longleaf/rhel9/apps/cuda/12.9/nvvm/libdevice/libdevice.10.bc
+GPU exp-gradient test: [1.        2.7182817]
+2026-07-15 20:23:23,192 | INFO | Starting joint-model v2 training run in runs/joint_autoencoder_vc_v2/joint_autoencoder_vc_v2_20260715_202321
+2026-07-15 20:23:23,193 | INFO | Feature shape: (6210, 512, 14)
+2026-07-15 20:23:23,205 | INFO | Unique subjects: 23
+2026-07-15 20:23:23,207 | INFO | Unique subject/trial pairs: 414
+
+Flat LOSO hyperparameter search — 4 configurations, 23 folds each
+Total available subjects: 23
+Total LOSO model fits: 92
+Requested metrics: ['accuracy', 'f1', 'precision', 'recall']
+Configuration selection: trial-level accuracy (maximize)
+Primary reported metrics: trial-level
+Prediction logging: True
+Variational interval logging: False
+Fold workers: 4
+Worker devices: GPUs [0, 1, 2, 3]
+
+################################################################################
+Configuration 1 / 4 (23 LOSO fits)
+Configuration:
+{   'epochs': 300,
+    'batch_size': 64,
+    'learning_rate': 0.0001,
+    'ae_loss_weight': 0.3,
+    'vc_loss_weight': 0.7,
+    'emb_dim': 16,
+    'dropout': 0.2,
+    'bilstm_units': 128,
+    'bilstm_layers': 2,
+    'bilstm_dropout': 0.2}
+[LOSOConfig1Worker-1] initialized on GPU 0 (CUDA_VISIBLE_DEVICES=0)
+[LOSOConfig1Worker-2] initialized on GPU 1 (CUDA_VISIBLE_DEVICES=1)
+[LOSOConfig1Worker-3] initialized on GPU 2 (CUDA_VISIBLE_DEVICES=2)
+
+[Fold   1 / 23] LOSO test subject=0 (train=5940, test=270 windows)
+
+[Fold   2 / 23] LOSO test subject=1 (train=5940, test=270 windows)
+
+[Fold   3 / 23] LOSO test subject=2 (train=5940, test=270 windows)
+[LOSOConfig1Worker-4] initialized on GPU 3 (CUDA_VISIBLE_DEVICES=3)
+
+[Fold   4 / 23] LOSO test subject=3 (train=5940, test=270 windows)
+
+Fold 4 metrics (trial primary)
+------------------------------
+                    fold: 4
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1236.588379
+                    loss: 0.647984
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.647984
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.647984
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=4  subject=3  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.647984  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.647984  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.647984  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold   5 / 23] LOSO test subject=4 (train=5940, test=270 windows)
+
+Fold 2 metrics (trial primary)
+------------------------------
+                    fold: 2
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1221.620117
+                    loss: 0.545741
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.545741
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.545741
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=2  subject=1  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.545741  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.545741  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.545741  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold   6 / 23] LOSO test subject=5 (train=5940, test=270 windows)
+
+Fold 3 metrics (trial primary)
+------------------------------
+                    fold: 3
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1225.913208
+                    loss: 0.686042
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.686042
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.686042
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=3  subject=2  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.686042  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.686042  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.686042  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   7 / 23] LOSO test subject=6 (train=5940, test=270 windows)
+
+Fold 1 metrics (trial primary)
+------------------------------
+                    fold: 1
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1217.634766
+                    loss: 0.754291
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.754291
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.754291
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=1  subject=0  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.754291  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.754291  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.754291  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   8 / 23] LOSO test subject=7 (train=5940, test=270 windows)
+
+Fold 7 metrics (trial primary)
+------------------------------
+                    fold: 7
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 797.750183
+                    loss: 0.468188
+                accuracy: 0.888889
+                      f1: 0.470588
+               precision: 0.444444
+                  recall: 0.500000
+             window_loss: 0.468191
+         window_accuracy: 0.888889
+               window_f1: 0.470588
+        window_precision: 0.444444
+           window_recall: 0.500000
+              trial_loss: 0.468188
+          trial_accuracy: 0.888889
+                trial_f1: 0.470588
+         trial_precision: 0.444444
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=7  subject=6  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.468188  accuracy=0.888889  f1=0.470588  precision=0.444444  recall=0.500000  window_loss=0.468191  window_accuracy=0.888889  window_f1=0.470588  window_precision=0.444444  window_recall=0.500000  trial_loss=0.468188  trial_accuracy=0.888889  trial_f1=0.470588  trial_precision=0.444444  trial_recall=0.500000
+
+Fold 5 metrics (trial primary)
+------------------------------
+                    fold: 5
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1346.315430
+                    loss: 0.616616
+                accuracy: 0.722222
+                      f1: 0.419355
+               precision: 0.361111
+                  recall: 0.500000
+             window_loss: 0.616616
+         window_accuracy: 0.722222
+               window_f1: 0.419355
+        window_precision: 0.361111
+           window_recall: 0.500000
+              trial_loss: 0.616616
+          trial_accuracy: 0.722222
+                trial_f1: 0.419355
+         trial_precision: 0.361111
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=5  subject=4  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.616616  accuracy=0.722222  f1=0.419355  precision=0.361111  recall=0.500000  window_loss=0.616616  window_accuracy=0.722222  window_f1=0.419355  window_precision=0.361111  window_recall=0.500000  trial_loss=0.616616  trial_accuracy=0.722222  trial_f1=0.419355  trial_precision=0.361111  trial_recall=0.500000
+
+[Fold   9 / 23] LOSO test subject=8 (train=5940, test=270 windows)
+
+[Fold  10 / 23] LOSO test subject=9 (train=5940, test=270 windows)
+
+Fold 6 metrics (trial primary)
+------------------------------
+                    fold: 6
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1225.132080
+                    loss: 0.329997
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.329997
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.329997
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=6  subject=5  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.329997  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.329997  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.329997  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+[Fold  11 / 23] LOSO test subject=10 (train=5940, test=270 windows)
+
+Fold 8 metrics (trial primary)
+------------------------------
+                    fold: 8
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1248.151855
+                    loss: 0.673645
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.673645
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.673645
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=8  subject=7  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.673645  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.673645  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.673645  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold  12 / 23] LOSO test subject=11 (train=5940, test=270 windows)
+
+Fold 9 metrics (trial primary)
+------------------------------
+                    fold: 9
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1347.446167
+                    loss: 0.402233
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.402233
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.402233
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=9  subject=8  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.402233  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.402233  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.402233  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+[Fold  13 / 23] LOSO test subject=12 (train=5940, test=270 windows)
+
+Fold 10 metrics (trial primary)
+-------------------------------
+                    fold: 10
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1256.216309
+                    loss: 0.795474
+                accuracy: 0.500000
+                      f1: 0.333333
+               precision: 0.250000
+                  recall: 0.500000
+             window_loss: 0.795475
+         window_accuracy: 0.500000
+               window_f1: 0.333333
+        window_precision: 0.250000
+           window_recall: 0.500000
+              trial_loss: 0.795474
+          trial_accuracy: 0.500000
+                trial_f1: 0.333333
+         trial_precision: 0.250000
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=10  subject=9  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.795474  accuracy=0.500000  f1=0.333333  precision=0.250000  recall=0.500000  window_loss=0.795475  window_accuracy=0.500000  window_f1=0.333333  window_precision=0.250000  window_recall=0.500000  trial_loss=0.795474  trial_accuracy=0.500000  trial_f1=0.333333  trial_precision=0.250000  trial_recall=0.500000
+
+[Fold  14 / 23] LOSO test subject=13 (train=5940, test=270 windows)
+
+Fold 11 metrics (trial primary)
+-------------------------------
+                    fold: 11
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1259.644775
+                    loss: 0.643221
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.643221
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.643221
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=11  subject=10  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.643221  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.643221  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.643221  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold  15 / 23] LOSO test subject=14 (train=5940, test=270 windows)
+
+Fold 12 metrics (trial primary)
+-------------------------------
+                    fold: 12
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1165.172852
+                    loss: 0.537943
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.537943
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.537943
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=12  subject=11  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.537943  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.537943  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.537943  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold  16 / 23] LOSO test subject=15 (train=5940, test=270 windows)
+
+Fold 13 metrics (trial primary)
+-------------------------------
+                    fold: 13
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1298.516479
+                    loss: 0.411719
+                accuracy: 0.888889
+                      f1: 0.470588
+               precision: 0.444444
+                  recall: 0.500000
+             window_loss: 0.411719
+         window_accuracy: 0.888889
+               window_f1: 0.470588
+        window_precision: 0.444444
+           window_recall: 0.500000
+              trial_loss: 0.411719
+          trial_accuracy: 0.888889
+                trial_f1: 0.470588
+         trial_precision: 0.444444
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=13  subject=12  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.411719  accuracy=0.888889  f1=0.470588  precision=0.444444  recall=0.500000  window_loss=0.411719  window_accuracy=0.888889  window_f1=0.470588  window_precision=0.444444  window_recall=0.500000  trial_loss=0.411719  trial_accuracy=0.888889  trial_f1=0.470588  trial_precision=0.444444  trial_recall=0.500000
+
+[Fold  17 / 23] LOSO test subject=16 (train=5940, test=270 windows)
+
+Fold 14 metrics (trial primary)
+-------------------------------
+                    fold: 14
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1255.322754
+                    loss: 0.737990
+                accuracy: 0.555556
+                      f1: 0.357143
+               precision: 0.277778
+                  recall: 0.500000
+             window_loss: 0.737990
+         window_accuracy: 0.555556
+               window_f1: 0.357143
+        window_precision: 0.277778
+           window_recall: 0.500000
+              trial_loss: 0.737990
+          trial_accuracy: 0.555556
+                trial_f1: 0.357143
+         trial_precision: 0.277778
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=14  subject=13  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.737990  accuracy=0.555556  f1=0.357143  precision=0.277778  recall=0.500000  window_loss=0.737990  window_accuracy=0.555556  window_f1=0.357143  window_precision=0.277778  window_recall=0.500000  trial_loss=0.737990  trial_accuracy=0.555556  trial_f1=0.357143  trial_precision=0.277778  trial_recall=0.500000
+
+[Fold  18 / 23] LOSO test subject=17 (train=5940, test=270 windows)
+
+Fold 15 metrics (trial primary)
+-------------------------------
+                    fold: 15
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1226.349365
+                    loss: 0.598245
+                accuracy: 0.722222
+                      f1: 0.419355
+               precision: 0.361111
+                  recall: 0.500000
+             window_loss: 0.598245
+         window_accuracy: 0.722222
+               window_f1: 0.419355
+        window_precision: 0.361111
+           window_recall: 0.500000
+              trial_loss: 0.598245
+          trial_accuracy: 0.722222
+                trial_f1: 0.419355
+         trial_precision: 0.361111
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=15  subject=14  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.598245  accuracy=0.722222  f1=0.419355  precision=0.361111  recall=0.500000  window_loss=0.598245  window_accuracy=0.722222  window_f1=0.419355  window_precision=0.361111  window_recall=0.500000  trial_loss=0.598245  trial_accuracy=0.722222  trial_f1=0.419355  trial_precision=0.361111  trial_recall=0.500000
+
+[Fold  19 / 23] LOSO test subject=18 (train=5940, test=270 windows)
+
+Fold 16 metrics (trial primary)
+-------------------------------
+                    fold: 16
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1267.734131
+                    loss: 0.694758
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.694758
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.694758
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=16  subject=15  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.694758  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.694758  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.694758  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold  20 / 23] LOSO test subject=19 (train=5940, test=270 windows)
+
+Fold 17 metrics (trial primary)
+-------------------------------
+                    fold: 17
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1244.737061
+                    loss: 0.774348
+                accuracy: 0.555556
+                      f1: 0.357143
+               precision: 0.277778
+                  recall: 0.500000
+             window_loss: 0.774348
+         window_accuracy: 0.555556
+               window_f1: 0.357143
+        window_precision: 0.277778
+           window_recall: 0.500000
+              trial_loss: 0.774348
+          trial_accuracy: 0.555556
+                trial_f1: 0.357143
+         trial_precision: 0.277778
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=17  subject=16  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.774348  accuracy=0.555556  f1=0.357143  precision=0.277778  recall=0.500000  window_loss=0.774348  window_accuracy=0.555556  window_f1=0.357143  window_precision=0.277778  window_recall=0.500000  trial_loss=0.774348  trial_accuracy=0.555556  trial_f1=0.357143  trial_precision=0.277778  trial_recall=0.500000
+
+[Fold  21 / 23] LOSO test subject=20 (train=5940, test=270 windows)
+
+Fold 18 metrics (trial primary)
+-------------------------------
+                    fold: 18
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1250.864014
+                    loss: 0.472932
+                accuracy: 0.833333
+                      f1: 0.454545
+               precision: 0.416667
+                  recall: 0.500000
+             window_loss: 0.472932
+         window_accuracy: 0.833333
+               window_f1: 0.454545
+        window_precision: 0.416667
+           window_recall: 0.500000
+              trial_loss: 0.472932
+          trial_accuracy: 0.833333
+                trial_f1: 0.454545
+         trial_precision: 0.416667
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=18  subject=17  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.472932  accuracy=0.833333  f1=0.454545  precision=0.416667  recall=0.500000  window_loss=0.472932  window_accuracy=0.833333  window_f1=0.454545  window_precision=0.416667  window_recall=0.500000  trial_loss=0.472932  trial_accuracy=0.833333  trial_f1=0.454545  trial_precision=0.416667  trial_recall=0.500000
+
+[Fold  22 / 23] LOSO test subject=21 (train=5940, test=270 windows)
+
+Fold 19 metrics (trial primary)
+-------------------------------
+                    fold: 19
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1258.603149
+                    loss: 0.337246
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.337246
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.337246
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=19  subject=18  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.337246  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.337246  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.337246  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+[Fold  23 / 23] LOSO test subject=22 (train=5940, test=270 windows)
+
+Fold 20 metrics (trial primary)
+-------------------------------
+                    fold: 20
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1217.862793
+                    loss: 0.539323
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.539323
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.539323
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=20  subject=19  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.539323  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.539323  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.539323  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+Fold 21 metrics (trial primary)
+-------------------------------
+                    fold: 21
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1195.409790
+                    loss: 0.549334
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.549335
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.549334
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=21  subject=20  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.549334  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.549335  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.549334  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+Fold 22 metrics (trial primary)
+-------------------------------
+                    fold: 22
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1249.186646
+                    loss: 0.596915
+                accuracy: 0.722222
+                      f1: 0.419355
+               precision: 0.361111
+                  recall: 0.500000
+             window_loss: 0.596915
+         window_accuracy: 0.722222
+               window_f1: 0.419355
+        window_precision: 0.361111
+           window_recall: 0.500000
+              trial_loss: 0.596915
+          trial_accuracy: 0.722222
+                trial_f1: 0.419355
+         trial_precision: 0.361111
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=22  subject=21  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.596915  accuracy=0.722222  f1=0.419355  precision=0.361111  recall=0.500000  window_loss=0.596915  window_accuracy=0.722222  window_f1=0.419355  window_precision=0.361111  window_recall=0.500000  trial_loss=0.596915  trial_accuracy=0.722222  trial_f1=0.419355  trial_precision=0.361111  trial_recall=0.500000
+
+Fold 23 metrics (trial primary)
+-------------------------------
+                    fold: 23
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1257.182373
+                    loss: 0.793027
+                accuracy: 0.500000
+                      f1: 0.333333
+               precision: 0.250000
+                  recall: 0.500000
+             window_loss: 0.793027
+         window_accuracy: 0.500000
+               window_f1: 0.333333
+        window_precision: 0.250000
+           window_recall: 0.500000
+              trial_loss: 0.793027
+          trial_accuracy: 0.500000
+                trial_f1: 0.333333
+         trial_precision: 0.250000
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=23  subject=22  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.793027  accuracy=0.500000  f1=0.333333  precision=0.250000  recall=0.500000  window_loss=0.793027  window_accuracy=0.500000  window_f1=0.333333  window_precision=0.250000  window_recall=0.500000  trial_loss=0.793027  trial_accuracy=0.500000  trial_f1=0.333333  trial_precision=0.250000  trial_recall=0.500000
+
+Configuration 1 complete: mean trial_accuracy=0.724638 ± 0.136554
+
+################################################################################
+Configuration 2 / 4 (23 LOSO fits)
+Configuration:
+{   'epochs': 300,
+    'batch_size': 64,
+    'learning_rate': 0.0001,
+    'ae_loss_weight': 0.3,
+    'vc_loss_weight': 0.7,
+    'emb_dim': 16,
+    'dropout': 0.2,
+    'bilstm_units': 128,
+    'bilstm_layers': 4,
+    'bilstm_dropout': 0.2}
+[LOSOConfig2Worker-1] initialized on GPU 0 (CUDA_VISIBLE_DEVICES=0)
+[LOSOConfig2Worker-2] initialized on GPU 1 (CUDA_VISIBLE_DEVICES=1)
+[LOSOConfig2Worker-3] initialized on GPU 2 (CUDA_VISIBLE_DEVICES=2)
+
+[Fold   1 / 23] LOSO test subject=0 (train=5940, test=270 windows)
+
+[Fold   3 / 23] LOSO test subject=2 (train=5940, test=270 windows)
+
+[Fold   2 / 23] LOSO test subject=1 (train=5940, test=270 windows)
+[LOSOConfig2Worker-4] initialized on GPU 3 (CUDA_VISIBLE_DEVICES=3)
+
+[Fold   4 / 23] LOSO test subject=3 (train=5940, test=270 windows)
+
+Fold 1 metrics (trial primary)
+------------------------------
+                    fold: 1
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1042.991577
+                    loss: 0.677356
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.677393
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.677356
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=1  subject=0  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.677356  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.677393  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.677356  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   5 / 23] LOSO test subject=4 (train=5940, test=270 windows)
+
+Fold 4 metrics (trial primary)
+------------------------------
+                    fold: 4
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1315.639648
+                    loss: 0.646964
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.646964
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.646964
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=4  subject=3  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.646964  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.646964  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.646964  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold   6 / 23] LOSO test subject=5 (train=5940, test=270 windows)
+
+Fold 3 metrics (trial primary)
+------------------------------
+                    fold: 3
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1173.358398
+                    loss: 0.702132
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.702132
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.702132
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=3  subject=2  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.702132  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.702132  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.702132  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   7 / 23] LOSO test subject=6 (train=5940, test=270 windows)
+
+Fold 2 metrics (trial primary)
+------------------------------
+                    fold: 2
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1260.845337
+                    loss: 0.540010
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.540010
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.540010
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=2  subject=1  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.540010  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.540010  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.540010  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold   8 / 23] LOSO test subject=7 (train=5940, test=270 windows)
+
+Fold 5 metrics (trial primary)
+------------------------------
+                    fold: 5
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1290.067505
+                    loss: 0.628735
+                accuracy: 0.722222
+                      f1: 0.419355
+               precision: 0.361111
+                  recall: 0.500000
+             window_loss: 0.628735
+         window_accuracy: 0.722222
+               window_f1: 0.419355
+        window_precision: 0.361111
+           window_recall: 0.500000
+              trial_loss: 0.628735
+          trial_accuracy: 0.722222
+                trial_f1: 0.419355
+         trial_precision: 0.361111
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=5  subject=4  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.628735  accuracy=0.722222  f1=0.419355  precision=0.361111  recall=0.500000  window_loss=0.628735  window_accuracy=0.722222  window_f1=0.419355  window_precision=0.361111  window_recall=0.500000  trial_loss=0.628735  trial_accuracy=0.722222  trial_f1=0.419355  trial_precision=0.361111  trial_recall=0.500000
+
+[Fold   9 / 23] LOSO test subject=8 (train=5940, test=270 windows)
+
+Fold 6 metrics (trial primary)
+------------------------------
+                    fold: 6
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1290.701416
+                    loss: 0.383481
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.383481
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.383481
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=6  subject=5  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.383481  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.383481  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.383481  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+[Fold  10 / 23] LOSO test subject=9 (train=5940, test=270 windows)
+
+Fold 7 metrics (trial primary)
+------------------------------
+                    fold: 7
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1250.199463
+                    loss: 0.354982
+                accuracy: 0.888889
+                      f1: 0.470588
+               precision: 0.444444
+                  recall: 0.500000
+             window_loss: 0.354982
+         window_accuracy: 0.888889
+               window_f1: 0.470588
+        window_precision: 0.444444
+           window_recall: 0.500000
+              trial_loss: 0.354982
+          trial_accuracy: 0.888889
+                trial_f1: 0.470588
+         trial_precision: 0.444444
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=7  subject=6  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.354982  accuracy=0.888889  f1=0.470588  precision=0.444444  recall=0.500000  window_loss=0.354982  window_accuracy=0.888889  window_f1=0.470588  window_precision=0.444444  window_recall=0.500000  trial_loss=0.354982  trial_accuracy=0.888889  trial_f1=0.470588  trial_precision=0.444444  trial_recall=0.500000
+
+[Fold  11 / 23] LOSO test subject=10 (train=5940, test=270 windows)
+
+Fold 8 metrics (trial primary)
+------------------------------
+                    fold: 8
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1293.900024
+                    loss: 0.681478
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.681478
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.681478
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=8  subject=7  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.681478  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.681478  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.681478  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold  12 / 23] LOSO test subject=11 (train=5940, test=270 windows)
+
+Fold 10 metrics (trial primary)
+-------------------------------
+                    fold: 10
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1305.424561
+                    loss: 0.859862
+                accuracy: 0.500000
+                      f1: 0.333333
+               precision: 0.250000
+                  recall: 0.500000
+             window_loss: 0.859862
+         window_accuracy: 0.500000
+               window_f1: 0.333333
+        window_precision: 0.250000
+           window_recall: 0.500000
+              trial_loss: 0.859862
+          trial_accuracy: 0.500000
+                trial_f1: 0.333333
+         trial_precision: 0.250000
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=10  subject=9  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.859862  accuracy=0.500000  f1=0.333333  precision=0.250000  recall=0.500000  window_loss=0.859862  window_accuracy=0.500000  window_f1=0.333333  window_precision=0.250000  window_recall=0.500000  trial_loss=0.859862  trial_accuracy=0.500000  trial_f1=0.333333  trial_precision=0.250000  trial_recall=0.500000
+
+[Fold  13 / 23] LOSO test subject=12 (train=5940, test=270 windows)
+
+Fold 9 metrics (trial primary)
+------------------------------
+                    fold: 9
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1212.335205
+                    loss: 0.269716
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.269716
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.269716
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=9  subject=8  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.269716  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.269716  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.269716  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+[Fold  14 / 23] LOSO test subject=13 (train=5940, test=270 windows)
+
+Fold 11 metrics (trial primary)
+-------------------------------
+                    fold: 11
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1278.219482
+                    loss: 0.637604
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.637604
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.637604
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=11  subject=10  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.637604  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.637604  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.637604  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold  15 / 23] LOSO test subject=14 (train=5940, test=270 windows)
+
+Fold 12 metrics (trial primary)
+-------------------------------
+                    fold: 12
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1345.673218
+                    loss: 0.531919
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.531919
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.531919
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=12  subject=11  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.531919  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.531919  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.531919  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold  16 / 23] LOSO test subject=15 (train=5940, test=270 windows)
+
+Fold 15 metrics (trial primary)
+-------------------------------
+                    fold: 15
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1010.579712
+                    loss: 0.569097
+                accuracy: 0.722222
+                      f1: 0.419355
+               precision: 0.361111
+                  recall: 0.500000
+             window_loss: 0.570971
+         window_accuracy: 0.722222
+               window_f1: 0.419355
+        window_precision: 0.361111
+           window_recall: 0.500000
+              trial_loss: 0.569097
+          trial_accuracy: 0.722222
+                trial_f1: 0.419355
+         trial_precision: 0.361111
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=15  subject=14  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.569097  accuracy=0.722222  f1=0.419355  precision=0.361111  recall=0.500000  window_loss=0.570971  window_accuracy=0.722222  window_f1=0.419355  window_precision=0.361111  window_recall=0.500000  trial_loss=0.569097  trial_accuracy=0.722222  trial_f1=0.419355  trial_precision=0.361111  trial_recall=0.500000
+
+Fold 13 metrics (trial primary)
+-------------------------------
+                    fold: 13
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1265.398560
+                    loss: 0.449798
+                accuracy: 0.888889
+                      f1: 0.470588
+               precision: 0.444444
+                  recall: 0.500000
+             window_loss: 0.449798
+         window_accuracy: 0.888889
+               window_f1: 0.470588
+        window_precision: 0.444444
+           window_recall: 0.500000
+              trial_loss: 0.449798
+          trial_accuracy: 0.888889
+                trial_f1: 0.470588
+         trial_precision: 0.444444
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=13  subject=12  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.449798  accuracy=0.888889  f1=0.470588  precision=0.444444  recall=0.500000  window_loss=0.449798  window_accuracy=0.888889  window_f1=0.470588  window_precision=0.444444  window_recall=0.500000  trial_loss=0.449798  trial_accuracy=0.888889  trial_f1=0.470588  trial_precision=0.444444  trial_recall=0.500000
+
+[Fold  17 / 23] LOSO test subject=16 (train=5940, test=270 windows)
+
+[Fold  18 / 23] LOSO test subject=17 (train=5940, test=270 windows)
+
+Fold 14 metrics (trial primary)
+-------------------------------
+                    fold: 14
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1377.236572
+                    loss: 0.712581
+                accuracy: 0.555556
+                      f1: 0.357143
+               precision: 0.277778
+                  recall: 0.500000
+             window_loss: 0.712581
+         window_accuracy: 0.555556
+               window_f1: 0.357143
+        window_precision: 0.277778
+           window_recall: 0.500000
+              trial_loss: 0.712581
+          trial_accuracy: 0.555556
+                trial_f1: 0.357143
+         trial_precision: 0.277778
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=14  subject=13  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.712581  accuracy=0.555556  f1=0.357143  precision=0.277778  recall=0.500000  window_loss=0.712581  window_accuracy=0.555556  window_f1=0.357143  window_precision=0.277778  window_recall=0.500000  trial_loss=0.712581  trial_accuracy=0.555556  trial_f1=0.357143  trial_precision=0.277778  trial_recall=0.500000
+
+[Fold  19 / 23] LOSO test subject=18 (train=5940, test=270 windows)
+
+Fold 16 metrics (trial primary)
+-------------------------------
+                    fold: 16
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1325.281494
+                    loss: 0.772804
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.772804
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.772804
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=16  subject=15  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.772804  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.772804  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.772804  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold  20 / 23] LOSO test subject=19 (train=5940, test=270 windows)
+
+Fold 18 metrics (trial primary)
+-------------------------------
+                    fold: 18
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1262.818359
+                    loss: 0.522513
+                accuracy: 0.833333
+                      f1: 0.454545
+               precision: 0.416667
+                  recall: 0.500000
+             window_loss: 0.522513
+         window_accuracy: 0.833333
+               window_f1: 0.454545
+        window_precision: 0.416667
+           window_recall: 0.500000
+              trial_loss: 0.522513
+          trial_accuracy: 0.833333
+                trial_f1: 0.454545
+         trial_precision: 0.416667
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=18  subject=17  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.522513  accuracy=0.833333  f1=0.454545  precision=0.416667  recall=0.500000  window_loss=0.522513  window_accuracy=0.833333  window_f1=0.454545  window_precision=0.416667  window_recall=0.500000  trial_loss=0.522513  trial_accuracy=0.833333  trial_f1=0.454545  trial_precision=0.416667  trial_recall=0.500000
+
+[Fold  21 / 23] LOSO test subject=20 (train=5940, test=270 windows)
+
+Fold 17 metrics (trial primary)
+-------------------------------
+                    fold: 17
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1228.574585
+                    loss: 0.703370
+                accuracy: 0.555556
+                      f1: 0.357143
+               precision: 0.277778
+                  recall: 0.500000
+             window_loss: 0.703370
+         window_accuracy: 0.555556
+               window_f1: 0.357143
+        window_precision: 0.277778
+           window_recall: 0.500000
+              trial_loss: 0.703370
+          trial_accuracy: 0.555556
+                trial_f1: 0.357143
+         trial_precision: 0.277778
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=17  subject=16  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.703370  accuracy=0.555556  f1=0.357143  precision=0.277778  recall=0.500000  window_loss=0.703370  window_accuracy=0.555556  window_f1=0.357143  window_precision=0.277778  window_recall=0.500000  trial_loss=0.703370  trial_accuracy=0.555556  trial_f1=0.357143  trial_precision=0.277778  trial_recall=0.500000
+
+[Fold  22 / 23] LOSO test subject=21 (train=5940, test=270 windows)
+
+Fold 20 metrics (trial primary)
+-------------------------------
+                    fold: 20
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1284.656494
+                    loss: 0.554992
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.554992
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.554992
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=20  subject=19  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.554992  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.554992  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.554992  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold  23 / 23] LOSO test subject=22 (train=5940, test=270 windows)
+
+Fold 19 metrics (trial primary)
+-------------------------------
+                    fold: 19
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 378.116760
+                    loss: 0.434622
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.434667
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.434622
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=19  subject=18  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.434622  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.434667  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.434622  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+Fold 21 metrics (trial primary)
+-------------------------------
+                    fold: 21
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1218.376343
+                    loss: 0.535986
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.535986
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.535986
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=21  subject=20  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.535986  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.535986  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.535986  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+Fold 22 metrics (trial primary)
+-------------------------------
+                    fold: 22
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1265.753662
+                    loss: 0.591072
+                accuracy: 0.722222
+                      f1: 0.419355
+               precision: 0.361111
+                  recall: 0.500000
+             window_loss: 0.591073
+         window_accuracy: 0.722222
+               window_f1: 0.419355
+        window_precision: 0.361111
+           window_recall: 0.500000
+              trial_loss: 0.591072
+          trial_accuracy: 0.722222
+                trial_f1: 0.419355
+         trial_precision: 0.361111
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=22  subject=21  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.591072  accuracy=0.722222  f1=0.419355  precision=0.361111  recall=0.500000  window_loss=0.591073  window_accuracy=0.722222  window_f1=0.419355  window_precision=0.361111  window_recall=0.500000  trial_loss=0.591072  trial_accuracy=0.722222  trial_f1=0.419355  trial_precision=0.361111  trial_recall=0.500000
+
+Fold 23 metrics (trial primary)
+-------------------------------
+                    fold: 23
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 1194.648682
+                    loss: 0.831395
+                accuracy: 0.500000
+                      f1: 0.333333
+               precision: 0.250000
+                  recall: 0.500000
+             window_loss: 0.831395
+         window_accuracy: 0.500000
+               window_f1: 0.333333
+        window_precision: 0.250000
+           window_recall: 0.500000
+              trial_loss: 0.831395
+          trial_accuracy: 0.500000
+                trial_f1: 0.333333
+         trial_precision: 0.250000
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=23  subject=22  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.831395  accuracy=0.500000  f1=0.333333  precision=0.250000  recall=0.500000  window_loss=0.831395  window_accuracy=0.500000  window_f1=0.333333  window_precision=0.250000  window_recall=0.500000  trial_loss=0.831395  trial_accuracy=0.500000  trial_f1=0.333333  trial_precision=0.250000  trial_recall=0.500000
+
+Configuration 2 complete: mean trial_accuracy=0.724638 ± 0.136554
+
+################################################################################
+Configuration 3 / 4 (23 LOSO fits)
+Configuration:
+{   'epochs': 300,
+    'batch_size': 64,
+    'learning_rate': 0.0001,
+    'ae_loss_weight': 0.3,
+    'vc_loss_weight': 0.7,
+    'emb_dim': 16,
+    'dropout': 0.2,
+    'bilstm_units': 256,
+    'bilstm_layers': 2,
+    'bilstm_dropout': 0.2}
+[LOSOConfig3Worker-1] initialized on GPU 0 (CUDA_VISIBLE_DEVICES=0)
+[LOSOConfig3Worker-2] initialized on GPU 1 (CUDA_VISIBLE_DEVICES=1)
+[LOSOConfig3Worker-3] initialized on GPU 2 (CUDA_VISIBLE_DEVICES=2)
+
+[Fold   1 / 23] LOSO test subject=0 (train=5940, test=270 windows)
+
+[Fold   2 / 23] LOSO test subject=1 (train=5940, test=270 windows)
+
+[Fold   3 / 23] LOSO test subject=2 (train=5940, test=270 windows)
+[LOSOConfig3Worker-4] initialized on GPU 3 (CUDA_VISIBLE_DEVICES=3)
+
+[Fold   4 / 23] LOSO test subject=3 (train=5940, test=270 windows)
+
+Fold 2 metrics (trial primary)
+------------------------------
+                    fold: 2
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2455.720703
+                    loss: 0.541154
+                accuracy: 0.777778
+                      f1: 0.437500
+               precision: 0.388889
+                  recall: 0.500000
+             window_loss: 0.541154
+         window_accuracy: 0.777778
+               window_f1: 0.437500
+        window_precision: 0.388889
+           window_recall: 0.500000
+              trial_loss: 0.541154
+          trial_accuracy: 0.777778
+                trial_f1: 0.437500
+         trial_precision: 0.388889
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=2  subject=1  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.541154  accuracy=0.777778  f1=0.437500  precision=0.388889  recall=0.500000  window_loss=0.541154  window_accuracy=0.777778  window_f1=0.437500  window_precision=0.388889  window_recall=0.500000  trial_loss=0.541154  trial_accuracy=0.777778  trial_f1=0.437500  trial_precision=0.388889  trial_recall=0.500000
+
+[Fold   5 / 23] LOSO test subject=4 (train=5940, test=270 windows)
+
+Fold 3 metrics (trial primary)
+------------------------------
+                    fold: 3
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2501.269043
+                    loss: 0.711413
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.711413
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.711413
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=3  subject=2  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.711413  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.711413  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.711413  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   6 / 23] LOSO test subject=5 (train=5940, test=270 windows)
+
+Fold 4 metrics (trial primary)
+------------------------------
+                    fold: 4
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2518.858643
+                    loss: 0.639596
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.639596
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.639596
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=4  subject=3  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.639596  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.639596  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.639596  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold   7 / 23] LOSO test subject=6 (train=5940, test=270 windows)
+
+Fold 1 metrics (trial primary)
+------------------------------
+                    fold: 1
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2439.695557
+                    loss: 0.678232
+                accuracy: 0.611111
+                      f1: 0.379310
+               precision: 0.305556
+                  recall: 0.500000
+             window_loss: 0.678232
+         window_accuracy: 0.611111
+               window_f1: 0.379310
+        window_precision: 0.305556
+           window_recall: 0.500000
+              trial_loss: 0.678232
+          trial_accuracy: 0.611111
+                trial_f1: 0.379310
+         trial_precision: 0.305556
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=1  subject=0  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.678232  accuracy=0.611111  f1=0.379310  precision=0.305556  recall=0.500000  window_loss=0.678232  window_accuracy=0.611111  window_f1=0.379310  window_precision=0.305556  window_recall=0.500000  trial_loss=0.678232  trial_accuracy=0.611111  trial_f1=0.379310  trial_precision=0.305556  trial_recall=0.500000
+
+[Fold   8 / 23] LOSO test subject=7 (train=5940, test=270 windows)
+
+Fold 5 metrics (trial primary)
+------------------------------
+                    fold: 5
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2472.353027
+                    loss: 0.777297
+                accuracy: 0.722222
+                      f1: 0.419355
+               precision: 0.361111
+                  recall: 0.500000
+             window_loss: 0.777297
+         window_accuracy: 0.722222
+               window_f1: 0.419355
+        window_precision: 0.361111
+           window_recall: 0.500000
+              trial_loss: 0.777297
+          trial_accuracy: 0.722222
+                trial_f1: 0.419355
+         trial_precision: 0.361111
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=5  subject=4  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.777297  accuracy=0.722222  f1=0.419355  precision=0.361111  recall=0.500000  window_loss=0.777297  window_accuracy=0.722222  window_f1=0.419355  window_precision=0.361111  window_recall=0.500000  trial_loss=0.777297  trial_accuracy=0.722222  trial_f1=0.419355  trial_precision=0.361111  trial_recall=0.500000
+
+[Fold   9 / 23] LOSO test subject=8 (train=5940, test=270 windows)
+
+Fold 7 metrics (trial primary)
+------------------------------
+                    fold: 7
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2504.302002
+                    loss: 0.464844
+                accuracy: 0.888889
+                      f1: 0.470588
+               precision: 0.444444
+                  recall: 0.500000
+             window_loss: 0.464844
+         window_accuracy: 0.888889
+               window_f1: 0.470588
+        window_precision: 0.444444
+           window_recall: 0.500000
+              trial_loss: 0.464844
+          trial_accuracy: 0.888889
+                trial_f1: 0.470588
+         trial_precision: 0.444444
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=7  subject=6  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.464844  accuracy=0.888889  f1=0.470588  precision=0.444444  recall=0.500000  window_loss=0.464844  window_accuracy=0.888889  window_f1=0.470588  window_precision=0.444444  window_recall=0.500000  trial_loss=0.464844  trial_accuracy=0.888889  trial_f1=0.470588  trial_precision=0.444444  trial_recall=0.500000
+
+[Fold  10 / 23] LOSO test subject=9 (train=5940, test=270 windows)
+
+Fold 6 metrics (trial primary)
+------------------------------
+                    fold: 6
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2478.699463
+                    loss: 0.304137
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.304137
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.304137
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=6  subject=5  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.304137  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.304137  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.304137  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+[Fold  11 / 23] LOSO test subject=10 (train=5940, test=270 windows)
+
+Fold 8 metrics (trial primary)
+------------------------------
+                    fold: 8
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2503.839355
+                    loss: 0.636464
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.636464
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.636464
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=8  subject=7  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.636464  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.636464  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.636464  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold  12 / 23] LOSO test subject=11 (train=5940, test=270 windows)
+
+Fold 9 metrics (trial primary)
+------------------------------
+                    fold: 9
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2523.448975
+                    loss: 0.382321
+                accuracy: 0.944444
+                      f1: 0.485714
+               precision: 0.472222
+                  recall: 0.500000
+             window_loss: 0.382321
+         window_accuracy: 0.944444
+               window_f1: 0.485714
+        window_precision: 0.472222
+           window_recall: 0.500000
+              trial_loss: 0.382321
+          trial_accuracy: 0.944444
+                trial_f1: 0.485714
+         trial_precision: 0.472222
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=9  subject=8  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.382321  accuracy=0.944444  f1=0.485714  precision=0.472222  recall=0.500000  window_loss=0.382321  window_accuracy=0.944444  window_f1=0.485714  window_precision=0.472222  window_recall=0.500000  trial_loss=0.382321  trial_accuracy=0.944444  trial_f1=0.485714  trial_precision=0.472222  trial_recall=0.500000
+
+[Fold  13 / 23] LOSO test subject=12 (train=5940, test=270 windows)
+
+Fold 11 metrics (trial primary)
+-------------------------------
+                    fold: 11
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2562.961914
+                    loss: 0.668944
+                accuracy: 0.666667
+                      f1: 0.400000
+               precision: 0.333333
+                  recall: 0.500000
+             window_loss: 0.668944
+         window_accuracy: 0.666667
+               window_f1: 0.400000
+        window_precision: 0.333333
+           window_recall: 0.500000
+              trial_loss: 0.668944
+          trial_accuracy: 0.666667
+                trial_f1: 0.400000
+         trial_precision: 0.333333
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=11  subject=10  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.668944  accuracy=0.666667  f1=0.400000  precision=0.333333  recall=0.500000  window_loss=0.668944  window_accuracy=0.666667  window_f1=0.400000  window_precision=0.333333  window_recall=0.500000  trial_loss=0.668944  trial_accuracy=0.666667  trial_f1=0.400000  trial_precision=0.333333  trial_recall=0.500000
+
+[Fold  14 / 23] LOSO test subject=13 (train=5940, test=270 windows)
+
+Fold 10 metrics (trial primary)
+-------------------------------
+                    fold: 10
+        evaluation_level: trial
+               n_samples: 18
+               n_windows: 270
+                n_trials: 18
+        keras_model_loss: 2482.618652
+                    loss: 0.705089
+                accuracy: 0.500000
+                      f1: 0.333333
+               precision: 0.250000
+                  recall: 0.500000
+             window_loss: 0.705089
+         window_accuracy: 0.500000
+               window_f1: 0.333333
+        window_precision: 0.250000
+           window_recall: 0.500000
+              trial_loss: 0.705089
+          trial_accuracy: 0.500000
+                trial_f1: 0.333333
+         trial_precision: 0.250000
+            trial_recall: 0.500000
+
+Per-user metrics
+----------------------------------------------------------------------------------------------------
+  fold=10  subject=9  n=18  evaluation_level=trial  n_windows=270  n_trials=18  loss=0.705089  accuracy=0.500000  f1=0.333333  precision=0.250000  recall=0.500000  window_loss=0.705089  window_accuracy=0.500000  window_f1=0.333333  window_precision=0.250000  window_recall=0.500000  trial_loss=0.705089  trial_accuracy=0.500000  trial_f1=0.333333  trial_precision=0.250000  trial_recall=0.500000
+
+[Fold  15 / 23] LOSO test subject=14 (train=5940, test=270 windows)

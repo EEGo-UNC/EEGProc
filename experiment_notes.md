@@ -1,0 +1,44 @@
+# Experimental Notes
+
+- 07/18/2026: 
+    - Without class weight sampling the model predicts the same class always.
+- 07/19/2026: 
+    - AE term >1.0 impedes the model from learning, so it does not predict better than random.
+    - Divergence terms are collapsing the model. With added terms, they ovveride deterministic loss terms and destroy learning. Model predicts basically random.
+- 07/20/2026:
+    - AE + CE classifier is overfitting, predicts random. Reduce model complexity
+- 07/21/2026
+    - Adding VC terms has helped enhance accuracies when using AE with it. If we remove variational terms from classifier, the AE reduces the accuracy. GOOD FOR VC!!
+    - NPY FILES ARE NOT BANDPASS FILTERED. Raw EEG will not be enough, we need to divvy it up into bands probably.
+    - CNN1D did not provide improvement after band filtering probably due to underfitting. Model classifies random.
+    - Methodology for finding best loss terms: run CNN1D models because they are fast. Then find the rest.
+        - After CNN1D finishes, rerun GCN with the new hp combo (best loss terms and increased BiLSTM complexity)
+- 07/22/2026
+    - Better results now, mdoel is learning even with added vc terms. Let's push for further complexity.
+    - Reverted convolutional layers [32, 64] -> [64, 32]. Changed early stopping from val_vc_cross_entropy to val_trial_f1 or joint_loss.
+    - val_trial_f1 has to be maximized!!
+    - Model continues to collapse. Decoder is at mean, trial prediction is random or predicts same class.
+- 07/23/2026
+    - Fixed preprocessing and dreamer preparation. Rerunning models.
+    - CNN1D and CNN2D did not work. Classifier collapsed in GCN.
+    - Reviewed and fixed problems across all encoders and VAE losses.
+    - Encouraging results on the smoke test, finally achieved ~0.6 trial macro f1.
+- 07/24/2026
+    - Classifier need to be at the trial level and decoders at the window level.
+    - Decoders are finally performing reasonably, now we must fix the classifier.
+- 07/26/2026
+    - Models are basically learning to collapse classes.
+    - Feature expansion optimization has val_acc and train_acc going up together. Previous models had train_acc go up and val_acc go down.
+- 07/27/2026
+    - Added adversarial subject identifiability goal which penalizes the VAE loss in order to reduce subject-unique representations. This fixed the optimization direction and has higher accuracy on subject 1, but it takes too many epochs (over 300) and the val_acc was still around 0.4 by the end.
+    - Added supervised contrastive learning to penalize differences in user distributions.
+    - Trial-level runs work better.
+- 07/30/2026
+    - Finally achieved reasonable accuracies (63% valence, 65% arousal, but classifier collapsed—those values were basically the baseline). But ran on subject median thresholds. Running global median now.
+    - Testing adversarial vs supcon.
+    - Current models are spatio-spectral encodings with temporal modeling. Looking into spatio-spectral + spatio-temporal encoding.
+- 8/1/2026
+    - Accuracies are still bad when using the imbalanced classes (60% valence, 64% arousal, 64 emb dim and 128 bilstm best). 
+    - Supcon con barely performed above average (52% valence).
+- 8/2/2026
+    - Created an BiLSTM-GCN STS feature fusion model that uses a joint mirror decoder for reconstruction but maintains the multidimensional loss function.
