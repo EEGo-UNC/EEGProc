@@ -234,10 +234,9 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --n-bands 3 \
     --out-dir runs/smoke/joint_sts/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
-    --max-folds 2 \
-    --n-jobs 2 \
-    --cpus-per-worker 4 \
-    --outer-verbose 2 \
+    --n-jobs 4 \
+    --cpus-per-worker 2 \
+    --outer-verbose 0 \
     --final-verbose 2 \
     --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
