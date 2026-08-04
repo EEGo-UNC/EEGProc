@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from eegproc import bandpass_filter, psd_bandpowers
-from preprocessing import (
+from eegproc.deep_learning.supervised.mtlfusenet.preprocessing import (
     EEG_CHANNELS,
     DREAMER_BANDS,
     ELECTRODE_POSITIONS,
@@ -33,7 +33,7 @@ from preprocessing import (
     label_to_binary,
     load_dreamer_csv,
 )
-from models import normalize_adjacency
+from eegproc.deep_learning.supervised.mtlfusenet.models import normalize_adjacency
 
 BANDS = ("theta", "alpha", "beta")
 FS = 128

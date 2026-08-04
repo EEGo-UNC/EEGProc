@@ -21,7 +21,7 @@ from sklearn.metrics import (
     accuracy_score, f1_score, precision_score, recall_score,
 )
 
-from mtl_model import MTLFuseNet
+from eegproc.deep_learning.supervised.mtlfusenet.mtl_model import MTLFuseNet
 
 AUTOTUNE = tf.data.AUTOTUNE
 SIGNATURE = (

@@ -1,7 +1,7 @@
-from preprocessing import (load_dreamer_csv, get_trial_eeg, compute_de_features,
+from eegproc.deep_learning.supervised.mtlfusenet.preprocessing import (load_dreamer_csv, get_trial_eeg, compute_de_features,
                             build_all_adjacency_matrices, eeg_trial_to_spatial_tensor,
                             window_spatial_tensor)
-from models import build_vae
+from eegproc.deep_learning.supervised.mtlfusenet.models import build_vae
 
 data = load_dreamer_csv("data/dreamer_joined.csv")
 subject_id = data['subject_id'].iloc[0]

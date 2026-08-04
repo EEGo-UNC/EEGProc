@@ -1,6 +1,6 @@
 import pickle
 import os
-from preprocessing import load_dreamer_csv, process_trial, EEG_CHANNELS, DREAMER_BANDS, ELECTRODE_POSITIONS
+from eegproc.deep_learning.supervised.mtlfusenet.preprocessing import load_dreamer_csv, process_trial, EEG_CHANNELS, DREAMER_BANDS, ELECTRODE_POSITIONS
 
 data = load_dreamer_csv("data/dreamer_joined.csv")
 

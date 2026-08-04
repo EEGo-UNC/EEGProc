@@ -20,8 +20,8 @@ Forward inputs are a tuple ``(X_ST, DE, adj)``:
 import tensorflow as tf
 from tensorflow.keras import layers
 
-from models import build_vae_encoder, build_vae_decoder, Sampling
-from losses import focal_loss, triplet_center_loss
+from eegproc.deep_learning.supervised.mtlfusenet.models import build_vae_encoder, build_vae_decoder, Sampling
+from eegproc.deep_learning.supervised.mtlfusenet.losses import focal_loss, triplet_center_loss
 
 
 class MTLFuseNet(tf.keras.Model):
