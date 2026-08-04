@@ -43,3 +43,7 @@
 - 8/2/2026
     - Created an BiLSTM-GCN STS feature fusion model that uses a joint mirror decoder for reconstruction but maintains the multidimensional loss function.
     - Testing alternating backprop model on 50% split.
+- 8/3/2026
+    - Achieved significantly higher accuracies on sts model (~70% arousal) and better decoder (R^2=0.6).
+- 8/4/2026
+    - Added focal loss to handle class imbalance and noise. Will test if variational goal helps focal loss due to better modeling of class margins.
