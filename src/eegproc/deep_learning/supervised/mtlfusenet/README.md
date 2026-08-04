@@ -132,7 +132,7 @@ The smoke script is stored in `SLURM_scripts/`. Submit it from the EEGProc repos
 
 ```bash
 cd "$HOME/EEGProc"
-sbatch SLURM_scripts/smoke_mtlfusenet_dreamer_arousal.sh
+sbatch src/eegproc/deep_learning/supervised/mtlfusenet/SLURM_scripts/smoke_mtlfusenet_dreamer_arousal.sh
 ```
 
 Check whether the job is queued or running:
@@ -155,4 +155,3 @@ MTLFuseNet combines a spatio-temporal VAE representation with a spatio-spectral 
 Each cached one-second window is a training sample. EEGProc averages window probabilities within each trial for trial-level selection and reporting. Setting `--prediction-latent-samples 0` uses the posterior mean for deterministic predictions; a positive value enables Monte Carlo latent averaging.
 
 The smoke job is only a pipeline test. Its two-fold, five-epoch metrics should not be treated as the final replication result.
-j
