@@ -67,37 +67,8 @@ find processed_trials -maxdepth 1 -name 'subj*_trial*.pkl' | wc -l
 cd "$HOME/EEGProc"
 
 sbatch src/eegproc/deep_learning/supervised/mtlfusenet/SLURM_scripts/preprocess_mtlfusenet_dreamer.sh
-```
-
-### Arousal
-
-```bash
-python -m eegproc.deep_learning.supervised.mtlfusenet.mtl_model_train \
-  --processed-dir processed_trials \
-  --task arousal \
-  --out-dir runs/mtlfusenet/DREAMER/arousal \
-  --run-name dreamer_arousal_mtlfusenet \
-  --epochs 50 \
-  --batch-size 64 \
-  --n-jobs 2 \
-  --cpus-per-worker 4 \
-  --selection-level trial \
-  --selection-metric accuracy
-```
-
-### Valence
-
-Use the same command with:
-
-```bash
---task valence \
---out-dir runs/mtlfusenet/DREAMER/valence \
---run-name dreamer_valence_mtlfusenet
-```
-
-Remove `--max-folds` or leave it unset for all 23 LOSO folds. Architecture and loss settings can be passed as ordinary flags or through `--hyperparameters-json`.
-
-## Submit the smoke test to SLURM
+``` 
+###Submit the smoke test to SLURM
 
 The smoke script is stored in `SLURM_scripts/`. Submit it from the EEGProc repository root:
 
