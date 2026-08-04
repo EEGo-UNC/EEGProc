@@ -232,7 +232,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/smoke/joint_sts/DREAMER/arousal \
+    --out-dir runs/joint_sts/ICRL_focal_loss1/ \
     --run-name dreamer_arousal_joint_sts \
     --n-jobs 4 \
     --cpus-per-worker 2 \
@@ -250,7 +250,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-sec 4.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
-    --use-class-weight \
+    --no-class-weight \
     --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --selection-level trial \
@@ -291,10 +291,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             true
         ],
         "subject_adversarial_weight": [
-            0.5
+            0.3
         ],
         "subject_loss_weight": [
-            0.0, 0.5
+            0.5
         ],
         "subject_hidden_units": [
             128
@@ -310,7 +310,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             false
         ],
         "supcon_weight": [
-            0.0
+            0.05
         ],
         "supcon_temperature": [
             0.1
@@ -323,18 +323,19 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vae_loss_weight": [
-            0.5
+            0.3
         ],
         "vae_beta": [
             0.3
         ],
         "label_smoothing": [
-            0.05
+            0.0
         ],
 
         "classifier_head": [
             "hybrid"
         ],
+
         "classification_hidden_units": [
             128
         ],
@@ -342,11 +343,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
 
-        "focal_gamma": [, 1.0, 2.0],
-        "focal_alpha": [
-            [0.725, 0.275],
-            [0.275, 0.725]
-        ],
+        "focal_alpha": [0.275, 0.725],
+        "focal_gamma": [1.0, 2.0],
         "vc_alpha": [
             1.0
         ],

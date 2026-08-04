@@ -42,3 +42,4 @@
     - Supcon con barely performed above average (52% valence).
 - 8/2/2026
     - Created an BiLSTM-GCN STS feature fusion model that uses a joint mirror decoder for reconstruction but maintains the multidimensional loss function.
+    - Testing alternating backprop model on 50% split.

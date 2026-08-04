@@ -1245,8 +1245,20 @@ class JointSTSModel(tf.keras.Model):
         )
 
     def fit(self, *args, **kwargs):
+        """Fit while enforcing the model-level class-weight switch.
+
+        Keras converts ``class_weight`` into per-sample weights before calling
+        ``train_step``. Removing it here guarantees that a model built with
+        ``use_class_weight=False`` cannot accidentally receive class weighting
+        from the cross-validation helper or another external caller. Explicit
+        ``sample_weight`` remains supported because it is a separate mechanism.
+        """
         if not self.use_class_weight:
-            kwargs.pop("class_weight", None)
+            removed_class_weight = kwargs.pop("class_weight", None)
+            if removed_class_weight is not None:
+                tf.get_logger().info(
+                    "Ignoring class_weight because use_class_weight=False."
+                )
         return super().fit(*args, **kwargs)
 
     def _configure_subject_head(self, n_subject_classes: int) -> None:

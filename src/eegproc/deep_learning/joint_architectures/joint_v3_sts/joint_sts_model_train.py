@@ -902,7 +902,10 @@ def train_joint_sts_model(
                 update_discriminator=bool(
                     hparams.get("update_discriminator", config.update_discriminator)
                 ),
-                use_class_weight=config.use_class_weight,
+                # Class weighting is a run-level switch. In particular,
+                # --no-class-weight must override every CV configuration and
+                # cannot be re-enabled through the hyperparameter grid.
+                use_class_weight=bool(config.use_class_weight),
                 use_subject_adversarial=bool(
                     hparams.get(
                         "use_subject_adversarial",
@@ -1018,6 +1021,10 @@ def train_joint_sts_model(
         "Classification loss: focal (gamma=%s, alpha=%s)",
         config.focal_gamma,
         config.focal_alpha,
+    )
+    logger.info(
+        "Keras class weighting enabled: %s",
+        config.use_class_weight,
     )
     logger.info("Cross-validation strategy: %s", config.cv_strategy)
     logger.info(
@@ -1374,20 +1381,30 @@ def train_joint_sts_model(
             for class_id, count in zip(classes, counts)
         }
         logger.info("Final-fit class weights: %s", final_class_weight)
+    else:
+        logger.info(
+            "Final-fit class weighting disabled by --no-class-weight."
+        )
 
     final_fit_inputs = (
         final_model.prepare_fit_inputs(feature_array, subject_id_array)
         if getattr(final_model, "requires_subject_ids", False)
         else feature_array
     )
+    final_fit_kwargs = {
+        "epochs": final_epochs,
+        "batch_size": final_batch_size,
+        "verbose": config.final_verbose,
+        "callbacks": final_callbacks,
+    }
+    # Do not even pass the class_weight keyword when class weighting is off.
+    # JointSTSModel.fit also strips it defensively if an external caller adds it.
+    if config.use_class_weight:
+        final_fit_kwargs["class_weight"] = final_class_weight
     final_history = final_model.fit(
         final_fit_inputs,
         label_array,
-        class_weight=final_class_weight,
-        epochs=final_epochs,
-        batch_size=final_batch_size,
-        verbose=config.final_verbose,
-        callbacks=final_callbacks,
+        **final_fit_kwargs,
     )
 
     if diagnostics_callback is not None:
@@ -1427,6 +1444,7 @@ def train_joint_sts_model(
         "classification_learning_rate": config.classification_learning_rate,
         "vae_learning_rate": config.vae_learning_rate,
         "use_class_weight": config.use_class_weight,
+        "final_class_weight": final_class_weight,
         "focal_gamma": config.focal_gamma,
         "focal_alpha": config.focal_alpha,
         "use_subject_adversarial": config.use_subject_adversarial,
