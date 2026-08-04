@@ -324,7 +324,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vae_loss_weight": [
-            0.0
+            0.1
         ],
         "vae_beta": [
             0.3
