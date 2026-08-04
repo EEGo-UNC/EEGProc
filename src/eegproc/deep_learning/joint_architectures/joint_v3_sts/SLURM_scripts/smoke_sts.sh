@@ -227,12 +227,18 @@ TF_PY
 #
 # Four outer-fold workers are requested for the four allocated L40S GPUs.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_model_train \
+    --cv-strategy loso \
+    --alternate-subject-sets \
+    --alternating-subject-seed 42 \
+    --validation-subjects 0 \
+    --no-early-stopping \
+    --skip-no-validation-loso-before-final \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/smoke/joint_sts/DREAMER/arousal \
+    --out-dir runs/smoke/alternating_sts_optimizer/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
     --max-folds 2 \
     --n-jobs 2 \
@@ -242,8 +248,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --seed 42 \
-    --validation-subjects 6 \
-    --validation-seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
     --early-stopping-patience 20 \
