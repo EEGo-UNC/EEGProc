@@ -341,6 +341,11 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         "classification_dropout": [
             0.3
         ],
+
+        "focal_gamma": [1.0, 2.0],
+        "focal_alpha": [
+            [0.275, 0.725]
+        ],
         "vc_alpha": [
             1.0
         ],
