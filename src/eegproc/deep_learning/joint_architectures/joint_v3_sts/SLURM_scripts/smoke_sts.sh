@@ -251,6 +251,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-sec 4.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
+    --use-class-weights \
     --early-stopping-monitor val_trial_balanced_accuracy \
     --early-stopping-mode max \
     --selection-level trial \
@@ -262,7 +263,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --threshold-selection-metric accuracy \
     --final-epoch-strategy median \
     --hyperparameters-json '{
-        "use_class_weight": [false, true],
         "epochs": [
             100
         ],
