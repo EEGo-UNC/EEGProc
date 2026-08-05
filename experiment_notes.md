@@ -47,3 +47,5 @@
     - Achieved significantly higher accuracies on sts model (~70% arousal) and better decoder (R^2=0.6).
 - 8/4/2026
     - Added focal loss to handle class imbalance and noise. Will test if variational goal helps focal loss due to better modeling of class margins.
+- 8/5/2026
+    - Collapsing models on focal loss LOSO. Achieved ~72% accuracy with very low class-0 f1. Running CFX to better understand class collapse and running focal_gamma>=4.0 to see if it helps mitigate collapse.
