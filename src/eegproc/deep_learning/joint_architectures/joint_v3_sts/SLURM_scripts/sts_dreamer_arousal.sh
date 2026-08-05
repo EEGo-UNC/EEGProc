@@ -238,7 +238,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/joint_sts/ICRL_focal_alternating_backprop2/ \
+    --out-dir runs/joint_sts/ICRL_focal_alternating_backprop3/ \
     --run-name dreamer_arousal_joint_sts \
     --n-jobs 4 \
     --cpus-per-worker 2 \
@@ -349,13 +349,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vc_beta": [
-            0.0, 0.5
+            0.25, 0.75
         ],
         "vc_gamma": [
             0.0
         ],
         "vc_lambda": [
-            0.0
+            0.1
         ],
 
         "t_down": [
