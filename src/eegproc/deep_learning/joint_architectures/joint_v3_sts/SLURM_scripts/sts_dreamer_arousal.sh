@@ -227,7 +227,7 @@ TF_PY
 #
 # Four outer-fold workers are requested for the four allocated L40S GPUs.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_model_train \
-    -cv-strategy loso \
+    --cv-strategy loso \
     --alternate-subject-sets \
     --alternating-subject-seed 42 \
     --validation-subjects 0 \
@@ -238,7 +238,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/joint_sts/ICRL_focal_alternating_backprop1/ \
+    --out-dir runs/joint_sts/ICRL_focal_alternating_backprop2/ \
     --run-name dreamer_arousal_joint_sts \
     --n-jobs 4 \
     --cpus-per-worker 2 \
@@ -255,8 +255,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --no-class-weight \
-    --early-stopping-monitor val_accuracy \
-    --early-stopping-mode max \
     --selection-level trial \
     --selection-metric accuracy \
     --decision-thresholds 0.5 \
@@ -265,7 +263,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
-            100
+            150
         ],
         "batch_size": [
             64
@@ -296,7 +294,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
         "subject_loss_weight": [
-            0.5
+            0.6
         ],
         "subject_hidden_units": [
             128
@@ -345,8 +343,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
 
-        "focal_alpha": [0.275, 0.725],
-        "focal_gamma": [1.0, 2.0],
+        "focal_alpha": [0.45, 0.55],
+        "focal_gamma": [2.0, 3.0],
         "vc_alpha": [
             1.0
         ],
@@ -384,8 +382,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
 
         "gcn_units": [
             [
-                128,
-                64
+                256,
+                128
             ]
         ],
         "spectral_emb_dim": [
@@ -445,4 +443,3 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             "mse"
         ]
     }'
-    
