@@ -266,7 +266,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
-            100
+            150
         ],
         "batch_size": [
             64
@@ -297,7 +297,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
         "subject_loss_weight": [
-            0.5
+            0.6
         ],
         "subject_hidden_units": [
             128
@@ -313,7 +313,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             false
         ],
         "supcon_weight": [
-            0.0
+            0.05
         ],
         "supcon_temperature": [
             0.1
@@ -346,19 +346,19 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
 
-        "focal_alpha": [0.45, 0.55],
-        "focal_gamma": [2.0],
+        "focal_alpha": [0.55, 0.45],
+        "focal_gamma": [1.5, 2.0],
         "vc_alpha": [
             1.0
         ],
         "vc_beta": [
-            0.0, 0.5
+            0.25, 0.75
         ],
         "vc_gamma": [
             0.0
         ],
         "vc_lambda": [
-            0.0
+            0.1
         ],
 
         "t_down": [
@@ -446,4 +446,3 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             "mse"
         ]
     }'
-    
