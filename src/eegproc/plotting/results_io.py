@@ -30,11 +30,15 @@ _RESULT_KEYS = frozenset(
         "fold_metrics",
         "user_metrics",
         "prediction_log",
+        "window_prediction_log",
+        "trial_prediction_log",
         "variational_interval_log",
         "best_configs",
         "inner_cv_results",
         "outer_fold_results",
         "mean_scores",
+        "config_results",
+        "fold_results",
     }
 )
 
@@ -111,6 +115,35 @@ def _rows_to_frame(rows: list[dict], model: str) -> pd.DataFrame:
     frame = pd.DataFrame(normalized_rows)
     frame.insert(0, "model", model)
     return frame
+
+
+def _prediction_rows(result: dict) -> list[dict]:
+    """Return prediction rows from either the legacy or flat LOSO JSON format."""
+    for key in ("prediction_log", "window_prediction_log", "trial_prediction_log"):
+        rows = result.get(key)
+        if rows:
+            return rows
+    return []
+
+
+def _fold_metric_rows(result: dict) -> list[dict]:
+    """Return fold-metric rows from either the legacy or flat LOSO JSON format."""
+    if result.get("fold_metrics"):
+        return result["fold_metrics"]
+
+    config_results = result.get("config_results") or []
+    if not config_results:
+        return []
+
+    best_config_index = result.get("best_config_index", 0)
+    if not isinstance(best_config_index, int):
+        best_config_index = 0
+    if best_config_index < 0:
+        best_config_index = 0
+
+    selected_config = config_results[best_config_index] if best_config_index < len(config_results) else config_results[0]
+    fold_metrics = selected_config.get("fold_metrics") or []
+    return fold_metrics
 
 
 def _flatten_configs(records: list[dict], model: str, config_key: str) -> pd.DataFrame:
@@ -192,6 +225,22 @@ def _summary_frame(result: dict, model: str) -> pd.DataFrame:
     else:
         mean_scores = result.get("trial_mean_scores") or result.get("window_mean_scores") or {}
         std_scores = result.get("trial_std_scores") or result.get("window_std_scores") or {}
+
+        if not mean_scores:
+            config_results = result.get("config_results") or []
+            if config_results:
+                best_config_index = result.get("best_config_index", 0)
+                if not isinstance(best_config_index, int):
+                    best_config_index = 0
+                if best_config_index < 0:
+                    best_config_index = 0
+                selected_config = (
+                    config_results[best_config_index]
+                    if best_config_index < len(config_results)
+                    else config_results[0]
+                )
+                mean_scores = selected_config.get("trial_mean_scores") or selected_config.get("window_mean_scores") or {}
+                std_scores = selected_config.get("trial_std_scores") or selected_config.get("window_std_scores") or {}
 
     rows = [
         {
@@ -277,12 +326,15 @@ def load_results(path: str | Path) -> ResultsTables:
     for model, result in models.items():
         subject_id_mapping[model] = result.get("subject_id_mapping", {}) or {}
 
-        if result.get("prediction_log"):
-            predictions_parts.append(_rows_to_frame(result["prediction_log"], model))
+        prediction_rows = _prediction_rows(result)
+        if prediction_rows:
+            predictions_parts.append(_rows_to_frame(prediction_rows, model))
         if result.get("user_metrics"):
             user_metrics_parts.append(_rows_to_frame(result["user_metrics"], model))
-        if result.get("fold_metrics"):
-            fold_metrics_parts.append(_rows_to_frame(result["fold_metrics"], model))
+
+        fold_metric_rows = _fold_metric_rows(result)
+        if fold_metric_rows:
+            fold_metrics_parts.append(_rows_to_frame(fold_metric_rows, model))
         if result.get("variational_interval_log"):
             interval_parts.append(
                 _rows_to_frame(result["variational_interval_log"], model)

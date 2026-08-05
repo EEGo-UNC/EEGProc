@@ -183,13 +183,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         "classification_hidden_units": [128],
         "classification_dropout": [0.3],
 
-        "focal_gamma": [2.0],
-        "focal_alpha": [
-            [0.275, 0.725],
-            [0.45, 0.55]
-            ],
+        "focal_gamma": [4.0, 5.0],
+        "focal_alpha": [0.275, 0.725],
         "vc_alpha": [1.0],
-        "vc_beta": [0.0, 0.5],
+        "vc_beta": [0.5],
         "vc_gamma": [0.0],
         "vc_lambda": [0.0],
 
