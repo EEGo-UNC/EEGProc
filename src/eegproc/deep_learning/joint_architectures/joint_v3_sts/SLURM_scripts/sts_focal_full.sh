@@ -140,17 +140,17 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --no-class-weight \
+    --early-stopping-monitor val_trial_balanced_accuracy \
+    --early-stopping-mode max \
     --early-stopping-patience 20 \
     --early-stopping-min-delta 0.002 \
-    --early-stopping-monitor val_accuracy \
-    --early-stopping-mode max \
     --selection-level trial \
-    --selection-metric accuracy \
+    --selection-metric balanced_accuracy \
     --decision-thresholds \
         0.20 0.25 0.30 0.35 0.40 0.45 0.50 \
         0.55 0.60 0.65 0.70 0.75 0.80 \
     --threshold-selection-level trial \
-    --threshold-selection-metric accuracy \
+    --threshold-selection-metric balanced_accuracy \
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [100],
@@ -183,8 +183,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         "classification_hidden_units": [128],
         "classification_dropout": [0.3],
 
-        "focal_gamma": [4.0, 5.0],
-        "focal_alpha": [0.275, 0.725],
+        "focal_gamma": [2.0, 4.0],
+        "focal_alpha": [0.55, 0.45],
         "vc_alpha": [1.0],
         "vc_beta": [0.5],
         "vc_gamma": [0.0],
