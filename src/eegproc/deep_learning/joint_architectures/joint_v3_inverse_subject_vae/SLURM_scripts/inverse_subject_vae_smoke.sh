@@ -18,7 +18,7 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
-MODEL_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/joint_v3_sts"
+MODEL_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/joint_v3_inverse_subject_vae"
 
 cd "$PROJECT_DIR"
 
@@ -159,9 +159,9 @@ from pathlib import Path
 
 import tensorflow as tf
 
-from src.eegproc.deep_learning.joint_architectures.joint_v3_sts \
+from src.eegproc.deep_learning.joint_architectures.joint_v3_inverse_subject_vae \
     import inverse_subject_vae_model
-from src.eegproc.deep_learning.joint_architectures.joint_v3_sts \
+from src.eegproc.deep_learning.joint_architectures.joint_v3_inverse_subject_vae \
     import inverse_subject_vae_train
 
 print("Python executable:", sys.executable)
@@ -386,7 +386,7 @@ cat "$HYPERPARAMETERS_JSON"
 # The selected metric is validation decoder_accuracy, which is reconstruction R^2.
 # Fold models are retained so model saving/loading is exercised during the smoke test.
 # The architecture and loss settings intentionally match the planned full run.
-python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.inverse_subject_vae_train \
+python -m src.eegproc.deep_learning.joint_architectures.joint_v3_inverse_subject_vae.inverse_subject_vae_train \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --dataset dreamer \

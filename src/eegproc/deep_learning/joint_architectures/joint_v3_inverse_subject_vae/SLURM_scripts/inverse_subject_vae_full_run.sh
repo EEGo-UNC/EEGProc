@@ -18,7 +18,7 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
-MODEL_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/joint_v3_sts"
+MODEL_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/joint_v3_inverse_subject_vae"
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 
 cd "$PROJECT_DIR"
