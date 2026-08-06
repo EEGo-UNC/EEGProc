@@ -19,6 +19,7 @@ module load cudnn/9.11.0
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
 MODEL_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/joint_v3_sts"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 
 cd "$PROJECT_DIR"
 
@@ -45,16 +46,21 @@ else
     python -m pip install -r requirements.txt
 fi
 
-# Confirm that the reconstruction-only model and trainer are in the repository.
+# The inverse-subject files travel with this SLURM script. Existing EEGProc
+# dependencies continue to load from the repository package directory.
 for required_file in \
-    "$MODEL_DIR/inverse_subject_vae_model.py" \
-    "$MODEL_DIR/inverse_subject_vae_train.py"
+    "$SUBMIT_DIR/inverse_subject_vae_model.py" \
+    "$SUBMIT_DIR/inverse_subject_vae_train.py"
 do
     if [[ ! -f "$required_file" ]]; then
-        echo "ERROR: Required file is missing: $required_file"
+        echo "ERROR: Required submission file is missing: $required_file"
+        echo "Place inverse_subject_vae_model.py and inverse_subject_vae_train.py"
+        echo "beside this SLURM script, then submit from that directory."
         exit 1
     fi
 done
+
+export PYTHONPATH="$SUBMIT_DIR:$MODEL_DIR:$PROJECT_DIR/src:${PYTHONPATH:-}"
 
 # Determine the CUDA toolkit root exposed by the Longleaf module.
 MODULE_CUDA_ROOT=""
@@ -159,10 +165,8 @@ from pathlib import Path
 
 import tensorflow as tf
 
-from src.eegproc.deep_learning.joint_architectures.joint_v3_sts \
-    import inverse_subject_vae_model
-from src.eegproc.deep_learning.joint_architectures.joint_v3_sts \
-    import inverse_subject_vae_train
+import inverse_subject_vae_model
+import inverse_subject_vae_train
 
 print("Python executable:", sys.executable)
 print("Virtual environment:", sys.prefix)
@@ -236,157 +240,12 @@ with tf.device("/GPU:0"):
 print("GPU exp-gradient test:", gradient.numpy())
 TF_PY
 
-# Keep the architecture and optimization settings in one JSON grid, matching
-# the style of the existing STS SLURM jobs. This grid contains one deliberate
-# configuration; LOSOCV still selects the epoch count by validation R^2.
-HYPERPARAMETERS_JSON="${SLURM_TMPDIR:-/tmp}/inverse_subject_vae_smoke_hparams_${SLURM_JOB_ID}.json"
-cat > "$HYPERPARAMETERS_JSON" <<'JSON'
-{
-    "epochs": [
-        40
-    ],
-    "batch_size": [
-        32
-    ],
-    "optimizer_name": [
-        "adamw"
-    ],
-    "vae_learning_rate": [
-        0.00005
-    ],
-    "subject_learning_rate": [
-        0.0001
-    ],
-    "weight_decay": [
-        0.0001
-    ],
-    "subject_steps_per_batch": [
-        1
-    ],
-    "vae_steps_per_batch": [
-        1
-    ],
-
-    "vae_loss_weight": [
-        1.0
-    ],
-    "vae_beta": [
-        0.3
-    ],
-    "subject_adversarial_weight": [
-        1.0
-    ],
-    "subject_loss_weight": [
-        1.0
-    ],
-    "subject_hidden_units": [
-        128
-    ],
-    "subject_dropout": [
-        0.0
-    ],
-
-    "t_down": [
-        2
-    ],
-    "temporal_pool_sizes": [
-        [
-            2
-        ]
-    ],
-
-    "bilstm_units": [
-        256
-    ],
-    "n_bilstm_layers": [
-        1
-    ],
-    "bilstm_dropout": [
-        0.3
-    ],
-    "temporal_emb_dim": [
-        64
-    ],
-
-    "gcn_units": [
-        [
-            256,
-            128
-        ]
-    ],
-    "spectral_emb_dim": [
-        128
-    ],
-    "gcn_dropout": [
-        0.2
-    ],
-    "gcn_activation": [
-        "relu"
-    ],
-    "gcn_use_batch_norm": [
-        false
-    ],
-    "graph_self_loop_bias": [
-        2.0
-    ],
-    "graph_identity_mix": [
-        0.0
-    ],
-    "graph_adjacency_reg_weight": [
-        0.0001
-    ],
-
-    "fusion_dim": [
-        256
-    ],
-    "latent_features": [
-        128
-    ],
-    "fusion_dropout": [
-        0.2
-    ],
-    "activation": [
-        "relu"
-    ],
-
-    "decoder_temporal_units": [
-        128
-    ],
-    "decoder_bilstm_layers": [
-        1
-    ],
-    "decoder_graph_output_units": [
-        32
-    ],
-    "decoder_branch_feature_dim": [
-        64
-    ],
-    "decoder_fusion_units": [
-        128
-    ],
-    "decoder_dropout": [
-        0.2
-    ],
-    "reconstruction_loss": [
-        "mse"
-    ]
-}
-JSON
-
-echo "Hyperparameter grid: $HYPERPARAMETERS_JSON"
-cat "$HYPERPARAMETERS_JSON"
-
-# Bounded two-fold DREAMER LOSOCV smoke test for unseen-subject reconstruction.
+# Bounded DREAMER LOSOCV smoke test for unseen-subject reconstruction.
 #
-# Each training batch alternates:
-#   1. a detached subject-classifier update;
-#   2. a VAE reconstruction + KL + inverse-subject update through GRL.
-#
-# Validation and held-out-subject reconstruction use the posterior mean.
-# The selected metric is validation decoder_accuracy, which is reconstruction R^2.
-# Fold models are retained so model saving/loading is exercised during the smoke test.
-# The architecture and loss settings intentionally match the planned full run.
-python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.inverse_subject_vae_train \
+# The inverse-subject model and trainer are loaded from SLURM_SUBMIT_DIR.
+# Existing STS encoder/decoder components are loaded from the EEGProc checkout.
+# Validation and held-out-subject reconstruction use posterior-mean R^2.
+python "$SUBMIT_DIR/inverse_subject_vae_train.py" \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --dataset dreamer \
@@ -406,4 +265,133 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.inverse_sub
     --verbose 2 \
     --skip-final-full-data-fit \
     --seed 42 \
-    --hyperparameters-json "$HYPERPARAMETERS_JSON"
+    --hyperparameters-json '{
+        "epochs": [
+            40
+        ],
+        "batch_size": [
+            32
+        ],
+        "optimizer_name": [
+            "adamw"
+        ],
+        "vae_learning_rate": [
+            0.00005
+        ],
+        "subject_learning_rate": [
+            0.0001
+        ],
+        "weight_decay": [
+            0.0001
+        ],
+        "subject_steps_per_batch": [
+            1
+        ],
+        "vae_steps_per_batch": [
+            1
+        ],
+
+        "vae_loss_weight": [
+            1.0
+        ],
+        "vae_beta": [
+            0.3
+        ],
+        "subject_adversarial_weight": [
+            1.0
+        ],
+        "subject_loss_weight": [
+            1.0
+        ],
+        "subject_hidden_units": [
+            128
+        ],
+        "subject_dropout": [
+            0.0
+        ],
+
+        "t_down": [
+            2
+        ],
+        "temporal_pool_sizes": [
+            [
+                2
+            ]
+        ],
+
+        "bilstm_units": [
+            256
+        ],
+        "n_bilstm_layers": [
+            1
+        ],
+        "bilstm_dropout": [
+            0.3
+        ],
+        "temporal_emb_dim": [
+            64
+        ],
+
+        "gcn_units": [
+            [
+                256,
+                128
+            ]
+        ],
+        "spectral_emb_dim": [
+            128
+        ],
+        "gcn_dropout": [
+            0.2
+        ],
+        "gcn_activation": [
+            "relu"
+        ],
+        "gcn_use_batch_norm": [
+            false
+        ],
+        "graph_self_loop_bias": [
+            2.0
+        ],
+        "graph_identity_mix": [
+            0.0
+        ],
+        "graph_adjacency_reg_weight": [
+            0.0001
+        ],
+
+        "fusion_dim": [
+            256
+        ],
+        "latent_features": [
+            128
+        ],
+        "fusion_dropout": [
+            0.2
+        ],
+        "activation": [
+            "relu"
+        ],
+
+        "decoder_temporal_units": [
+            128
+        ],
+        "decoder_bilstm_layers": [
+            1
+        ],
+        "decoder_graph_output_units": [
+            32
+        ],
+        "decoder_branch_feature_dim": [
+            64
+        ],
+        "decoder_fusion_units": [
+            128
+        ],
+        "decoder_dropout": [
+            0.2
+        ],
+        "reconstruction_loss": [
+            "mse"
+        ]
+    }'
