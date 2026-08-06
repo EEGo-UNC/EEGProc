@@ -1075,8 +1075,9 @@ def train_joint_sts_model(
         config.alternating_subject_seed,
     )
     logger.info(
-        "First-order MLDG: %s (inner_lr=%.8g, meta_test_weight=%.6g, "
-        "A_subjects=%d, B_subjects=%d, samples_per_subject=%d, seed=%s)",
+        "First-order MLDG: %s (sampling=natural_within_subject, "
+        "inner_lr=%.8g, meta_test_weight=%.6g, A_subjects=%d, "
+        "B_subjects=%d, samples_per_subject=%d, seed=%s)",
         config.use_mldg,
         config.mldg_inner_learning_rate,
         config.mldg_meta_test_weight,
@@ -1091,6 +1092,10 @@ def train_joint_sts_model(
         config.selection_metric,
         config.threshold_selection_level,
         config.threshold_selection_metric,
+    )
+    logger.info(
+        "Metric convention: MTLFuseNet-compatible trial aggregation; "
+        "f1/precision/recall treat class 1 as positive"
     )
     logger.info("Subject adversarial enabled: %s", config.use_subject_adversarial)
     logger.info("SupCon enabled: %s", config.use_supcon)
@@ -1142,7 +1147,9 @@ def train_joint_sts_model(
         "n_epochs": config.cv_max_epochs,
         "batch_size": config.batch_size,
         "hyperparameters": config.hyperparameters,
-        "evaluation_level": "window",
+        # MTLFuseNet reports classification after averaging window probabilities
+        # within each trial, so trial-level metrics are the primary fold metrics.
+        "evaluation_level": "trial",
         "selection_level": config.selection_level,
         "selection_metric": config.selection_metric,
         "maximize_metric": config.maximize_metric,
@@ -1151,6 +1158,9 @@ def train_joint_sts_model(
             "f1",
             "precision",
             "recall",
+            "macro_f1",
+            "macro_precision",
+            "macro_recall",
             "balanced_accuracy",
         ),
         "log_predictions": True,
@@ -1338,7 +1348,7 @@ def train_joint_sts_model(
             fixed_config=final_hparams,
             n_epochs=final_epochs,
             batch_size=final_batch_size,
-            evaluation_level="window",
+            evaluation_level="trial",
             selection_level=config.selection_level,
             # This stage evaluates one already-selected configuration, so the
             # ranking field is informational only. Balanced accuracy is always
@@ -1350,6 +1360,9 @@ def train_joint_sts_model(
                 "f1",
                 "precision",
                 "recall",
+                "macro_f1",
+                "macro_precision",
+                "macro_recall",
                 "balanced_accuracy",
             ),
             log_predictions=True,
@@ -1534,6 +1547,8 @@ def train_joint_sts_model(
         "cv_best_epochs": cv_best_epochs,
         "final_epoch_strategy": config.final_epoch_strategy,
         "classification_level": "window",
+        "primary_evaluation_level": "trial",
+        "metric_convention": "mtlfusenet_binary_class_1_positive",
         "selection_level": config.selection_level,
         "default_classifier_head": config.classifier_head,
         "classification_steps_per_batch": config.classification_steps_per_batch,
@@ -1546,6 +1561,7 @@ def train_joint_sts_model(
         "mldg_meta_train_subjects": config.mldg_meta_train_subjects,
         "mldg_meta_test_subjects": config.mldg_meta_test_subjects,
         "mldg_samples_per_subject": config.mldg_samples_per_subject,
+        "mldg_sampling": "natural_within_subject",
         "mldg_seed": config.mldg_seed,
         "use_class_weight": config.use_class_weight,
         "final_class_weight": final_class_weight,
@@ -1679,6 +1695,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "f1",
             "precision",
             "recall",
+            "macro_f1",
+            "macro_precision",
+            "macro_recall",
             "balanced_accuracy",
         ),
         default="f1",

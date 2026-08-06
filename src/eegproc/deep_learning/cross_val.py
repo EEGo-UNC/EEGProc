@@ -30,13 +30,16 @@ _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset(
     {
         "accuracy",
-        # For binary tasks these canonical names follow MTLFuseNet/sklearn's
-        # default convention: class 1 is the positive class.
+        # MTLFuseNet-compatible binary metrics: class 1 is positive.
         "f1",
         "precision",
         "recall",
-        # Class-balanced and explicit compatibility aliases.
+        # Explicit class-balanced alternatives retained for diagnostics.
+        "macro_f1",
+        "macro_precision",
+        "macro_recall",
         "balanced_accuracy",
+        # Backward-compatible aliases for the canonical binary metrics.
         "binary_f1",
         "binary_precision",
         "binary_recall",
@@ -323,7 +326,7 @@ class AlternatingSubjectSetSequence(tf.keras.utils.Sequence):
 
 
 class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
-    """Yield subject-balanced first-order MLDG episodes.
+    """Yield subject-stratified first-order MLDG episodes with natural labels.
 
     Every item contains two disjoint groups sampled from the current fold's
     gradient-training subjects:
@@ -428,37 +431,23 @@ class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
         subject,
         rng: np.random.Generator,
     ) -> np.ndarray:
-        """Sample one subject approximately evenly across available classes."""
-        subject_indices = np.where(self.subject_ids == subject)[0]
-        subject_labels = self.y_ids[subject_indices]
-        classes = np.unique(subject_labels)
-        if len(classes) <= 1:
-            return rng.choice(
-                subject_indices,
-                size=self.samples_per_subject,
-                replace=len(subject_indices) < self.samples_per_subject,
-            ).astype(np.int64)
+        """Sample uniformly from all windows belonging to one subject.
 
-        base = self.samples_per_subject // len(classes)
-        remainder = self.samples_per_subject % len(classes)
-        sampled: list[np.ndarray] = []
-        shuffled_classes = classes.copy()
-        rng.shuffle(shuffled_classes)
-        for class_position, class_id in enumerate(shuffled_classes):
-            take = base + (1 if class_position < remainder else 0)
-            if take == 0:
-                continue
-            candidates = subject_indices[subject_labels == class_id]
-            sampled.append(
-                rng.choice(
-                    candidates,
-                    size=take,
-                    replace=len(candidates) < take,
-                ).astype(np.int64)
+        No class is selected explicitly. Consequently, both meta-train A and
+        meta-test B preserve each selected subject's empirical class
+        distribution in expectation while every selected subject still
+        contributes exactly ``samples_per_subject`` windows.
+        """
+        subject_indices = np.flatnonzero(self.subject_ids == subject)
+        if subject_indices.size == 0:
+            raise RuntimeError(
+                f"MLDG selected subject {subject!r} without any windows."
             )
-        indices = np.concatenate(sampled, axis=0)
-        rng.shuffle(indices)
-        return indices
+        return rng.choice(
+            subject_indices,
+            size=self.samples_per_subject,
+            replace=subject_indices.size < self.samples_per_subject,
+        ).astype(np.int64)
 
     def _sample_group_indices(
         self,
@@ -878,9 +867,8 @@ def _threshold_metric_value(
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
     if metric == "accuracy":
         return float(accuracy_score(y_true, y_pred))
-    if metric in {"f1", "binary_f1"}:
-        # MTLFuseNet calls sklearn.f1_score without an ``average`` argument,
-        # which is binary class-1 F1 for the DREAMER tasks.
+    if metric == "f1":
+        # MTLFuseNet convention: binary F1 for class 1.
         return float(
             f1_score(
                 y_true,
@@ -900,9 +888,20 @@ def _threshold_metric_value(
                 zero_division=0,
             )
         )
+    if metric == "binary_f1":
+        return float(
+            f1_score(
+                y_true,
+                y_pred,
+                average="binary",
+                pos_label=1,
+                zero_division=0,
+            )
+        )
     raise ValueError(
         "threshold_selection_metric must be accuracy, f1, "
-        "balanced_accuracy, or binary_f1."
+        "balanced_accuracy, or binary_f1. Here f1 follows the "
+        "MTLFuseNet binary class-1 convention."
     )
 
 
@@ -1648,16 +1647,16 @@ def _classification_metrics(
 ) -> dict:
     """Compute selected classification metrics.
 
-    For binary tasks, ``f1``, ``precision``, and ``recall`` reproduce the
-    MTLFuseNet implementation: sklearn's binary convention with class 1 as the
-    positive class and ``zero_division=0``. The explicit ``binary_*`` names are
-    retained as backward-compatible aliases and therefore return the same
-    values. ``balanced_accuracy`` remains macro recall across both classes.
+    For binary tasks, ``f1``, ``precision``, and ``recall`` follow the
+    MTLFuseNet convention: class 1 is the positive class and no macro averaging
+    is applied. ``binary_f1``, ``binary_precision``, and ``binary_recall`` are
+    retained as backward-compatible aliases. Explicit ``macro_*`` metrics and
+    ``balanced_accuracy`` remain available for class-balanced diagnostics.
 
-    For non-binary tasks, the canonical ``f1``, ``precision``, and ``recall``
-    fall back to macro averaging because MTLFuseNet's binary convention is not
-    defined. AUC is reported as NaN when a binary fold contains only one true
-    class rather than inventing a score.
+    For multiclass tasks, the canonical metrics fall back to macro averaging
+    because binary positive-class metrics are undefined. ``roc_auc`` uses the
+    predicted probability for class 1 and is reported as NaN when a binary fold
+    contains only one ground-truth class.
     """
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
@@ -1710,37 +1709,91 @@ def _classification_metrics(
             scores["accuracy"] = float(accuracy_score(y_true, y_pred))
 
         elif metric == "f1":
-            scores["f1"] = float(
+            if n_classes == 2:
+                value = f1_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            else:
+                value = f1_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
+            scores["f1"] = float(value)
+
+        elif metric == "precision":
+            if n_classes == 2:
+                value = precision_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            else:
+                value = precision_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
+            scores["precision"] = float(value)
+
+        elif metric == "recall":
+            if n_classes == 2:
+                value = recall_score(
+                    y_true,
+                    y_pred,
+                    average="binary",
+                    pos_label=1,
+                    zero_division=0,
+                )
+            else:
+                value = recall_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    labels=expected_labels,
+                    zero_division=0,
+                )
+            scores["recall"] = float(value)
+
+        elif metric == "macro_f1":
+            scores["macro_f1"] = float(
                 f1_score(
                     y_true,
                     y_pred,
-                    average="binary" if n_classes == 2 else "macro",
-                    pos_label=1,
-                    labels=None if n_classes == 2 else expected_labels,
+                    average="macro",
+                    labels=expected_labels,
                     zero_division=0,
                 )
             )
 
-        elif metric == "precision":
-            scores["precision"] = float(
+        elif metric == "macro_precision":
+            scores["macro_precision"] = float(
                 precision_score(
                     y_true,
                     y_pred,
-                    average="binary" if n_classes == 2 else "macro",
-                    pos_label=1,
-                    labels=None if n_classes == 2 else expected_labels,
+                    average="macro",
+                    labels=expected_labels,
                     zero_division=0,
                 )
             )
 
-        elif metric == "recall":
-            scores["recall"] = float(
+        elif metric == "macro_recall":
+            scores["macro_recall"] = float(
                 recall_score(
                     y_true,
                     y_pred,
-                    average="binary" if n_classes == 2 else "macro",
-                    pos_label=1,
-                    labels=None if n_classes == 2 else expected_labels,
+                    average="macro",
+                    labels=expected_labels,
                     zero_division=0,
                 )
             )
@@ -1915,8 +1968,7 @@ class TrialValidationMetrics(tf.keras.callbacks.Callback):
     window models are still aggregated within each (subject_id, trial_id) pair.
     The resulting values are added to the Keras epoch logs as
     ``val_trial_f1``, ``val_trial_balanced_accuracy``, and ``val_trial_loss``
-    so callbacks such as EarlyStopping can monitor them. For binary tasks,
-    ``val_trial_f1`` uses MTLFuseNet's class-1 binary F1 convention.
+    so callbacks such as EarlyStopping can monitor them.
     """
 
     def __init__(
@@ -1969,21 +2021,29 @@ class TrialValidationMetrics(tf.keras.callbacks.Callback):
         y_pred_trial = trial_aggregation["y_pred"]
         expected_labels = list(range(probabilities_trial.shape[1]))
 
-        logs["val_trial_f1"] = float(
+        if probabilities_trial.shape[1] == 2:
+            val_trial_f1 = f1_score(
+                y_true_trial,
+                y_pred_trial,
+                average="binary",
+                pos_label=1,
+                zero_division=0,
+            )
+        else:
+            val_trial_f1 = f1_score(
+                y_true_trial,
+                y_pred_trial,
+                average="macro",
+                labels=expected_labels,
+                zero_division=0,
+            )
+        logs["val_trial_f1"] = float(val_trial_f1)
+        logs["val_trial_macro_f1"] = float(
             f1_score(
                 y_true_trial,
                 y_pred_trial,
-                average=(
-                    "binary"
-                    if probabilities_trial.shape[1] == 2
-                    else "macro"
-                ),
-                pos_label=1,
-                labels=(
-                    None
-                    if probabilities_trial.shape[1] == 2
-                    else expected_labels
-                ),
+                average="macro",
+                labels=expected_labels,
                 zero_division=0,
             )
         )
@@ -3732,6 +3792,9 @@ def nested_lnso_cv(
         "f1",
         "precision",
         "recall",
+        "macro_f1",
+        "macro_precision",
+        "macro_recall",
         "balanced_accuracy",
         "binary_f1",
         "binary_precision",
@@ -4472,7 +4535,7 @@ def _run_loso_fold(
                 seed=fold_mldg_seed,
             )
             print(
-                "First-order MLDG episodes: "
+                "First-order MLDG episodes (natural within-subject labels): "
                 f"A_subjects={mldg_meta_train_subjects}, "
                 f"B_subjects={mldg_meta_test_subjects}, "
                 f"samples_per_subject={mldg_samples_per_subject}, "
@@ -4930,6 +4993,9 @@ def loso_cv(
         "f1",
         "precision",
         "recall",
+        "macro_f1",
+        "macro_precision",
+        "macro_recall",
         "balanced_accuracy",
         "binary_f1",
         "binary_precision",
@@ -5013,11 +5079,11 @@ def loso_cv(
     ---------
     ``selection_level`` determines whether configurations are ranked using
     window- or trial-level scores. Hierarchical rank-4 inputs require trial-level
-    selection. For binary tasks, ``selection_metric='f1'`` and the reported
-    ``f1``, ``precision``, and ``recall`` use MTLFuseNet's class-1 binary
-    convention. The ``binary_*`` fields are retained as identical compatibility
-    aliases, while ``balanced_accuracy`` remains class-balanced macro recall and
-    ``roc_auc`` uses the class-1 probability.
+    selection. For binary tasks, ``selection_metric='f1'`` uses the MTLFuseNet
+    convention: class 1 is positive. ``precision`` and ``recall`` follow the same
+    convention. Explicit ``macro_*`` metrics and ``balanced_accuracy`` remain
+    available for class-balanced diagnostics, while ``roc_auc`` uses the class-1
+    probability.
     Classification metrics are maximized; probability loss and joint loss are minimized unless
     ``maximize_metric`` is explicitly supplied. Ties use lower between-subject
     standard deviation, lower mean log loss, then the earlier grid index.
@@ -5321,7 +5387,7 @@ def loso_cv(
         print("Per-fold validation: disabled")
     if use_mldg:
         print(
-            "Optimization: first-order MLDG "
+            "Optimization: first-order MLDG with natural within-subject labels "
             f"(A={mldg_meta_train_subjects} subjects, "
             f"B={mldg_meta_test_subjects} subjects, "
             f"samples/subject={mldg_samples_per_subject}, seed={mldg_seed})"
@@ -5632,6 +5698,9 @@ def fixed_loso_cv(
         "f1",
         "precision",
         "recall",
+        "macro_f1",
+        "macro_precision",
+        "macro_recall",
         "balanced_accuracy",
     ),
     log_predictions: bool = True,
@@ -6305,6 +6374,9 @@ def lnskto_cv(
         "f1",
         "precision",
         "recall",
+        "macro_f1",
+        "macro_precision",
+        "macro_recall",
         "balanced_accuracy",
         "binary_f1",
         "binary_precision",
