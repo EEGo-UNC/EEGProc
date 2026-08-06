@@ -123,7 +123,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --label-dimension arousal \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/FULL_LOSO_FOCAL_TRAIN_VAL/DREAMER/AROUSAL \
+    --out-dir runs/FULL_LOSO_FOCAL_BALANCED/DREAMER/AROUSAL \
     --run-name dreamer_arousal_restored_075 \
     --n-jobs 4 \
     --cpus-per-worker 2 \

@@ -240,7 +240,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --n-bands 3 \
     --out-dir runs/smoke/alternating_sts_optimizer/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
-    --max-folds 2 \
+    --max-folds 1 \
     --n-jobs 2 \
     --cpus-per-worker 4 \
     --outer-verbose 2 \
@@ -252,7 +252,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --median-label 3 \
     --early-stopping-patience 20 \
     --early-stopping-min-delta 0.002 \
-    --window-sec 4.0 \
+    --window-sec 1.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --no-class-weight \
@@ -329,7 +329,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
         "vae_beta": [
-            0.3
+            0.1
         ],
         "label_smoothing": [
             0.0
@@ -352,7 +352,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vc_beta": [
-            0.25, 0.75
+            0.5
         ],
         "vc_gamma": [
             0.0
@@ -385,8 +385,8 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
 
         "gcn_units": [
             [
-                128,
-                64
+                256,
+                128
             ]
         ],
         "spectral_emb_dim": [

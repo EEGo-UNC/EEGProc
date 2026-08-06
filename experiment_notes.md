@@ -49,3 +49,5 @@
     - Added focal loss to handle class imbalance and noise. Will test if variational goal helps focal loss due to better modeling of class margins.
 - 8/5/2026
     - Collapsing models on focal loss LOSO. Achieved ~72% accuracy with very low class-0 f1. Running CFX to better understand class collapse and running focal_gamma>=4.0 to see if it helps mitigate collapse.
+- 8/6/2026
+    - Balanced accuracy model achieves 57% bal_acc but acc is sub-50.
