@@ -30,11 +30,12 @@ _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset(
     {
         "accuracy",
-        # Existing class-balanced metrics. These remain macro averaged.
+        # For binary tasks these canonical names follow MTLFuseNet/sklearn's
+        # default convention: class 1 is the positive class.
         "f1",
         "precision",
         "recall",
-        # Paper-comparison metrics commonly reported for binary DREAMER tasks.
+        # Class-balanced and explicit compatibility aliases.
         "balanced_accuracy",
         "binary_f1",
         "binary_precision",
@@ -877,13 +878,15 @@ def _threshold_metric_value(
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
     if metric == "accuracy":
         return float(accuracy_score(y_true, y_pred))
-    if metric == "f1":
+    if metric in {"f1", "binary_f1"}:
+        # MTLFuseNet calls sklearn.f1_score without an ``average`` argument,
+        # which is binary class-1 F1 for the DREAMER tasks.
         return float(
             f1_score(
                 y_true,
                 y_pred,
-                average="macro",
-                labels=[0, 1],
+                average="binary",
+                pos_label=1,
                 zero_division=0,
             )
         )
@@ -894,16 +897,6 @@ def _threshold_metric_value(
                 y_pred,
                 average="macro",
                 labels=[0, 1],
-                zero_division=0,
-            )
-        )
-    if metric == "binary_f1":
-        return float(
-            f1_score(
-                y_true,
-                y_pred,
-                average="binary",
-                pos_label=1,
                 zero_division=0,
             )
         )
@@ -1655,15 +1648,16 @@ def _classification_metrics(
 ) -> dict:
     """Compute selected classification metrics.
 
-    ``f1``, ``precision``, and ``recall`` preserve the existing macro-averaged
-    definitions so every expected class contributes equally. The additional
-    ``binary_*`` metrics treat class 1 as the positive class, matching the
-    common reporting convention in DREAMER papers such as STSNet. ``roc_auc``
-    uses the predicted probability for class 1.
+    For binary tasks, ``f1``, ``precision``, and ``recall`` reproduce the
+    MTLFuseNet implementation: sklearn's binary convention with class 1 as the
+    positive class and ``zero_division=0``. The explicit ``binary_*`` names are
+    retained as backward-compatible aliases and therefore return the same
+    values. ``balanced_accuracy`` remains macro recall across both classes.
 
-    Binary paper-comparison metrics require exactly two output classes. AUC is
-    undefined when a fold contains only one ground-truth class; in that case
-    ``roc_auc`` is reported as NaN rather than inventing a score.
+    For non-binary tasks, the canonical ``f1``, ``precision``, and ``recall``
+    fall back to macro averaging because MTLFuseNet's binary convention is not
+    defined. AUC is reported as NaN when a binary fold contains only one true
+    class rather than inventing a score.
     """
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
@@ -1720,8 +1714,9 @@ def _classification_metrics(
                 f1_score(
                     y_true,
                     y_pred,
-                    average="macro",
-                    labels=expected_labels,
+                    average="binary" if n_classes == 2 else "macro",
+                    pos_label=1,
+                    labels=None if n_classes == 2 else expected_labels,
                     zero_division=0,
                 )
             )
@@ -1731,8 +1726,9 @@ def _classification_metrics(
                 precision_score(
                     y_true,
                     y_pred,
-                    average="macro",
-                    labels=expected_labels,
+                    average="binary" if n_classes == 2 else "macro",
+                    pos_label=1,
+                    labels=None if n_classes == 2 else expected_labels,
                     zero_division=0,
                 )
             )
@@ -1742,8 +1738,9 @@ def _classification_metrics(
                 recall_score(
                     y_true,
                     y_pred,
-                    average="macro",
-                    labels=expected_labels,
+                    average="binary" if n_classes == 2 else "macro",
+                    pos_label=1,
+                    labels=None if n_classes == 2 else expected_labels,
                     zero_division=0,
                 )
             )
@@ -1918,7 +1915,8 @@ class TrialValidationMetrics(tf.keras.callbacks.Callback):
     window models are still aggregated within each (subject_id, trial_id) pair.
     The resulting values are added to the Keras epoch logs as
     ``val_trial_f1``, ``val_trial_balanced_accuracy``, and ``val_trial_loss``
-    so callbacks such as EarlyStopping can monitor them.
+    so callbacks such as EarlyStopping can monitor them. For binary tasks,
+    ``val_trial_f1`` uses MTLFuseNet's class-1 binary F1 convention.
     """
 
     def __init__(
@@ -1975,8 +1973,17 @@ class TrialValidationMetrics(tf.keras.callbacks.Callback):
             f1_score(
                 y_true_trial,
                 y_pred_trial,
-                average="macro",
-                labels=expected_labels,
+                average=(
+                    "binary"
+                    if probabilities_trial.shape[1] == 2
+                    else "macro"
+                ),
+                pos_label=1,
+                labels=(
+                    None
+                    if probabilities_trial.shape[1] == 2
+                    else expected_labels
+                ),
                 zero_division=0,
             )
         )
@@ -5006,9 +5013,11 @@ def loso_cv(
     ---------
     ``selection_level`` determines whether configurations are ranked using
     window- or trial-level scores. Hierarchical rank-4 inputs require trial-level
-    selection. ``selection_metric`` defaults to macro-F1. ``f1``, ``precision``,
-    and ``recall`` are macro averaged; the ``binary_*`` metrics treat class 1 as
-    positive, and ``roc_auc`` uses the class-1 probability for paper comparison.
+    selection. For binary tasks, ``selection_metric='f1'`` and the reported
+    ``f1``, ``precision``, and ``recall`` use MTLFuseNet's class-1 binary
+    convention. The ``binary_*`` fields are retained as identical compatibility
+    aliases, while ``balanced_accuracy`` remains class-balanced macro recall and
+    ``roc_auc`` uses the class-1 probability.
     Classification metrics are maximized; probability loss and joint loss are minimized unless
     ``maximize_metric`` is explicitly supplied. Ties use lower between-subject
     standard deviation, lower mean log loss, then the earlier grid index.
