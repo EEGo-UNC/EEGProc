@@ -78,6 +78,7 @@ _JOINT_LOSS_WEIGHT_KEYS = frozenset(
         "vc_gamma",
         "vc_lambda",
         "subject_loss_weight",
+        "mldg_meta_test_weight",
         "use_subject_adversarial",
         "label_smoothing",
     }
@@ -318,6 +319,203 @@ class AlternatingSubjectSetSequence(tf.keras.utils.Sequence):
         self.rng.shuffle(self._order_a)
         self.rng.shuffle(self._order_b)
 
+
+
+class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
+    """Yield subject-balanced first-order MLDG episodes.
+
+    Every item contains two disjoint groups sampled from the current fold's
+    gradient-training subjects:
+
+    ``meta_train`` (A)
+        Supplies the inner classification/adversarial/SupCon gradient.
+    ``meta_test`` (B)
+        Supplies an emotion-only gradient after the model has been moved to
+        temporary fast weights computed from A.
+
+    Subject IDs are remapped once over the complete fold-local training pool so
+    A and B use one consistent subject-class vocabulary. The true LOSO test
+    subject and any validation subjects are absent because this sequence is
+    constructed only from ``X_fit_train``.
+    """
+
+    def __init__(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        subject_ids: np.ndarray,
+        *,
+        model: tf.keras.Model,
+        meta_train_subjects: int = 6,
+        meta_test_subjects: int = 2,
+        samples_per_subject: int = 4,
+        class_weight: dict[int, float] | None = None,
+        seed: int | None = 42,
+    ) -> None:
+        super().__init__()
+        self.X = np.asarray(X)
+        self.y = np.asarray(y)
+        self.y_ids = _as_numpy_1d(self.y).astype(np.int64)
+        self.subject_ids = np.asarray(subject_ids).reshape(-1)
+        if not (len(self.X) == len(self.y) == len(self.subject_ids)):
+            raise ValueError(
+                "MLDG X, y, and subject_ids must have matching lengths."
+            )
+
+        self.meta_train_subjects = int(meta_train_subjects)
+        self.meta_test_subjects = int(meta_test_subjects)
+        self.samples_per_subject = int(samples_per_subject)
+        if self.meta_train_subjects < 1 or self.meta_test_subjects < 1:
+            raise ValueError("MLDG requires at least one A and one B subject.")
+        if self.samples_per_subject < 1:
+            raise ValueError("samples_per_subject must be at least 1.")
+
+        self.unique_subjects = np.sort(np.unique(self.subject_ids))
+        required_subjects = self.meta_train_subjects + self.meta_test_subjects
+        if required_subjects > len(self.unique_subjects):
+            raise ValueError(
+                "MLDG episode requests "
+                f"{required_subjects} subjects, but this fold has only "
+                f"{len(self.unique_subjects)} gradient-training subjects."
+            )
+
+        self.class_weight = dict(class_weight or {})
+        self.base_seed = 0 if seed is None else int(seed)
+        self.epoch_index = 0
+        total_episode_samples = required_subjects * self.samples_per_subject
+        self.steps_per_epoch = max(
+            1,
+            int(np.ceil(len(self.X) / total_episode_samples)),
+        )
+
+        # Configure the fold-local adversarial head, when enabled, and retain a
+        # contiguous subject vocabulary for both A and B.
+        prepared = _prepare_fit_inputs_with_subject_ids(
+            model,
+            self.X,
+            self.subject_ids,
+        )
+        if isinstance(prepared, Mapping):
+            self.eeg_for_fit = np.asarray(prepared["eeg"])
+            prepared_subject_ids = prepared.get("subject_id")
+            if prepared_subject_ids is None:
+                raise ValueError(
+                    "prepare_fit_inputs returned a mapping without subject_id."
+                )
+            self.subject_classes = np.asarray(prepared_subject_ids, dtype=np.int32)
+        else:
+            self.eeg_for_fit = np.asarray(prepared)
+            subject_to_class = {
+                value.item() if isinstance(value, np.generic) else value: index
+                for index, value in enumerate(self.unique_subjects)
+            }
+            self.subject_classes = np.asarray(
+                [
+                    subject_to_class[
+                        value.item() if isinstance(value, np.generic) else value
+                    ]
+                    for value in self.subject_ids
+                ],
+                dtype=np.int32,
+            )
+
+    def __len__(self) -> int:
+        return self.steps_per_epoch
+
+    def _sample_subject_windows(
+        self,
+        subject,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """Sample one subject approximately evenly across available classes."""
+        subject_indices = np.where(self.subject_ids == subject)[0]
+        subject_labels = self.y_ids[subject_indices]
+        classes = np.unique(subject_labels)
+        if len(classes) <= 1:
+            return rng.choice(
+                subject_indices,
+                size=self.samples_per_subject,
+                replace=len(subject_indices) < self.samples_per_subject,
+            ).astype(np.int64)
+
+        base = self.samples_per_subject // len(classes)
+        remainder = self.samples_per_subject % len(classes)
+        sampled: list[np.ndarray] = []
+        shuffled_classes = classes.copy()
+        rng.shuffle(shuffled_classes)
+        for class_position, class_id in enumerate(shuffled_classes):
+            take = base + (1 if class_position < remainder else 0)
+            if take == 0:
+                continue
+            candidates = subject_indices[subject_labels == class_id]
+            sampled.append(
+                rng.choice(
+                    candidates,
+                    size=take,
+                    replace=len(candidates) < take,
+                ).astype(np.int64)
+            )
+        indices = np.concatenate(sampled, axis=0)
+        rng.shuffle(indices)
+        return indices
+
+    def _sample_group_indices(
+        self,
+        subjects: np.ndarray,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        indices = np.concatenate(
+            [self._sample_subject_windows(subject, rng) for subject in subjects],
+            axis=0,
+        )
+        rng.shuffle(indices)
+        return indices
+
+    def _sample_weights(self, indices: np.ndarray) -> np.ndarray:
+        if not self.class_weight:
+            return np.ones(len(indices), dtype=np.float32)
+        return np.asarray(
+            [self.class_weight.get(int(label), 1.0) for label in self.y_ids[indices]],
+            dtype=np.float32,
+        )
+
+    def __getitem__(self, index: int):
+        seed_sequence = np.random.SeedSequence(
+            [self.base_seed, int(self.epoch_index), int(index)]
+        )
+        rng = np.random.default_rng(seed_sequence)
+        selected = rng.choice(
+            self.unique_subjects,
+            size=self.meta_train_subjects + self.meta_test_subjects,
+            replace=False,
+        )
+        subjects_a = np.asarray(selected[: self.meta_train_subjects])
+        subjects_b = np.asarray(selected[self.meta_train_subjects :])
+        indices_a = self._sample_group_indices(subjects_a, rng)
+        indices_b = self._sample_group_indices(subjects_b, rng)
+
+        x_batch = {
+            "meta_train": {
+                "eeg": self.eeg_for_fit[indices_a],
+                "subject_id": self.subject_classes[indices_a],
+            },
+            "meta_test": {
+                "eeg": self.eeg_for_fit[indices_b],
+                "subject_id": self.subject_classes[indices_b],
+            },
+        }
+        y_batch = {
+            "meta_train": self.y[indices_a],
+            "meta_test": self.y[indices_b],
+        }
+        sample_weight = {
+            "meta_train": self._sample_weights(indices_a),
+            "meta_test": self._sample_weights(indices_b),
+        }
+        return x_batch, y_batch, sample_weight
+
+    def on_epoch_end(self) -> None:
+        self.epoch_index += 1
 
 def _balanced_two_subject_sets(
     subject_ids: np.ndarray,
@@ -3964,6 +4162,11 @@ def _run_loso_fold(
     cv_strategy: str = "loso",
     alternate_subject_sets: bool = False,
     alternating_subject_seed: int | None = 42,
+    use_mldg: bool = False,
+    mldg_meta_train_subjects: int = 6,
+    mldg_meta_test_subjects: int = 2,
+    mldg_samples_per_subject: int = 4,
+    mldg_seed: int | None = 42,
 ) -> dict:
     """Train and evaluate one LOSO fold with optional seeded validation.
 
@@ -4010,6 +4213,16 @@ def _run_loso_fold(
         )
     if validation_subjects_per_fold < 0:
         raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if alternate_subject_sets and use_mldg:
+        raise ValueError(
+            "alternate_subject_sets and use_mldg are mutually exclusive."
+        )
+    if mldg_meta_train_subjects < 1 or mldg_meta_test_subjects < 1:
+        raise ValueError("MLDG A/B subject counts must both be at least 1.")
+    if mldg_samples_per_subject < 1:
+        raise ValueError("mldg_samples_per_subject must be at least 1.")
+    if mldg_seed is not None and mldg_seed < 0:
+        raise ValueError("mldg_seed must be >= 0 or None.")
     if alternate_subject_sets and validation_subjects_per_fold != 0:
         raise ValueError(
             "alternate_subject_sets uses all non-test subjects and therefore "
@@ -4229,7 +4442,46 @@ def _run_loso_fold(
             if validation_subjects_per_fold > 0
             else None
         )
-        if alternate_subject_sets:
+        if use_mldg:
+            fold_mldg_seed = (
+                None
+                if mldg_seed is None
+                else int(mldg_seed) + int(fold_number)
+            )
+            effective_class_weight = (
+                class_weight
+                if bool(getattr(model, "use_class_weight", True))
+                else None
+            )
+            mldg_sequence = MetaLearningSubjectSequence(
+                X=X_fit_train,
+                y=y_fit_train,
+                subject_ids=subject_ids_fit_train,
+                model=model,
+                meta_train_subjects=mldg_meta_train_subjects,
+                meta_test_subjects=mldg_meta_test_subjects,
+                samples_per_subject=mldg_samples_per_subject,
+                class_weight=effective_class_weight,
+                seed=fold_mldg_seed,
+            )
+            print(
+                "First-order MLDG episodes: "
+                f"A_subjects={mldg_meta_train_subjects}, "
+                f"B_subjects={mldg_meta_test_subjects}, "
+                f"samples_per_subject={mldg_samples_per_subject}, "
+                f"steps_per_epoch={len(mldg_sequence)}",
+                flush=True,
+            )
+            subject_set_a = np.asarray([], dtype=subject_ids_fit_train.dtype)
+            subject_set_b = np.asarray([], dtype=subject_ids_fit_train.dtype)
+            history = model.fit(
+                mldg_sequence,
+                validation_data=validation_data,
+                verbose=0,
+                **fit_hp,
+                **fit_call_kwargs,
+            )
+        elif alternate_subject_sets:
             if validation_subjects_per_fold > 0:
                 raise ValueError(
                     "alternate_subject_sets requires validation_subjects_per_fold=0."
@@ -4434,6 +4686,10 @@ def _run_loso_fold(
         "stopped_early": bool(stopped_early),
         "decision_threshold": float(selected_decision_threshold),
         "alternate_subject_sets": bool(alternate_subject_sets),
+        "use_mldg": bool(use_mldg),
+        "mldg_meta_train_subjects": int(mldg_meta_train_subjects) if use_mldg else 0,
+        "mldg_meta_test_subjects": int(mldg_meta_test_subjects) if use_mldg else 0,
+        "mldg_samples_per_subject": int(mldg_samples_per_subject) if use_mldg else 0,
         "subject_set_a": [
             _python_scalar(value) for value in subject_set_a.tolist()
         ] if alternate_subject_sets else [],
@@ -4704,6 +4960,11 @@ def loso_cv(
     max_folds: int | None = None,
     alternate_subject_sets: bool = False,
     alternating_subject_seed: int | None = 42,
+    use_mldg: bool = False,
+    mldg_meta_train_subjects: int = 6,
+    mldg_meta_test_subjects: int = 2,
+    mldg_samples_per_subject: int = 4,
+    mldg_seed: int | None = 42,
 ) -> dict:
     """Run a flat hyperparameter search using complete LOSO evaluations.
 
@@ -4866,6 +5127,16 @@ def loso_cv(
 
     if validation_subjects_per_fold < 0:
         raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if alternate_subject_sets and use_mldg:
+        raise ValueError(
+            "alternate_subject_sets and use_mldg are mutually exclusive."
+        )
+    if mldg_meta_train_subjects < 1 or mldg_meta_test_subjects < 1:
+        raise ValueError("MLDG A/B subject counts must both be at least 1.")
+    if mldg_samples_per_subject < 1:
+        raise ValueError("mldg_samples_per_subject must be at least 1.")
+    if mldg_seed is not None and mldg_seed < 0:
+        raise ValueError("mldg_seed must be >= 0 or None.")
     if validation_seed is not None and validation_seed < 0:
         raise ValueError("validation_seed must be >= 0 or None.")
     if early_stopping_patience is not None and early_stopping_patience < 0:
@@ -4932,6 +5203,20 @@ def loso_cv(
             f"{validation_subjects_per_fold} validation subjects for "
             f"{len(unique_subjects)} total subjects."
         )
+    if use_mldg:
+        available_mldg_subjects = (
+            len(unique_subjects) - 1 - validation_subjects_per_fold
+        )
+        required_mldg_subjects = (
+            int(mldg_meta_train_subjects) + int(mldg_meta_test_subjects)
+        )
+        if required_mldg_subjects > available_mldg_subjects:
+            raise ValueError(
+                "MLDG requires "
+                f"{required_mldg_subjects} episodic subjects, but each LOSO "
+                f"fold leaves only {available_mldg_subjects} gradient-training "
+                "subjects after removing test and validation subjects."
+            )
 
     if max_folds is not None:
         if max_folds < 1:
@@ -5025,6 +5310,17 @@ def loso_cv(
         )
     else:
         print("Per-fold validation: disabled")
+    if use_mldg:
+        print(
+            "Optimization: first-order MLDG "
+            f"(A={mldg_meta_train_subjects} subjects, "
+            f"B={mldg_meta_test_subjects} subjects, "
+            f"samples/subject={mldg_samples_per_subject}, seed={mldg_seed})"
+        )
+    elif alternate_subject_sets:
+        print("Optimization: alternating fixed subject sets")
+    else:
+        print("Optimization: ordinary shuffled minibatches")
     print(f"Fold workers: {effective_n_jobs}")
 
     if effective_n_jobs > 1 and normalized_gpu_ids is None:
@@ -5081,6 +5377,11 @@ def loso_cv(
         "extra_fit_kwargs": extra_fit_kwargs,
         "alternate_subject_sets": bool(alternate_subject_sets),
         "alternating_subject_seed": alternating_subject_seed,
+        "use_mldg": bool(use_mldg),
+        "mldg_meta_train_subjects": int(mldg_meta_train_subjects),
+        "mldg_meta_test_subjects": int(mldg_meta_test_subjects),
+        "mldg_samples_per_subject": int(mldg_samples_per_subject),
+        "mldg_seed": mldg_seed,
     }
 
     config_results: list[dict] = []
@@ -5203,6 +5504,11 @@ def loso_cv(
         "early_stopping_monitor": early_stopping_monitor,
         "early_stopping_mode": early_stopping_mode,
         "restore_best_weights": bool(restore_best_weights),
+        "use_mldg": bool(use_mldg),
+        "mldg_meta_train_subjects": int(mldg_meta_train_subjects) if use_mldg else 0,
+        "mldg_meta_test_subjects": int(mldg_meta_test_subjects) if use_mldg else 0,
+        "mldg_samples_per_subject": int(mldg_samples_per_subject) if use_mldg else 0,
+        "mldg_seed": mldg_seed if use_mldg else None,
         "config_results": config_results,
         "best_config_index": int(best_config_index),
         "best_config": best_config,
@@ -5339,6 +5645,11 @@ def fixed_loso_cv(
     max_folds: int | None = None,
     alternate_subject_sets: bool = False,
     alternating_subject_seed: int | None = 42,
+    use_mldg: bool = False,
+    mldg_meta_train_subjects: int = 6,
+    mldg_meta_test_subjects: int = 2,
+    mldg_samples_per_subject: int = 4,
+    mldg_seed: int | None = 42,
 ) -> dict:
     """Evaluate one fixed configuration with strict LOSOCV and no validation.
 
@@ -5420,6 +5731,11 @@ def fixed_loso_cv(
         max_folds=max_folds,
         alternate_subject_sets=alternate_subject_sets,
         alternating_subject_seed=alternating_subject_seed,
+        use_mldg=use_mldg,
+        mldg_meta_train_subjects=mldg_meta_train_subjects,
+        mldg_meta_test_subjects=mldg_meta_test_subjects,
+        mldg_samples_per_subject=mldg_samples_per_subject,
+        mldg_seed=mldg_seed,
     )
 
     if int(results.get("n_configs", 0)) != 1:
@@ -6140,6 +6456,16 @@ def lnskto_cv(
 
     if validation_subjects_per_fold < 0:
         raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if alternate_subject_sets and use_mldg:
+        raise ValueError(
+            "alternate_subject_sets and use_mldg are mutually exclusive."
+        )
+    if mldg_meta_train_subjects < 1 or mldg_meta_test_subjects < 1:
+        raise ValueError("MLDG A/B subject counts must both be at least 1.")
+    if mldg_samples_per_subject < 1:
+        raise ValueError("mldg_samples_per_subject must be at least 1.")
+    if mldg_seed is not None and mldg_seed < 0:
+        raise ValueError("mldg_seed must be >= 0 or None.")
     if validation_seed is not None and validation_seed < 0:
         raise ValueError("validation_seed must be >= 0 or None.")
     if early_stopping_patience is not None and early_stopping_patience < 0:

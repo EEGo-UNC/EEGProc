@@ -3,8 +3,8 @@
 The STS model classifies and reconstructs one EEG window at a time. Its
 parallel BiLSTM and GCN encoders are fused into a variational latent sequence,
 which feeds a dense/variational classifier and a dual-path BiLSTM-GCN decoder.
-Classification and VAE objectives are optimized alternately inside each model
-``train_step``.
+Classification supports ordinary updates or first-order subject-domain MLDG;
+the VAE objective remains a separate alternating phase inside ``train_step``.
 
 Cross-validation supports strict leave-one-subject-out (LOSO) and the existing
 leave-N-subjects-and-K-trials-out (LNSKTO) protocol. Although the neural model
@@ -55,15 +55,28 @@ except ImportError:
 
 try:
     try:
-        from ...cross_val import PredictionDiagnostics, fixed_loso_cv, lnskto_cv, loso_cv
+        from ...cross_val import (
+            MetaLearningSubjectSequence,
+            PredictionDiagnostics,
+            fixed_loso_cv,
+            lnskto_cv,
+            loso_cv,
+        )
     except ImportError:
-        from ...cross_val import PredictionDiagnostics, fixed_loso_cv, lnskto_cv, loso_cv
+        from ...cross_val import (
+            MetaLearningSubjectSequence,
+            PredictionDiagnostics,
+            fixed_loso_cv,
+            lnskto_cv,
+            loso_cv,
+        )
 except ImportError:
     SRC_ROOT = Path(__file__).resolve().parents[3]
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
     try:
         from eegproc.deep_learning.cross_val import (
+            MetaLearningSubjectSequence,
             PredictionDiagnostics,
             fixed_loso_cv,
             lnskto_cv,
@@ -71,6 +84,7 @@ except ImportError:
         )
     except ImportError:
         from eegproc.deep_learning.cross_val import (
+            MetaLearningSubjectSequence,
             PredictionDiagnostics,
             fixed_loso_cv,
             lnskto_cv,
@@ -116,6 +130,15 @@ class JointSTSTrainingConfig:
     cpus_per_worker: int | None = None
     alternate_subject_sets: bool = False
     alternating_subject_seed: int | None = 42
+
+    # First-order MLDG subject-domain generalization.
+    use_mldg: bool = False
+    mldg_inner_learning_rate: float = 1e-4
+    mldg_meta_test_weight: float = 1.0
+    mldg_meta_train_subjects: int = 6
+    mldg_meta_test_subjects: int = 2
+    mldg_samples_per_subject: int = 4
+    mldg_seed: int | None = 42
 
     # Prediction, thresholds, and diagnostics.
     prediction_latent_samples: int = 0
@@ -624,6 +647,8 @@ def _model_hparameter_keys() -> set[str]:
         "weight_decay",
         "classification_steps_per_batch",
         "vae_steps_per_batch",
+        "mldg_inner_learning_rate",
+        "mldg_meta_test_weight",
         "t_down",
         "temporal_pool_sizes",
         "bilstm_units",
@@ -957,6 +982,21 @@ def train_joint_sts_model(
                 vae_steps_per_batch=int(
                     hparams.get("vae_steps_per_batch", config.vae_steps_per_batch)
                 ),
+                # MLDG changes the required batch structure and is therefore
+                # a run-level switch, not a per-grid model hyperparameter.
+                use_mldg=bool(config.use_mldg),
+                mldg_inner_learning_rate=float(
+                    hparams.get(
+                        "mldg_inner_learning_rate",
+                        config.mldg_inner_learning_rate,
+                    )
+                ),
+                mldg_meta_test_weight=float(
+                    hparams.get(
+                        "mldg_meta_test_weight",
+                        config.mldg_meta_test_weight,
+                    )
+                ),
                 optimizer_name=str(
                     hparams.get(
                         "optimizer",
@@ -1033,6 +1073,17 @@ def train_joint_sts_model(
         "Alternating two-subject-set optimization: %s (seed=%s)",
         config.alternate_subject_sets,
         config.alternating_subject_seed,
+    )
+    logger.info(
+        "First-order MLDG: %s (inner_lr=%.8g, meta_test_weight=%.6g, "
+        "A_subjects=%d, B_subjects=%d, samples_per_subject=%d, seed=%s)",
+        config.use_mldg,
+        config.mldg_inner_learning_rate,
+        config.mldg_meta_test_weight,
+        config.mldg_meta_train_subjects,
+        config.mldg_meta_test_subjects,
+        config.mldg_samples_per_subject,
+        config.mldg_seed,
     )
     logger.info(
         "Selection: %s_%s; thresholds selected by %s_%s",
@@ -1138,12 +1189,20 @@ def train_joint_sts_model(
         "cpus_per_worker": config.cpus_per_worker,
     }
 
+    if config.use_mldg and config.cv_strategy != "loso":
+        raise ValueError("First-order MLDG is currently implemented for LOSO only.")
+
     if config.cv_strategy == "loso":
         cv_results = loso_cv(
             **common_cv_kwargs,
             max_folds=config.max_folds,
             alternate_subject_sets=config.alternate_subject_sets,
             alternating_subject_seed=config.alternating_subject_seed,
+            use_mldg=config.use_mldg,
+            mldg_meta_train_subjects=config.mldg_meta_train_subjects,
+            mldg_meta_test_subjects=config.mldg_meta_test_subjects,
+            mldg_samples_per_subject=config.mldg_samples_per_subject,
+            mldg_seed=config.mldg_seed,
         )
     elif config.cv_strategy == "lnskto":
         cv_results = lnskto_cv(
@@ -1317,6 +1376,11 @@ def train_joint_sts_model(
             max_folds=config.max_folds,
             alternate_subject_sets=config.alternate_subject_sets,
             alternating_subject_seed=config.alternating_subject_seed,
+            use_mldg=config.use_mldg,
+            mldg_meta_train_subjects=config.mldg_meta_train_subjects,
+            mldg_meta_test_subjects=config.mldg_meta_test_subjects,
+            mldg_samples_per_subject=config.mldg_samples_per_subject,
+            mldg_seed=config.mldg_seed,
         )
 
         no_validation_fold_rows: list[dict] = []
@@ -1397,26 +1461,48 @@ def train_joint_sts_model(
             "Final-fit class weighting disabled by --no-class-weight."
         )
 
-    final_fit_inputs = (
-        final_model.prepare_fit_inputs(feature_array, subject_id_array)
-        if getattr(final_model, "requires_subject_ids", False)
-        else feature_array
-    )
-    final_fit_kwargs = {
-        "epochs": final_epochs,
-        "batch_size": final_batch_size,
-        "verbose": config.final_verbose,
-        "callbacks": final_callbacks,
-    }
-    # Do not even pass the class_weight keyword when class weighting is off.
-    # JointSTSModel.fit also strips it defensively if an external caller adds it.
-    if config.use_class_weight:
-        final_fit_kwargs["class_weight"] = final_class_weight
-    final_history = final_model.fit(
-        final_fit_inputs,
-        label_array,
-        **final_fit_kwargs,
-    )
+    if config.use_mldg:
+        final_mldg_sequence = MetaLearningSubjectSequence(
+            X=feature_array,
+            y=label_array,
+            subject_ids=subject_id_array,
+            model=final_model,
+            meta_train_subjects=config.mldg_meta_train_subjects,
+            meta_test_subjects=config.mldg_meta_test_subjects,
+            samples_per_subject=config.mldg_samples_per_subject,
+            class_weight=final_class_weight,
+            seed=config.mldg_seed,
+        )
+        logger.info(
+            "Final MLDG fit uses %d episodes per epoch.",
+            len(final_mldg_sequence),
+        )
+        final_history = final_model.fit(
+            final_mldg_sequence,
+            epochs=final_epochs,
+            verbose=config.final_verbose,
+            callbacks=final_callbacks,
+        )
+    else:
+        final_fit_inputs = (
+            final_model.prepare_fit_inputs(feature_array, subject_id_array)
+            if getattr(final_model, "requires_subject_ids", False)
+            else feature_array
+        )
+        final_fit_kwargs = {
+            "epochs": final_epochs,
+            "batch_size": final_batch_size,
+            "verbose": config.final_verbose,
+            "callbacks": final_callbacks,
+        }
+        # Do not even pass class_weight when weighting is disabled.
+        if config.use_class_weight:
+            final_fit_kwargs["class_weight"] = final_class_weight
+        final_history = final_model.fit(
+            final_fit_inputs,
+            label_array,
+            **final_fit_kwargs,
+        )
 
     if diagnostics_callback is not None:
         _write_csv(
@@ -1454,6 +1540,13 @@ def train_joint_sts_model(
         "vae_steps_per_batch": config.vae_steps_per_batch,
         "classification_learning_rate": config.classification_learning_rate,
         "vae_learning_rate": config.vae_learning_rate,
+        "use_mldg": config.use_mldg,
+        "mldg_inner_learning_rate": config.mldg_inner_learning_rate,
+        "mldg_meta_test_weight": config.mldg_meta_test_weight,
+        "mldg_meta_train_subjects": config.mldg_meta_train_subjects,
+        "mldg_meta_test_subjects": config.mldg_meta_test_subjects,
+        "mldg_samples_per_subject": config.mldg_samples_per_subject,
+        "mldg_seed": config.mldg_seed,
         "use_class_weight": config.use_class_weight,
         "final_class_weight": final_class_weight,
         "focal_gamma": config.focal_gamma,
@@ -1635,6 +1728,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "Use ordinary shuffled minibatches across all training subjects.",
     )
     parser.add_argument("--alternating-subject-seed", type=int, default=42)
+    _add_bool_pair(
+        parser,
+        "--use-mldg",
+        "--no-mldg",
+        "use_mldg",
+        False,
+        (
+            "Enable first-order MLDG episodes over disjoint meta-train A and "
+            "pseudo-unseen meta-test B subjects."
+        ),
+        "Disable first-order MLDG and use the selected ordinary training mode.",
+    )
+    parser.add_argument("--mldg-inner-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--mldg-meta-test-weight", type=float, default=1.0)
+    parser.add_argument("--mldg-meta-train-subjects", type=int, default=6)
+    parser.add_argument("--mldg-meta-test-subjects", type=int, default=2)
+    parser.add_argument("--mldg-samples-per-subject", type=int, default=4)
+    parser.add_argument("--mldg-seed", type=int, default=42)
     parser.add_argument("--no-early-stopping", action="store_true")
     parser.add_argument("--early-stopping-patience", type=int, default=20)
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.001)
@@ -1804,6 +1915,10 @@ def _validate_args(args: argparse.Namespace, hyperparameters: dict) -> None:
     positive_fields = {
         "classification_learning_rate": args.classification_learning_rate,
         "vae_learning_rate": args.vae_learning_rate,
+        "mldg_inner_learning_rate": args.mldg_inner_learning_rate,
+        "mldg_meta_train_subjects": args.mldg_meta_train_subjects,
+        "mldg_meta_test_subjects": args.mldg_meta_test_subjects,
+        "mldg_samples_per_subject": args.mldg_samples_per_subject,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
         "classification_steps_per_batch": args.classification_steps_per_batch,
@@ -1868,6 +1983,7 @@ def _validate_args(args: argparse.Namespace, hyperparameters: dict) -> None:
         "subject_adversarial_weight": args.subject_adversarial_weight,
         "subject_loss_weight": args.subject_loss_weight,
         "supcon_weight": args.supcon_weight,
+        "mldg_meta_test_weight": args.mldg_meta_test_weight,
         "graph_self_loop_bias": args.graph_self_loop_bias,
         "graph_adjacency_reg_weight": args.graph_adjacency_reg_weight,
         "early_stopping_min_delta": args.early_stopping_min_delta,
@@ -1890,6 +2006,14 @@ def _validate_args(args: argparse.Namespace, hyperparameters: dict) -> None:
         raise ValueError("--prediction-latent-samples must be non-negative.")
     if args.validation_subjects < 0:
         raise ValueError("--validation-subjects must be non-negative.")
+    if args.alternate_subject_sets and args.use_mldg:
+        raise ValueError(
+            "--alternate-subject-sets and --use-mldg are mutually exclusive."
+        )
+    if args.use_mldg and args.cv_strategy != "loso":
+        raise ValueError("--use-mldg currently requires --cv-strategy loso.")
+    if args.mldg_seed is not None and args.mldg_seed < 0:
+        raise ValueError("--mldg-seed must be non-negative or omitted.")
     if args.alternate_subject_sets and args.validation_subjects != 0:
         raise ValueError(
             "--alternate-subject-sets requires --validation-subjects 0."
@@ -1967,6 +2091,13 @@ def main(argv: list[str] | None = None) -> int:
         cpus_per_worker=args.cpus_per_worker,
         alternate_subject_sets=args.alternate_subject_sets,
         alternating_subject_seed=args.alternating_subject_seed,
+        use_mldg=args.use_mldg,
+        mldg_inner_learning_rate=args.mldg_inner_learning_rate,
+        mldg_meta_test_weight=args.mldg_meta_test_weight,
+        mldg_meta_train_subjects=args.mldg_meta_train_subjects,
+        mldg_meta_test_subjects=args.mldg_meta_test_subjects,
+        mldg_samples_per_subject=args.mldg_samples_per_subject,
+        mldg_seed=args.mldg_seed,
         prediction_latent_samples=args.prediction_latent_samples,
         latent_sampling_seed=args.latent_sampling_seed,
         decision_thresholds=tuple(sorted(map(float, args.decision_thresholds))),
