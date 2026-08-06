@@ -228,8 +228,14 @@ TF_PY
 # Four outer-fold workers are requested for the four allocated L40S GPUs.
 python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_model_train \
     --cv-strategy loso \
-    --alternate-subject-sets \
-    --alternating-subject-seed 42 \
+    --use-mldg \
+    --no-alternate-subject-sets \
+    --mldg-inner-learning-rate 0.0001\
+    --mldg-meta-test-weight 1.0 \
+    --mldg-meta-train-subjects 6 \
+    --mldg-meta-test-subjects 2 \
+    --mldg-samples-per-subject 4 \
+    --mldg-seed 42 \
     --validation-subjects 0 \
     --no-early-stopping \
     --skip-no-validation-loso-before-final \
@@ -252,7 +258,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --median-label 3 \
     --early-stopping-patience 20 \
     --early-stopping-min-delta 0.002 \
-    --window-sec 1.0 \
+    --window-sec 2.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --no-class-weight \
@@ -329,7 +335,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             0.3
         ],
         "vae_beta": [
-            0.1
+            0.05
         ],
         "label_smoothing": [
             0.0
