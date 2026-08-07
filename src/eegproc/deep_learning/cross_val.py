@@ -22,6 +22,39 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+__all__ = [
+    "PredictionDiagnostics",
+    "CompactEpochLogger",
+    "MetaLearningSubjectSequence",
+    "AlternatingSubjectSetSequence",
+]
+
+
+def __getattr__(name: str):
+    """Provide lazy compatibility exports without reintroducing import cycles."""
+    if name == "PredictionDiagnostics":
+        from .training_outputs import PredictionDiagnostics
+
+        return PredictionDiagnostics
+    if name == "CompactEpochLogger":
+        from .training_outputs import CompactEpochLogger
+
+        return CompactEpochLogger
+    if name == "MetaLearningSubjectSequence":
+        from .generalize_optimization_strats.MetaLearning import (
+            MetaLearningSubjectSequence,
+        )
+
+        return MetaLearningSubjectSequence
+    if name == "AlternatingSubjectSetSequence":
+        from .generalize_optimization_strats.AlternatingGroupLearning import (
+            AlternatingSubjectSetSequence,
+        )
+
+        return AlternatingSubjectSetSequence
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset(
     {
