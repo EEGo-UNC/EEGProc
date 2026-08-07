@@ -352,6 +352,21 @@ class DualPathSTSDecoder(tf.keras.Model):
         self.temporal_upsample_blocks = _build_upsample_branch(
             "temporal", self.temporal_decoder_units
         )
+        self.temporal_upsample_layers = [
+            block["upsample"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_convs = [
+            block["conv"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_norms = [
+            block["norm"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_activations = [
+            block["activation"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_dropouts = [
+            block["dropout"] for block in self.temporal_upsample_blocks
+        ]
         self.temporal_bilstm_layers = [
             tf.keras.layers.Bidirectional(
                 tf.keras.layers.LSTM(
@@ -395,6 +410,21 @@ class DualPathSTSDecoder(tf.keras.Model):
         self.graph_upsample_blocks = _build_upsample_branch(
             "graph", graph_seed_units
         )
+        self.graph_upsample_layers = [
+            block["upsample"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_convs = [
+            block["conv"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_norms = [
+            block["norm"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_activations = [
+            block["activation"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_dropouts = [
+            block["dropout"] for block in self.graph_upsample_blocks
+        ]
 
         self.node_seed_projection = tf.keras.layers.Dense(
             self.n_channels * graph_seed_units,
