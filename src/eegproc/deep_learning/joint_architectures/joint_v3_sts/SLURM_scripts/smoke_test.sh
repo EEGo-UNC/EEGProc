@@ -273,7 +273,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --hyperparameters-json '{
         "epochs": [
             150
-        ],e
+        ],
         "batch_size": [
             64
         ],
