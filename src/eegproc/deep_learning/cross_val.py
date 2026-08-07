@@ -22,14 +22,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from .training_outputs import CompactEpochLogger, PredictionDiagnostics
-from .generalize_optimization_strats.AlternatingGroupLearning import (
-    AlternatingSubjectSetSequence,
-)
-from .generalize_optimization_strats.MetaLearning import (
-    MetaLearningSubjectSequence,
-)
-
 _FIT_RESERVED_KEYS = frozenset({"epochs", "batch_size"})
 _CLASSIFICATION_METRICS = frozenset(
     {
@@ -2510,6 +2502,8 @@ def _run_loso_fold(
             f"configuration and extra_fit_kwargs: {sorted(duplicate_fit_keys)}"
         )
 
+    from .training_outputs import CompactEpochLogger, PredictionDiagnostics
+
     fit_call_kwargs = dict(extra_fit_kwargs)
     callbacks = list(fit_call_kwargs.pop("callbacks", []))
     prediction_diagnostics_callback: PredictionDiagnostics | None = None
@@ -2595,6 +2589,10 @@ def _run_loso_fold(
             (X_validation, y_validation) if validation_subjects_per_fold > 0 else None
         )
         if use_mldg:
+            from .generalize_optimization_strats.MetaLearning import (
+                MetaLearningSubjectSequence,
+            )
+
             fold_mldg_seed = (
                 None if mldg_seed is None else int(mldg_seed) + int(fold_number)
             )
@@ -2630,6 +2628,10 @@ def _run_loso_fold(
                 **fit_call_kwargs,
             )
         elif alternate_subject_sets:
+            from .generalize_optimization_strats.AlternatingGroupLearning import (
+                AlternatingSubjectSetSequence,
+            )
+
             if validation_subjects_per_fold > 0:
                 raise ValueError(
                     "alternate_subject_sets requires validation_subjects_per_fold=0."
