@@ -272,7 +272,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --final-epoch-strategy median \
     --hyperparameters-json '{
         "epochs": [
-            150
+            30
         ],
         "batch_size": [
             64

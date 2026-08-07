@@ -113,9 +113,10 @@ def _as_positive_int_tuple(
     allow_empty: bool = False,
 ) -> tuple[int, ...]:
     if values is None:
-        normalized: tuple[int, ...] = ()
-    else:
-        normalized = tuple(int(value) for value in values)
+        values = ()
+    if not isinstance(values, (tuple, list)):
+        values = (values,)
+    normalized = tuple(int(value) for value in values)
     if not normalized and not allow_empty:
         raise ValueError(f"{name} must contain at least one value.")
     if any(value < 1 for value in normalized):
@@ -130,20 +131,17 @@ def _resolve_temporal_pool_sizes(
     t_down = int(t_down)
     if t_down < 1:
         raise ValueError(f"t_down must be >= 1, got {t_down}.")
-    pools = (
-        (() if t_down == 1 else (t_down,))
-        if temporal_pool_sizes is None
-        else _as_positive_int_tuple(
-            "temporal_pool_sizes",
-            temporal_pool_sizes,
-            allow_empty=True,
-        )
+    if temporal_pool_sizes is None:
+        return () if t_down == 1 else (t_down,)
+    pools = _as_positive_int_tuple(
+        "temporal_pool_sizes",
+        temporal_pool_sizes,
+        allow_empty=True,
     )
-    effective_downsampling = int(np.prod(pools, dtype=np.int64)) if pools else 1
-    if effective_downsampling != t_down:
+    if int(np.prod(pools, dtype=np.int64) if pools else 1) != t_down:
         raise ValueError(
             f"t_down={t_down}, but temporal_pool_sizes={pools} produces "
-            f"{effective_downsampling}."
+            f"{int(np.prod(pools, dtype=np.int64) if pools else 1)}."
         )
     return pools
 
@@ -302,26 +300,46 @@ class DualPathSTSDecoder(tf.keras.Model):
 
         if self.timesteps < 1 or self.n_channels < 1 or self.n_bands < 1:
             raise ValueError("Decoder dimensions must be positive.")
-        if self.temporal_decoder_units < 1:
-            raise ValueError("temporal_decoder_units must be positive.")
-        if self.n_temporal_decoder_bilstm_layers < 1:
-            raise ValueError(
-                "n_temporal_decoder_bilstm_layers must be positive."
-            )
-        if self.graph_output_units < 1:
-            raise ValueError("graph_output_units must be positive.")
         if self.branch_feature_dim < 1 or self.fusion_units < 1:
             raise ValueError("Decoder feature dimensions must be positive.")
-        if not 0.0 <= self.dropout_rate < 1.0:
-            raise ValueError("Decoder dropout must be in [0, 1).")
-        if self.graph_self_loop_bias < 0.0:
-            raise ValueError("graph_self_loop_bias must be non-negative.")
-        if not 0.0 <= self.graph_identity_mix <= 1.0:
-            raise ValueError("graph_identity_mix must be in [0, 1].")
-        if self.graph_adjacency_reg_weight < 0.0:
-            raise ValueError(
-                "graph_adjacency_reg_weight must be non-negative."
+
+        layer_norm = (
+            lambda name: tf.keras.layers.BatchNormalization(name=name)
+            if self.use_batch_norm
+            else lambda name: tf.keras.layers.LayerNormalization(
+                axis=-1,
+                name=name,
             )
+        )
+
+        def _build_upsample_branch(prefix, filters):
+            blocks = []
+            for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
+                blocks.append(
+                    {
+                        "upsample": tf.keras.layers.UpSampling1D(
+                            size=pool_size,
+                            name=f"{prefix}_upsample_{index}",
+                        ),
+                        "conv": tf.keras.layers.Conv1D(
+                            filters,
+                            kernel_size=3,
+                            padding="same",
+                            activation=None,
+                            name=f"{prefix}_upsample_conv_{index}",
+                        ),
+                        "norm": layer_norm(name=f"{prefix}_upsample_norm_{index}"),
+                        "activation": tf.keras.layers.Activation(
+                            self.activation_name,
+                            name=f"{prefix}_upsample_activation_{index}",
+                        ),
+                        "dropout": tf.keras.layers.Dropout(
+                            self.dropout_rate,
+                            name=f"{prefix}_upsample_dropout_{index}",
+                        ),
+                    }
+                )
+            return blocks
 
         # Temporal decoder branch.
         self.temporal_input_projection = tf.keras.layers.Conv1D(
@@ -331,73 +349,32 @@ class DualPathSTSDecoder(tf.keras.Model):
             activation=None,
             name="temporal_input_projection",
         )
-        self.temporal_upsample_layers = []
-        self.temporal_upsample_convs = []
-        self.temporal_upsample_norms = []
-        self.temporal_upsample_activations = []
-        self.temporal_upsample_dropouts = []
-        for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
-            self.temporal_upsample_layers.append(
-                tf.keras.layers.UpSampling1D(
-                    size=pool_size,
-                    name=f"temporal_upsample_{index}",
-                )
-            )
-            self.temporal_upsample_convs.append(
-                tf.keras.layers.Conv1D(
+        self.temporal_upsample_blocks = _build_upsample_branch(
+            "temporal", self.temporal_decoder_units
+        )
+        self.temporal_bilstm_layers = [
+            tf.keras.layers.Bidirectional(
+                tf.keras.layers.LSTM(
                     self.temporal_decoder_units,
-                    kernel_size=3,
-                    padding="same",
-                    activation=None,
-                    name=f"temporal_upsample_conv_{index}",
-                )
+                    return_sequences=True,
+                    name=f"temporal_decoder_lstm_{index}",
+                ),
+                merge_mode="concat",
+                name=f"temporal_decoder_bilstm_{index}",
             )
-            self.temporal_upsample_norms.append(
-                tf.keras.layers.LayerNormalization(
-                    axis=-1,
-                    name=f"temporal_upsample_norm_{index}",
-                )
+            for index in range(self.n_temporal_decoder_bilstm_layers)
+        ]
+        self.temporal_bilstm_norms = [
+            layer_norm(name=f"temporal_decoder_norm_{index}")
+            for index in range(self.n_temporal_decoder_bilstm_layers)
+        ]
+        self.temporal_bilstm_dropouts = [
+            tf.keras.layers.Dropout(
+                self.dropout_rate,
+                name=f"temporal_decoder_dropout_{index}",
             )
-            self.temporal_upsample_activations.append(
-                tf.keras.layers.Activation(
-                    self.activation_name,
-                    name=f"temporal_upsample_activation_{index}",
-                )
-            )
-            self.temporal_upsample_dropouts.append(
-                tf.keras.layers.Dropout(
-                    self.dropout_rate,
-                    name=f"temporal_upsample_dropout_{index}",
-                )
-            )
-
-        self.temporal_bilstm_layers = []
-        self.temporal_bilstm_norms = []
-        self.temporal_bilstm_dropouts = []
-        for index in range(self.n_temporal_decoder_bilstm_layers):
-            self.temporal_bilstm_layers.append(
-                tf.keras.layers.Bidirectional(
-                    tf.keras.layers.LSTM(
-                        self.temporal_decoder_units,
-                        return_sequences=True,
-                        name=f"temporal_decoder_lstm_{index}",
-                    ),
-                    merge_mode="concat",
-                    name=f"temporal_decoder_bilstm_{index}",
-                )
-            )
-            self.temporal_bilstm_norms.append(
-                tf.keras.layers.LayerNormalization(
-                    axis=-1,
-                    name=f"temporal_decoder_norm_{index}",
-                )
-            )
-            self.temporal_bilstm_dropouts.append(
-                tf.keras.layers.Dropout(
-                    self.dropout_rate,
-                    name=f"temporal_decoder_dropout_{index}",
-                )
-            )
+            for index in range(self.n_temporal_decoder_bilstm_layers)
+        ]
         self.temporal_feature_projection = tf.keras.layers.Conv1D(
             self.branch_feature_dim,
             kernel_size=1,
@@ -415,45 +392,9 @@ class DualPathSTSDecoder(tf.keras.Model):
             activation=None,
             name="graph_input_projection",
         )
-        self.graph_upsample_layers = []
-        self.graph_upsample_convs = []
-        self.graph_upsample_norms = []
-        self.graph_upsample_activations = []
-        self.graph_upsample_dropouts = []
-        for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
-            self.graph_upsample_layers.append(
-                tf.keras.layers.UpSampling1D(
-                    size=pool_size,
-                    name=f"graph_upsample_{index}",
-                )
-            )
-            self.graph_upsample_convs.append(
-                tf.keras.layers.Conv1D(
-                    graph_seed_units,
-                    kernel_size=3,
-                    padding="same",
-                    activation=None,
-                    name=f"graph_upsample_conv_{index}",
-                )
-            )
-            self.graph_upsample_norms.append(
-                tf.keras.layers.LayerNormalization(
-                    axis=-1,
-                    name=f"graph_upsample_norm_{index}",
-                )
-            )
-            self.graph_upsample_activations.append(
-                tf.keras.layers.Activation(
-                    self.activation_name,
-                    name=f"graph_upsample_activation_{index}",
-                )
-            )
-            self.graph_upsample_dropouts.append(
-                tf.keras.layers.Dropout(
-                    self.dropout_rate,
-                    name=f"graph_upsample_dropout_{index}",
-                )
-            )
+        self.graph_upsample_blocks = _build_upsample_branch(
+            "graph", graph_seed_units
+        )
 
         self.node_seed_projection = tf.keras.layers.Dense(
             self.n_channels * graph_seed_units,
@@ -480,7 +421,7 @@ class DualPathSTSDecoder(tf.keras.Model):
             )
             self.graph_norms.append(
                 tf.keras.layers.BatchNormalization(
-                    name=f"decoder_graph_bn_{index}"
+                    name=f"decoder_graph_bn_{index}",
                 )
                 if self.use_batch_norm
                 else tf.keras.layers.LayerNormalization(
@@ -575,6 +516,23 @@ class DualPathSTSDecoder(tf.keras.Model):
         pad_amount = tf.maximum(0, self.timesteps - current_timesteps)
         return tf.pad(sequence, [[0, 0], [0, pad_amount], [0, 0]])
 
+    def _upsample_block(
+        self,
+        sequence: tf.Tensor,
+        upsample,
+        conv,
+        norm,
+        activation,
+        dropout,
+        training: bool,
+    ) -> tf.Tensor:
+        sequence = upsample(sequence)
+        residual = sequence
+        sequence = conv(sequence)
+        sequence = norm(sequence + residual)
+        sequence = activation(sequence)
+        return dropout(sequence, training=training)
+
     def _temporal_branch(self, inputs: tf.Tensor, training: bool) -> tf.Tensor:
         sequence = self.temporal_input_projection(inputs)
         for upsample, conv, norm, activation, dropout in zip(
@@ -584,12 +542,15 @@ class DualPathSTSDecoder(tf.keras.Model):
             self.temporal_upsample_activations,
             self.temporal_upsample_dropouts,
         ):
-            sequence = upsample(sequence)
-            residual = sequence
-            sequence = conv(sequence)
-            sequence = norm(sequence + residual)
-            sequence = activation(sequence)
-            sequence = dropout(sequence, training=training)
+            sequence = self._upsample_block(
+                sequence,
+                upsample,
+                conv,
+                norm,
+                activation,
+                dropout,
+                training,
+            )
         sequence = self._fix_length(sequence)
         for bilstm, norm, dropout in zip(
             self.temporal_bilstm_layers,
@@ -610,12 +571,15 @@ class DualPathSTSDecoder(tf.keras.Model):
             self.graph_upsample_activations,
             self.graph_upsample_dropouts,
         ):
-            sequence = upsample(sequence)
-            residual = sequence
-            sequence = conv(sequence)
-            sequence = norm(sequence + residual)
-            sequence = activation(sequence)
-            sequence = dropout(sequence, training=training)
+            sequence = self._upsample_block(
+                sequence,
+                upsample,
+                conv,
+                norm,
+                activation,
+                dropout,
+                training,
+            )
         sequence = self._fix_length(sequence)
         node_sequence = self.node_seed_projection(sequence)
         batch_size = tf.shape(node_sequence)[0]
@@ -2042,23 +2006,56 @@ class JointSTSModel(tf.keras.Model):
         gradients,
         variables,
     ) -> None:
-        pairs = [
-            (gradient, variable)
-            for gradient, variable in zip(gradients, variables)
-            if gradient is not None
-        ]
-        if pairs:
-            optimizer.apply_gradients(pairs)
+        optimizer.apply_gradients(
+            (g, v)
+            for g, v in zip(gradients, variables)
+            if g is not None
+        )
+
+    def _update_discriminator(self, x, y_flat):
+        if not self.update_discriminator:
+            return tf.zeros((), dtype=tf.float32)
+
+        discriminator_variables = self._discriminator_variables()
+        if not discriminator_variables:
+            return tf.zeros((), dtype=tf.float32)
+        if self.discriminator_optimizer is None:
+            raise RuntimeError(
+                "Discriminator updates are enabled without an optimizer."
+            )
+        eeg_inputs = self._split_eeg_and_subject_inputs(x)[0]
+        with tf.GradientTape() as discriminator_tape:
+            discriminator_outputs = self(
+                eeg_inputs,
+                training=True,
+                sample_latent=False,
+                include_reconstruction=False,
+                include_subject_adversarial=False,
+            )
+            discriminator_loss = self.classifier.discriminator_loss(
+                tf.stop_gradient(
+                    discriminator_outputs["classification_latent"]
+                ),
+                y_flat,
+            )
+        discriminator_gradients = discriminator_tape.gradient(
+            discriminator_loss,
+            discriminator_variables,
+        )
+        self._apply_gradients(
+            self.discriminator_optimizer,
+            discriminator_gradients,
+            discriminator_variables,
+        )
+        return discriminator_loss
 
     @staticmethod
     def _unpack_data(data):
         if not isinstance(data, tuple):
             raise ValueError("Expected data as (x, y) or (x, y, sample_weight).")
-        if len(data) == 2:
-            return data[0], data[1], None
-        if len(data) == 3:
-            return data[0], data[1], data[2]
-        raise ValueError("Expected data as (x, y) or (x, y, sample_weight).")
+        if len(data) not in {2, 3}:
+            raise ValueError("Expected data as (x, y) or (x, y, sample_weight).")
+        return data[0], data[1], data[2] if len(data) == 3 else None
 
     def _update_trackers(
         self,
@@ -2231,35 +2228,7 @@ class JointSTSModel(tf.keras.Model):
                 classification_variables,
             )
 
-            discriminator_variables = self._discriminator_variables()
-            if self.update_discriminator and discriminator_variables:
-                if self.discriminator_optimizer is None:
-                    raise RuntimeError(
-                        "Discriminator updates are enabled without an optimizer."
-                    )
-                with tf.GradientTape() as discriminator_tape:
-                    discriminator_outputs = self(
-                        self._split_eeg_and_subject_inputs(x)[0],
-                        training=True,
-                        sample_latent=False,
-                        include_reconstruction=False,
-                        include_subject_adversarial=False,
-                    )
-                    discriminator_loss = self.classifier.discriminator_loss(
-                        tf.stop_gradient(
-                            discriminator_outputs["classification_latent"]
-                        ),
-                        y_flat,
-                    )
-                discriminator_gradients = discriminator_tape.gradient(
-                    discriminator_loss,
-                    discriminator_variables,
-                )
-                self._apply_gradients(
-                    self.discriminator_optimizer,
-                    discriminator_gradients,
-                    discriminator_variables,
-                )
+            discriminator_loss = self._update_discriminator(x, y_flat)
 
         vae_losses = vae_outputs = None
         for _ in range(self.vae_steps_per_batch):
@@ -2367,35 +2336,7 @@ class JointSTSModel(tf.keras.Model):
                 classification_variables,
             )
 
-            discriminator_variables = self._discriminator_variables()
-            if self.update_discriminator and discriminator_variables:
-                if self.discriminator_optimizer is None:
-                    raise RuntimeError(
-                        "Discriminator updates are enabled without an optimizer."
-                    )
-                with tf.GradientTape() as discriminator_tape:
-                    discriminator_outputs = self(
-                        self._split_eeg_and_subject_inputs(x_a)[0],
-                        training=True,
-                        sample_latent=False,
-                        include_reconstruction=False,
-                        include_subject_adversarial=False,
-                    )
-                    discriminator_loss = self.classifier.discriminator_loss(
-                        tf.stop_gradient(
-                            discriminator_outputs["classification_latent"]
-                        ),
-                        y_a_flat,
-                    )
-                discriminator_gradients = discriminator_tape.gradient(
-                    discriminator_loss,
-                    discriminator_variables,
-                )
-                self._apply_gradients(
-                    self.discriminator_optimizer,
-                    discriminator_gradients,
-                    discriminator_variables,
-                )
+            discriminator_loss = self._update_discriminator(x_a, y_a_flat)
 
         # Reconstruction remains a separate cooperative phase and sees both A
         # and B examples. Only the classification update uses MLDG fast weights.
@@ -2438,9 +2379,7 @@ class JointSTSModel(tf.keras.Model):
     def train_step(self, data) -> dict[str, tf.Tensor]:
         if self.classification_optimizer is None or self.vae_optimizer is None:
             raise RuntimeError("Call model.compile(...) before model.fit(...).")
-        if self.use_mldg:
-            return self._mldg_train_step(data)
-        return self._standard_train_step(data)
+        return self._mldg_train_step(data) if self.use_mldg else self._standard_train_step(data)
 
     def test_step(self, data) -> dict[str, tf.Tensor]:
         x, y, sample_weight = self._unpack_data(data)
