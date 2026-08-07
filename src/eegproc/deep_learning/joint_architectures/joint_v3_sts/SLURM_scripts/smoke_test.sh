@@ -303,7 +303,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             2.0
         ],
         "subject_loss_weight": [
-            0.5
+            0.8
         ],
         "subject_hidden_units": [
             128
