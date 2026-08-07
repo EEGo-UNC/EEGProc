@@ -166,11 +166,14 @@ def _hyperparameter_candidates(
             return list(value)
         return [value]
 
+    if value is None:
+        return [None]
+
     if not isinstance(value, (list, tuple)):
         raise TypeError(
             f"Sequence hyperparameter {key!r} must be a list or tuple, "
             f"got {type(value).__name__}."
-        )
+    )
     if not value:
         if key in _EMPTY_SEQUENCE_ALLOWED_KEYS:
             return [[]]
