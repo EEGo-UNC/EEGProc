@@ -13,9 +13,9 @@ from collections.abc import Sequence
 import tensorflow as tf
 
 try:
-    from ...unsupervised.Convolutions.GCN import BandSeparatedGCNEncoder
+    from ...unsupervised.Convolutions.GCN_band_separated import BandSeparatedGCNEncoder
 except ImportError:
-    from eegproc.deep_learning.unsupervised.Convolutions.GCN import BandSeparatedGCNEncoder
+    from eegproc.deep_learning.unsupervised.Convolutions.GCN_band_separated import BandSeparatedGCNEncoder
 
 JOINT_STS_BUILDER_API_VERSION = 4
 
