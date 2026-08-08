@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=joint_v4_dreamer_arousal
-#SBATCH --output=joint_v4_dreamer_arousal_%j.out
-#SBATCH --error=joint_v4_dreamer_arousal_%j.err
+#SBATCH --job-name=smoke_v4_dreamer_valence
+#SBATCH --output=smoke_v4_dreamer_valence_%j.out
+#SBATCH --error=smoke_v4_dreamer_valence_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:2
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
-#SBATCH --time=48:00:00
+#SBATCH --time=1:30:00
 
 set -euo pipefail
 
@@ -20,9 +20,8 @@ PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
 CLASSIFICATION_LEVEL="${CLASSIFICATION_LEVEL:-trial}"
 
-# Trial mode has only 414 DREAMER samples, so use a smaller batch.
 if [[ "$CLASSIFICATION_LEVEL" == "trial" ]]; then
-    BATCH_SIZE=16
+    BATCH_SIZE=8
 else
     BATCH_SIZE=64
 fi
@@ -70,7 +69,6 @@ find_libdevice() {
 
 LIBDEVICE_PATH="$(find_libdevice)"
 if [[ -z "$LIBDEVICE_PATH" ]]; then
-    echo "libdevice.10.bc was not found; installing nvidia-cuda-nvcc-cu12."
     if command -v flock >/dev/null 2>&1; then
         (
             flock -x 9
@@ -99,8 +97,6 @@ echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Classification level: $CLASSIFICATION_LEVEL"
 echo "Batch size: $BATCH_SIZE"
-echo "Python: $(command -v python)"
-echo "XLA_FLAGS: $XLA_FLAGS"
 
 python --version
 nvidia-smi
@@ -117,9 +113,7 @@ if "classification_level" not in inspect.signature(
     joint_sts_model.build_joint_sts_model
 ).parameters:
     raise RuntimeError("joint_v4_sts builder is missing classification_level.")
-gpus = tf.config.list_physical_devices("GPU")
-print("Available GPUs:", gpus)
-if not gpus:
+if not tf.config.list_physical_devices("GPU"):
     raise RuntimeError("TensorFlow cannot see the allocated GPU.")
 TF_PY
 
@@ -129,14 +123,15 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
-    --label-dimension arousal \
+    --label-dimension valence \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/joint_v4_sts/DREAMER/arousal/${CLASSIFICATION_LEVEL}" \
-    --run-name "dreamer_arousal_joint_v4_${CLASSIFICATION_LEVEL}" \
-    --n-jobs 4 \
+    --out-dir "runs/smoke/joint_v4_sts/DREAMER/valence/${CLASSIFICATION_LEVEL}" \
+    --run-name "dreamer_valence_joint_v4_${CLASSIFICATION_LEVEL}_smoke" \
+    --max-folds 2 \
+    --n-jobs 2 \
     --cpus-per-worker 2 \
-    --outer-verbose 0 \
+    --outer-verbose 2 \
     --final-verbose 2 \
     --seed 42 \
     --label-threshold-mode global \
@@ -150,19 +145,20 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --decision-thresholds 0.5 \
     --threshold-selection-level trial \
     --threshold-selection-metric accuracy \
-    --early-stopping-patience 30 \
+    --early-stopping-patience 10 \
     --early-stopping-min-delta 0.002 \
     --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --final-epoch-strategy median \
+    --skip-no-validation-loso-before-final \
     --batch-size "$BATCH_SIZE" \
     --hyperparameters-json '{
-        "epochs": [150],
+        "epochs": [20],
         "optimizer": ["adamw"],
-        "classification_learning_rate": [0.0001, 0.00003],
+        "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
-        "gcn_units": [[64, 32], [128, 64]],
-        "spectral_emb_dim": [64, 128],
+        "gcn_units": [[64, 32]],
+        "spectral_emb_dim": [64],
         "gcn_dropout": [0.2],
         "gcn_activation": ["relu"],
         "gcn_use_batch_norm": [false],
@@ -171,7 +167,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "graph_adjacency_reg_weight": [0.0001],
         "t_down": [2],
         "temporal_pool_sizes": [[2]],
-        "bilstm_units": [64, 128],
+        "bilstm_units": [64],
         "bilstm_layers": [1],
         "bilstm_dropout": [0.3],
         "classification_hidden_units": [64],
