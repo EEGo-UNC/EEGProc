@@ -35,15 +35,6 @@ class CounterfactualLossWeights:
     validity: float = 1.0
     signal_proximity: float = 0.10
 
-    def __post_init__(self) -> None:
-        if self.validity < 0.0:
-            raise ValueError("validity weight must be non-negative.")
-        if self.signal_proximity < 0.0:
-            raise ValueError("signal_proximity weight must be non-negative.")
-        if self.validity == 0.0 and self.signal_proximity == 0.0:
-            raise ValueError("At least one loss weight must be positive.")
-
-
 def normalize_target_classes(
     target_class: int | tf.Tensor,
     batch_size: int | tf.Tensor,

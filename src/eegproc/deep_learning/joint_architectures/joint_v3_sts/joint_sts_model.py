@@ -9,8 +9,8 @@ This module implements the STS architecture proposed for EEGProc:
                                                          |-- fused decoder
                                                          |-- subject adversary
 
-The two principal objectives are optimized *alternately* inside every Keras
-``train_step``:
+The reconstruction objective remains alternating. Classification can use
+ordinary updates or first-order MLDG episodes inside each Keras ``train_step``:
 
 1. Classification phase
    Updates both encoders, fusion/posterior layers, the classification pathway,
@@ -29,7 +29,7 @@ HybridClassifier and VariationalClassifier remain selectable ablations.
 
 from __future__ import annotations
 
-JOINT_STS_BUILDER_API_VERSION = 2
+JOINT_STS_BUILDER_API_VERSION = 3
 
 import importlib
 from collections.abc import Mapping, Sequence
@@ -113,9 +113,10 @@ def _as_positive_int_tuple(
     allow_empty: bool = False,
 ) -> tuple[int, ...]:
     if values is None:
-        normalized: tuple[int, ...] = ()
-    else:
-        normalized = tuple(int(value) for value in values)
+        values = ()
+    if not isinstance(values, (tuple, list)):
+        values = (values,)
+    normalized = tuple(int(value) for value in values)
     if not normalized and not allow_empty:
         raise ValueError(f"{name} must contain at least one value.")
     if any(value < 1 for value in normalized):
@@ -130,20 +131,17 @@ def _resolve_temporal_pool_sizes(
     t_down = int(t_down)
     if t_down < 1:
         raise ValueError(f"t_down must be >= 1, got {t_down}.")
-    pools = (
-        (() if t_down == 1 else (t_down,))
-        if temporal_pool_sizes is None
-        else _as_positive_int_tuple(
-            "temporal_pool_sizes",
-            temporal_pool_sizes,
-            allow_empty=True,
-        )
+    if temporal_pool_sizes is None:
+        return () if t_down == 1 else (t_down,)
+    pools = _as_positive_int_tuple(
+        "temporal_pool_sizes",
+        temporal_pool_sizes,
+        allow_empty=True,
     )
-    effective_downsampling = int(np.prod(pools, dtype=np.int64)) if pools else 1
-    if effective_downsampling != t_down:
+    if int(np.prod(pools, dtype=np.int64) if pools else 1) != t_down:
         raise ValueError(
             f"t_down={t_down}, but temporal_pool_sizes={pools} produces "
-            f"{effective_downsampling}."
+            f"{int(np.prod(pools, dtype=np.int64) if pools else 1)}."
         )
     return pools
 
@@ -302,26 +300,46 @@ class DualPathSTSDecoder(tf.keras.Model):
 
         if self.timesteps < 1 or self.n_channels < 1 or self.n_bands < 1:
             raise ValueError("Decoder dimensions must be positive.")
-        if self.temporal_decoder_units < 1:
-            raise ValueError("temporal_decoder_units must be positive.")
-        if self.n_temporal_decoder_bilstm_layers < 1:
-            raise ValueError(
-                "n_temporal_decoder_bilstm_layers must be positive."
-            )
-        if self.graph_output_units < 1:
-            raise ValueError("graph_output_units must be positive.")
         if self.branch_feature_dim < 1 or self.fusion_units < 1:
             raise ValueError("Decoder feature dimensions must be positive.")
-        if not 0.0 <= self.dropout_rate < 1.0:
-            raise ValueError("Decoder dropout must be in [0, 1).")
-        if self.graph_self_loop_bias < 0.0:
-            raise ValueError("graph_self_loop_bias must be non-negative.")
-        if not 0.0 <= self.graph_identity_mix <= 1.0:
-            raise ValueError("graph_identity_mix must be in [0, 1].")
-        if self.graph_adjacency_reg_weight < 0.0:
-            raise ValueError(
-                "graph_adjacency_reg_weight must be non-negative."
+
+        layer_norm = (
+            lambda name: tf.keras.layers.BatchNormalization(name=name)
+            if self.use_batch_norm
+            else lambda name: tf.keras.layers.LayerNormalization(
+                axis=-1,
+                name=name,
             )
+        )
+
+        def _build_upsample_branch(prefix, filters):
+            blocks = []
+            for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
+                blocks.append(
+                    {
+                        "upsample": tf.keras.layers.UpSampling1D(
+                            size=pool_size,
+                            name=f"{prefix}_upsample_{index}",
+                        ),
+                        "conv": tf.keras.layers.Conv1D(
+                            filters,
+                            kernel_size=3,
+                            padding="same",
+                            activation=None,
+                            name=f"{prefix}_upsample_conv_{index}",
+                        ),
+                        "norm": layer_norm(name=f"{prefix}_upsample_norm_{index}"),
+                        "activation": tf.keras.layers.Activation(
+                            self.activation_name,
+                            name=f"{prefix}_upsample_activation_{index}",
+                        ),
+                        "dropout": tf.keras.layers.Dropout(
+                            self.dropout_rate,
+                            name=f"{prefix}_upsample_dropout_{index}",
+                        ),
+                    }
+                )
+            return blocks
 
         # Temporal decoder branch.
         self.temporal_input_projection = tf.keras.layers.Conv1D(
@@ -331,73 +349,47 @@ class DualPathSTSDecoder(tf.keras.Model):
             activation=None,
             name="temporal_input_projection",
         )
-        self.temporal_upsample_layers = []
-        self.temporal_upsample_convs = []
-        self.temporal_upsample_norms = []
-        self.temporal_upsample_activations = []
-        self.temporal_upsample_dropouts = []
-        for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
-            self.temporal_upsample_layers.append(
-                tf.keras.layers.UpSampling1D(
-                    size=pool_size,
-                    name=f"temporal_upsample_{index}",
-                )
-            )
-            self.temporal_upsample_convs.append(
-                tf.keras.layers.Conv1D(
+        self.temporal_upsample_blocks = _build_upsample_branch(
+            "temporal", self.temporal_decoder_units
+        )
+        self.temporal_upsample_layers = [
+            block["upsample"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_convs = [
+            block["conv"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_norms = [
+            block["norm"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_activations = [
+            block["activation"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_upsample_dropouts = [
+            block["dropout"] for block in self.temporal_upsample_blocks
+        ]
+        self.temporal_bilstm_layers = [
+            tf.keras.layers.Bidirectional(
+                tf.keras.layers.LSTM(
                     self.temporal_decoder_units,
-                    kernel_size=3,
-                    padding="same",
-                    activation=None,
-                    name=f"temporal_upsample_conv_{index}",
-                )
+                    return_sequences=True,
+                    name=f"temporal_decoder_lstm_{index}",
+                ),
+                merge_mode="concat",
+                name=f"temporal_decoder_bilstm_{index}",
             )
-            self.temporal_upsample_norms.append(
-                tf.keras.layers.LayerNormalization(
-                    axis=-1,
-                    name=f"temporal_upsample_norm_{index}",
-                )
+            for index in range(self.n_temporal_decoder_bilstm_layers)
+        ]
+        self.temporal_bilstm_norms = [
+            layer_norm(name=f"temporal_decoder_norm_{index}")
+            for index in range(self.n_temporal_decoder_bilstm_layers)
+        ]
+        self.temporal_bilstm_dropouts = [
+            tf.keras.layers.Dropout(
+                self.dropout_rate,
+                name=f"temporal_decoder_dropout_{index}",
             )
-            self.temporal_upsample_activations.append(
-                tf.keras.layers.Activation(
-                    self.activation_name,
-                    name=f"temporal_upsample_activation_{index}",
-                )
-            )
-            self.temporal_upsample_dropouts.append(
-                tf.keras.layers.Dropout(
-                    self.dropout_rate,
-                    name=f"temporal_upsample_dropout_{index}",
-                )
-            )
-
-        self.temporal_bilstm_layers = []
-        self.temporal_bilstm_norms = []
-        self.temporal_bilstm_dropouts = []
-        for index in range(self.n_temporal_decoder_bilstm_layers):
-            self.temporal_bilstm_layers.append(
-                tf.keras.layers.Bidirectional(
-                    tf.keras.layers.LSTM(
-                        self.temporal_decoder_units,
-                        return_sequences=True,
-                        name=f"temporal_decoder_lstm_{index}",
-                    ),
-                    merge_mode="concat",
-                    name=f"temporal_decoder_bilstm_{index}",
-                )
-            )
-            self.temporal_bilstm_norms.append(
-                tf.keras.layers.LayerNormalization(
-                    axis=-1,
-                    name=f"temporal_decoder_norm_{index}",
-                )
-            )
-            self.temporal_bilstm_dropouts.append(
-                tf.keras.layers.Dropout(
-                    self.dropout_rate,
-                    name=f"temporal_decoder_dropout_{index}",
-                )
-            )
+            for index in range(self.n_temporal_decoder_bilstm_layers)
+        ]
         self.temporal_feature_projection = tf.keras.layers.Conv1D(
             self.branch_feature_dim,
             kernel_size=1,
@@ -415,45 +407,24 @@ class DualPathSTSDecoder(tf.keras.Model):
             activation=None,
             name="graph_input_projection",
         )
-        self.graph_upsample_layers = []
-        self.graph_upsample_convs = []
-        self.graph_upsample_norms = []
-        self.graph_upsample_activations = []
-        self.graph_upsample_dropouts = []
-        for index, pool_size in enumerate(reversed(self.temporal_pool_sizes)):
-            self.graph_upsample_layers.append(
-                tf.keras.layers.UpSampling1D(
-                    size=pool_size,
-                    name=f"graph_upsample_{index}",
-                )
-            )
-            self.graph_upsample_convs.append(
-                tf.keras.layers.Conv1D(
-                    graph_seed_units,
-                    kernel_size=3,
-                    padding="same",
-                    activation=None,
-                    name=f"graph_upsample_conv_{index}",
-                )
-            )
-            self.graph_upsample_norms.append(
-                tf.keras.layers.LayerNormalization(
-                    axis=-1,
-                    name=f"graph_upsample_norm_{index}",
-                )
-            )
-            self.graph_upsample_activations.append(
-                tf.keras.layers.Activation(
-                    self.activation_name,
-                    name=f"graph_upsample_activation_{index}",
-                )
-            )
-            self.graph_upsample_dropouts.append(
-                tf.keras.layers.Dropout(
-                    self.dropout_rate,
-                    name=f"graph_upsample_dropout_{index}",
-                )
-            )
+        self.graph_upsample_blocks = _build_upsample_branch(
+            "graph", graph_seed_units
+        )
+        self.graph_upsample_layers = [
+            block["upsample"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_convs = [
+            block["conv"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_norms = [
+            block["norm"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_activations = [
+            block["activation"] for block in self.graph_upsample_blocks
+        ]
+        self.graph_upsample_dropouts = [
+            block["dropout"] for block in self.graph_upsample_blocks
+        ]
 
         self.node_seed_projection = tf.keras.layers.Dense(
             self.n_channels * graph_seed_units,
@@ -480,7 +451,7 @@ class DualPathSTSDecoder(tf.keras.Model):
             )
             self.graph_norms.append(
                 tf.keras.layers.BatchNormalization(
-                    name=f"decoder_graph_bn_{index}"
+                    name=f"decoder_graph_bn_{index}",
                 )
                 if self.use_batch_norm
                 else tf.keras.layers.LayerNormalization(
@@ -575,6 +546,23 @@ class DualPathSTSDecoder(tf.keras.Model):
         pad_amount = tf.maximum(0, self.timesteps - current_timesteps)
         return tf.pad(sequence, [[0, 0], [0, pad_amount], [0, 0]])
 
+    def _upsample_block(
+        self,
+        sequence: tf.Tensor,
+        upsample,
+        conv,
+        norm,
+        activation,
+        dropout,
+        training: bool,
+    ) -> tf.Tensor:
+        sequence = upsample(sequence)
+        residual = sequence
+        sequence = conv(sequence)
+        sequence = norm(sequence + residual)
+        sequence = activation(sequence)
+        return dropout(sequence, training=training)
+
     def _temporal_branch(self, inputs: tf.Tensor, training: bool) -> tf.Tensor:
         sequence = self.temporal_input_projection(inputs)
         for upsample, conv, norm, activation, dropout in zip(
@@ -584,12 +572,15 @@ class DualPathSTSDecoder(tf.keras.Model):
             self.temporal_upsample_activations,
             self.temporal_upsample_dropouts,
         ):
-            sequence = upsample(sequence)
-            residual = sequence
-            sequence = conv(sequence)
-            sequence = norm(sequence + residual)
-            sequence = activation(sequence)
-            sequence = dropout(sequence, training=training)
+            sequence = self._upsample_block(
+                sequence,
+                upsample,
+                conv,
+                norm,
+                activation,
+                dropout,
+                training,
+            )
         sequence = self._fix_length(sequence)
         for bilstm, norm, dropout in zip(
             self.temporal_bilstm_layers,
@@ -610,12 +601,15 @@ class DualPathSTSDecoder(tf.keras.Model):
             self.graph_upsample_activations,
             self.graph_upsample_dropouts,
         ):
-            sequence = upsample(sequence)
-            residual = sequence
-            sequence = conv(sequence)
-            sequence = norm(sequence + residual)
-            sequence = activation(sequence)
-            sequence = dropout(sequence, training=training)
+            sequence = self._upsample_block(
+                sequence,
+                upsample,
+                conv,
+                norm,
+                activation,
+                dropout,
+                training,
+            )
         sequence = self._fix_length(sequence)
         node_sequence = self.node_seed_projection(sequence)
         batch_size = tf.shape(node_sequence)[0]
@@ -853,6 +847,9 @@ class JointSTSModel(tf.keras.Model):
         supcon_cross_subject_only: bool = True,
         classification_steps_per_batch: int = 1,
         vae_steps_per_batch: int = 1,
+        use_mldg: bool = False,
+        mldg_inner_learning_rate: float = 1e-4,
+        mldg_meta_test_weight: float = 1.0,
         name: str = "joint_sts_model",
         **kwargs,
     ) -> None:
@@ -899,6 +896,10 @@ class JointSTSModel(tf.keras.Model):
             raise ValueError("supcon_temperature must be positive.")
         if classification_steps_per_batch < 1 or vae_steps_per_batch < 1:
             raise ValueError("Both alternating step counts must be at least 1.")
+        if mldg_inner_learning_rate <= 0.0:
+            raise ValueError("mldg_inner_learning_rate must be positive.")
+        if mldg_meta_test_weight < 0.0:
+            raise ValueError("mldg_meta_test_weight must be non-negative.")
         if n_subject_classes is not None and int(n_subject_classes) < 2:
             raise ValueError("n_subject_classes must be at least 2.")
 
@@ -1041,6 +1042,9 @@ class JointSTSModel(tf.keras.Model):
 
         self.classification_steps_per_batch = int(classification_steps_per_batch)
         self.vae_steps_per_batch = int(vae_steps_per_batch)
+        self.use_mldg = bool(use_mldg)
+        self.mldg_inner_learning_rate = float(mldg_inner_learning_rate)
+        self.mldg_meta_test_weight = float(mldg_meta_test_weight)
         self.classification_optimizer = None
         self.vae_optimizer = None
         self.discriminator_optimizer = None
@@ -1055,6 +1059,20 @@ class JointSTSModel(tf.keras.Model):
         )
         self.vae_regularization_tracker = tf.keras.metrics.Mean(
             name="vae_regularization_loss"
+        )
+        self.mldg_meta_train_loss_tracker = tf.keras.metrics.Mean(
+            name="mldg_meta_train_loss"
+        )
+        self.mldg_meta_test_loss_tracker = tf.keras.metrics.Mean(
+            name="mldg_meta_test_loss"
+        )
+        self.mldg_gradient_cosine_tracker = tf.keras.metrics.Mean(
+            name="mldg_gradient_cosine"
+        )
+        self.mldg_meta_test_accuracy_tracker = (
+            tf.keras.metrics.SparseCategoricalAccuracy(
+                name="mldg_meta_test_accuracy"
+            )
         )
 
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
@@ -1154,6 +1172,15 @@ class JointSTSModel(tf.keras.Model):
             self.weighted_kl_loss_tracker,
             self.decoder_accuracy_tracker,
         ]
+        if self.use_mldg:
+            metrics.extend(
+                [
+                    self.mldg_meta_train_loss_tracker,
+                    self.mldg_meta_test_loss_tracker,
+                    self.mldg_gradient_cosine_tracker,
+                    self.mldg_meta_test_accuracy_tracker,
+                ]
+            )
         if self.subject_adversarial_enabled:
             metrics.extend(
                 [
@@ -1763,6 +1790,143 @@ class JointSTSModel(tf.keras.Model):
         }
         return losses, outputs
 
+    def _meta_test_emotion_losses(
+        self,
+        x,
+        y_flat: tf.Tensor,
+        training: bool,
+        sample_weight=None,
+    ) -> tuple[dict[str, tf.Tensor], dict[str, tf.Tensor]]:
+        """Return B's emotion-only objective at the temporary fast weights.
+
+        Subject adversity, SupCon, decoder reconstruction, and optional VC
+        regularizers are deliberately excluded. B evaluates only whether the
+        A update transfers to different subjects for the target emotion task.
+        """
+        eeg_inputs, _subject_ids = self._split_eeg_and_subject_inputs(x)
+        outputs = self(
+            eeg_inputs,
+            training=training,
+            sample_latent=False,
+            include_reconstruction=False,
+            include_subject_adversarial=False,
+        )
+        vc_losses = self.classifier.vc_loss_components(
+            mh=outputs["classification_latent"],
+            y=y_flat,
+            alpha=self.vc_alpha,
+            beta=0.0,
+            gamma=0.0,
+            lambda_=0.0,
+            logits=outputs["logits"],
+            sample_weight=sample_weight,
+        )
+        objective = (
+            tf.cast(self.classification_loss_weight, vc_losses["total_loss"].dtype)
+            * vc_losses["total_loss"]
+        )
+        return {"objective": objective}, outputs
+
+    @staticmethod
+    def _dense_gradient(gradient, variable: tf.Variable) -> tf.Tensor | None:
+        if gradient is None:
+            return None
+        if isinstance(gradient, tf.IndexedSlices):
+            gradient = tf.convert_to_tensor(gradient)
+        return tf.cast(gradient, variable.dtype)
+
+    def _combine_first_order_gradients(
+        self,
+        gradients_a,
+        gradients_b,
+        variables,
+    ) -> list[tf.Tensor | None]:
+        combined: list[tf.Tensor | None] = []
+        beta = tf.cast(self.mldg_meta_test_weight, tf.float32)
+        for gradient_a, gradient_b, variable in zip(
+            gradients_a, gradients_b, variables
+        ):
+            gradient_a = self._dense_gradient(gradient_a, variable)
+            gradient_b = self._dense_gradient(gradient_b, variable)
+            if gradient_a is None and gradient_b is None:
+                combined.append(None)
+            elif gradient_a is None:
+                combined.append(tf.cast(beta, variable.dtype) * gradient_b)
+            elif gradient_b is None:
+                combined.append(gradient_a)
+            else:
+                combined.append(
+                    gradient_a
+                    + tf.cast(beta, variable.dtype) * gradient_b
+                )
+        return combined
+
+    @classmethod
+    def _gradient_cosine_similarity(
+        cls,
+        gradients_a,
+        gradients_b,
+        variables,
+    ) -> tf.Tensor:
+        dot = tf.zeros((), dtype=tf.float32)
+        norm_a = tf.zeros((), dtype=tf.float32)
+        norm_b = tf.zeros((), dtype=tf.float32)
+        for gradient_a, gradient_b, variable in zip(
+            gradients_a, gradients_b, variables
+        ):
+            gradient_a = cls._dense_gradient(gradient_a, variable)
+            gradient_b = cls._dense_gradient(gradient_b, variable)
+            if gradient_a is None or gradient_b is None:
+                continue
+            a = tf.cast(tf.reshape(gradient_a, [-1]), tf.float32)
+            b = tf.cast(tf.reshape(gradient_b, [-1]), tf.float32)
+            dot += tf.reduce_sum(a * b)
+            norm_a += tf.reduce_sum(tf.square(a))
+            norm_b += tf.reduce_sum(tf.square(b))
+        return tf.math.divide_no_nan(
+            dot,
+            tf.sqrt(norm_a) * tf.sqrt(norm_b),
+        )
+
+    @staticmethod
+    def _merge_episode_inputs(meta_train_x, meta_test_x):
+        eeg_a, subject_a = JointSTSModel._split_eeg_and_subject_inputs(meta_train_x)
+        eeg_b, subject_b = JointSTSModel._split_eeg_and_subject_inputs(meta_test_x)
+        merged_eeg = tf.concat([eeg_a, eeg_b], axis=0)
+        if subject_a is None or subject_b is None:
+            return merged_eeg
+        return {
+            "eeg": merged_eeg,
+            "subject_id": tf.concat([subject_a, subject_b], axis=0),
+        }
+
+    @staticmethod
+    def _unpack_mldg_episode(data):
+        x, y, sample_weight = JointSTSModel._unpack_data(data)
+        if not isinstance(x, Mapping) or not isinstance(y, Mapping):
+            raise ValueError(
+                "MLDG training expects x/y mappings with meta_train and meta_test."
+            )
+        if "meta_train" not in x or "meta_test" not in x:
+            raise ValueError("MLDG x is missing meta_train or meta_test.")
+        if "meta_train" not in y or "meta_test" not in y:
+            raise ValueError("MLDG y is missing meta_train or meta_test.")
+        if sample_weight is None:
+            sample_weight_a = sample_weight_b = None
+        elif isinstance(sample_weight, Mapping):
+            sample_weight_a = sample_weight.get("meta_train")
+            sample_weight_b = sample_weight.get("meta_test")
+        else:
+            raise ValueError("MLDG sample_weight must be a mapping or None.")
+        return (
+            x["meta_train"],
+            y["meta_train"],
+            sample_weight_a,
+            x["meta_test"],
+            y["meta_test"],
+            sample_weight_b,
+        )
+
     def _vae_losses(
         self,
         x,
@@ -1872,23 +2036,56 @@ class JointSTSModel(tf.keras.Model):
         gradients,
         variables,
     ) -> None:
-        pairs = [
-            (gradient, variable)
-            for gradient, variable in zip(gradients, variables)
-            if gradient is not None
-        ]
-        if pairs:
-            optimizer.apply_gradients(pairs)
+        optimizer.apply_gradients(
+            (g, v)
+            for g, v in zip(gradients, variables)
+            if g is not None
+        )
+
+    def _update_discriminator(self, x, y_flat):
+        if not self.update_discriminator:
+            return tf.zeros((), dtype=tf.float32)
+
+        discriminator_variables = self._discriminator_variables()
+        if not discriminator_variables:
+            return tf.zeros((), dtype=tf.float32)
+        if self.discriminator_optimizer is None:
+            raise RuntimeError(
+                "Discriminator updates are enabled without an optimizer."
+            )
+        eeg_inputs = self._split_eeg_and_subject_inputs(x)[0]
+        with tf.GradientTape() as discriminator_tape:
+            discriminator_outputs = self(
+                eeg_inputs,
+                training=True,
+                sample_latent=False,
+                include_reconstruction=False,
+                include_subject_adversarial=False,
+            )
+            discriminator_loss = self.classifier.discriminator_loss(
+                tf.stop_gradient(
+                    discriminator_outputs["classification_latent"]
+                ),
+                y_flat,
+            )
+        discriminator_gradients = discriminator_tape.gradient(
+            discriminator_loss,
+            discriminator_variables,
+        )
+        self._apply_gradients(
+            self.discriminator_optimizer,
+            discriminator_gradients,
+            discriminator_variables,
+        )
+        return discriminator_loss
 
     @staticmethod
     def _unpack_data(data):
         if not isinstance(data, tuple):
             raise ValueError("Expected data as (x, y) or (x, y, sample_weight).")
-        if len(data) == 2:
-            return data[0], data[1], None
-        if len(data) == 3:
-            return data[0], data[1], data[2]
-        raise ValueError("Expected data as (x, y) or (x, y, sample_weight).")
+        if len(data) not in {2, 3}:
+            raise ValueError("Expected data as (x, y) or (x, y, sample_weight).")
+        return data[0], data[1], data[2] if len(data) == 3 else None
 
     def _update_trackers(
         self,
@@ -1900,8 +2097,18 @@ class JointSTSModel(tf.keras.Model):
         y_flat: tf.Tensor,
         sample_weight,
         discriminator_loss: tf.Tensor,
+        meta_test_loss: tf.Tensor | None = None,
+        meta_test_outputs: dict[str, tf.Tensor] | None = None,
+        meta_test_y_flat: tf.Tensor | None = None,
+        meta_test_sample_weight=None,
+        mldg_gradient_cosine: tf.Tensor | None = None,
     ) -> None:
         total_loss = classification_losses["objective"] + vae_losses["objective"]
+        if meta_test_loss is not None:
+            total_loss += (
+                tf.cast(self.mldg_meta_test_weight, meta_test_loss.dtype)
+                * meta_test_loss
+            )
         self.total_loss_tracker.update_state(total_loss)
         self.classification_objective_tracker.update_state(
             classification_losses["objective"]
@@ -1913,6 +2120,21 @@ class JointSTSModel(tf.keras.Model):
         self.vae_regularization_tracker.update_state(
             vae_losses["regularization_loss"]
         )
+        if self.use_mldg and meta_test_loss is not None:
+            self.mldg_meta_train_loss_tracker.update_state(
+                classification_losses["objective"]
+            )
+            self.mldg_meta_test_loss_tracker.update_state(meta_test_loss)
+            if mldg_gradient_cosine is not None:
+                self.mldg_gradient_cosine_tracker.update_state(
+                    mldg_gradient_cosine
+                )
+            if meta_test_outputs is not None and meta_test_y_flat is not None:
+                self.mldg_meta_test_accuracy_tracker.update_state(
+                    meta_test_y_flat,
+                    meta_test_outputs["logits"],
+                    sample_weight=meta_test_sample_weight,
+                )
 
         self.vc_loss_tracker.update_state(classification_losses["vc_loss"])
         self.vc_focal_loss_tracker.update_state(
@@ -2009,9 +2231,7 @@ class JointSTSModel(tf.keras.Model):
     def _metric_results(self) -> dict[str, tf.Tensor]:
         return {metric.name: metric.result() for metric in self.metrics}
 
-    def train_step(self, data) -> dict[str, tf.Tensor]:
-        if self.classification_optimizer is None or self.vae_optimizer is None:
-            raise RuntimeError("Call model.compile(...) before model.fit(...).")
+    def _standard_train_step(self, data) -> dict[str, tf.Tensor]:
         x, y, sample_weight = self._unpack_data(data)
         y_flat = self._flatten_labels(y)
 
@@ -2038,35 +2258,7 @@ class JointSTSModel(tf.keras.Model):
                 classification_variables,
             )
 
-            discriminator_variables = self._discriminator_variables()
-            if self.update_discriminator and discriminator_variables:
-                if self.discriminator_optimizer is None:
-                    raise RuntimeError(
-                        "Discriminator updates are enabled without an optimizer."
-                    )
-                with tf.GradientTape() as discriminator_tape:
-                    discriminator_outputs = self(
-                        self._split_eeg_and_subject_inputs(x)[0],
-                        training=True,
-                        sample_latent=False,
-                        include_reconstruction=False,
-                        include_subject_adversarial=False,
-                    )
-                    discriminator_loss = self.classifier.discriminator_loss(
-                        tf.stop_gradient(
-                            discriminator_outputs["classification_latent"]
-                        ),
-                        y_flat,
-                    )
-                discriminator_gradients = discriminator_tape.gradient(
-                    discriminator_loss,
-                    discriminator_variables,
-                )
-                self._apply_gradients(
-                    self.discriminator_optimizer,
-                    discriminator_gradients,
-                    discriminator_variables,
-                )
+            discriminator_loss = self._update_discriminator(x, y_flat)
 
         vae_losses = vae_outputs = None
         for _ in range(self.vae_steps_per_batch):
@@ -2094,6 +2286,130 @@ class JointSTSModel(tf.keras.Model):
             discriminator_loss=discriminator_loss,
         )
         return self._metric_results()
+
+    def _mldg_train_step(self, data) -> dict[str, tf.Tensor]:
+        (
+            x_a,
+            y_a,
+            sample_weight_a,
+            x_b,
+            y_b,
+            sample_weight_b,
+        ) = self._unpack_mldg_episode(data)
+        y_a_flat = self._flatten_labels(y_a)
+        y_b_flat = self._flatten_labels(y_b)
+
+        classification_losses = classification_outputs = None
+        meta_test_losses = meta_test_outputs = None
+        gradient_cosine = tf.zeros((), dtype=tf.float32)
+        discriminator_loss = tf.zeros((), dtype=tf.float32)
+
+        for _ in range(self.classification_steps_per_batch):
+            with tf.GradientTape() as meta_train_tape:
+                classification_losses, classification_outputs = (
+                    self._classification_losses(
+                        x=x_a,
+                        y_flat=y_a_flat,
+                        training=True,
+                        sample_weight=sample_weight_a,
+                    )
+                )
+            classification_variables = self._classification_variables()
+            gradients_a = meta_train_tape.gradient(
+                classification_losses["objective"],
+                classification_variables,
+            )
+
+            original_values = [tf.identity(variable) for variable in classification_variables]
+            inner_lr = tf.cast(self.mldg_inner_learning_rate, tf.float32)
+            for variable, gradient_a in zip(classification_variables, gradients_a):
+                gradient_a = self._dense_gradient(gradient_a, variable)
+                if gradient_a is not None:
+                    variable.assign_sub(tf.cast(inner_lr, variable.dtype) * gradient_a)
+
+            with tf.GradientTape() as meta_test_tape:
+                meta_test_losses, meta_test_outputs = (
+                    self._meta_test_emotion_losses(
+                        x=x_b,
+                        y_flat=y_b_flat,
+                        # Deterministic B prevents dropout/BatchNorm state
+                        # changes from leaking out of the temporary fast step.
+                        training=False,
+                        sample_weight=sample_weight_b,
+                    )
+                )
+            gradients_b = meta_test_tape.gradient(
+                meta_test_losses["objective"],
+                classification_variables,
+            )
+
+            # Restore theta before the real Adam/AdamW outer update. B's
+            # gradients were evaluated at theta' but are applied to theta.
+            for variable, original_value in zip(
+                classification_variables, original_values
+            ):
+                variable.assign(original_value)
+
+            gradient_cosine = self._gradient_cosine_similarity(
+                gradients_a,
+                gradients_b,
+                classification_variables,
+            )
+            combined_gradients = self._combine_first_order_gradients(
+                gradients_a,
+                gradients_b,
+                classification_variables,
+            )
+            self._apply_gradients(
+                self.classification_optimizer,
+                combined_gradients,
+                classification_variables,
+            )
+
+            discriminator_loss = self._update_discriminator(x_a, y_a_flat)
+
+        # Reconstruction remains a separate cooperative phase and sees both A
+        # and B examples. Only the classification update uses MLDG fast weights.
+        x_vae = self._merge_episode_inputs(x_a, x_b)
+        vae_losses = vae_outputs = None
+        for _ in range(self.vae_steps_per_batch):
+            with tf.GradientTape() as vae_tape:
+                vae_losses, vae_outputs = self._vae_losses(
+                    x=x_vae,
+                    training=True,
+                )
+            vae_variables = self._vae_variables()
+            vae_gradients = vae_tape.gradient(
+                vae_losses["objective"],
+                vae_variables,
+            )
+            self._apply_gradients(
+                self.vae_optimizer,
+                vae_gradients,
+                vae_variables,
+            )
+
+        self._update_trackers(
+            classification_losses=classification_losses,
+            classification_outputs=classification_outputs,
+            vae_losses=vae_losses,
+            vae_outputs=vae_outputs,
+            x=x_vae,
+            y_flat=y_a_flat,
+            sample_weight=sample_weight_a,
+            discriminator_loss=discriminator_loss,
+            meta_test_loss=meta_test_losses["objective"],
+            meta_test_outputs=meta_test_outputs,
+            meta_test_y_flat=y_b_flat,
+            meta_test_sample_weight=sample_weight_b,
+            mldg_gradient_cosine=gradient_cosine,
+        )
+        return self._metric_results()
+
+    def train_step(self, data) -> dict[str, tf.Tensor]:
+        if self.classification_optimizer is None or self.vae_optimizer is None:
+            raise RuntimeError("Call model.compile(...) before model.fit(...).")
+        return self._mldg_train_step(data) if self.use_mldg else self._standard_train_step(data)
 
     def test_step(self, data) -> dict[str, tf.Tensor]:
         x, y, sample_weight = self._unpack_data(data)
@@ -2287,6 +2603,9 @@ class JointSTSModel(tf.keras.Model):
                     self.classification_steps_per_batch
                 ),
                 "vae_steps_per_batch": self.vae_steps_per_batch,
+                "use_mldg": self.use_mldg,
+                "mldg_inner_learning_rate": self.mldg_inner_learning_rate,
+                "mldg_meta_test_weight": self.mldg_meta_test_weight,
             }
         )
         return config
@@ -2366,6 +2685,9 @@ def build_joint_sts_model(
     supcon_cross_subject_only: bool = True,
     classification_steps_per_batch: int = 1,
     vae_steps_per_batch: int = 1,
+    use_mldg: bool = False,
+    mldg_inner_learning_rate: float = 1e-4,
+    mldg_meta_test_weight: float = 1.0,
     optimizer_name: str = "adamw",
     classification_learning_rate: float = 1e-4,
     vae_learning_rate: float = 5e-5,
@@ -2504,6 +2826,9 @@ def build_joint_sts_model(
         supcon_cross_subject_only=supcon_cross_subject_only,
         classification_steps_per_batch=classification_steps_per_batch,
         vae_steps_per_batch=vae_steps_per_batch,
+        use_mldg=use_mldg,
+        mldg_inner_learning_rate=mldg_inner_learning_rate,
+        mldg_meta_test_weight=mldg_meta_test_weight,
         name=model_name,
     )
 

@@ -143,6 +143,38 @@ def test_missing_tables_come_back_empty(tmp_path):
     assert tables.has_tasks is False
 
 
+def test_loads_flat_loso_shape(tmp_path):
+    payload = {
+        "best_config_index": 0,
+        "config_results": [
+            {
+                "config_index": 0,
+                "config": {"learning_rate": 0.001},
+                "trial_mean_scores": {"accuracy": 0.75, "f1": 0.6},
+                "trial_std_scores": {"accuracy": 0.1, "f1": 0.1},
+                "fold_metrics": [
+                    {"fold": 1, "accuracy": 0.7, "f1": 0.6},
+                    {"fold": 2, "accuracy": 0.8, "f1": 0.7},
+                ],
+            }
+        ],
+        "user_metrics": [{"fold": 1, "subject_id": 0, "accuracy": 0.7}],
+        "window_prediction_log": [
+            {"fold": 1, "subject_id": 0, "y_true": 0, "y_pred": 0, "p_class_0": 0.9, "p_class_1": 0.1},
+            {"fold": 1, "subject_id": 1, "y_true": 1, "y_pred": 1, "p_class_0": 0.2, "p_class_1": 0.8},
+        ],
+    }
+
+    tables = load_results(_write(tmp_path, payload))
+
+    assert tables.models == ["model"]
+    assert not tables.predictions.empty
+    assert not tables.fold_metrics.empty
+    assert not tables.user_metrics.empty
+    assert not tables.summary.empty
+    assert {"model", "y_true", "y_pred"}.issubset(tables.predictions.columns)
+
+
 def test_class_probability_columns_order():
     df = pd.DataFrame(columns=["p_class_1", "p_class_0", "p_class_10", "p_pred", "other"])
     assert class_probability_columns(df) == ["p_class_0", "p_class_1", "p_class_10"]
