@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
-#SBATCH --time=2:30:00
+#SBATCH --time=1:30:00
 
 set -euo pipefail
 
@@ -120,7 +120,7 @@ TF_PY
 python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_model_train \
     --cv-strategy loso \
     --classification-level "$CLASSIFICATION_LEVEL" \
-    --validation-subjects 2 \
+    --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension arousal \
