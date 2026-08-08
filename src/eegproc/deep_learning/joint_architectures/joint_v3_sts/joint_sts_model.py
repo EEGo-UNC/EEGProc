@@ -300,17 +300,31 @@ class DualPathSTSDecoder(tf.keras.Model):
 
         if self.timesteps < 1 or self.n_channels < 1 or self.n_bands < 1:
             raise ValueError("Decoder dimensions must be positive.")
+        if self.temporal_decoder_units < 1:
+            raise ValueError("temporal_decoder_units must be positive.")
+        if self.n_temporal_decoder_bilstm_layers < 1:
+            raise ValueError(
+                "n_temporal_decoder_bilstm_layers must be positive."
+            )
+        if self.graph_output_units < 1:
+            raise ValueError("graph_output_units must be positive.")
         if self.branch_feature_dim < 1 or self.fusion_units < 1:
             raise ValueError("Decoder feature dimensions must be positive.")
-
-        layer_norm = (
-            lambda name: tf.keras.layers.BatchNormalization(name=name)
-            if self.use_batch_norm
-            else lambda name: tf.keras.layers.LayerNormalization(
-                axis=-1,
-                name=name,
+        if not 0.0 <= self.dropout_rate < 1.0:
+            raise ValueError("Decoder dropout must be in [0, 1).")
+        if self.graph_self_loop_bias < 0.0:
+            raise ValueError("graph_self_loop_bias must be non-negative.")
+        if not 0.0 <= self.graph_identity_mix <= 1.0:
+            raise ValueError("graph_identity_mix must be in [0, 1].")
+        if self.graph_adjacency_reg_weight < 0.0:
+            raise ValueError(
+                "graph_adjacency_reg_weight must be non-negative."
             )
-        )
+
+        def _make_norm(name: str):
+            if self.use_batch_norm:
+                return tf.keras.layers.BatchNormalization(name=name)
+            return tf.keras.layers.LayerNormalization(axis=-1, name=name)
 
         def _build_upsample_branch(prefix, filters):
             blocks = []
@@ -328,7 +342,7 @@ class DualPathSTSDecoder(tf.keras.Model):
                             activation=None,
                             name=f"{prefix}_upsample_conv_{index}",
                         ),
-                        "norm": layer_norm(name=f"{prefix}_upsample_norm_{index}"),
+                        "norm": _make_norm(name=f"{prefix}_upsample_norm_{index}"),
                         "activation": tf.keras.layers.Activation(
                             self.activation_name,
                             name=f"{prefix}_upsample_activation_{index}",
@@ -380,7 +394,7 @@ class DualPathSTSDecoder(tf.keras.Model):
             for index in range(self.n_temporal_decoder_bilstm_layers)
         ]
         self.temporal_bilstm_norms = [
-            layer_norm(name=f"temporal_decoder_norm_{index}")
+            _make_norm(name=f"temporal_decoder_norm_{index}")
             for index in range(self.n_temporal_decoder_bilstm_layers)
         ]
         self.temporal_bilstm_dropouts = [
@@ -559,7 +573,11 @@ class DualPathSTSDecoder(tf.keras.Model):
         sequence = upsample(sequence)
         residual = sequence
         sequence = conv(sequence)
-        sequence = norm(sequence + residual)
+        sequence = sequence + residual
+        if isinstance(norm, tf.keras.layers.BatchNormalization):
+            sequence = norm(sequence, training=training)
+        else:
+            sequence = norm(sequence)
         sequence = activation(sequence)
         return dropout(sequence, training=training)
 
@@ -588,7 +606,10 @@ class DualPathSTSDecoder(tf.keras.Model):
             self.temporal_bilstm_dropouts,
         ):
             sequence = bilstm(sequence, training=training)
-            sequence = norm(sequence)
+            if isinstance(norm, tf.keras.layers.BatchNormalization):
+                sequence = norm(sequence, training=training)
+            else:
+                sequence = norm(sequence)
             sequence = dropout(sequence, training=training)
         return self.temporal_feature_projection(sequence)
 
