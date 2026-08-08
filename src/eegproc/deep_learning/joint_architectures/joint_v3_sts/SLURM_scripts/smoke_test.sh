@@ -246,7 +246,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --n-bands 3 \
     --out-dir runs/smoke/alternating_sts_optimizer/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
-    --max-folds 1 \
+    --max-folds 2 \
     --n-jobs 2 \
     --cpus-per-worker 4 \
     --outer-verbose 2 \
