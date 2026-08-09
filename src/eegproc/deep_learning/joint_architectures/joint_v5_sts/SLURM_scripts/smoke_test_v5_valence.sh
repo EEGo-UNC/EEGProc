@@ -69,7 +69,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
     --seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
-    --window-sec 4.0 \
+    --window-sec 1.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --no-class-weight \
