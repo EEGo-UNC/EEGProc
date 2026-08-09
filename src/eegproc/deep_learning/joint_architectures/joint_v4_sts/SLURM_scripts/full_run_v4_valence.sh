@@ -168,7 +168,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --mldg-inner-learning-rate 0.0001 \
     --mldg-meta-test-weight 1.0 \
     --mldg-meta-train-subjects 6 \
-    --mldg-meta-test-subjects 2 \
+    --mldg-meta-test-subjects 6 \
     --mldg-samples-per-subject 1 \
     --mldg-seed 42 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
@@ -190,7 +190,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --window-normalization global_rms \
     --no-class-weight \
     --selection-level trial \
-    --selection-metric accuracy \
+    --selection-metric balanced_accuracy \
     --decision-thresholds 0.5 \
     --threshold-selection-level trial \
     --threshold-selection-metric accuracy \
@@ -199,7 +199,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --final-epoch-strategy median \
     --batch-size "$BATCH_SIZE" \
     --hyperparameters-json '{
-        "epochs": [100],
+        "epochs": [200],
         "optimizer": ["adamw"],
         "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
@@ -218,7 +218,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "bilstm_dropout": [0.3],
         "bilstm_emb_dim": [64],
 
-        "use_vae": [false, true],
+        "use_vae": [false],
         "vae_loss_weight": [0.1],
         "vae_beta": [0.05],
         "vae_learning_rate": [0.0001],
@@ -232,6 +232,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "classification_hidden_units": [64],
         "classification_dropout": [0.3],
         "activation": ["relu"],
-        "focal_gamma": [1.0],
+        "focal_gamma": [1.5],
         "focal_alpha": null
     }'
