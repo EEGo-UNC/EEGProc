@@ -28,7 +28,7 @@ fi
 
 # Trial mode has only 414 DREAMER samples, so use a smaller batch.
 if [[ "$CLASSIFICATION_LEVEL" == "trial" ]]; then
-    BATCH_SIZE=16
+    BATCH_SIZE=8
 else
     BATCH_SIZE=64
 fi
@@ -202,7 +202,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --final-epoch-strategy median \
     --batch-size "$BATCH_SIZE" \
     --hyperparameters-json '{
-        "epochs": [150],
+        "epochs": [100],
         "optimizer": ["adamw"],
         "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
