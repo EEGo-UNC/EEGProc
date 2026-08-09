@@ -72,7 +72,7 @@ try:
     )
     from ...unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder
     from ...unsupervised.Convolutions.CNN2D import CNN2DDecoder, CNN2DEncoder
-    from ...unsupervised.Convolutions.GCN import GCNDecoder, GCNEncoder
+    from ...unsupervised.GNN.GCN import GCNDecoder, GCNEncoder
 except ImportError:
     SRC_ROOT = Path(__file__).resolve().parents[3]
     if str(SRC_ROOT) not in sys.path:
@@ -98,7 +98,7 @@ except ImportError:
         CNN2DDecoder,
         CNN2DEncoder,
     )
-    from eegproc.deep_learning.unsupervised.Convolutions.GCN import (
+    from eegproc.deep_learning.unsupervised.GNN.GCN import (
         GCNDecoder,
         GCNEncoder,
     )

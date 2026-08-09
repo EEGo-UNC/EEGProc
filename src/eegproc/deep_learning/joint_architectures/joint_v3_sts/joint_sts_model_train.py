@@ -25,13 +25,26 @@ import sys
 import numpy as np
 import tensorflow as tf
 
-from .joint_sts_cli import (
-    _json_default,
-    _validate_args,
-    _write_csv,
-    _write_json,
-    parse_args,
-)
+try:
+    from .joint_sts_cli import (
+        _json_default,
+        _validate_args,
+        _write_csv,
+        _write_json,
+        parse_args,
+    )
+except ImportError:
+    # Preserve the direct-execution behavior used by the rest of this module.
+    CURRENT_DIR = Path(__file__).resolve().parent
+    if str(CURRENT_DIR) not in sys.path:
+        sys.path.insert(0, str(CURRENT_DIR))
+    from joint_sts_cli import (
+        _json_default,
+        _validate_args,
+        _write_csv,
+        _write_json,
+        parse_args,
+    )
 
 try:
     from .joint_sts_model import JointSTSModel, build_joint_sts_model
@@ -65,7 +78,6 @@ try:
             MetaLearningSubjectSequence,
             PredictionDiagnostics,
             fixed_loso_cv,
-            lnskto_cv,
             loso_cv,
         )
     except ImportError:
@@ -73,7 +85,6 @@ try:
             MetaLearningSubjectSequence,
             PredictionDiagnostics,
             fixed_loso_cv,
-            lnskto_cv,
             loso_cv,
         )
 except ImportError:
@@ -681,6 +692,27 @@ def _model_hparameter_keys() -> set[str]:
     }
 
 
+def _load_lnskto_cv():
+    """Load the optional LNSKTO implementation only when it is requested.
+
+    The current cross_val.py used by the LOSO pipeline may be LOSO-only.
+    Keeping this import lazy prevents a missing legacy LNSKTO helper from
+    breaking ordinary LOSO training at module-import time.
+    """
+    try:
+        from ...cross_val import lnskto_cv as function
+    except ImportError:
+        try:
+            from eegproc.deep_learning.cross_val import lnskto_cv as function
+        except ImportError as exc:
+            raise RuntimeError(
+                "cv_strategy='lnskto' was requested, but this cross_val.py "
+                "does not define lnskto_cv. Restore the LNSKTO implementation "
+                "or use --cv-strategy loso."
+            ) from exc
+    return function
+
+
 def train_joint_sts_model(
     feature_array: np.ndarray | None = None,
     label_array: np.ndarray | None = None,
@@ -1192,7 +1224,8 @@ def train_joint_sts_model(
             mldg_seed=config.mldg_seed,
         )
     elif config.cv_strategy == "lnskto":
-        cv_results = lnskto_cv(
+        lnskto_cv_function = _load_lnskto_cv()
+        cv_results = lnskto_cv_function(
             **common_cv_kwargs,
             n_subjects=config.lnskto_subjects,
             k_trials=config.lnskto_trials,

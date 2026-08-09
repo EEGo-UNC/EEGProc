@@ -2,30 +2,43 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 from ..BaseEncoder import BaseEncoder
-from ..GraphConv import GraphConv
+from .GraphConv import GraphConv
 from ..utils import _product
 
 
 @tf.keras.utils.register_keras_serializable(package="eegproc")
-class GCNEncoder(BaseEncoder):
-    """Residual, node-preserving GCN encoder for EEG sequence data.
+class BandSeparatedGCNEncoder(BaseEncoder):
+    """Band-separated residual GCN encoder for EEG sequence data.
 
-    The input is a sequence of flattened channel-band vectors with shape
-    ``(batch, timesteps, n_channels * n_bands)``. At each timestep, the vector
-    is reshaped to ``(n_channels, n_bands)`` so that electrodes are graph nodes
-    and frequency bands are node features. A single electrode adjacency is
-    shared across theta, alpha, beta, and gamma; the feature projection can
-    subsequently learn interactions among those four band features.
+    Input shape:
+        (batch, timesteps, n_channels * n_bands)
 
-    Unlike a global-average graph readout, this encoder retains every node's
-    representation by concatenating the node embeddings in the fixed electrode
-    order before temporal pooling. Residual graph blocks provide a node-local
-    path around adjacency mixing, which reduces graph over-smoothing and keeps
-    electrode-specific information available to the latent representation.
+    The flattened feature axis is interpreted in channel-major order:
+        [ch0_band0, ch0_band1, ..., ch1_band0, ch1_band1, ...]
 
-    The public output interface remains
-    ``(batch, ceil(timesteps / t_down), emb_dim)`` so that the encoder remains
-    compatible with the existing joint VAE/VC architecture and BiLSTM head.
+    At each timestep, the input is reshaped to:
+        (batch, timesteps, n_channels, n_bands)
+
+    Each frequency band is then processed by its own independent GCN stack:
+
+        band_0 -> GCN stack 0
+        band_1 -> GCN stack 1
+        ...
+        band_k -> GCN stack k
+
+    Therefore, every band has its own:
+      * GraphConv weights
+      * learnable electrode adjacency matrices
+      * normalization layers
+      * residual projections
+
+    Bands never mix inside the graph convolutions. Their node-preserving graph
+    outputs are concatenated only after all per-band GCN stacks have completed.
+
+    The output remains:
+        (batch, ceil(timesteps / t_down), emb_dim)
+
+    so it remains compatible with downstream BiLSTM sequence models.
     """
 
     def __init__(
@@ -33,7 +46,7 @@ class GCNEncoder(BaseEncoder):
         timesteps: int,
         t_down: int,
         n_channels: int = 14,
-        n_bands: int = 4,
+        n_bands: int = 3,
         gcn_units: tuple[int, ...] = (64, 32),
         temporal_pool_sizes: tuple[int, ...] | None = None,
         emb_dim: int = 128,
@@ -43,7 +56,7 @@ class GCNEncoder(BaseEncoder):
         graph_self_loop_bias: float = 2.0,
         graph_identity_mix: float = 0.0,
         graph_adjacency_reg_weight: float = 1e-4,
-        name: str = "encoder_gcn",
+        name: str = "encoder_band_separated_gcn",
         **kwargs,
     ):
         super().__init__(
@@ -82,90 +95,115 @@ class GCNEncoder(BaseEncoder):
                 f"got {graph_adjacency_reg_weight}."
             )
 
-        self.n_channels = n_channels
-        self.n_bands = n_bands
-        self.gcn_units = tuple(gcn_units)
+        self.n_channels = int(n_channels)
+        self.n_bands = int(n_bands)
+        self.gcn_units = tuple(int(units) for units in gcn_units)
         self.temporal_pool_sizes = self._normalize_temporal_pool_sizes(
             temporal_pool_sizes,
             self.t_down,
         )
-        self.dropout_rate = dropout
+        self.dropout_rate = float(dropout)
         self.activation = activation
-        self.use_batch_norm = use_batch_norm
+        self.use_batch_norm = bool(use_batch_norm)
         self.graph_self_loop_bias = float(graph_self_loop_bias)
         self.graph_identity_mix = float(graph_identity_mix)
         self.graph_adjacency_reg_weight = float(graph_adjacency_reg_weight)
 
         self.to_nodes = layers.Reshape(
             (timesteps, n_channels, n_bands),
-            name="to_nodes",
+            name="to_channel_band_grid",
         )
 
-        self.gcn_layers = []
-        self.bn_layers = []
-        self.residual_projections = []
-        self.activation_layers = []
-        self.dropout_layers = []
+        # One completely independent graph stack per frequency band.
+        self.band_gcn_layers: list[list[GraphConv]] = []
+        self.band_bn_layers: list[list[layers.Layer | None]] = []
+        self.band_residual_projections: list[list[layers.Layer | None]] = []
+        self.band_activation_layers: list[list[layers.Layer]] = []
+        self.band_dropout_layers: list[list[layers.Layer]] = []
 
-        input_units = n_bands
-        for i, units in enumerate(self.gcn_units):
-            # Keep the graph transform linear here. Activation is applied after
-            # the residual addition so the skip path is not distorted first.
-            # GraphConv natively accepts (..., n_nodes, features), so the
-            # complete (batch, time, nodes, features) tensor is processed in
-            # one vectorized call. TimeDistributed would invoke the layer once
-            # per timestep, repeating adjacency regularization and adding major
-            # tracing/runtime overhead.
-            self.gcn_layers.append(
-                GraphConv(
-                    units=units,
-                    n_nodes=n_channels,
-                    activation=None,
-                    self_loop_bias=self.graph_self_loop_bias,
-                    identity_mix=self.graph_identity_mix,
-                    adjacency_reg_weight=self.graph_adjacency_reg_weight,
-                    name=f"gcn_{i}",
+        for band_index in range(self.n_bands):
+            gcn_layers = []
+            bn_layers = []
+            residual_projections = []
+            activation_layers = []
+            dropout_layers = []
+
+            # Each band begins with exactly one scalar feature per electrode.
+            input_units = 1
+
+            for layer_index, units in enumerate(self.gcn_units):
+                prefix = f"band_{band_index}_gcn_{layer_index}"
+
+                gcn_layers.append(
+                    GraphConv(
+                        units=units,
+                        n_nodes=self.n_channels,
+                        activation=None,
+                        self_loop_bias=self.graph_self_loop_bias,
+                        identity_mix=self.graph_identity_mix,
+                        adjacency_reg_weight=self.graph_adjacency_reg_weight,
+                        name=prefix,
+                    )
                 )
-            )
 
-            # A direct BatchNormalization call supports rank-4 tensors and
-            # normalizes the graph feature axis over batch, time, and nodes.
-            self.bn_layers.append(
-                layers.BatchNormalization(name=f"gcn_bn_{i}")
-                if use_batch_norm
-                else None
-            )
-
-            self.residual_projections.append(
-                layers.Dense(
-                    units,
-                    use_bias=False,
-                    name=f"gcn_residual_projection_{i}",
+                bn_layers.append(
+                    layers.BatchNormalization(
+                        name=f"band_{band_index}_gcn_bn_{layer_index}"
+                    )
+                    if self.use_batch_norm
+                    else None
                 )
-                if input_units != units
-                else None
-            )
 
-            self.activation_layers.append(
-                layers.Activation(activation, name=f"gcn_activation_{i}")
-            )
-
-            # Drops graph feature maps consistently across time and nodes,
-            # rather than independently corrupting individual node values.
-            self.dropout_layers.append(
-                layers.SpatialDropout2D(
-                    dropout,
-                    name=f"gcn_spatial_do_{i}",
+                residual_projections.append(
+                    layers.Dense(
+                        units,
+                        use_bias=False,
+                        name=(
+                            f"band_{band_index}_gcn_residual_projection_"
+                            f"{layer_index}"
+                        ),
+                    )
+                    if input_units != units
+                    else None
                 )
+
+                activation_layers.append(
+                    layers.Activation(
+                        self.activation,
+                        name=f"band_{band_index}_gcn_activation_{layer_index}",
+                    )
+                )
+
+                dropout_layers.append(
+                    layers.SpatialDropout2D(
+                        self.dropout_rate,
+                        name=f"band_{band_index}_gcn_spatial_do_{layer_index}",
+                    )
+                )
+
+                input_units = units
+
+            self.band_gcn_layers.append(gcn_layers)
+            self.band_bn_layers.append(bn_layers)
+            self.band_residual_projections.append(residual_projections)
+            self.band_activation_layers.append(activation_layers)
+            self.band_dropout_layers.append(dropout_layers)
+
+        # Preserve electrode identity within every band, then concatenate bands.
+        self.band_node_readouts = [
+            layers.Reshape(
+                (
+                    timesteps,
+                    self.n_channels * self.gcn_units[-1],
+                ),
+                name=f"band_{band_index}_node_preserving_readout",
             )
+            for band_index in range(self.n_bands)
+        ]
 
-            input_units = units
-
-        # Fixed electrode order is meaningful for EEG, so concatenating nodes
-        # is preferable to averaging them into a permutation-invariant vector.
-        self.node_readout = layers.Reshape(
-            (timesteps, n_channels * self.gcn_units[-1]),
-            name="node_preserving_readout",
+        self.band_fusion = layers.Concatenate(
+            axis=-1,
+            name="band_gcn_feature_concatenation",
         )
 
         self.temporal_pool_layers = [
@@ -179,18 +217,19 @@ class GCNEncoder(BaseEncoder):
 
         self.temporal_dropout_layers = [
             layers.Dropout(
-                dropout,
+                self.dropout_rate,
                 name=f"enc_tdo_{i}",
             )
             for i, _ in enumerate(self.temporal_pool_sizes)
         ]
 
+        # Only after band-specific graph processing do we mix band features.
         self.seq_emb = layers.Conv1D(
-            emb_dim,
+            self.emb_dim,
             kernel_size=1,
             padding="same",
             activation=None,
-            name="seq_emb",
+            name="band_fused_seq_emb",
         )
 
     @staticmethod
@@ -225,30 +264,77 @@ class GCNEncoder(BaseEncoder):
         """Flattened number of channel-band features per timestep."""
         return self.n_channels * self.n_bands
 
-    def call(self, inputs, training: bool = False):
-        """Encode EEG while retaining electrode-specific graph features."""
-        x = self.to_nodes(inputs)
+    def _encode_one_band(
+        self,
+        x: tf.Tensor,
+        band_index: int,
+        training: bool,
+    ) -> tf.Tensor:
+        """Run one frequency band through only its own graph stack."""
+
+        # x is (batch, time, channels, bands).
+        # Preserve a feature axis so GraphConv receives:
+        # (batch, time, channels, 1).
+        band_x = x[..., band_index : band_index + 1]
 
         for gcn, bn, residual_projection, activation, dropout in zip(
-            self.gcn_layers,
-            self.bn_layers,
-            self.residual_projections,
-            self.activation_layers,
-            self.dropout_layers,
+            self.band_gcn_layers[band_index],
+            self.band_bn_layers[band_index],
+            self.band_residual_projections[band_index],
+            self.band_activation_layers[band_index],
+            self.band_dropout_layers[band_index],
         ):
-            residual = x
-            x = gcn(x, training=training)
+            residual = band_x
+            band_x = gcn(band_x, training=training)
 
             if bn is not None:
-                x = bn(x, training=training)
+                band_x = bn(band_x, training=training)
 
             if residual_projection is not None:
                 residual = residual_projection(residual)
 
-            x = activation(x + residual)
-            x = dropout(x, training=training)
+            band_x = activation(band_x + residual)
+            band_x = dropout(band_x, training=training)
 
-        x = self.node_readout(x)
+        return self.band_node_readouts[band_index](band_x)
+
+    def call(self, inputs, training: bool = False):
+        """Encode each EEG frequency band with an independent electrode GCN."""
+
+        inputs = tf.convert_to_tensor(inputs)
+
+        if inputs.shape.rank != 3:
+            raise ValueError(
+                "BandSeparatedGCNEncoder expects "
+                "(batch, timesteps, n_channels * n_bands); "
+                f"got {inputs.shape}."
+            )
+
+        expected_features = self.n_channels * self.n_bands
+        static_features = inputs.shape[-1]
+        if static_features is not None and int(static_features) != expected_features:
+            raise ValueError(
+                "Input feature dimension does not match "
+                f"n_channels * n_bands: {static_features} != "
+                f"{self.n_channels} * {self.n_bands}."
+            )
+
+        x = self.to_nodes(inputs)
+
+        band_sequences = [
+            self._encode_one_band(
+                x=x,
+                band_index=band_index,
+                training=training,
+            )
+            for band_index in range(self.n_bands)
+        ]
+
+        x = (
+            band_sequences[0]
+            if self.n_bands == 1
+            else self.band_fusion(band_sequences)
+        )
 
         for pool, dropout in zip(
             self.temporal_pool_layers,
@@ -259,15 +345,37 @@ class GCNEncoder(BaseEncoder):
 
         return self.seq_emb(x)
 
-    def get_adjacency_matrices(self) -> dict[str, tf.Tensor]:
-        """Return normalized electrode adjacency matrices for diagnostics."""
+    def get_adjacency_matrices(self) -> dict[str, dict[str, tf.Tensor]]:
+        """Return one set of learned adjacency matrices per frequency band."""
+        output: dict[str, dict[str, tf.Tensor]] = {}
+
+        for band_index, graph_stack in enumerate(self.band_gcn_layers):
+            output[f"band_{band_index}"] = {
+                graph_layer.name: graph_layer.normalized_adjacency()
+                for graph_layer in graph_stack
+            }
+
+        return output
+
+    def get_band_features(
+        self,
+        inputs,
+        training: bool = False,
+    ) -> dict[str, tf.Tensor]:
+        """Expose per-band post-GCN node-preserving sequences for diagnostics."""
+        x = self.to_nodes(tf.convert_to_tensor(inputs))
+
         return {
-            graph_layer.name: graph_layer.normalized_adjacency()
-            for graph_layer in self.gcn_layers
+            f"band_{band_index}": self._encode_one_band(
+                x=x,
+                band_index=band_index,
+                training=training,
+            )
+            for band_index in range(self.n_bands)
         }
 
     def get_config(self) -> dict:
-        """Return serializable configuration for the encoder."""
+        """Return serializable configuration for the band-separated encoder."""
         config = super().get_config()
         config.update(
             {
@@ -280,10 +388,17 @@ class GCNEncoder(BaseEncoder):
                 "use_batch_norm": self.use_batch_norm,
                 "graph_self_loop_bias": self.graph_self_loop_bias,
                 "graph_identity_mix": self.graph_identity_mix,
-                "graph_adjacency_reg_weight": self.graph_adjacency_reg_weight,
+                "graph_adjacency_reg_weight": (
+                    self.graph_adjacency_reg_weight
+                ),
             }
         )
         return config
+
+
+# Backward-compatible alias for callers that import GCNEncoder.
+# New code should import BandSeparatedGCNEncoder explicitly.
+GCNEncoder = BandSeparatedGCNEncoder
 
 
 @tf.keras.utils.register_keras_serializable(package="eegproc")

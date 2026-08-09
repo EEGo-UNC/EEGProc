@@ -52,3 +52,5 @@
 - 8/6/2026
     - Balanced accuracy model achieves 57% bal_acc but acc is sub-50.
     - Attempting to change alternating subjects backpropagation to Meta-Learning Domain Generalization
+- 8/8/2026
+    - Feature fusion is a difficult path to go down. Depends on too much dimensionality and ablative testing. Best to have a spatio spectral -> temporal -> classifier setup. This produces a contiguous latent space, making it easier for the final heads.

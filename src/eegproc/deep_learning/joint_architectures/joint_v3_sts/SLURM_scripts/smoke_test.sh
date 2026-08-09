@@ -246,7 +246,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
     --n-bands 3 \
     --out-dir runs/smoke/alternating_sts_optimizer/DREAMER/arousal \
     --run-name dreamer_arousal_joint_sts \
-    --max-folds 1 \
+    --max-folds 2 \
     --n-jobs 2 \
     --cpus-per-worker 4 \
     --outer-verbose 2 \
@@ -297,13 +297,13 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
         ],
 
         "use_subject_adversarial": [
-            true
+            false
         ],
         "subject_adversarial_weight": [
             2.0
         ],
         "subject_loss_weight": [
-            0.8
+            0.0
         ],
         "subject_hidden_units": [
             128
@@ -332,7 +332,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v3_sts.joint_sts_m
             1.0
         ],
         "vae_loss_weight": [
-            0.3
+            0.001
         ],
         "vae_beta": [
             0.05

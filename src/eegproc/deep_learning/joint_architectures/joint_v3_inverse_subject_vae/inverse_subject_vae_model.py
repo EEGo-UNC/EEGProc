@@ -34,7 +34,7 @@ try:
         DualPathSTSDecoder,
         build_spatiotemporal_bilstm_encoder,
     )
-    from ...unsupervised.Convolutions.GCN import GCNEncoder
+    from ...unsupervised.GNN.GCN import GCNEncoder
     from ...unsupervised.VariationalAutoencoderLoss import (
         GradientReversal,
         VariationalAutoencoderLoss,
@@ -45,7 +45,7 @@ except ImportError:
         DualPathSTSDecoder,
         build_spatiotemporal_bilstm_encoder,
     )
-    from eegproc.deep_learning.unsupervised.Convolutions.GCN import GCNEncoder
+    from eegproc.deep_learning.unsupervised.GNN.GCN import GCNEncoder
     from eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss import (
         GradientReversal,
         VariationalAutoencoderLoss,
