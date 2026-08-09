@@ -72,6 +72,27 @@ def parse_args(argv=None):
     p.add_argument("--skip-no-validation-loso-before-final", action="store_true")
     p.add_argument("--hyperparameters-json", default=None)
 
+    # Intentionally test-leaky reverse-engineering mode. The held-out LOSO
+    # subject is evaluated after every epoch and selects that fold's checkpoint.
+    p.add_argument("--oracle-test-epoch-selection", action="store_true")
+    p.add_argument(
+        "--oracle-metric",
+        choices=("accuracy", "balanced_accuracy", "f1", "macro_f1"),
+        default="accuracy",
+        help="Held-out test-subject metric used to choose the oracle epoch.",
+    )
+    p.add_argument(
+        "--oracle-every",
+        type=int,
+        default=1,
+        help="Evaluate the held-out test subject every N epochs (default: 1).",
+    )
+    p.add_argument(
+        "--oracle-save-fold-weights",
+        action="store_true",
+        help="Save the oracle-selected weights for every LOSO fold.",
+    )
+
     p.add_argument("--raw-eeg-npy", default=None)
     p.add_argument("--raw-labels-npy", default=None)
     p.add_argument("--label-dimension", choices=("valence","arousal"), default="valence")
