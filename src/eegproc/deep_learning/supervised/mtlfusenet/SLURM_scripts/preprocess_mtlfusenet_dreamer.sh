@@ -32,6 +32,21 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 
+# Ensure the local package is importable from this environment.
+# Reuse the lock pattern from training scripts so concurrent jobs do not race.
+if command -v flock >/dev/null 2>&1; then
+    (
+        flock -x 9
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt
+        python -m pip install -e .
+    ) 9>"$PROJECT_DIR/.venv312_install.lock"
+else
+    python -m pip install --upgrade pip
+    python -m pip install -r requirements.txt
+    python -m pip install -e .
+fi
+
 if [[ ! -f "$CSV_PATH" ]]; then
     echo "ERROR: DREAMER CSV not found at $CSV_PATH"
     exit 1
@@ -46,6 +61,11 @@ echo "Input CSV: $CSV_PATH"
 echo "Output directory: $OUTPUT_DIR"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-1}"
 echo "Start time: $(date)"
+
+python - <<'PY'
+import eegproc
+print("Imported eegproc from:", eegproc.__file__)
+PY
 
 python -m eegproc.deep_learning.supervised.mtlfusenet.mtl_preprocess \
     --csv "$CSV_PATH" \
