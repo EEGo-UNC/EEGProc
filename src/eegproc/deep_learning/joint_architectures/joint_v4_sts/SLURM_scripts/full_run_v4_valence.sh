@@ -18,7 +18,7 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
-CLASSIFICATION_LEVEL="${CLASSIFICATION_LEVEL:-trial}"
+CLASSIFICATION_LEVEL="${CLASSIFICATION_LEVEL:-window}"
 USE_MLDG="${USE_MLDG:-true}"
 if [[ "$USE_MLDG" == "true" ]]; then
     MLDG_FLAG="--use-mldg"
