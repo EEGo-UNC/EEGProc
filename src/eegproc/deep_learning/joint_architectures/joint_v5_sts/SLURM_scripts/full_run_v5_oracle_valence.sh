@@ -62,7 +62,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
     --batch-size 4 \
     --mi-max-observations 50000 \
     --hyperparameters-json '{
-        "epochs": [150],
+        "epochs": [100],
         "optimizer": ["adamw"],
         "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
