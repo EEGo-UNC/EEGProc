@@ -53,6 +53,7 @@ PY
 
 python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_model_train \
     --classification-level window \
+    --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension valence \
@@ -73,18 +74,18 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
     --window-normalization global_rms \
     --no-class-weight \
     --selection-level trial \
-    --selection-metric accuracy \
+    --selection-metric balanced_accuracy \
     --decision-thresholds 0.5 \
     --threshold-selection-level trial \
     --threshold-selection-metric accuracy \
     --early-stopping-patience 20 \
-    --early-stopping-monitor accuracy \
+    --early-stopping-monitor val_gaccuracy \
     --early-stopping-mode max \
     --skip-no-validation-loso-before-final \
     --batch-size 2 \
     --mi-max-observations 15000 \
     --hyperparameters-json '{
-        "epochs": [100],
+        "epochs": [150],
         "optimizer": ["adamw"],
         "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
@@ -92,14 +93,14 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
         "gcn_dropout": [0.1],
         "gcn_use_batch_norm": [false],
         "spectral_gru_units": [384],
-        "spectral_gru_dropout": [0.2],
+        "spectral_gru_dropout": [0.0],
         "mi_n_neighbors": [3],
         "mi_band_reduction": ["mean"],
         "mi_max_observations": [15000],
         "classification_hidden_units": [128],
-        "classification_dropout": [0.2],
+        "classification_dropout": [0.3],
         "activation": ["relu"],
-        "focal_gamma": [1.0],
+        "focal_gamma": [0.0],
         "focal_alpha": null,
         "use_class_weight": [false]
     }'
