@@ -54,3 +54,5 @@
     - Attempting to change alternating subjects backpropagation to Meta-Learning Domain Generalization
 - 8/8/2026
     - Feature fusion is a difficult path to go down. Depends on too much dimensionality and ablative testing. Best to have a spatio spectral -> temporal -> classifier setup. This produces a contiguous latent space, making it easier for the final heads.
+- 8/9/2026
+    - MTLFuseNet claims subject-independence, but the paper lacks a significant amount of information in order to replicate. CHMFE-DAN reports a very small increase above baseline.

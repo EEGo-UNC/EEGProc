@@ -47,7 +47,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
     --out-dir runs/smoke/joint_v5_sts/DREAMER/valence/oracle \
     --run-name dreamer_valence_joint_v5_oracle_smoke \
     --max-folds 2 \
-    --n-jobs 1 \
+    --n-jobs 2 \
     --outer-verbose 0 \
     --final-verbose 0 \
     --seed 42 \
