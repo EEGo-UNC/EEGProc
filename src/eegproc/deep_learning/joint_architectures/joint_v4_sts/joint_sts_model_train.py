@@ -50,10 +50,10 @@ except ImportError:
     )
 
 try:
-    from ...cross_val import PredictionDiagnostics, fixed_loso_cv, loso_cv
+    from ...cross_val import MetaLearningSubjectSequence, PredictionDiagnostics, fixed_loso_cv, loso_cv
 except ImportError:
     from eegproc.deep_learning.cross_val import (
-        PredictionDiagnostics, fixed_loso_cv, loso_cv
+        MetaLearningSubjectSequence, PredictionDiagnostics, fixed_loso_cv, loso_cv
     )
 
 
@@ -64,6 +64,7 @@ class JointV4TrainingConfig:
     dataset: str = "dreamer"
     n_channels: int = 14
     n_bands: int = 3
+    classification_level: str = "trial"
 
     batch_size: int = 64
     cv_max_epochs: int = 100
@@ -85,11 +86,31 @@ class JointV4TrainingConfig:
     bilstm_units: int = 256
     n_bilstm_layers: int = 1
     bilstm_dropout: float = 0.30
+    bilstm_emb_dim: int = 64
     classification_hidden_units: int = 128
     classification_dropout: float = 0.30
     activation: str = "relu"
 
     focal_gamma: float = 0.0
+
+    use_vae: bool = False
+    vae_loss_weight: float = 0.1
+    vae_beta: float = 0.05
+    vae_learning_rate: float = 5e-5
+    use_subject_adversarial: bool = False
+    subject_adversarial_weight: float = 0.3
+    subject_loss_weight: float = 0.3
+    subject_hidden_units: int = 64
+    subject_dropout: float = 0.0
+
+    # Run-level MLDG switch; not part of the hyperparameter grid.
+    use_mldg: bool = False
+    mldg_inner_learning_rate: float = 1e-4
+    mldg_meta_test_weight: float = 1.0
+    mldg_meta_train_subjects: int = 6
+    mldg_meta_test_subjects: int = 2
+    mldg_samples_per_subject: int = 4
+    mldg_seed: int | None = 42
     focal_alpha: tuple[float, ...] | None = None
     use_class_weight: bool = False
 
@@ -171,6 +192,68 @@ def _flatten_grouped_trials_to_windows(features, labels, subjects, trials):
         np.repeat(trials, n_windows),
     )
 
+
+
+def _group_windows_into_trials(features, labels, subjects, trials):
+    """Group ordered windows into one fixed-size tensor per (subject, trial).
+
+    DREAMER trials have a common stimulus duration under the current
+    preprocessing, so every group should contain the same number of windows.
+    Labels inherited by the windows must also agree within each trial.
+    """
+    features = np.asarray(features, dtype=np.float32)
+    labels = _class_ids(labels)
+    subjects = np.asarray(subjects).reshape(-1)
+    trials = np.asarray(trials).reshape(-1)
+
+    keys = []
+    seen = set()
+    for subject_id, trial_id in zip(subjects.tolist(), trials.tolist()):
+        key = (subject_id, trial_id)
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    grouped_x = []
+    grouped_y = []
+    grouped_subjects = []
+    grouped_trials = []
+    window_counts = []
+
+    for subject_id, trial_id in keys:
+        indices = np.flatnonzero(
+            (subjects == subject_id) & (trials == trial_id)
+        )
+        if indices.size == 0:
+            continue
+        trial_labels = labels[indices]
+        if np.any(trial_labels != trial_labels[0]):
+            raise ValueError(
+                f"Inconsistent labels inside subject={subject_id}, "
+                f"trial={trial_id}: {np.unique(trial_labels).tolist()}."
+            )
+        grouped_x.append(features[indices])
+        grouped_y.append(int(trial_labels[0]))
+        grouped_subjects.append(subject_id)
+        grouped_trials.append(trial_id)
+        window_counts.append(int(indices.size))
+
+    if not grouped_x:
+        raise ValueError("No trial groups were created.")
+    unique_counts = sorted(set(window_counts))
+    if len(unique_counts) != 1:
+        raise ValueError(
+            "Trial mode currently requires an equal number of windows per "
+            f"trial; observed counts={unique_counts}. Use fixed DREAMER "
+            "windowing or window mode."
+        )
+
+    return (
+        np.stack(grouped_x, axis=0).astype(np.float32),
+        np.asarray(grouped_y, dtype=np.int64),
+        np.asarray(grouped_subjects),
+        np.asarray(grouped_trials),
+    )
 
 def _normalize_each_window(features, mode="global_rms", epsilon=1e-6):
     x = np.asarray(features, dtype=np.float32)
@@ -330,8 +413,12 @@ def train_joint_v4_sts(
     y = np.asarray(label_array)
     subjects = np.asarray(subject_id_array).reshape(-1)
     trials = np.asarray(trial_id_array).reshape(-1)
-    if X.ndim != 3:
-        raise ValueError(f"Expected (windows,timesteps,features), got {X.shape}.")
+    expected_rank = 3 if config.classification_level == "window" else 4
+    if X.ndim != expected_rank:
+        raise ValueError(
+            f"{config.classification_level} mode expects rank {expected_rank}, "
+            f"got {X.shape}."
+        )
     if X.shape[-1] != config.n_channels * config.n_bands:
         raise ValueError(
             f"features={X.shape[-1]} but {config.n_channels}*{config.n_bands}="
@@ -340,10 +427,10 @@ def train_joint_v4_sts(
 
     write_json(run_dir / "training_config.json", asdict(config))
     logger.info("Architecture: band-separated GCN -> BiLSTM -> classifier")
-    logger.info("Target: DREAMER valence")
+    logger.info("Classification level: %s", config.classification_level)
     logger.info("Input: %s", X.shape)
     logger.info("Bands have independent GCN stacks and adjacency matrices.")
-    logger.info("No VAE, decoder, feature-fusion posterior, subject adversary, or SupCon.")
+    logger.info("VAE enabled: %s | subject adversarial: %s | MLDG: %s", config.use_vae, config.use_subject_adversarial, config.use_mldg)
 
     allowed = {
         "learning_rate", "classification_learning_rate", "optimizer", "optimizer_name",
@@ -351,8 +438,11 @@ def train_joint_v4_sts(
         "spectral_emb_dim", "gcn_dropout", "gcn_activation", "gcn_use_batch_norm",
         "graph_self_loop_bias", "graph_identity_mix", "graph_adjacency_reg_weight",
         "bilstm_units", "bilstm_layers", "n_bilstm_layers", "bilstm_dropout",
-        "classification_hidden_units", "classification_dropout", "activation",
-        "focal_gamma", "focal_alpha",
+        "bilstm_emb_dim", "classification_hidden_units", "classification_dropout", "activation",
+        "focal_gamma", "focal_alpha", "classification_level",
+        "use_vae", "vae_loss_weight", "vae_beta", "vae_learning_rate",
+        "use_subject_adversarial", "subject_adversarial_weight",
+        "subject_loss_weight", "subject_hidden_units", "subject_dropout",
     }
 
     def builder(**h):
@@ -361,6 +451,7 @@ def train_joint_v4_sts(
             raise ValueError(f"Unknown v4 hyperparameters: {sorted(unknown)}")
         return build_joint_sts_model(
             input_shape=tuple(X.shape[1:]),
+            classification_level=config.classification_level,
             n_classes=_n_classes(y),
             n_channels=config.n_channels,
             n_bands=config.n_bands,
@@ -379,6 +470,7 @@ def train_joint_v4_sts(
             bilstm_units=int(h.get("bilstm_units", config.bilstm_units)),
             n_bilstm_layers=int(h.get("bilstm_layers", h.get("n_bilstm_layers", config.n_bilstm_layers))),
             bilstm_dropout=float(h.get("bilstm_dropout", config.bilstm_dropout)),
+            bilstm_emb_dim=int(h.get("bilstm_emb_dim", config.bilstm_emb_dim)),
             classification_hidden_units=int(
                 h.get("classification_hidden_units", config.classification_hidden_units)
             ),
@@ -388,6 +480,18 @@ def train_joint_v4_sts(
             activation=str(h.get("activation", config.activation)),
             focal_gamma=float(h.get("focal_gamma", config.focal_gamma)),
             focal_alpha=h.get("focal_alpha", config.focal_alpha),
+            use_vae=bool(h.get("use_vae", config.use_vae)),
+            vae_loss_weight=float(h.get("vae_loss_weight", config.vae_loss_weight)),
+            vae_beta=float(h.get("vae_beta", config.vae_beta)),
+            vae_learning_rate=float(h.get("vae_learning_rate", config.vae_learning_rate)),
+            use_subject_adversarial=bool(h.get("use_subject_adversarial", config.use_subject_adversarial)),
+            subject_adversarial_weight=float(h.get("subject_adversarial_weight", config.subject_adversarial_weight)),
+            subject_loss_weight=float(h.get("subject_loss_weight", config.subject_loss_weight)),
+            subject_hidden_units=int(h.get("subject_hidden_units", config.subject_hidden_units)),
+            subject_dropout=float(h.get("subject_dropout", config.subject_dropout)),
+            use_mldg=bool(config.use_mldg),
+            mldg_inner_learning_rate=float(config.mldg_inner_learning_rate),
+            mldg_meta_test_weight=float(config.mldg_meta_test_weight),
             optimizer_name=str(h.get("optimizer", h.get("optimizer_name", config.optimizer_name))),
             classification_learning_rate=float(
                 h.get("learning_rate", h.get(
@@ -413,7 +517,7 @@ def train_joint_v4_sts(
         batch_size=config.batch_size,
         hyperparameters=config.hyperparameters,
         evaluation_level="trial",
-        selection_level=config.selection_level,
+        selection_level="trial",
         selection_metric=config.selection_metric,
         metrics=(
             "accuracy","f1","precision","recall",
@@ -446,6 +550,11 @@ def train_joint_v4_sts(
         n_jobs=config.n_jobs,
         cpus_per_worker=config.cpus_per_worker,
         max_folds=config.max_folds,
+        use_mldg=config.use_mldg,
+        mldg_meta_train_subjects=config.mldg_meta_train_subjects,
+        mldg_meta_test_subjects=config.mldg_meta_test_subjects,
+        mldg_samples_per_subject=config.mldg_samples_per_subject,
+        mldg_seed=config.mldg_seed,
     )
 
     write_json(run_dir / "loso_cv_results.json", cv)
@@ -485,7 +594,7 @@ def train_joint_v4_sts(
             n_epochs=final_epochs,
             batch_size=final_batch_size,
             evaluation_level="trial",
-            selection_level=config.selection_level,
+            selection_level="trial",
             selection_metric="balanced_accuracy",
             maximize_metric=True,
             metrics=(
@@ -506,6 +615,11 @@ def train_joint_v4_sts(
             n_jobs=config.n_jobs,
             cpus_per_worker=config.cpus_per_worker,
             max_folds=config.max_folds,
+            use_mldg=config.use_mldg,
+            mldg_meta_train_subjects=config.mldg_meta_train_subjects,
+            mldg_meta_test_subjects=config.mldg_meta_test_subjects,
+            mldg_samples_per_subject=config.mldg_samples_per_subject,
+            mldg_seed=config.mldg_seed,
         )
         write_json(run_dir / "no_validation_loso_results.json", fixed)
 
@@ -524,17 +638,42 @@ def train_joint_v4_sts(
             for c, count in zip(classes, counts)
         }
 
-    fit_kwargs = dict(
-        epochs=final_epochs,
-        batch_size=final_batch_size,
-        verbose=config.final_verbose,
-        callbacks=callbacks,
-    )
-    if class_weight is not None:
-        fit_kwargs["class_weight"] = class_weight
-    history = model.fit(X, y, **fit_kwargs)
+    if config.use_mldg:
+        final_sequence = MetaLearningSubjectSequence(
+            X=X,
+            y=y,
+            subject_ids=subjects,
+            model=model,
+            meta_train_subjects=config.mldg_meta_train_subjects,
+            meta_test_subjects=config.mldg_meta_test_subjects,
+            samples_per_subject=config.mldg_samples_per_subject,
+            class_weight=class_weight,
+            seed=config.mldg_seed,
+        )
+        history = model.fit(
+            final_sequence,
+            epochs=final_epochs,
+            verbose=config.final_verbose,
+            callbacks=callbacks,
+        )
+    else:
+        fit_inputs = (
+            model.prepare_fit_inputs(X, subjects)
+            if getattr(model, "requires_subject_ids", False)
+            else X
+        )
+        fit_kwargs = dict(
+            epochs=final_epochs,
+            batch_size=final_batch_size,
+            verbose=config.final_verbose,
+            callbacks=callbacks,
+        )
+        if class_weight is not None:
+            fit_kwargs["class_weight"] = class_weight
+        history = model.fit(fit_inputs, y, **fit_kwargs)
 
-    final_eval = model.evaluate(X, y, verbose=0, return_dict=True)
+    eval_inputs = model.prepare_fit_inputs(X, subjects) if getattr(model, "requires_subject_ids", False) else X
+    final_eval = model.evaluate(eval_inputs, y, verbose=0, return_dict=True)
     if config.save_weights:
         model.save_weights(run_dir / "final_model.weights.h5")
     if config.save_full_model:
@@ -545,7 +684,10 @@ def train_joint_v4_sts(
     summary = {
         "run_dir": str(run_dir),
         "architecture": "band_separated_gcn_then_bilstm_then_classifier",
-        "target": "valence",
+        "classification_level": config.classification_level,
+        "use_vae": config.use_vae,
+        "use_subject_adversarial": config.use_subject_adversarial,
+        "use_mldg": config.use_mldg,
         "selected_final_config": selected,
         "selected_final_epochs": final_epochs,
         "selected_final_batch_size": final_batch_size,
@@ -573,6 +715,7 @@ def main(argv=None):
         dataset=args.dataset,
         n_channels=args.n_channels,
         n_bands=args.n_bands,
+        classification_level=args.classification_level,
         batch_size=args.batch_size,
         cv_max_epochs=args.epochs,
         optimizer_name=args.optimizer,
@@ -591,10 +734,27 @@ def main(argv=None):
         bilstm_units=args.bilstm_units,
         n_bilstm_layers=args.bilstm_layers,
         bilstm_dropout=args.bilstm_dropout,
+        bilstm_emb_dim=args.bilstm_emb_dim,
         classification_hidden_units=args.classification_hidden_units,
         classification_dropout=args.classification_dropout,
         activation=args.activation,
         focal_gamma=args.focal_gamma,
+        use_vae=args.use_vae,
+        vae_loss_weight=args.vae_loss_weight,
+        vae_beta=args.vae_beta,
+        vae_learning_rate=args.vae_learning_rate,
+        use_subject_adversarial=args.use_subject_adversarial,
+        subject_adversarial_weight=args.subject_adversarial_weight,
+        subject_loss_weight=args.subject_loss_weight,
+        subject_hidden_units=args.subject_hidden_units,
+        subject_dropout=args.subject_dropout,
+        use_mldg=args.use_mldg,
+        mldg_inner_learning_rate=args.mldg_inner_learning_rate,
+        mldg_meta_test_weight=args.mldg_meta_test_weight,
+        mldg_meta_train_subjects=args.mldg_meta_train_subjects,
+        mldg_meta_test_subjects=args.mldg_meta_test_subjects,
+        mldg_samples_per_subject=args.mldg_samples_per_subject,
+        mldg_seed=args.mldg_seed,
         focal_alpha=None if args.focal_alpha is None else tuple(args.focal_alpha),
         use_class_weight=args.use_class_weight,
         selection_level=args.selection_level,
@@ -648,6 +808,11 @@ def main(argv=None):
         label_threshold_mode=args.label_threshold_mode,
         dataset=dataset_config,
     )
+
+    if config.classification_level == "trial":
+        X, y, subjects, trials = _group_windows_into_trials(
+            X, y, subjects, trials
+        )
 
     train_joint_v4_sts(X, y, subjects, trials, config)
     return 0

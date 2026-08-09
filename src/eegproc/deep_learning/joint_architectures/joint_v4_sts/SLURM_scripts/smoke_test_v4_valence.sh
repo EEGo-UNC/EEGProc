@@ -19,6 +19,12 @@ module load cudnn/9.11.0
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
 CLASSIFICATION_LEVEL="${CLASSIFICATION_LEVEL:-trial}"
+USE_MLDG="${USE_MLDG:-false}"
+if [[ "$USE_MLDG" == "true" ]]; then
+    MLDG_FLAG="--use-mldg"
+else
+    MLDG_FLAG="--no-mldg"
+fi
 
 if [[ "$CLASSIFICATION_LEVEL" == "trial" ]]; then
     BATCH_SIZE=8
@@ -109,10 +115,22 @@ from src.eegproc.deep_learning.joint_architectures.joint_v4_sts import joint_sts
 print("TensorFlow:", tf.__version__)
 print("V4 module:", joint_sts_model.__file__)
 print("Builder:", inspect.signature(joint_sts_model.build_joint_sts_model))
-if "classification_level" not in inspect.signature(
-    joint_sts_model.build_joint_sts_model
-).parameters:
-    raise RuntimeError("joint_v4_sts builder is missing classification_level.")
+required = {
+    "classification_level",
+    "bilstm_emb_dim",
+    "use_vae",
+    "use_subject_adversarial",
+    "use_mldg",
+}
+actual = set(inspect.signature(joint_sts_model.build_joint_sts_model).parameters)
+missing = required - actual
+api_version = getattr(joint_sts_model, "JOINT_STS_BUILDER_API_VERSION", 0)
+print("V4 builder API version:", api_version)
+if missing or api_version < 6:
+    raise RuntimeError(
+        "joint_v4_sts builder is stale/incomplete. "
+        f"Missing={sorted(missing)}, API version={api_version}; expected >=6."
+    )
 if not tf.config.list_physical_devices("GPU"):
     raise RuntimeError("TensorFlow cannot see the allocated GPU.")
 TF_PY
@@ -120,6 +138,13 @@ TF_PY
 python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_model_train \
     --cv-strategy loso \
     --classification-level "$CLASSIFICATION_LEVEL" \
+    "$MLDG_FLAG" \
+    --mldg-inner-learning-rate 0.0001 \
+    --mldg-meta-test-weight 1.0 \
+    --mldg-meta-train-subjects 6 \
+    --mldg-meta-test-subjects 2 \
+    --mldg-samples-per-subject 4 \
+    --mldg-seed 42 \
     --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
@@ -153,7 +178,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --skip-no-validation-loso-before-final \
     --batch-size "$BATCH_SIZE" \
     --hyperparameters-json '{
-        "epochs": [20],
+        "epochs": [30],
         "optimizer": ["adamw"],
         "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
@@ -170,6 +195,34 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "bilstm_units": [64],
         "bilstm_layers": [1],
         "bilstm_dropout": [0.3],
+        "use_vae": [
+            false
+        ],
+        "vae_loss_weight": [
+            0.1
+        ],
+        "vae_beta": [
+            0.05
+        ],
+        "vae_learning_rate": [
+            0.00005
+        ],
+        "use_subject_adversarial": [
+            false
+        ],
+        "subject_adversarial_weight": [
+            0.3
+        ],
+        "subject_loss_weight": [
+            0.3
+        ],
+        "subject_hidden_units": [
+            64
+        ],
+        "subject_dropout": [
+            0.0
+        ],
+
         "classification_hidden_units": [64],
         "classification_dropout": [0.3],
         "activation": ["relu"],

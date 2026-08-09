@@ -9,7 +9,7 @@ import tensorflow as tf
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Band-separated GCN -> BiLSTM -> classifier.")
     p.add_argument("--out-dir", default="runs/joint_v4_sts")
-    p.add_argument("--run-name", default="dreamer_valence_joint_v4_sts")
+    p.add_argument("--run-name", default="dreamer_arousal_joint_v4_sts")
     p.add_argument("--dataset", choices=("dreamer","amigos","eegemotions_27"), default="dreamer")
     p.add_argument("--raw-eeg-npy", default=None)
     p.add_argument("--raw-labels-npy", default=None)
@@ -22,6 +22,8 @@ def parse_args(argv=None):
     p.add_argument("--window-normalization", choices=("none","global_rms","feature_zscore"), default="global_rms")
     p.add_argument("--n-channels", type=int, default=14)
     p.add_argument("--n-bands", type=int, default=3)
+    p.add_argument("--classification-level", choices=("window","trial"), default="trial",
+                   help="window: one prediction per EEG window; trial: GCN per window then BiLSTM across windows.")
 
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--batch-size", type=int, default=64)
@@ -43,11 +45,40 @@ def parse_args(argv=None):
     p.add_argument("--bilstm-units", type=int, default=256)
     p.add_argument("--bilstm-layers", type=int, default=1)
     p.add_argument("--bilstm-dropout", type=float, default=0.3)
+    p.add_argument("--bilstm-emb-dim", type=int, default=64)
     p.add_argument("--classification-hidden-units", type=int, default=128)
     p.add_argument("--classification-dropout", type=float, default=0.3)
     p.add_argument("--activation", default="relu")
     p.add_argument("--focal-gamma", type=float, default=0.0)
     p.add_argument("--focal-alpha", type=float, nargs="+", default=None)
+
+    # Auxiliary heads. These defaults may also be overridden per CV grid via
+    # use_vae/use_subject_adversarial in --hyperparameters-json.
+    p.add_argument("--use-vae", dest="use_vae", action="store_true")
+    p.add_argument("--no-vae", dest="use_vae", action="store_false")
+    p.set_defaults(use_vae=False)
+    p.add_argument("--vae-loss-weight", type=float, default=0.1)
+    p.add_argument("--vae-beta", type=float, default=0.05)
+    p.add_argument("--vae-learning-rate", type=float, default=5e-5)
+
+    p.add_argument("--use-subject-adversarial", dest="use_subject_adversarial", action="store_true")
+    p.add_argument("--no-subject-adversarial", dest="use_subject_adversarial", action="store_false")
+    p.set_defaults(use_subject_adversarial=False)
+    p.add_argument("--subject-adversarial-weight", type=float, default=0.3)
+    p.add_argument("--subject-loss-weight", type=float, default=0.3)
+    p.add_argument("--subject-hidden-units", type=int, default=64)
+    p.add_argument("--subject-dropout", type=float, default=0.0)
+
+    # MLDG is deliberately run-level because it changes batch construction.
+    p.add_argument("--use-mldg", dest="use_mldg", action="store_true")
+    p.add_argument("--no-mldg", dest="use_mldg", action="store_false")
+    p.set_defaults(use_mldg=False)
+    p.add_argument("--mldg-inner-learning-rate", type=float, default=1e-4)
+    p.add_argument("--mldg-meta-test-weight", type=float, default=1.0)
+    p.add_argument("--mldg-meta-train-subjects", type=int, default=6)
+    p.add_argument("--mldg-meta-test-subjects", type=int, default=2)
+    p.add_argument("--mldg-samples-per-subject", type=int, default=4)
+    p.add_argument("--mldg-seed", type=int, default=42)
 
     p.add_argument("--cv-strategy", choices=("loso",), default="loso")
     p.add_argument("--max-folds", type=int, default=None)
@@ -109,13 +140,31 @@ def validate_args(args, hparams):
         ("gcn_dropout", args.gcn_dropout),
         ("bilstm_dropout", args.bilstm_dropout),
         ("classification_dropout", args.classification_dropout),
+        ("subject_dropout", args.subject_dropout),
     ):
         if not 0 <= value < 1:
             raise ValueError(f"{name} must be in [0,1).")
+    if args.bilstm_emb_dim < 1 or args.subject_hidden_units < 1:
+        raise ValueError("bilstm_emb_dim and subject_hidden_units must be positive.")
+    for name, value in (
+        ("vae_loss_weight", args.vae_loss_weight),
+        ("vae_beta", args.vae_beta),
+        ("subject_adversarial_weight", args.subject_adversarial_weight),
+        ("subject_loss_weight", args.subject_loss_weight),
+        ("mldg_meta_test_weight", args.mldg_meta_test_weight),
+    ):
+        if value < 0:
+            raise ValueError(f"{name} must be non-negative.")
+    if args.vae_learning_rate <= 0 or args.mldg_inner_learning_rate <= 0:
+        raise ValueError("VAE and MLDG learning rates must be positive.")
+    if args.mldg_meta_train_subjects < 1 or args.mldg_meta_test_subjects < 1 or args.mldg_samples_per_subject < 1:
+        raise ValueError("MLDG subject/sample counts must be positive.")
+    if "use_mldg" in hparams:
+        raise ValueError("use_mldg is run-level; use --use-mldg/--no-mldg, not hyperparameters JSON.")
     if int(np.prod(args.temporal_pool_sizes, dtype=np.int64)) != args.t_down:
         raise ValueError("t_down must equal product(temporal_pool_sizes).")
     if args.prediction_latent_samples != 0:
-        raise ValueError("v4 has no latent posterior; prediction-latent-samples must be 0.")
+        raise ValueError("v4 classification is deterministic; prediction-latent-samples must be 0.")
     if not isinstance(hparams, dict):
         raise ValueError("hyperparameters-json must decode to an object.")
 
