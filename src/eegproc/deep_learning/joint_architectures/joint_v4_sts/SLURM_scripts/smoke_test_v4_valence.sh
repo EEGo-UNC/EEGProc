@@ -109,12 +109,18 @@ nvidia-smi
 
 python - <<'TF_PY'
 import inspect
+import numpy as np
 import tensorflow as tf
-from src.eegproc.deep_learning.joint_architectures.joint_v4_sts import joint_sts_model
+
+from src.eegproc.deep_learning.joint_architectures.joint_v4_sts import (
+    joint_sts_model,
+)
 
 print("TensorFlow:", tf.__version__)
 print("V4 module:", joint_sts_model.__file__)
-print("Builder:", inspect.signature(joint_sts_model.build_joint_sts_model))
+signature = inspect.signature(joint_sts_model.build_joint_sts_model)
+print("Builder:", signature)
+
 required = {
     "classification_level",
     "bilstm_emb_dim",
@@ -122,17 +128,168 @@ required = {
     "use_subject_adversarial",
     "use_mldg",
 }
-actual = set(inspect.signature(joint_sts_model.build_joint_sts_model).parameters)
+actual = set(signature.parameters)
 missing = required - actual
-api_version = getattr(joint_sts_model, "JOINT_STS_BUILDER_API_VERSION", 0)
+api_version = getattr(
+    joint_sts_model,
+    "JOINT_STS_BUILDER_API_VERSION",
+    0,
+)
 print("V4 builder API version:", api_version)
+
 if missing or api_version < 6:
     raise RuntimeError(
         "joint_v4_sts builder is stale/incomplete. "
         f"Missing={sorted(missing)}, API version={api_version}; expected >=6."
     )
-if not tf.config.list_physical_devices("GPU"):
+
+encoder_module = joint_sts_model.BandSeparatedGCNEncoder.__module__
+print("BandSeparatedGCNEncoder module:", encoder_module)
+if "GCN_band_separated" not in encoder_module:
+    raise RuntimeError(
+        "joint_v4_sts is not importing BandSeparatedGCNEncoder from "
+        "GCN_band_separated.py."
+    )
+
+gpus = tf.config.list_physical_devices("GPU")
+print("Available GPUs:", gpus)
+if not gpus:
     raise RuntimeError("TensorFlow cannot see the allocated GPU.")
+
+# Runtime architecture preflight: trial-level classifier.
+trial_shape = (3, 8, 42)
+x_trial = tf.zeros((2, *trial_shape), dtype=tf.float32)
+
+baseline = joint_sts_model.build_joint_sts_model(
+    input_shape=trial_shape,
+    classification_level="trial",
+    n_classes=2,
+    n_channels=14,
+    n_bands=3,
+    t_down=2,
+    temporal_pool_sizes=(2,),
+    gcn_units=(8,),
+    spectral_emb_dim=8,
+    bilstm_units=4,
+    n_bilstm_layers=1,
+    bilstm_emb_dim=4,
+    classification_hidden_units=4,
+    use_vae=False,
+    use_subject_adversarial=False,
+    use_mldg=False,
+)
+baseline_logits = baseline(x_trial, training=False)
+print("Baseline trial logits shape:", baseline_logits.shape)
+if tuple(baseline_logits.shape) != (2, 2):
+    raise RuntimeError(
+        f"Unexpected baseline logits shape: {baseline_logits.shape}"
+    )
+
+# Runtime VAE preflight.
+vae_model = joint_sts_model.build_joint_sts_model(
+    input_shape=trial_shape,
+    classification_level="trial",
+    n_classes=2,
+    n_channels=14,
+    n_bands=3,
+    t_down=2,
+    temporal_pool_sizes=(2,),
+    gcn_units=(8,),
+    spectral_emb_dim=8,
+    bilstm_units=4,
+    n_bilstm_layers=1,
+    bilstm_emb_dim=4,
+    classification_hidden_units=4,
+    use_vae=True,
+    vae_loss_weight=0.1,
+    vae_beta=0.05,
+    vae_learning_rate=5e-5,
+    use_subject_adversarial=False,
+    use_mldg=False,
+)
+vae_losses, vae_outputs = vae_model._vae_losses(
+    x_trial,
+    training=False,
+)
+print(
+    "VAE preflight:",
+    {key: float(value.numpy()) for key, value in vae_losses.items()},
+)
+print("VAE reconstruction shape:", vae_outputs["reconstruction"].shape)
+
+# Runtime subject-adversarial preflight. This specifically verifies that the
+# fold-local subject head is created before Keras locks model state.
+subject_model = joint_sts_model.build_joint_sts_model(
+    input_shape=trial_shape,
+    classification_level="trial",
+    n_classes=2,
+    n_channels=14,
+    n_bands=3,
+    t_down=2,
+    temporal_pool_sizes=(2,),
+    gcn_units=(8,),
+    spectral_emb_dim=8,
+    bilstm_units=4,
+    n_bilstm_layers=1,
+    bilstm_emb_dim=4,
+    classification_hidden_units=4,
+    use_vae=False,
+    use_subject_adversarial=True,
+    subject_adversarial_weight=0.3,
+    subject_loss_weight=0.3,
+    subject_hidden_units=4,
+    use_mldg=False,
+)
+prepared = subject_model.prepare_fit_inputs(
+    np.zeros((2, *trial_shape), dtype=np.float32),
+    np.asarray([10, 11], dtype=np.int32),
+)
+subject_losses, subject_outputs = subject_model._classification_losses(
+    prepared,
+    tf.constant([0, 1], dtype=tf.int32),
+    training=False,
+)
+print("Subject loss:", float(subject_losses["subject_loss"].numpy()))
+print("Subject logits shape:", subject_outputs["subject_logits"].shape)
+
+# Runtime first-order MLDG preflight.
+mldg_model = joint_sts_model.build_joint_sts_model(
+    input_shape=trial_shape,
+    classification_level="trial",
+    n_classes=2,
+    n_channels=14,
+    n_bands=3,
+    t_down=2,
+    temporal_pool_sizes=(2,),
+    gcn_units=(8,),
+    spectral_emb_dim=8,
+    bilstm_units=4,
+    n_bilstm_layers=1,
+    bilstm_emb_dim=4,
+    classification_hidden_units=4,
+    use_vae=False,
+    use_subject_adversarial=False,
+    use_mldg=True,
+    mldg_inner_learning_rate=1e-4,
+    mldg_meta_test_weight=1.0,
+)
+mldg_metrics = mldg_model._mldg_train_step(
+    (
+        {
+            "meta_train": x_trial[:1],
+            "meta_test": x_trial[1:],
+        },
+        {
+            "meta_train": tf.constant([0], dtype=tf.int32),
+            "meta_test": tf.constant([1], dtype=tf.int32),
+        },
+    )
+)
+print(
+    "MLDG preflight metrics:",
+    {key: float(value.numpy()) for key, value in mldg_metrics.items()},
+)
+print("V4 runtime preflight: PASS")
 TF_PY
 
 python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_model_train \
@@ -195,6 +352,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "bilstm_units": [64],
         "bilstm_layers": [1],
         "bilstm_dropout": [0.3],
+        "bilstm_emb_dim": [64],
         "use_vae": [
             false
         ],

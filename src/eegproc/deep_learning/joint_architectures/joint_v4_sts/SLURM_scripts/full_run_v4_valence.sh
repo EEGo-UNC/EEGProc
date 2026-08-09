@@ -19,6 +19,12 @@ module load cudnn/9.11.0
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
 CLASSIFICATION_LEVEL="${CLASSIFICATION_LEVEL:-trial}"
+USE_MLDG="${USE_MLDG:-false}"
+if [[ "$USE_MLDG" == "true" ]]; then
+    MLDG_FLAG="--use-mldg"
+else
+    MLDG_FLAG="--no-mldg"
+fi
 
 # Trial mode has only 414 DREAMER samples, so use a smaller batch.
 if [[ "$CLASSIFICATION_LEVEL" == "trial" ]]; then
@@ -98,6 +104,7 @@ fi
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Classification level: $CLASSIFICATION_LEVEL"
+echo "MLDG enabled: $USE_MLDG"
 echo "Batch size: $BATCH_SIZE"
 echo "Python: $(command -v python)"
 echo "XLA_FLAGS: $XLA_FLAGS"
@@ -108,15 +115,46 @@ nvidia-smi
 python - <<'TF_PY'
 import inspect
 import tensorflow as tf
-from src.eegproc.deep_learning.joint_architectures.joint_v4_sts import joint_sts_model
+
+from src.eegproc.deep_learning.joint_architectures.joint_v4_sts import (
+    joint_sts_model,
+)
 
 print("TensorFlow:", tf.__version__)
 print("V4 module:", joint_sts_model.__file__)
-print("Builder:", inspect.signature(joint_sts_model.build_joint_sts_model))
-if "classification_level" not in inspect.signature(
-    joint_sts_model.build_joint_sts_model
-).parameters:
-    raise RuntimeError("joint_v4_sts builder is missing classification_level.")
+signature = inspect.signature(joint_sts_model.build_joint_sts_model)
+print("Builder:", signature)
+
+required = {
+    "classification_level",
+    "bilstm_emb_dim",
+    "use_vae",
+    "use_subject_adversarial",
+    "use_mldg",
+}
+actual = set(signature.parameters)
+missing = required - actual
+api_version = getattr(
+    joint_sts_model,
+    "JOINT_STS_BUILDER_API_VERSION",
+    0,
+)
+print("V4 builder API version:", api_version)
+
+if missing or api_version < 6:
+    raise RuntimeError(
+        "joint_v4_sts builder is stale/incomplete. "
+        f"Missing={sorted(missing)}, API version={api_version}; expected >=6."
+    )
+
+encoder_module = joint_sts_model.BandSeparatedGCNEncoder.__module__
+print("BandSeparatedGCNEncoder module:", encoder_module)
+if "GCN_band_separated" not in encoder_module:
+    raise RuntimeError(
+        "joint_v4_sts is not importing BandSeparatedGCNEncoder from "
+        "GCN_band_separated.py."
+    )
+
 gpus = tf.config.list_physical_devices("GPU")
 print("Available GPUs:", gpus)
 if not gpus:
@@ -126,6 +164,13 @@ TF_PY
 python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_model_train \
     --cv-strategy loso \
     --classification-level "$CLASSIFICATION_LEVEL" \
+    "$MLDG_FLAG" \
+    --mldg-inner-learning-rate 0.0001 \
+    --mldg-meta-test-weight 1.0 \
+    --mldg-meta-train-subjects 6 \
+    --mldg-meta-test-subjects 2 \
+    --mldg-samples-per-subject 4 \
+    --mldg-seed 42 \
     --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
@@ -174,6 +219,19 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "bilstm_units": [64, 128],
         "bilstm_layers": [1],
         "bilstm_dropout": [0.3],
+        "bilstm_emb_dim": [64, 128],
+
+        "use_vae": [false],
+        "vae_loss_weight": [0.1],
+        "vae_beta": [0.05],
+        "vae_learning_rate": [0.00005],
+
+        "use_subject_adversarial": [false],
+        "subject_adversarial_weight": [0.3],
+        "subject_loss_weight": [0.3],
+        "subject_hidden_units": [64],
+        "subject_dropout": [0.0],
+
         "classification_hidden_units": [64],
         "classification_dropout": [0.3],
         "activation": ["relu"],

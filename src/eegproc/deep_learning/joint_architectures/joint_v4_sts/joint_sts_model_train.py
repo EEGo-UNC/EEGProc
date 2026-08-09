@@ -1,11 +1,13 @@
 """Training entry point for joint_v4_sts.
 
 Architecture:
-    band-separated GCN -> BiLSTM -> classifier
+    band-separated GCN -> BiLSTM -> bilstm_emb_dim -> classifier
 
-The training protocol keeps EEGProc's LOSO/trial-level evaluation conventions
-but deliberately removes v3's VAE, decoder, feature fusion, subject adversary,
-SupCon, and alternating optimization.
+Optional auxiliary objectives:
+    * graph-sequence variational autoencoder reconstruction
+    * subject-adversarial prediction from the shared BiLSTM representation
+
+MLDG is a run-level option and changes the classification batch/update logic.
 """
 
 from __future__ import annotations
@@ -484,6 +486,7 @@ def train_joint_v4_sts(
             vae_loss_weight=float(h.get("vae_loss_weight", config.vae_loss_weight)),
             vae_beta=float(h.get("vae_beta", config.vae_beta)),
             vae_learning_rate=float(h.get("vae_learning_rate", config.vae_learning_rate)),
+            use_class_weight=bool(config.use_class_weight),
             use_subject_adversarial=bool(h.get("use_subject_adversarial", config.use_subject_adversarial)),
             subject_adversarial_weight=float(h.get("subject_adversarial_weight", config.subject_adversarial_weight)),
             subject_loss_weight=float(h.get("subject_loss_weight", config.subject_loss_weight)),
