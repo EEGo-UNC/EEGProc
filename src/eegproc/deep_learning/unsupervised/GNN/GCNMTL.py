@@ -25,6 +25,10 @@ per-timestep band features so it still returns
     (batch, ceil(timesteps / t_down), emb_dim)
 and can be compared against BandSeparatedGCNEncoder in the same pipeline.
 
+The encoder deliberately has NO learned projection after the spectral GRU.
+When ``use_spectral_gru=True``, the output feature dimension is exactly
+``spectral_gru_units`` (384 for the MTLFuseNet-aligned v5 baseline).
+
 For a strict MTLFuseNet reproduction, feed DE features instead of raw/filtered
 band amplitudes.
 """
@@ -228,7 +232,10 @@ class GCNMTLEncoder(BaseEncoder):
 
     Output
     ------
-    (batch, ceil(timesteps / t_down), emb_dim)
+    (batch, ceil(timesteps / t_down), spectral_gru_units)
+
+    There is no post-GRU Conv1D/Dense projection. The GRU output is the
+    spatio-spectral latent representation returned by this encoder.
 
     The adjacency is fixed. It MUST be computed from training data only.
     """
@@ -242,12 +249,12 @@ class GCNMTLEncoder(BaseEncoder):
         n_bands: int = 3,
         gcn_units: tuple[int, ...] = (64, 32),
         temporal_pool_sizes: tuple[int, ...] | None = None,
-        emb_dim: int = 128,
+        emb_dim: int | None = None,
         dropout: float = 0.10,
         activation: str = "relu",
         use_batch_norm: bool = False,
         use_spectral_gru: bool = True,
-        spectral_gru_units: int = 128,
+        spectral_gru_units: int = 384,
         spectral_gru_dropout: float = 0.0,
         graph_add_self_loops: bool = True,
         graph_symmetrize: bool = True,
@@ -262,9 +269,24 @@ class GCNMTLEncoder(BaseEncoder):
     ):
         del graph_self_loop_bias, graph_identity_mix, graph_adjacency_reg_weight
 
+        # With the post-GRU projection removed, BaseEncoder.emb_dim must
+        # describe the representation that is actually returned.
+        gcn_units_tuple = tuple(int(u) for u in gcn_units)
+        if use_spectral_gru:
+            output_dim = int(spectral_gru_units)
+        else:
+            output_dim = int(n_bands) * int(n_channels) * gcn_units_tuple[-1]
+
+        if emb_dim is not None and int(emb_dim) != output_dim:
+            raise ValueError(
+                "GCNMTLEncoder no longer applies a post-GRU projection: "
+                f"emb_dim={emb_dim} must equal the actual output dimension "
+                f"{output_dim}. Set emb_dim=None (recommended) or match it."
+            )
+
         super().__init__(
             timesteps=timesteps,
-            emb_dim=emb_dim,
+            emb_dim=output_dim,
             t_down=t_down,
             name=name,
             **kwargs,
@@ -299,7 +321,7 @@ class GCNMTLEncoder(BaseEncoder):
 
         self.n_channels = int(n_channels)
         self.n_bands = int(n_bands)
-        self.gcn_units = tuple(int(u) for u in gcn_units)
+        self.gcn_units = gcn_units_tuple
         self.temporal_pool_sizes = self._normalize_temporal_pool_sizes(
             temporal_pool_sizes, self.t_down
         )
@@ -371,13 +393,6 @@ class GCNMTLEncoder(BaseEncoder):
             for i, _ in enumerate(self.temporal_pool_sizes)
         ]
 
-        self.seq_emb = layers.Conv1D(
-            self.emb_dim,
-            kernel_size=1,
-            padding="same",
-            activation=None,
-            name="mtl_seq_emb",
-        )
 
     @staticmethod
     def _normalize_temporal_pool_sizes(
@@ -509,7 +524,8 @@ class GCNMTLEncoder(BaseEncoder):
             x = pool(x)
             x = dropout(x, training=training)
 
-        return self.seq_emb(x)
+        # Return the GRU representation directly: no post-GRU projection.
+        return x
 
     def get_adjacency_matrix(self) -> tf.Tensor:
         """Return the MTL-normalized shared adjacency used by the GCN."""
