@@ -52,15 +52,15 @@ if not tf.config.list_physical_devices("GPU"):
 PY
 
 python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_model_train \
-    --classification-level trial \
+    --classification-level window \
     --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension valence \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/smoke/joint_v5_sts/DREAMER/valence/trial \
-    --run-name dreamer_valence_joint_v5_trial_smoke \
+    --out-dir runs/smoke/joint_v5_sts/DREAMER/valence/window \
+    --run-name dreamer_valence_joint_v5_window_smoke \
     --max-folds 2 \
     --n-jobs 2 \
     --cpus-per-worker 4 \
@@ -98,12 +98,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
         "mi_n_neighbors": [3],
         "mi_band_reduction": ["mean"],
         "mi_max_observations": [15000],
-        "t_down": [2],
-        "temporal_pool_sizes": [[2]],
         "classification_hidden_units": [128],
         "classification_dropout": [0.3],
         "activation": ["relu"],
-        "focal_gamma": [1.0],
+        "focal_gamma": [0.0],
         "focal_alpha": null,
         "use_class_weight": [false]
     }'

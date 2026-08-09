@@ -18,7 +18,7 @@ def parse_args(argv=None):
     p.add_argument("--out-dir", default="runs/joint_v5_sts")
     p.add_argument("--run-name", default="dreamer_valence_joint_v5_sts")
     p.add_argument("--dataset", default="dreamer", choices=("dreamer","amigos","eegemotions_27"))
-    p.add_argument("--classification-level", choices=("window","trial"), default="trial")
+    p.add_argument("--classification-level", choices=("window","trial"), default="window")
     p.add_argument("--n-channels", type=int, default=14)
     p.add_argument("--n-bands", type=int, default=3)
 
@@ -28,8 +28,8 @@ def parse_args(argv=None):
     p.add_argument("--classification-learning-rate", type=float, default=1e-4)
     p.add_argument("--weight-decay", type=float, default=5e-5)
 
-    p.add_argument("--t-down", type=int, default=2)
-    p.add_argument("--temporal-pool-sizes", type=int, nargs="*", default=[2])
+    p.add_argument("--t-down", type=int, default=1)
+    p.add_argument("--temporal-pool-sizes", type=int, nargs="*", default=[])
     p.add_argument("--gcn-units", type=int, nargs="+", default=[32])
     p.add_argument("--gcn-dropout", type=float, default=0.10)
     p.add_argument("--gcn-activation", default="relu")
@@ -75,7 +75,7 @@ def parse_args(argv=None):
     p.add_argument("--raw-eeg-npy", default=None)
     p.add_argument("--raw-labels-npy", default=None)
     p.add_argument("--label-dimension", choices=("valence","arousal"), default="valence")
-    p.add_argument("--window-sec", type=float, default=4.0)
+    p.add_argument("--window-sec", type=float, default=1.0)
     p.add_argument("--window-overlap", type=float, default=0.0)
     p.add_argument("--fs", type=float, default=128.0)
     p.add_argument("--median-label", type=float, default=3.0)

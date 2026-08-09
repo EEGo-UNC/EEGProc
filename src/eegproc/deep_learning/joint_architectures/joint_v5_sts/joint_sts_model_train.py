@@ -1,10 +1,17 @@
-"""Training entry point for joint_v5_sts.
+"""Training entry point for corrected joint_v5_sts.
 
 Architecture:
-    MTLFuseNet-style shared fixed-MI GCN -> spectral GRU -> classifier
+    1-second channel-band waveform
+        -> shared fixed-MI GCN
+        -> spectral GRU across theta/alpha/beta
+        -> classifier
 
-The data/CV conventions intentionally follow joint_v4_sts, but v5.0 excludes
-BiLSTM, VAE, decoder, fusion, subject-adversarial, SupCon, and MLDG machinery.
+Training is WINDOW LEVEL. Trial IDs are retained so cross_val can aggregate
+window probabilities and select/report TRIAL-LEVEL metrics. There is no
+trial-embedding average inside the neural model.
+
+v5.0 excludes BiLSTM, VAE, decoder, fusion, temporal pooling,
+subject-adversarial, SupCon, and MLDG machinery.
 """
 
 from __future__ import annotations
@@ -34,7 +41,6 @@ except ImportError:
 try:
     from ..joint_v4_sts.joint_sts_model_train import (
         load_joint_v4_training_data,
-        _group_windows_into_trials,
         _class_ids,
         _n_classes,
         _selected_epochs,
@@ -43,7 +49,6 @@ try:
 except ImportError:
     from eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_model_train import (
         load_joint_v4_training_data,
-        _group_windows_into_trials,
         _class_ids,
         _n_classes,
         _selected_epochs,
@@ -68,7 +73,10 @@ class JointV5TrainingConfig:
     dataset: str = "dreamer"
     n_channels: int = 14
     n_bands: int = 3
-    classification_level: str = "trial"
+    # Neural model trains one prediction per 1-second window.
+    classification_level: str = "window"
+    # cross_val aggregates window probabilities by (subject, trial).
+    evaluation_level: str = "trial"
 
     batch_size: int = 16
     cv_max_epochs: int = 100
@@ -76,8 +84,10 @@ class JointV5TrainingConfig:
     classification_learning_rate: float = 1e-4
     weight_decay: float = 5e-5
 
-    t_down: int = 2
-    temporal_pool_sizes: tuple[int, ...] = (2,)
+    # Corrected v5 uses the complete 1-second waveform as each GCN node's
+    # feature vector, so there is no temporal pooling/downsampling.
+    t_down: int = 1
+    temporal_pool_sizes: tuple[int, ...] = ()
     gcn_units: tuple[int, ...] = (32,)
     gcn_dropout: float = 0.10
     gcn_activation: str = "relu"
@@ -212,10 +222,21 @@ def train_joint_v5_sts(X, y, subjects, trials, config: JointV5TrainingConfig):
     y = np.asarray(y)
     subjects = np.asarray(subjects).reshape(-1)
     trials = np.asarray(trials).reshape(-1)
-    expected_rank = 3 if config.classification_level == "window" else 4
-    if X.ndim != expected_rank:
+    if config.classification_level != "window":
         raise ValueError(
-            f"{config.classification_level} mode expects rank {expected_rank}, got {X.shape}."
+            "Corrected v5 trains at window level only. "
+            "Use trial-level aggregation in cross_val for reporting."
+        )
+    if config.evaluation_level != "trial":
+        raise ValueError("Corrected v5 baseline expects trial-level evaluation.")
+    if config.t_down != 1 or tuple(config.temporal_pool_sizes):
+        raise ValueError(
+            "Corrected v5 requires t_down=1 and temporal_pool_sizes=()."
+        )
+    if X.ndim != 3:
+        raise ValueError(
+            "Corrected v5 expects window samples shaped (N,T,F); "
+            f"got {X.shape}."
         )
     if X.shape[-1] != config.n_channels * config.n_bands:
         raise ValueError(
@@ -223,11 +244,36 @@ def train_joint_v5_sts(X, y, subjects, trials, config: JointV5TrainingConfig):
             f"{config.n_channels * config.n_bands}."
         )
 
+    # Remove architecture keys from legacy v5 hyperparameter JSONs. They are
+    # fixed by the corrected representation and should not appear as fake
+    # selected hyperparameters in CV output.
+    sanitized_hparams = dict(config.hyperparameters)
+    for fixed_key in ("classification_level", "t_down", "temporal_pool_sizes"):
+        if fixed_key in sanitized_hparams:
+            logger.info(
+                "Ignoring legacy hyperparameter %s=%r; corrected v5 fixes "
+                "classification_level='window', t_down=1, temporal_pool_sizes=().",
+                fixed_key,
+                sanitized_hparams[fixed_key],
+            )
+            sanitized_hparams.pop(fixed_key)
+    config.hyperparameters = sanitized_hparams
+
     _write_json(run_dir / "training_config.json", asdict(config))
-    logger.info("Architecture: MTL fixed-MI shared GCN -> spectral GRU -> classifier")
-    logger.info("Spectral GRU output: %d-D direct latent; no post-GRU convolution", config.spectral_gru_units)
-    logger.info("Classification level: %s", config.classification_level)
+    logger.info("Architecture: full-window shared fixed-MI GCN -> spectral GRU -> classifier")
+    logger.info(
+        "Per-window tensor interpretation: (T,C*Bands) -> "
+        "(Bands,C,T) -> GCN -> band sequence -> GRU"
+    )
+    logger.info(
+        "GCN output per band: channels x %d; GRU output: %d-D direct latent",
+        config.gcn_units[-1],
+        config.spectral_gru_units,
+    )
+    logger.info("Training level: window")
+    logger.info("Primary evaluation/selection level: trial")
     logger.info("Input tensor: %s", X.shape)
+    logger.info("No temporal pooling/downsampling: t_down=1")
     logger.info("MI adjacency is adapted inside EACH model.fit from fold-training data only.")
     logger.info("BiLSTM/VAE/fusion/adversarial/SupCon/MLDG: all disabled in v5.0")
 
@@ -248,12 +294,12 @@ def train_joint_v5_sts(X, y, subjects, trials, config: JointV5TrainingConfig):
             raise ValueError(f"Unknown v5 hyperparameters: {sorted(unknown)}")
         return build_joint_sts_model(
             input_shape=tuple(X.shape[1:]),
-            classification_level=config.classification_level,
+            classification_level="window",
             n_classes=_n_classes(y),
             n_channels=config.n_channels,
             n_bands=config.n_bands,
-            t_down=int(h.get("t_down", config.t_down)),
-            temporal_pool_sizes=h.get("temporal_pool_sizes", config.temporal_pool_sizes),
+            t_down=1,
+            temporal_pool_sizes=(),
             gcn_units=h.get("gcn_units", config.gcn_units),
             gcn_dropout=float(h.get("gcn_dropout", config.gcn_dropout)),
             gcn_activation=str(h.get("gcn_activation", config.gcn_activation)),
@@ -278,7 +324,6 @@ def train_joint_v5_sts(X, y, subjects, trials, config: JointV5TrainingConfig):
 
     builder._sequence_hyperparameter_depths = {
         "gcn_units": 1,
-        "temporal_pool_sizes": 1,
         "focal_alpha": 1,
     }
 
@@ -291,8 +336,8 @@ def train_joint_v5_sts(X, y, subjects, trials, config: JointV5TrainingConfig):
         n_epochs=config.cv_max_epochs,
         batch_size=config.batch_size,
         hyperparameters=config.hyperparameters,
-        evaluation_level=config.classification_level,
-        selection_level=("trial" if config.classification_level == "trial" else config.selection_level),
+        evaluation_level=config.evaluation_level,
+        selection_level=config.selection_level,
         selection_metric=config.selection_metric,
         metrics=("accuracy","f1","precision","recall","macro_f1","macro_precision","macro_recall","balanced_accuracy"),
         log_predictions=True,
@@ -355,8 +400,8 @@ def train_joint_v5_sts(X, y, subjects, trials, config: JointV5TrainingConfig):
             fixed_config=final_h,
             n_epochs=final_epochs,
             batch_size=final_batch_size,
-            evaluation_level=config.classification_level,
-            selection_level=("trial" if config.classification_level == "trial" else config.selection_level),
+            evaluation_level=config.evaluation_level,
+            selection_level=config.selection_level,
             selection_metric="balanced_accuracy",
             maximize_metric=True,
             metrics=("accuracy","f1","precision","recall","macro_f1","macro_precision","macro_recall","balanced_accuracy"),
@@ -410,7 +455,8 @@ def train_joint_v5_sts(X, y, subjects, trials, config: JointV5TrainingConfig):
     summary = {
         "run_dir": str(run_dir),
         "architecture": "mtl_fixed_mi_gcn_then_spectral_gru_then_classifier",
-        "classification_level": config.classification_level,
+        "classification_level": "window",
+        "evaluation_level": config.evaluation_level,
         "selected_final_config": selected,
         "selected_final_epochs": final_epochs,
         "selected_final_batch_size": final_batch_size,
@@ -436,14 +482,15 @@ def main(argv=None):
         dataset=args.dataset,
         n_channels=args.n_channels,
         n_bands=args.n_bands,
-        classification_level=args.classification_level,
+        classification_level="window",
+        evaluation_level="trial",
         batch_size=args.batch_size,
         cv_max_epochs=args.epochs,
         optimizer_name=args.optimizer,
         classification_learning_rate=args.classification_learning_rate,
         weight_decay=args.weight_decay,
-        t_down=args.t_down,
-        temporal_pool_sizes=tuple(args.temporal_pool_sizes),
+        t_down=1,
+        temporal_pool_sizes=(),
         gcn_units=tuple(args.gcn_units),
         gcn_dropout=args.gcn_dropout,
         gcn_activation=args.gcn_activation,
@@ -495,24 +542,57 @@ def main(argv=None):
         hyperparameters=hparams,
     )
 
+    if not np.isclose(float(args.window_sec), 1.0):
+        raise ValueError(
+            "Corrected joint_v5_sts uses the paper-style 1-second segment as "
+            "the GCN node-feature waveform. Set --window-sec 1.0."
+        )
+    if not np.isclose(float(args.window_overlap), 0.0):
+        raise ValueError(
+            "The v5.0 baseline uses non-overlapping 1-second segments. "
+            "Set --window-overlap 0.0."
+        )
+
+    if args.classification_level != "window":
+        print(
+            "joint_v5_sts: overriding --classification-level "
+            f"{args.classification_level!r}; v5.0 trains windows and reports "
+            "trial-level metrics via cross_val.",
+            flush=True,
+        )
+    if int(args.t_down) != 1 or tuple(args.temporal_pool_sizes):
+        print(
+            "joint_v5_sts: ignoring temporal pooling CLI values; corrected "
+            "v5.0 fixes t_down=1 and temporal_pool_sizes=().",
+            flush=True,
+        )
+
     dataset_config = get_dataset_config(args.dataset)
     eeg_path = args.raw_eeg_npy or dataset_config.eeg_path
     labels_path = args.raw_labels_npy or dataset_config.labels_path
+
     X, y, subjects, trials = load_joint_v4_training_data(
         eeg_path=eeg_path,
         labels_path=labels_path,
         label_dimension=args.label_dimension,
-        window_size_sec=args.window_sec,
+        window_size_sec=1.0,
         fs=args.fs,
-        overlap=args.window_overlap,
+        overlap=0.0,
         median_label=args.median_label,
         window_normalization=args.window_normalization,
         label_threshold_mode=args.label_threshold_mode,
         dataset=dataset_config,
     )
-    if config.classification_level == "trial":
-        X, y, subjects, trials = _group_windows_into_trials(X, y, subjects, trials)
 
+    expected_samples = int(round(float(args.fs)))
+    if X.ndim != 3 or X.shape[1] != expected_samples:
+        raise ValueError(
+            "Expected one-second window tensor (N, fs, features); "
+            f"with fs={args.fs:g}, expected T={expected_samples}, got {X.shape}."
+        )
+
+    # IMPORTANT: do NOT group windows into rank-4 trial tensors. cross_val keeps
+    # trial IDs and averages window probabilities only for trial-level metrics.
     train_joint_v5_sts(X, y, subjects, trials, config)
     return 0
 
