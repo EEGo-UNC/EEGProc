@@ -26,12 +26,12 @@ import numpy as np
 import tensorflow as tf
 
 try:
-    from ...unsupervised.Convolutions.GCNMTL import (
+    from ...unsupervised.GNN.GCNMTL import (
         GCNMTLEncoder,
         compute_mtl_shared_mi_adjacency,
     )
 except ImportError:
-    from eegproc.deep_learning.unsupervised.Convolutions.GCNMTL import (
+    from eegproc.deep_learning.unsupervised.GNN.GCNMTL import (
         GCNMTLEncoder,
         compute_mtl_shared_mi_adjacency,
     )
