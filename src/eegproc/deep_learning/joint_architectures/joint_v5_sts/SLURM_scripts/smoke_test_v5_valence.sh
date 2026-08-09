@@ -53,7 +53,6 @@ PY
 
 python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_model_train \
     --classification-level window \
-    --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension valence \
@@ -78,15 +77,12 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
     --decision-thresholds 0.5 \
     --threshold-selection-level trial \
     --threshold-selection-metric accuracy \
-    --early-stopping-patience 8 \
-    --early-stopping-min-delta 0.002 \
-    --early-stopping-monitor val_accuracy \
     --early-stopping-mode max \
     --skip-no-validation-loso-before-final \
     --batch-size 2 \
     --mi-max-observations 15000 \
     --hyperparameters-json '{
-        "epochs": [20],
+        "epochs": [150],
         "optimizer": ["adamw"],
         "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
