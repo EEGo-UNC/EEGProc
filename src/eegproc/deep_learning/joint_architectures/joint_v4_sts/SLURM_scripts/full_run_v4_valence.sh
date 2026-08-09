@@ -19,7 +19,7 @@ module load cudnn/9.11.0
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
 CLASSIFICATION_LEVEL="${CLASSIFICATION_LEVEL:-trial}"
-USE_MLDG="${USE_MLDG:-false}"
+USE_MLDG="${USE_MLDG:-true}"
 if [[ "$USE_MLDG" == "true" ]]; then
     MLDG_FLAG="--use-mldg"
 else
@@ -204,10 +204,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --hyperparameters-json '{
         "epochs": [150],
         "optimizer": ["adamw"],
-        "classification_learning_rate": [0.0001, 0.00003],
+        "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
-        "gcn_units": [[64, 32], [128, 64]],
-        "spectral_emb_dim": [64, 128],
+        "gcn_units": [[128, 64]],
+        "spectral_emb_dim": [128],
         "gcn_dropout": [0.2],
         "gcn_activation": ["relu"],
         "gcn_use_batch_norm": [false],
@@ -216,25 +216,25 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "graph_adjacency_reg_weight": [0.0001],
         "t_down": [2],
         "temporal_pool_sizes": [[2]],
-        "bilstm_units": [64, 128],
+        "bilstm_units": [128],
         "bilstm_layers": [1],
         "bilstm_dropout": [0.3],
-        "bilstm_emb_dim": [64, 128],
+        "bilstm_emb_dim": [128],
 
-        "use_vae": [false],
+        "use_vae": [false, true],
         "vae_loss_weight": [0.1],
         "vae_beta": [0.05],
-        "vae_learning_rate": [0.00005],
+        "vae_learning_rate": [0.0001],
 
-        "use_subject_adversarial": [false],
-        "subject_adversarial_weight": [0.3],
-        "subject_loss_weight": [0.3],
+        "use_subject_adversarial": [false, true],
+        "subject_adversarial_weight": [0.8],
+        "subject_loss_weight": [2.0],
         "subject_hidden_units": [64],
         "subject_dropout": [0.0],
 
         "classification_hidden_units": [64],
         "classification_dropout": [0.3],
         "activation": ["relu"],
-        "focal_gamma": [0.0],
+        "focal_gamma": [1.0],
         "focal_alpha": null
     }'
