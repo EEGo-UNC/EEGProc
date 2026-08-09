@@ -38,12 +38,12 @@ if command -v flock >/dev/null 2>&1; then
     (
         flock -x 9
         python -m pip install --upgrade pip
-        python -m pip install -r requirements.txt
+        # Preprocessing does not require TensorFlow; install package deps from
+        # pyproject.toml instead of strict pinned requirements.txt.
         python -m pip install -e .
     ) 9>"$PROJECT_DIR/.venv312_install.lock"
 else
     python -m pip install --upgrade pip
-    python -m pip install -r requirements.txt
     python -m pip install -e .
 fi
 
