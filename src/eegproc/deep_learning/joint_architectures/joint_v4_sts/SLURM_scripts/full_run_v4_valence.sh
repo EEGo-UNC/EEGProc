@@ -171,7 +171,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --mldg-meta-test-subjects 2 \
     --mldg-samples-per-subject 4 \
     --mldg-seed 42 \
-    --validation-subjects 4 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension valence \
@@ -197,8 +196,6 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --threshold-selection-metric accuracy \
     --early-stopping-patience 30 \
     --early-stopping-min-delta 0.002 \
-    --early-stopping-monitor val_accuracy \
-    --early-stopping-mode max \
     --final-epoch-strategy median \
     --batch-size "$BATCH_SIZE" \
     --hyperparameters-json '{
@@ -207,7 +204,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "classification_learning_rate": [0.0001],
         "weight_decay": [0.00005],
         "gcn_units": [[128, 64]],
-        "spectral_emb_dim": [128],
+        "spectral_emb_dim": [64],
         "gcn_dropout": [0.2],
         "gcn_activation": ["relu"],
         "gcn_use_batch_norm": [false],
@@ -216,10 +213,10 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
         "graph_adjacency_reg_weight": [0.0001],
         "t_down": [2],
         "temporal_pool_sizes": [[2]],
-        "bilstm_units": [128],
+        "bilstm_units": [64],
         "bilstm_layers": [1],
         "bilstm_dropout": [0.3],
-        "bilstm_emb_dim": [128],
+        "bilstm_emb_dim": [64],
 
         "use_vae": [false, true],
         "vae_loss_weight": [0.1],
