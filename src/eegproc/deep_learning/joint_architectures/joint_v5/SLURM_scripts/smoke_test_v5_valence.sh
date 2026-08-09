@@ -103,7 +103,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v5_sts.joint_sts_m
         "classification_hidden_units": [128],
         "classification_dropout": [0.3],
         "activation": ["relu"],
-        "focal_gamma": [0.0],
+        "focal_gamma": [1.0],
         "focal_alpha": null,
         "use_class_weight": [false]
     }'
