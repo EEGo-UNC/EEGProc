@@ -169,7 +169,7 @@ python -m src.eegproc.deep_learning.joint_architectures.joint_v4_sts.joint_sts_m
     --mldg-meta-test-weight 1.0 \
     --mldg-meta-train-subjects 6 \
     --mldg-meta-test-subjects 2 \
-    --mldg-samples-per-subject 4 \
+    --mldg-samples-per-subject 1 \
     --mldg-seed 42 \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
