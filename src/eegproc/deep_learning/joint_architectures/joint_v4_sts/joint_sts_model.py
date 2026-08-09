@@ -32,12 +32,12 @@ from collections.abc import Mapping, Sequence
 import tensorflow as tf
 
 try:
-    from ...unsupervised.Convolutions.GCN_band_separated import (
+    from ...unsupervised.GNN.GCN_band_separated import (
         BandSeparatedGCNEncoder,
         GCNDecoder,
     )
 except ImportError:
-    from eegproc.deep_learning.unsupervised.Convolutions.GCN_band_separated import (
+    from eegproc.deep_learning.unsupervised.GNN.GCN_band_separated import (
         BandSeparatedGCNEncoder,
         GCNDecoder,
     )

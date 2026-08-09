@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 from ..BaseEncoder import BaseEncoder
-from ..GraphConv import GraphConv
+from .GraphConv import GraphConv
 from ..utils import _product
 
 
