@@ -265,8 +265,7 @@ def _subject_median_window_labels(labels_path, label_dimension, subjects, trials
         ratings = raw[subject_row, :, dim].astype(np.float64)
         binary = (ratings >= np.median(ratings)).astype(np.int64)
         mapping = {
-            trial_id: int(binary[index])
-            for index, trial_id in enumerate(unique_trials)
+            trial_id: int(binary[index]) for index, trial_id in enumerate(unique_trials)
         }
         out[mask] = np.asarray([mapping[trial_id] for trial_id in trials[mask]])
     return out
@@ -339,8 +338,12 @@ def _calibration_fold_rows(results: dict) -> list[dict]:
             row = {
                 "target_subject": fold.get("target_subject"),
                 "calibration_fold": fold.get("calibration_fold"),
-                "calibration_trial_ids": json.dumps(fold.get("calibration_trial_ids", [])),
-                "evaluation_trial_ids": json.dumps(fold.get("evaluation_trial_ids", [])),
+                "calibration_trial_ids": json.dumps(
+                    fold.get("calibration_trial_ids", [])
+                ),
+                "evaluation_trial_ids": json.dumps(
+                    fold.get("evaluation_trial_ids", [])
+                ),
                 "n_calibration_samples": fold.get("n_calibration_samples"),
                 "n_evaluation_samples": fold.get("n_evaluation_samples"),
                 "calibration_epochs_ran": fold.get("calibration_epochs_ran"),
@@ -353,7 +356,6 @@ def _calibration_fold_rows(results: dict) -> list[dict]:
                 row.update({f"{prefix}_{key}": value for key, value in scores.items()})
             rows.append(row)
     return rows
-
 
 
 def train_sic_loso_validation(
@@ -598,8 +600,12 @@ def train_sic(
         )
 
     overall = results.get("overall", {})
-    logger.info("Zero-shot all-target mean: %s", overall.get("zero_shot_all_trials_mean_scores"))
-    logger.info("Paired zero-shot mean: %s", overall.get("paired_zero_shot_mean_scores"))
+    logger.info(
+        "Zero-shot all-target mean: %s", overall.get("zero_shot_all_trials_mean_scores")
+    )
+    logger.info(
+        "Paired zero-shot mean: %s", overall.get("paired_zero_shot_mean_scores")
+    )
     logger.info("Post-calibration mean: %s", overall.get("calibrated_mean_scores"))
     logger.info("Calibration delta mean: %s", overall.get("delta_mean_scores"))
     logger.info("Saved SIC artifacts to %s", run_dir)
@@ -623,19 +629,31 @@ def parse_args(argv=None):
     )
     parser.add_argument("--out-dir", default="runs/sic")
     parser.add_argument("--run-name", default="dreamer_valence_sic")
-    parser.add_argument("--dataset", default="dreamer", choices=("dreamer", "amigos", "eegemotions_27"))
+    parser.add_argument(
+        "--dataset", default="dreamer", choices=("dreamer", "amigos", "eegemotions_27")
+    )
     parser.add_argument("--raw-eeg-npy", default=None)
     parser.add_argument("--raw-labels-npy", default=None)
-    parser.add_argument("--label-dimension", choices=("valence", "arousal"), default="valence")
-    parser.add_argument("--label-threshold-mode", choices=("global", "subject_median"), default="global")
+    parser.add_argument(
+        "--label-dimension", choices=("valence", "arousal"), default="valence"
+    )
+    parser.add_argument(
+        "--label-threshold-mode", choices=("global", "subject_median"), default="global"
+    )
     parser.add_argument("--median-label", type=float, default=3.0)
     parser.add_argument("--window-sec", type=float, default=4.0)
     parser.add_argument("--window-overlap", type=float, default=0.0)
     parser.add_argument("--fs", type=float, default=30.0)
-    parser.add_argument("--window-normalization", choices=("none", "global_rms", "feature_zscore"), default="global_rms")
+    parser.add_argument(
+        "--window-normalization",
+        choices=("none", "global_rms", "feature_zscore"),
+        default="global_rms",
+    )
     parser.add_argument("--n-channels", type=_positive_int, default=14)
     parser.add_argument("--n-bands", type=_positive_int, default=3)
-    parser.add_argument("--classification-level", choices=("trial", "window"), default="window")
+    parser.add_argument(
+        "--classification-level", choices=("trial", "window"), default="window"
+    )
 
     parser.add_argument(
         "--training-protocol",
@@ -664,7 +682,9 @@ def parse_args(argv=None):
     parser.add_argument("--calibration-trials", type=_positive_int, default=6)
     parser.add_argument("--calibration-folds", type=_positive_int, default=3)
     parser.add_argument("--calibration-learning-rate", type=float, default=1e-4)
-    parser.add_argument("--calibration-optimizer", choices=("adam", "adamw"), default="adamw")
+    parser.add_argument(
+        "--calibration-optimizer", choices=("adam", "adamw"), default="adamw"
+    )
     parser.add_argument("--calibration-weight-decay", type=float, default=0.0)
     parser.add_argument("--calibration-seed", type=int, default=42)
     parser.add_argument("--no-stratify-calibration", action="store_true")
@@ -706,7 +726,10 @@ def _validate_args(args, model_config):
         raise ValueError("--early-stopping-patience must be >= 1.")
     if args.early_stopping_min_delta < 0.0:
         raise ValueError("--early-stopping-min-delta must be non-negative.")
-    if args.calibration_trials * args.calibration_folds != 18 and args.dataset == "dreamer":
+    if (
+        args.calibration_trials * args.calibration_folds != 18
+        and args.dataset == "dreamer"
+    ):
         raise ValueError(
             "DREAMER SIC currently uses the complete 18-trial protocol: "
             "calibration_trials * calibration_folds must equal 18."

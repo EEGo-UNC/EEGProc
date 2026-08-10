@@ -19,14 +19,6 @@ module load cudnn/9.11.0
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
 
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
-SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
-VALIDATION_SUBJECTS="${VALIDATION_SUBJECTS:-6}"
-EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-20}"
-EARLY_STOPPING_MIN_DELTA="${EARLY_STOPPING_MIN_DELTA:-0.001}"
-
-export USE_SUBJECT_ADVERSARIAL
-
 cd "$PROJECT_DIR"
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -112,7 +104,7 @@ print(json.dumps({
     "bilstm_units": 128,
     "n_bilstm_layers": 1,
     "bilstm_dropout": 0.3,
-    "architecture_mode": "serial",
+    "architecture_mode": "feature_fusion",
     "fusion_units": 128,
     "fusion_dropout": 0.2,
     "focal_gamma": 1.0,
@@ -144,17 +136,6 @@ PY
 )"
 
 echo "Job ID: ${SLURM_JOB_ID}"
-echo "Node: $(hostname)"
-echo "Model: SIC ordinary ERM + subject-disjoint validation"
-echo "Classification level: window"
-echo "Source epochs: $SOURCE_EPOCHS"
-echo "Source batch size: $SOURCE_BATCH_SIZE"
-echo "Validation subjects per LOSO fold: $VALIDATION_SUBJECTS"
-echo "Early stopping: val_loss, patience=$EARLY_STOPPING_PATIENCE, min_delta=$EARLY_STOPPING_MIN_DELTA"
-echo "Restore best weights: true"
-echo "V-REx: DISABLED"
-echo "Subject adversarial enabled: $USE_SUBJECT_ADVERSARIAL"
-echo "Adversarial takeover/recovery: REMOVED"
 python --version
 nvidia-smi
 
@@ -213,16 +194,16 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --n-bands 3 \
     --out-dir runs/smoke/sic_normal_validation/DREAMER/valence \
     --run-name dreamer_valence_sic_normal_validation_smoke \
-    --source-epochs "$SOURCE_EPOCHS" \
-    --source-batch-size "$SOURCE_BATCH_SIZE" \
-    --validation-subjects "$VALIDATION_SUBJECTS" \
+    --source-epochs 100 \
+    --source-batch-size 64 \
+    --validation-subjects 6 \
     --validation-seed 42 \
-    --early-stopping-patience "$EARLY_STOPPING_PATIENCE" \
-    --early-stopping-min-delta "$EARLY_STOPPING_MIN_DELTA" \
-    --early-stopping-monitor val_loss \
+    --early-stopping-patience 20 \
+    --early-stopping-min-delta 0.001 \
+    --early-stopping-monitor val_balanced_accuracy \
     --early-stopping-mode min \
     --decision-threshold 0.5 \
-    --prediction-latent-samples 3 \
+    --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
     --max-subjects 4 \
     --n-jobs 2 \
