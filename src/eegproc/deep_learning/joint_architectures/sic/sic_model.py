@@ -27,13 +27,16 @@ The generative path uses EEGProc's existing graph-aware MTL decoder::
 The decoder is intentionally simpler than the encoder: it is a reconstruction
 module, not a claimed mathematical inverse of the GCN/GRU/BiLSTM encoder.
 
-Subject invariance is imposed directly on pooled z with gradient reversal.
-An optional subject-adversarial loss upper bound implements an adversary
-recovery gate: when subject cross-entropy rises above the configured bound,
-only the subject discriminator is optimized (with z stop-gradiented) until the
-loss returns below the bound.  Normal GRL joint training then resumes.  This
-keeps the adversary sufficiently strong without asking a GRL update to
-simultaneously reduce the same loss it is trying to maximize in the encoder.
+Subject invariance can be imposed directly on pooled z with ordinary gradient
+reversal.  There is no adversarial takeover/recovery controller: emotion/VC,
+VAE, and (when enabled) subject-adversarial objectives are optimized together
+in the same source update.
+
+V-REx can additionally regularize source training.  Each source subject present
+in a minibatch is treated as an environment.  SIC computes the classification
+cross-entropy risk separately for each subject and adds the variance of those
+risks to the ordinary source objective.  This uses the same batched forward
+pass and a single backward/optimizer step.
 
 Subject calibration
 -------------------
@@ -82,7 +85,7 @@ except ImportError:
     )
 
 
-SIC_BUILDER_API_VERSION = 2
+SIC_BUILDER_API_VERSION = 4
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
 
 
@@ -238,7 +241,7 @@ class GradientReversal(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
 class SICModel(tf.keras.Model):
-    """Subject Invariant Calibrator: MTL GCN/GRU -> BiLSTM -> z -> dense-softmax."""
+    """SIC with serial or parallel feature-fusion encoder and focal classifier."""
 
     def __init__(
         self,
@@ -250,6 +253,10 @@ class SICModel(tf.keras.Model):
         bilstm_units: int = 128,
         n_bilstm_layers: int = 1,
         bilstm_dropout: float = 0.30,
+        architecture_mode: str = "serial",
+        fusion_units: int = 128,
+        fusion_dropout: float = 0.20,
+        temporal_downsample_factor: int = 1,
         z_dim: int = 64,
         z_log_var_clip_min: float = -20.0,
         z_log_var_clip_max: float = 20.0,
@@ -257,6 +264,8 @@ class SICModel(tf.keras.Model):
         classification_dropout: float = 0.20,
         activation: str = "relu",
         label_smoothing: float = 0.0,
+        focal_gamma: float = 1.0,
+        focal_alpha: float | None = None,
         vc_loss_weight: float = 1.0,
         vc_alpha: float = 1.0,
         vc_beta: float = 0.5,
@@ -265,15 +274,14 @@ class SICModel(tf.keras.Model):
         update_vc_discriminator: bool = False,
         vae_loss_weight: float = 0.10,
         vae_beta: float = 0.05,
+        use_vrex: bool = False,
+        vrex_penalty_weight: float = 1.0,
         use_subject_adversarial: bool = True,
         n_subject_classes: int | None = None,
         subject_adversarial_weight: float = 0.8,
         subject_loss_weight: float = 1.0,
         subject_hidden_units: int = 64,
         subject_dropout: float = 0.0,
-        use_subject_adversarial_upperbound: bool = False,
-        subject_adversarial_loss_upperbound: float | None = None,
-        subject_adversarial_recovery_max_steps: int = 25,
         calibration_unfreeze_layers: int = 1,
         calibration_use_vc_target: bool = True,
         calibration_vc_alpha: float | None = None,
@@ -294,6 +302,21 @@ class SICModel(tf.keras.Model):
             raise ValueError("n_classes must be >= 2.")
         if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1 or int(z_dim) < 1:
             raise ValueError("BiLSTM and z dimensions must be positive.")
+        architecture_mode = str(architecture_mode).lower()
+        if architecture_mode not in {"serial", "feature_fusion"}:
+            raise ValueError(
+                "architecture_mode must be 'serial' or 'feature_fusion'."
+            )
+        if int(fusion_units) < 1:
+            raise ValueError("fusion_units must be positive.")
+        if not 0.0 <= float(fusion_dropout) < 1.0:
+            raise ValueError("fusion_dropout must be in [0, 1).")
+        if int(temporal_downsample_factor) < 1:
+            raise ValueError("temporal_downsample_factor must be >= 1.")
+        if float(focal_gamma) < 0.0:
+            raise ValueError("focal_gamma must be non-negative.")
+        if focal_alpha is not None and not 0.0 <= float(focal_alpha) <= 1.0:
+            raise ValueError("focal_alpha must be in [0, 1] or None.")
         if float(z_log_var_clip_min) >= float(z_log_var_clip_max):
             raise ValueError("z_log_var_clip_min must be less than max.")
         hidden_units = tuple(int(value) for value in classification_hidden_units)
@@ -318,19 +341,8 @@ class SICModel(tf.keras.Model):
             raise ValueError("subject_hidden_units must be positive.")
         if not 0.0 <= float(subject_dropout) < 1.0:
             raise ValueError("subject_dropout must be in [0, 1).")
-        if bool(use_subject_adversarial_upperbound):
-            if subject_adversarial_loss_upperbound is None:
-                raise ValueError(
-                    "subject_adversarial_loss_upperbound is required when the "
-                    "upper-bound controller is enabled."
-                )
-            if float(subject_adversarial_loss_upperbound) <= 0.0:
-                raise ValueError(
-                    "subject_adversarial_loss_upperbound must be positive."
-                )
-        subject_adversarial_recovery_max_steps = int(subject_adversarial_recovery_max_steps)
-        if subject_adversarial_recovery_max_steps < 1:
-            raise ValueError("subject_adversarial_recovery_max_steps must be >= 1.")
+        if float(vrex_penalty_weight) < 0.0:
+            raise ValueError("vrex_penalty_weight must be non-negative.")
         calibration_unfreeze_layers = int(calibration_unfreeze_layers)
         max_calibration_layers = len(hidden_units) + 1
         if not 1 <= calibration_unfreeze_layers <= max_calibration_layers:
@@ -346,6 +358,10 @@ class SICModel(tf.keras.Model):
         self.bilstm_units = int(bilstm_units)
         self.n_bilstm_layers = int(n_bilstm_layers)
         self.bilstm_dropout_rate = float(bilstm_dropout)
+        self.architecture_mode = architecture_mode
+        self.fusion_units = int(fusion_units)
+        self.fusion_dropout_rate = float(fusion_dropout)
+        self.temporal_downsample_factor = int(temporal_downsample_factor)
         self.z_dim = int(z_dim)
         self.z_log_var_clip_min = float(z_log_var_clip_min)
         self.z_log_var_clip_max = float(z_log_var_clip_max)
@@ -353,6 +369,8 @@ class SICModel(tf.keras.Model):
         self.classification_dropout_rate = float(classification_dropout)
         self.activation_name = str(activation)
         self.label_smoothing = float(label_smoothing)
+        self.focal_gamma = float(focal_gamma)
+        self.focal_alpha = None if focal_alpha is None else float(focal_alpha)
 
         self.vc_loss_weight = float(vc_loss_weight)
         self.vc_alpha = float(vc_alpha)
@@ -364,8 +382,10 @@ class SICModel(tf.keras.Model):
         self.vae_beta = float(vae_beta)
         self.use_class_weight = bool(use_class_weight)
 
+        self.use_vrex = bool(use_vrex)
+        self.vrex_penalty_weight = float(vrex_penalty_weight)
+
         self.subject_adversarial_enabled = bool(use_subject_adversarial)
-        self.use_subject_adversarial = self.subject_adversarial_enabled
         self.n_subject_classes = (
             None if n_subject_classes is None else int(n_subject_classes)
         )
@@ -373,15 +393,6 @@ class SICModel(tf.keras.Model):
         self.subject_loss_weight = float(subject_loss_weight)
         self.subject_hidden_units = int(subject_hidden_units)
         self.subject_dropout_rate = float(subject_dropout)
-        self.use_subject_adversarial_upperbound = bool(
-            use_subject_adversarial_upperbound
-        )
-        self.subject_adversarial_loss_upperbound = (
-            None
-            if subject_adversarial_loss_upperbound is None
-            else float(subject_adversarial_loss_upperbound)
-        )
-        self.subject_adversarial_recovery_max_steps = subject_adversarial_recovery_max_steps
 
         self.calibration_unfreeze_layers = calibration_unfreeze_layers
         self.calibration_use_vc_target = bool(calibration_use_vc_target)
@@ -399,7 +410,12 @@ class SICModel(tf.keras.Model):
         )
         self.calibration_mode = False
 
-        self.requires_subject_ids = self.subject_adversarial_enabled
+        self.requires_subject_ids = self.subject_adversarial_enabled or self.use_vrex
+        # Current EEGProc cross_val uses ``use_subject_adversarial`` as the
+        # compatibility gate for attaching source subject IDs.  Keep that gate
+        # true whenever V-REx needs subject metadata; actual GRL computation is
+        # still controlled exclusively by ``subject_adversarial_enabled``.
+        self.use_subject_adversarial = self.requires_subject_ids
 
         # MTL encoder already performs GCN + spectral GRU.  This recurrent
         # stack is exclusively temporal, preserving the reduced time axis.
@@ -430,6 +446,29 @@ class SICModel(tf.keras.Model):
                     name=f"v6_temporal_bilstm_dropout_{index}",
                 )
             )
+
+        # In serial mode the BiLSTM consumes the GCN-GRU sequence.
+        # In feature_fusion mode the BiLSTM is an independent raw-EEG branch;
+        # it is downsampled to the GCN-GRU temporal resolution and fused before z.
+        self.parallel_temporal_pool = tf.keras.layers.AveragePooling1D(
+            pool_size=self.temporal_downsample_factor,
+            strides=self.temporal_downsample_factor,
+            padding="same",
+            name="v6_parallel_bilstm_pool",
+        )
+        self.fusion_projection = tf.keras.layers.Dense(
+            self.fusion_units,
+            activation=self.activation_name,
+            name="v6_feature_fusion_dense",
+        )
+        self.fusion_norm = tf.keras.layers.LayerNormalization(
+            axis=-1,
+            name="v6_feature_fusion_ln",
+        )
+        self.fusion_dropout_layer = tf.keras.layers.Dropout(
+            self.fusion_dropout_rate,
+            name="v6_feature_fusion_dropout",
+        )
 
         self.z_mean_projection = tf.keras.layers.Dense(
             self.z_dim,
@@ -499,7 +538,6 @@ class SICModel(tf.keras.Model):
             self._configure_subject_head(self.n_subject_classes)
 
         self.main_optimizer = None
-        self.subject_optimizer = None
         self.vc_discriminator_optimizer = None
 
         # Keras metrics.  The same classification metrics are emitted both
@@ -508,6 +546,7 @@ class SICModel(tf.keras.Model):
         self.loss_tracker = tf.keras.metrics.Mean(name="loss")
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
         self.cross_entropy_tracker = tf.keras.metrics.Mean(name="cross_entropy")
+        self.focal_loss_tracker = tf.keras.metrics.Mean(name="focal_loss")
         self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
             name="accuracy"
         )
@@ -516,15 +555,16 @@ class SICModel(tf.keras.Model):
             name="reconstruction_loss"
         )
         self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
+        self.vrex_penalty_tracker = tf.keras.metrics.Mean(name="vrex_penalty")
+        self.vrex_subject_risk_mean_tracker = tf.keras.metrics.Mean(
+            name="vrex_subject_risk_mean"
+        )
+        self.vrex_subjects_per_batch_tracker = tf.keras.metrics.Mean(
+            name="vrex_subjects_per_batch"
+        )
         self.subject_loss_tracker = tf.keras.metrics.Mean(name="subject_loss")
         self.subject_accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
             name="subject_accuracy"
-        )
-        self.subject_takeover_tracker = tf.keras.metrics.Mean(
-            name="subject_takeover_fraction"
-        )
-        self.subject_recovery_steps_tracker = tf.keras.metrics.Mean(
-            name="subject_recovery_steps"
         )
 
     @property
@@ -533,18 +573,25 @@ class SICModel(tf.keras.Model):
             self.loss_tracker,
             self.vc_loss_tracker,
             self.cross_entropy_tracker,
+            self.focal_loss_tracker,
             self.accuracy_tracker,
             self.vae_loss_tracker,
             self.reconstruction_loss_tracker,
             self.kl_loss_tracker,
         ]
+        if self.use_vrex:
+            output.extend(
+                [
+                    self.vrex_penalty_tracker,
+                    self.vrex_subject_risk_mean_tracker,
+                    self.vrex_subjects_per_batch_tracker,
+                ]
+            )
         if self.subject_adversarial_enabled:
             output.extend(
                 [
                     self.subject_loss_tracker,
                     self.subject_accuracy_tracker,
-                    self.subject_takeover_tracker,
-                    self.subject_recovery_steps_tracker,
                 ]
             )
         return output
@@ -552,7 +599,6 @@ class SICModel(tf.keras.Model):
     def compile(
         self,
         main_optimizer,
-        subject_optimizer=None,
         vc_discriminator_optimizer=None,
         **kwargs,
     ):
@@ -561,7 +607,6 @@ class SICModel(tf.keras.Model):
         kwargs.setdefault("jit_compile", False)
         super().compile(optimizer=main_optimizer, **kwargs)
         self.main_optimizer = main_optimizer
-        self.subject_optimizer = subject_optimizer
         self.vc_discriminator_optimizer = vc_discriminator_optimizer
 
     def fit(self, *args, **kwargs):
@@ -628,7 +673,8 @@ class SICModel(tf.keras.Model):
         if len(eeg_array) != len(subjects):
             raise ValueError("EEG inputs and subject IDs must align.")
         unique_subjects = np.sort(np.unique(subjects))
-        self._configure_subject_head(len(unique_subjects))
+        if self.subject_adversarial_enabled:
+            self._configure_subject_head(len(unique_subjects))
         mapping = {
             value.item() if isinstance(value, np.generic) else value: index
             for index, value in enumerate(unique_subjects)
@@ -674,9 +720,48 @@ class SICModel(tf.keras.Model):
 
     def _posterior_from_flat_windows(self, flat_windows, training: bool):
         graph_sequence = self.graph_encoder(flat_windows, training=training)
-        temporal_sequence = self._temporal_encode(graph_sequence, training=training)
-        z_mean = self.z_mean_projection(temporal_sequence)
-        raw_log_var = self.z_log_var_projection(temporal_sequence)
+
+        if self.architecture_mode == "serial":
+            temporal_sequence = self._temporal_encode(
+                graph_sequence,
+                training=training,
+            )
+            fused_sequence = temporal_sequence
+            bilstm_sequence = temporal_sequence
+        else:
+            # Independent temporal branch directly from the raw EEG feature
+            # sequence. No GCN/GRU features enter this BiLSTM branch.
+            bilstm_sequence = self._temporal_encode(
+                flat_windows,
+                training=training,
+            )
+            pooled_bilstm = self.parallel_temporal_pool(bilstm_sequence)
+
+            # The builder sets temporal_downsample_factor=t_down, so the two
+            # branches normally align exactly. The assertion catches any future
+            # encoder pooling change rather than silently mis-fusing tensors.
+            tf.debugging.assert_equal(
+                tf.shape(graph_sequence)[1],
+                tf.shape(pooled_bilstm)[1],
+                message=(
+                    "GCN-GRU and BiLSTM branch sequence lengths do not match "
+                    "for feature fusion."
+                ),
+            )
+            fused_sequence = tf.concat(
+                [graph_sequence, pooled_bilstm],
+                axis=-1,
+            )
+            fused_sequence = self.fusion_projection(fused_sequence)
+            fused_sequence = self.fusion_norm(fused_sequence)
+            fused_sequence = self.fusion_dropout_layer(
+                fused_sequence,
+                training=training,
+            )
+            temporal_sequence = fused_sequence
+
+        z_mean = self.z_mean_projection(fused_sequence)
+        raw_log_var = self.z_log_var_projection(fused_sequence)
         z_log_var = tf.clip_by_value(
             raw_log_var,
             self.z_log_var_clip_min,
@@ -685,6 +770,8 @@ class SICModel(tf.keras.Model):
         return {
             "graph_sequence": graph_sequence,
             "temporal_sequence": temporal_sequence,
+            "bilstm_sequence": bilstm_sequence,
+            "fused_sequence": fused_sequence,
             "z_mean": z_mean,
             "z_log_var": z_log_var,
         }
@@ -811,6 +898,47 @@ class SICModel(tf.keras.Model):
         )
         return outputs["logits"]
 
+    def _per_sample_focal_loss(self, logits, y_flat):
+        """Sparse binary/multiclass focal loss from deterministic logits."""
+        y_flat = tf.cast(tf.reshape(y_flat, [-1]), tf.int32)
+        ce = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            labels=y_flat,
+            logits=logits,
+        )
+        probs = tf.nn.softmax(logits, axis=-1)
+        row_ids = tf.range(tf.shape(y_flat)[0], dtype=tf.int32)
+        gather_ids = tf.stack([row_ids, y_flat], axis=1)
+        p_t = tf.gather_nd(probs, gather_ids)
+        modulating = tf.pow(
+            tf.maximum(1.0 - p_t, tf.keras.backend.epsilon()),
+            tf.cast(self.focal_gamma, p_t.dtype),
+        )
+        loss = modulating * ce
+
+        if self.focal_alpha is not None:
+            if self.n_classes != 2:
+                raise ValueError(
+                    "Scalar focal_alpha is currently defined only for binary SIC."
+                )
+            alpha = tf.cast(self.focal_alpha, loss.dtype)
+            alpha_t = tf.where(
+                tf.equal(y_flat, 1),
+                alpha,
+                1.0 - alpha,
+            )
+            loss = alpha_t * loss
+        return loss
+
+    @staticmethod
+    def _weighted_mean(values, sample_weight):
+        if sample_weight is None:
+            return tf.reduce_mean(values)
+        weights = tf.cast(tf.reshape(sample_weight, [-1]), values.dtype)
+        return tf.math.divide_no_nan(
+            tf.reduce_sum(values * weights),
+            tf.reduce_sum(weights),
+        )
+
     def _vc_components(
         self,
         classification_embedding,
@@ -820,24 +948,19 @@ class SICModel(tf.keras.Model):
         *,
         calibration: bool,
     ):
+        # The deterministic classifier term is focal loss. The VC target still
+        # contributes its latent/distribution regularizers, but its CE term is
+        # replaced so we do not optimize both CE and focal simultaneously.
+        focal_per_sample = self._per_sample_focal_loss(logits, y_flat)
+        focal_loss = self._weighted_mean(focal_per_sample, sample_weight)
+
         if calibration and not self.calibration_use_vc_target:
-            per_sample = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=y_flat,
-                logits=logits,
-            )
-            if sample_weight is None:
-                ce = tf.reduce_mean(per_sample)
-            else:
-                weights = tf.cast(tf.reshape(sample_weight, [-1]), per_sample.dtype)
-                ce = tf.math.divide_no_nan(
-                    tf.reduce_sum(per_sample * weights),
-                    tf.reduce_sum(weights),
-                )
-            zero = tf.zeros((), dtype=ce.dtype)
+            zero = tf.zeros((), dtype=focal_loss.dtype)
             return {
-                "total_loss": ce,
-                "cross_entropy": ce,
-                "weighted_cross_entropy": ce,
+                "total_loss": focal_loss,
+                "cross_entropy": focal_loss,
+                "weighted_cross_entropy": focal_loss,
+                "focal_loss": focal_loss,
                 "latent_posterior_kl": zero,
                 "weighted_latent_posterior_kl": zero,
                 "discriminator_kl": zero,
@@ -846,16 +969,30 @@ class SICModel(tf.keras.Model):
                 "weighted_class_prior_kl": zero,
             }
 
-        return self.vc_target.vc_loss_components(
+        alpha = self.calibration_vc_alpha if calibration else self.vc_alpha
+        components = self.vc_target.vc_loss_components(
             mh=classification_embedding,
             y=y_flat,
-            alpha=(self.calibration_vc_alpha if calibration else self.vc_alpha),
+            alpha=alpha,
             beta=(self.calibration_vc_beta if calibration else self.vc_beta),
             gamma=(self.calibration_vc_gamma if calibration else self.vc_gamma),
             lambda_=(self.calibration_vc_lambda if calibration else self.vc_lambda),
             logits=logits,
             sample_weight=sample_weight,
         )
+
+        # VariationalClassifier's alpha-weighted deterministic CE is replaced
+        # by alpha-weighted focal loss, preserving all non-deterministic VC
+        # terms exactly as configured.
+        dtype = components["total_loss"].dtype
+        ce_term = tf.cast(components["weighted_cross_entropy"], dtype)
+        focal_term = tf.cast(alpha, dtype) * tf.cast(focal_loss, dtype)
+        components = dict(components)
+        components["total_loss"] = (
+            tf.cast(components["total_loss"], dtype) - ce_term + focal_term
+        )
+        components["focal_loss"] = tf.cast(focal_loss, dtype)
+        return components
 
     def _vae_components(self, outputs, training: bool):
         reconstruction = self.decoder(outputs["z"], training=training)
@@ -946,6 +1083,58 @@ class SICModel(tf.keras.Model):
                 variables.append(variable)
         return variables
 
+    def _vrex_components(self, logits, y_flat, subject_ids, sample_weight):
+        """Return subject-wise classification risks and the V-REx penalty.
+
+        The deterministic SIC classifier uses focal loss. V-REx therefore
+        adds ``lambda * Var(R_s)`` where ``R_s`` is the mean focal risk for one
+        source subject represented in the current minibatch.
+        """
+        dtype = logits.dtype
+        zero = tf.zeros((), dtype=dtype)
+        if not self.use_vrex or subject_ids is None:
+            return {
+                "penalty": zero,
+                "mean_subject_risk": zero,
+                "n_subjects": zero,
+                "subject_risks": tf.zeros((0,), dtype=dtype),
+            }
+
+        targets = tf.cast(tf.reshape(subject_ids, [-1]), tf.int32)
+        per_sample = self._per_sample_focal_loss(logits, y_flat)
+        weights = None
+        if sample_weight is not None:
+            weights = tf.cast(tf.reshape(sample_weight, [-1]), per_sample.dtype)
+
+        unique_subjects = tf.unique(targets).y
+
+        def risk_for_subject(subject_id):
+            mask = tf.cast(tf.equal(targets, subject_id), per_sample.dtype)
+            if weights is None:
+                return tf.math.divide_no_nan(
+                    tf.reduce_sum(per_sample * mask),
+                    tf.reduce_sum(mask),
+                )
+            subject_weights = weights * mask
+            return tf.math.divide_no_nan(
+                tf.reduce_sum(per_sample * subject_weights),
+                tf.reduce_sum(subject_weights),
+            )
+
+        subject_risks = tf.map_fn(
+            risk_for_subject,
+            unique_subjects,
+            fn_output_signature=per_sample.dtype,
+        )
+        mean_subject_risk = tf.reduce_mean(subject_risks)
+        penalty = tf.math.reduce_variance(subject_risks)
+        return {
+            "penalty": penalty,
+            "mean_subject_risk": mean_subject_risk,
+            "n_subjects": tf.cast(tf.size(unique_subjects), dtype),
+            "subject_risks": subject_risks,
+        }
+
     def _update_metrics(
         self,
         *,
@@ -956,13 +1145,15 @@ class SICModel(tf.keras.Model):
         sample_weight,
         vae_components=None,
         subject_components=None,
-        takeover=False,
-        recovery_steps=0,
+        vrex_components=None,
     ):
         zero = tf.zeros((), dtype=total_loss.dtype)
         self.loss_tracker.update_state(total_loss)
         self.vc_loss_tracker.update_state(vc_components["total_loss"])
         self.cross_entropy_tracker.update_state(vc_components["cross_entropy"])
+        self.focal_loss_tracker.update_state(
+            vc_components.get("focal_loss", vc_components["cross_entropy"])
+        )
         self.accuracy_tracker.update_state(
             y_flat,
             outputs["logits"],
@@ -979,6 +1170,18 @@ class SICModel(tf.keras.Model):
         self.kl_loss_tracker.update_state(
             zero if vae_components is None else vae_components["kl_loss"]
         )
+        if self.use_vrex:
+            self.vrex_penalty_tracker.update_state(
+                zero if vrex_components is None else vrex_components["penalty"]
+            )
+            self.vrex_subject_risk_mean_tracker.update_state(
+                zero
+                if vrex_components is None
+                else vrex_components["mean_subject_risk"]
+            )
+            self.vrex_subjects_per_batch_tracker.update_state(
+                zero if vrex_components is None else vrex_components["n_subjects"]
+            )
         if self.subject_adversarial_enabled:
             subject_loss = (
                 zero
@@ -994,102 +1197,13 @@ class SICModel(tf.keras.Model):
                     subject_components["subject_targets"],
                     subject_components["subject_logits"],
                 )
-            self.subject_takeover_tracker.update_state(
-                tf.cast(takeover, tf.float32)
-            )
-            self.subject_recovery_steps_tracker.update_state(
-                tf.cast(recovery_steps, tf.float32)
-            )
-
-    def _adversary_recovery_step(self, outputs, subject_ids):
-        """Train only the subject discriminator until CE is below the bound."""
-        if self.subject_optimizer is None:
-            raise RuntimeError(
-                "Subject upper-bound takeover requires subject_optimizer."
-            )
-        z_frozen = tf.stop_gradient(outputs["pooled_z_mean"])
-        with tf.GradientTape() as tape:
-            subject_components = self._subject_components(
-                z_frozen,
-                subject_ids,
-                training=True,
-                use_grl=False,
-            )
-            objective = subject_components["subject_loss"]
-        variables = self._subject_head_variables()
-        gradients = tape.gradient(objective, variables)
-        self._apply_gradients(self.subject_optimizer, gradients, variables)
-        # Re-measure after the update so the recovery controller stops on the
-        # first step that actually returns CE below the configured bound.
-        return self._subject_components(
-            z_frozen,
-            subject_ids,
-            training=False,
-            use_grl=False,
-        )
 
     def _source_train_step(self, x, y_flat, sample_weight):
         eeg_inputs, subject_ids = self._split_eeg_and_subject_inputs(x)
-
-        # The extra probe pass is performed only for the optional upper-bound
-        # controller. Ordinary v6 training therefore pays no duplicate-encoder
-        # cost.
-        if (
-            self.subject_adversarial_enabled
-            and self.use_subject_adversarial_upperbound
-            and subject_ids is not None
-        ):
-            probe_outputs = self._encode(
-                eeg_inputs,
-                training=False,
-                sample_latent=False,
+        if self.use_vrex and subject_ids is None:
+            raise ValueError(
+                "V-REx source training requires subject IDs in each minibatch."
             )
-            probe_subject = self._subject_components(
-                probe_outputs["pooled_z_mean"],
-                subject_ids,
-                training=False,
-                use_grl=False,
-            )
-            bound = tf.cast(
-                self.subject_adversarial_loss_upperbound,
-                probe_subject["subject_loss"].dtype,
-            )
-            # The builder enables run_eagerly only for this ablation so the
-            # current batch loss can control which optimizer step is taken.
-            takeover = bool((probe_subject["subject_loss"] > bound).numpy())
-            if takeover:
-                subject_components = probe_subject
-                recovery_steps = 0
-                while (
-                    float(subject_components["subject_loss"].numpy())
-                    > float(self.subject_adversarial_loss_upperbound)
-                    and recovery_steps < self.subject_adversarial_recovery_max_steps
-                ):
-                    subject_components = self._adversary_recovery_step(
-                        probe_outputs,
-                        subject_ids,
-                    )
-                    recovery_steps += 1
-                vc_components = self._vc_components(
-                    probe_outputs["classification_embedding"],
-                    probe_outputs["logits"],
-                    y_flat,
-                    sample_weight,
-                    calibration=False,
-                )
-                total = tf.cast(subject_components["subject_loss"], tf.float32)
-                self._update_metrics(
-                    total_loss=total,
-                    vc_components=vc_components,
-                    outputs=probe_outputs,
-                    y_flat=y_flat,
-                    sample_weight=sample_weight,
-                    vae_components=None,
-                    subject_components=subject_components,
-                    takeover=True,
-                    recovery_steps=recovery_steps,
-                )
-                return
 
         with tf.GradientTape() as tape:
             outputs = self._encode(
@@ -1111,6 +1225,12 @@ class SICModel(tf.keras.Model):
                 training=True,
                 use_grl=True,
             )
+            vrex_components = self._vrex_components(
+                outputs["logits"],
+                y_flat,
+                subject_ids,
+                sample_weight,
+            )
             dtype = vc_components["total_loss"].dtype
             total = (
                 tf.cast(self.vc_loss_weight, dtype)
@@ -1119,6 +1239,8 @@ class SICModel(tf.keras.Model):
                 * tf.cast(vae_components["vae_loss"], dtype)
                 + tf.cast(self.subject_loss_weight, dtype)
                 * tf.cast(subject_components["subject_loss"], dtype)
+                + tf.cast(self.vrex_penalty_weight, dtype)
+                * tf.cast(vrex_components["penalty"], dtype)
                 + self._regularization_loss(dtype)
             )
         variables = self.trainable_variables
@@ -1152,7 +1274,7 @@ class SICModel(tf.keras.Model):
             sample_weight=sample_weight,
             vae_components=vae_components,
             subject_components=subject_components,
-            takeover=False,
+            vrex_components=vrex_components,
         )
 
     def _calibration_train_step(self, x, y_flat, sample_weight):
@@ -1190,7 +1312,7 @@ class SICModel(tf.keras.Model):
             sample_weight=sample_weight,
             vae_components=None,
             subject_components=None,
-            takeover=False,
+            vrex_components=None,
         )
 
     def train_step(self, data):
@@ -1252,7 +1374,7 @@ class SICModel(tf.keras.Model):
             sample_weight=sample_weight,
             vae_components=vae_components,
             subject_components=subject_components,
-            takeover=False,
+            vrex_components=None,
         )
         return {metric.name: metric.result() for metric in self.metrics}
 
@@ -1306,6 +1428,10 @@ class SICModel(tf.keras.Model):
             layer.trainable = False
         for layer in self.temporal_dropouts:
             layer.trainable = False
+        self.parallel_temporal_pool.trainable = False
+        self.fusion_projection.trainable = False
+        self.fusion_norm.trainable = False
+        self.fusion_dropout_layer.trainable = False
         self.z_mean_projection.trainable = False
         self.z_log_var_projection.trainable = False
         self.decoder.trainable = False
@@ -1349,7 +1475,6 @@ class SICModel(tf.keras.Model):
         # or another target calibration fold.
         self.compile(
             main_optimizer=optimizer,
-            subject_optimizer=None,
             vc_discriminator_optimizer=None,
             run_eagerly=False,
             jit_compile=False,
@@ -1466,6 +1591,10 @@ class SICModel(tf.keras.Model):
                 "bilstm_units": self.bilstm_units,
                 "n_bilstm_layers": self.n_bilstm_layers,
                 "bilstm_dropout": self.bilstm_dropout_rate,
+                "architecture_mode": self.architecture_mode,
+                "fusion_units": self.fusion_units,
+                "fusion_dropout": self.fusion_dropout_rate,
+                "temporal_downsample_factor": self.temporal_downsample_factor,
                 "z_dim": self.z_dim,
                 "z_log_var_clip_min": self.z_log_var_clip_min,
                 "z_log_var_clip_max": self.z_log_var_clip_max,
@@ -1473,6 +1602,8 @@ class SICModel(tf.keras.Model):
                 "classification_dropout": self.classification_dropout_rate,
                 "activation": self.activation_name,
                 "label_smoothing": self.label_smoothing,
+                "focal_gamma": self.focal_gamma,
+                "focal_alpha": self.focal_alpha,
                 "vc_loss_weight": self.vc_loss_weight,
                 "vc_alpha": self.vc_alpha,
                 "vc_beta": self.vc_beta,
@@ -1481,21 +1612,14 @@ class SICModel(tf.keras.Model):
                 "update_vc_discriminator": self.update_vc_discriminator,
                 "vae_loss_weight": self.vae_loss_weight,
                 "vae_beta": self.vae_beta,
+                "use_vrex": self.use_vrex,
+                "vrex_penalty_weight": self.vrex_penalty_weight,
                 "use_subject_adversarial": self.subject_adversarial_enabled,
                 "n_subject_classes": self.n_subject_classes,
                 "subject_adversarial_weight": self.subject_adversarial_weight,
                 "subject_loss_weight": self.subject_loss_weight,
                 "subject_hidden_units": self.subject_hidden_units,
                 "subject_dropout": self.subject_dropout_rate,
-                "use_subject_adversarial_upperbound": (
-                    self.use_subject_adversarial_upperbound
-                ),
-                "subject_adversarial_loss_upperbound": (
-                    self.subject_adversarial_loss_upperbound
-                ),
-                "subject_adversarial_recovery_max_steps": (
-                    self.subject_adversarial_recovery_max_steps
-                ),
                 "calibration_unfreeze_layers": self.calibration_unfreeze_layers,
                 "calibration_use_vc_target": self.calibration_use_vc_target,
                 "calibration_vc_alpha": self.calibration_vc_alpha,
@@ -1546,6 +1670,9 @@ def build_sic_model(
     bilstm_units: int = 128,
     n_bilstm_layers: int = 1,
     bilstm_dropout: float = 0.30,
+    architecture_mode: str = "serial",
+    fusion_units: int = 128,
+    fusion_dropout: float = 0.20,
     z_dim: int = 64,
     z_log_var_clip_min: float = -20.0,
     z_log_var_clip_max: float = 20.0,
@@ -1553,6 +1680,8 @@ def build_sic_model(
     classification_dropout: float = 0.20,
     activation: str = "relu",
     label_smoothing: float = 0.0,
+    focal_gamma: float = 1.0,
+    focal_alpha: float | None = None,
     vc_loss_weight: float = 1.0,
     vc_alpha: float = 1.0,
     vc_beta: float = 0.5,
@@ -1561,15 +1690,14 @@ def build_sic_model(
     update_vc_discriminator: bool = False,
     vae_loss_weight: float = 0.10,
     vae_beta: float = 0.05,
+    use_vrex: bool = False,
+    vrex_penalty_weight: float = 1.0,
     use_subject_adversarial: bool = True,
     n_subject_classes: int | None = None,
     subject_adversarial_weight: float = 0.8,
     subject_loss_weight: float = 1.0,
     subject_hidden_units: int = 64,
     subject_dropout: float = 0.0,
-    use_subject_adversarial_upperbound: bool = False,
-    subject_adversarial_loss_upperbound: float | None = None,
-    subject_adversarial_recovery_max_steps: int = 25,
     calibration_unfreeze_layers: int = 1,
     calibration_use_vc_target: bool = True,
     calibration_vc_alpha: float | None = None,
@@ -1579,7 +1707,6 @@ def build_sic_model(
     decoder_dropout: float = 0.10,
     optimizer_name: str = "adamw",
     learning_rate: float = 1e-4,
-    subject_learning_rate: float | None = None,
     vc_discriminator_learning_rate: float | None = None,
     weight_decay: float = 5e-5,
     use_class_weight: bool = False,
@@ -1695,6 +1822,10 @@ def build_sic_model(
         bilstm_units=int(bilstm_units),
         n_bilstm_layers=int(n_bilstm_layers),
         bilstm_dropout=float(bilstm_dropout),
+        architecture_mode=str(architecture_mode),
+        fusion_units=int(fusion_units),
+        fusion_dropout=float(fusion_dropout),
+        temporal_downsample_factor=int(t_down),
         z_dim=int(z_dim),
         z_log_var_clip_min=float(z_log_var_clip_min),
         z_log_var_clip_max=float(z_log_var_clip_max),
@@ -1704,6 +1835,8 @@ def build_sic_model(
         classification_dropout=float(classification_dropout),
         activation=str(activation),
         label_smoothing=float(label_smoothing),
+        focal_gamma=float(focal_gamma),
+        focal_alpha=focal_alpha,
         vc_loss_weight=float(vc_loss_weight),
         vc_alpha=float(vc_alpha),
         vc_beta=float(vc_beta),
@@ -1712,17 +1845,14 @@ def build_sic_model(
         update_vc_discriminator=bool(update_vc_discriminator),
         vae_loss_weight=float(vae_loss_weight),
         vae_beta=float(vae_beta),
+        use_vrex=bool(use_vrex),
+        vrex_penalty_weight=float(vrex_penalty_weight),
         use_subject_adversarial=bool(use_subject_adversarial),
         n_subject_classes=n_subject_classes,
         subject_adversarial_weight=float(subject_adversarial_weight),
         subject_loss_weight=float(subject_loss_weight),
         subject_hidden_units=int(subject_hidden_units),
         subject_dropout=float(subject_dropout),
-        use_subject_adversarial_upperbound=bool(
-            use_subject_adversarial_upperbound
-        ),
-        subject_adversarial_loss_upperbound=subject_adversarial_loss_upperbound,
-        subject_adversarial_recovery_max_steps=int(subject_adversarial_recovery_max_steps),
         calibration_unfreeze_layers=int(calibration_unfreeze_layers),
         calibration_use_vc_target=bool(calibration_use_vc_target),
         calibration_vc_alpha=calibration_vc_alpha,
@@ -1737,20 +1867,6 @@ def build_sic_model(
         optimizer_name=optimizer_name,
         learning_rate=float(learning_rate),
         weight_decay=float(weight_decay),
-    )
-    resolved_subject_lr = (
-        float(learning_rate)
-        if subject_learning_rate is None
-        else float(subject_learning_rate)
-    )
-    subject_optimizer = (
-        _build_optimizer(
-            optimizer_name=optimizer_name,
-            learning_rate=resolved_subject_lr,
-            weight_decay=float(weight_decay),
-        )
-        if bool(use_subject_adversarial)
-        else None
     )
     resolved_disc_lr = (
         float(learning_rate)
@@ -1769,12 +1885,8 @@ def build_sic_model(
 
     model.compile(
         main_optimizer=main_optimizer,
-        subject_optimizer=subject_optimizer,
         vc_discriminator_optimizer=vc_discriminator_optimizer,
-        # The upper-bound controller makes a per-batch Python decision after
-        # reading the current subject CE. Keep ordinary runs graph-compatible,
-        # but enable eager custom train_step only for this ablation.
-        run_eagerly=bool(use_subject_adversarial_upperbound),
+        run_eagerly=False,
         jit_compile=False,
     )
 

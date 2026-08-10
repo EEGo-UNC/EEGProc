@@ -38,9 +38,9 @@ except ImportError:
     from sic_model import SIC_BUILDER_API_VERSION, build_sic_model
 
 try:
-    from ...cross_val import subject_calibration_cv
+    from ...cross_val import loso_cv, subject_calibration_cv
 except ImportError:
-    from eegproc.deep_learning.cross_val import subject_calibration_cv
+    from eegproc.deep_learning.cross_val import loso_cv, subject_calibration_cv
 
 try:
     from ..joint_v2_data import (
@@ -61,10 +61,19 @@ class SICTrainingConfig:
     dataset: str = "dreamer"
     n_channels: int = 14
     n_bands: int = 3
-    classification_level: str = "trial"
+    classification_level: str = "window"
 
+    training_protocol: str = "subject_calibration"
     source_epochs: int = 100
     source_batch_size: int = 8
+
+    validation_subjects: int = 4
+    validation_seed: int | None = 42
+    early_stopping_patience: int | None = 10
+    early_stopping_min_delta: float = 0.001
+    early_stopping_monitor: str = "val_loss"
+    early_stopping_mode: str = "min"
+    restore_best_weights: bool = True
     calibration_epochs: int = 30
     calibration_batch_size: int = 6
     calibration_trials: int = 6
@@ -346,6 +355,127 @@ def _calibration_fold_rows(results: dict) -> list[dict]:
     return rows
 
 
+
+def train_sic_loso_validation(
+    feature_array,
+    label_array,
+    subject_id_array,
+    trial_id_array,
+    config: SICTrainingConfig,
+):
+    """Ordinary SIC LOSO training with subject-disjoint validation.
+
+    This mode intentionally bypasses subject calibration. It exists to verify
+    that the SIC architecture learns under conventional ERM before introducing
+    V-REx. One LOSO subject is held out for test; a seeded subset of the
+    remaining source subjects is held out for validation in each fold.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = _ensure_dir(config.output_dir / f"{config.run_name}_{timestamp}")
+    logger = _configure_logger(run_dir)
+
+    if config.seed is not None:
+        tf.keras.utils.set_random_seed(config.seed)
+        np.random.seed(config.seed)
+
+    X = np.asarray(feature_array, dtype=np.float32)
+    y = np.asarray(label_array)
+    subjects = np.asarray(subject_id_array).reshape(-1)
+    trials = np.asarray(trial_id_array).reshape(-1)
+
+    expected_rank = 4 if config.classification_level == "trial" else 3
+    if X.ndim != expected_rank:
+        raise ValueError(
+            f"SIC {config.classification_level} mode expects rank {expected_rank}; "
+            f"got {X.shape}."
+        )
+
+    model_config = dict(config.model_config)
+    model_config.setdefault("classification_level", config.classification_level)
+    model_config.setdefault("n_classes", _n_classes(y))
+    model_config.setdefault("n_channels", config.n_channels)
+    model_config.setdefault("n_bands", config.n_bands)
+
+    # Normal-validation mode is conventional ERM unless the caller explicitly
+    # requests otherwise. The dedicated smoke script sets this False.
+    model_config.setdefault("use_vrex", False)
+
+    _write_json(run_dir / "training_config.json", asdict(config))
+    _write_json(run_dir / "model_config.json", model_config)
+
+    logger.info("Model: SIC (Subject Invariant Calibrator)")
+    logger.info("Training protocol: ordinary LOSO + subject-disjoint validation")
+    logger.info("Classification level: %s", config.classification_level)
+    logger.info("Validation subjects per fold: %d", config.validation_subjects)
+    logger.info(
+        "Early stopping: monitor=%s mode=%s patience=%s min_delta=%s restore_best=%s",
+        config.early_stopping_monitor,
+        config.early_stopping_mode,
+        config.early_stopping_patience,
+        config.early_stopping_min_delta,
+        config.restore_best_weights,
+    )
+    logger.info(
+        "V-REx: enabled=%s weight=%s",
+        model_config.get("use_vrex", False),
+        model_config.get("vrex_penalty_weight", 0.0),
+    )
+
+    builder = partial(build_sic_model, input_shape=tuple(X.shape[1:]))
+
+    results = loso_cv(
+        model_builder_function=builder,
+        feature_array=X,
+        label_array=y,
+        subject_id_array=subjects,
+        trial_id_array=trials,
+        n_epochs=config.source_epochs,
+        batch_size=config.source_batch_size,
+        hyperparameters=model_config,
+        evaluation_level=config.classification_level,
+        selection_metric="balanced_accuracy",
+        selection_level=config.classification_level,
+        maximize_metric=True,
+        metrics=(
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+            "macro_f1",
+            "macro_precision",
+            "macro_recall",
+            "balanced_accuracy",
+        ),
+        log_predictions=True,
+        log_variational_intervals=config.log_variational_intervals,
+        n_prediction_latent_samples=config.prediction_latent_samples,
+        latent_sampling_seed=config.latent_sampling_seed,
+        n_uncertainty_samples=config.uncertainty_samples,
+        validation_subjects_per_fold=config.validation_subjects,
+        validation_seed=config.validation_seed,
+        early_stopping_patience=config.early_stopping_patience,
+        early_stopping_min_delta=config.early_stopping_min_delta,
+        early_stopping_monitor=config.early_stopping_monitor,
+        early_stopping_mode=config.early_stopping_mode,
+        restore_best_weights=config.restore_best_weights,
+        decision_thresholds=(config.decision_threshold,),
+        threshold_selection_metric="balanced_accuracy",
+        threshold_selection_level=config.classification_level,
+        verbose=config.verbose,
+        extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
+        n_jobs=config.n_jobs,
+        gpu_ids=config.gpu_ids,
+        cpus_per_worker=config.cpus_per_worker,
+        max_folds=config.max_subjects,
+        alternate_subject_sets=False,
+        use_mldg=False,
+    )
+
+    _write_json(run_dir / "sic_loso_validation_results.json", results)
+    logger.info("Saved normal-validation SIC artifacts to %s", run_dir)
+    return {"run_dir": str(run_dir), "results": results}
+
+
 def train_sic(
     feature_array,
     label_array,
@@ -399,10 +529,10 @@ def train_sic(
         model_config.get("calibration_unfreeze_layers", 1),
     )
     logger.info(
-        "Subject-adversarial upper bound: enabled=%s threshold=%s max_recovery_steps=%s",
-        model_config.get("use_subject_adversarial_upperbound", False),
-        model_config.get("subject_adversarial_loss_upperbound"),
-        model_config.get("subject_adversarial_recovery_max_steps", 25),
+        "Source generalization: V-REx enabled=%s penalty_weight=%s; subject_adversarial=%s",
+        model_config.get("use_vrex", False),
+        model_config.get("vrex_penalty_weight", 0.0),
+        model_config.get("use_subject_adversarial", True),
     )
 
     builder = partial(build_sic_model, input_shape=tuple(X.shape[1:]))
@@ -425,7 +555,7 @@ def train_sic(
         calibration_weight_decay=config.calibration_weight_decay,
         calibration_seed=config.calibration_seed,
         stratify_calibration=config.stratify_calibration,
-        evaluation_level="trial",
+        evaluation_level=config.classification_level,
         metrics=(
             "accuracy",
             "f1",
@@ -468,7 +598,7 @@ def train_sic(
         )
 
     overall = results.get("overall", {})
-    logger.info("Zero-shot all-trial mean: %s", overall.get("zero_shot_all_trials_mean_scores"))
+    logger.info("Zero-shot all-target mean: %s", overall.get("zero_shot_all_trials_mean_scores"))
     logger.info("Paired zero-shot mean: %s", overall.get("paired_zero_shot_mean_scores"))
     logger.info("Post-calibration mean: %s", overall.get("calibrated_mean_scores"))
     logger.info("Calibration delta mean: %s", overall.get("delta_mean_scores"))
@@ -486,9 +616,9 @@ def _positive_int(value: str) -> int:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Train SIC: MTLFuseNet GCN/GRU -> temporal BiLSTM -> variational z, "
-            "with VAE reconstruction, subject adversity, VC target, and "
-            "three-fold six-trial subject calibration."
+            "Train SIC with serial or GCN-GRU/BiLSTM feature-fusion encoder, "
+            "with VAE reconstruction, optional V-REx and subject adversity, "
+            "VC target, and three-fold six-trial subject calibration."
         )
     )
     parser.add_argument("--out-dir", default="runs/sic")
@@ -505,10 +635,30 @@ def parse_args(argv=None):
     parser.add_argument("--window-normalization", choices=("none", "global_rms", "feature_zscore"), default="global_rms")
     parser.add_argument("--n-channels", type=_positive_int, default=14)
     parser.add_argument("--n-bands", type=_positive_int, default=3)
-    parser.add_argument("--classification-level", choices=("trial", "window"), default="trial")
+    parser.add_argument("--classification-level", choices=("trial", "window"), default="window")
 
+    parser.add_argument(
+        "--training-protocol",
+        choices=("subject_calibration", "loso_validation"),
+        default="subject_calibration",
+        help=(
+            "subject_calibration runs SIC pretraining + six-trial calibration; "
+            "loso_validation runs ordinary ERM/V-REx LOSO with subject-disjoint validation."
+        ),
+    )
     parser.add_argument("--source-epochs", type=_positive_int, default=100)
     parser.add_argument("--source-batch-size", type=_positive_int, default=8)
+    parser.add_argument("--validation-subjects", type=int, default=4)
+    parser.add_argument("--validation-seed", type=int, default=42)
+    parser.add_argument("--early-stopping-patience", type=int, default=10)
+    parser.add_argument("--early-stopping-min-delta", type=float, default=0.001)
+    parser.add_argument("--early-stopping-monitor", default="val_loss")
+    parser.add_argument(
+        "--early-stopping-mode",
+        choices=("auto", "min", "max"),
+        default="min",
+    )
+    parser.add_argument("--no-restore-best-weights", action="store_true")
     parser.add_argument("--calibration-epochs", type=_positive_int, default=30)
     parser.add_argument("--calibration-batch-size", type=_positive_int, default=6)
     parser.add_argument("--calibration-trials", type=_positive_int, default=6)
@@ -545,11 +695,17 @@ def parse_args(argv=None):
 
 
 def _validate_args(args, model_config):
-    if args.classification_level != "trial":
+    if args.validation_subjects < 0:
+        raise ValueError("--validation-subjects must be >= 0.")
+    if args.training_protocol == "loso_validation" and args.validation_subjects < 1:
         raise ValueError(
-            "The SIC six-trial calibration protocol currently requires "
-            "--classification-level trial so six trials are six supervised samples."
+            "--training-protocol loso_validation requires at least one "
+            "subject-disjoint validation subject."
         )
+    if args.early_stopping_patience is not None and args.early_stopping_patience < 1:
+        raise ValueError("--early-stopping-patience must be >= 1.")
+    if args.early_stopping_min_delta < 0.0:
+        raise ValueError("--early-stopping-min-delta must be non-negative.")
     if args.calibration_trials * args.calibration_folds != 18 and args.dataset == "dreamer":
         raise ValueError(
             "DREAMER SIC currently uses the complete 18-trial protocol: "
@@ -606,8 +762,16 @@ def main(argv=None):
         n_channels=args.n_channels,
         n_bands=args.n_bands,
         classification_level=args.classification_level,
+        training_protocol=args.training_protocol,
         source_epochs=args.source_epochs,
         source_batch_size=args.source_batch_size,
+        validation_subjects=args.validation_subjects,
+        validation_seed=args.validation_seed,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
+        early_stopping_monitor=args.early_stopping_monitor,
+        early_stopping_mode=args.early_stopping_mode,
+        restore_best_weights=not args.no_restore_best_weights,
         calibration_epochs=args.calibration_epochs,
         calibration_batch_size=args.calibration_batch_size,
         calibration_trials=args.calibration_trials,
@@ -634,7 +798,10 @@ def main(argv=None):
         window_normalization=args.window_normalization,
         model_config=model_config,
     )
-    train_sic(X, y, subjects, trials, config)
+    if args.training_protocol == "loso_validation":
+        train_sic_loso_validation(X, y, subjects, trials, config)
+    else:
+        train_sic(X, y, subjects, trials, config)
     return 0
 
 

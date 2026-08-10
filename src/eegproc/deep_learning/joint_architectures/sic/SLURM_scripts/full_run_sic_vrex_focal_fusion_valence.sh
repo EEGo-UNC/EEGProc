@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=sic_valence
-#SBATCH --output=sic_valence_%j.out
-#SBATCH --error=sic_valence_%j.err
+#SBATCH --job-name=sic_vrex_valence
+#SBATCH --output=sic_vrex_valence_%j.out
+#SBATCH --error=sic_vrex_valence_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:4
@@ -18,13 +18,24 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
+
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-60}"
+SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-25}"
-USE_SUBJECT_ADV_UPPERBOUND="${USE_SUBJECT_ADV_UPPERBOUND:-false}"
-SUBJECT_ADV_UPPERBOUND="${SUBJECT_ADV_UPPERBOUND:-2.8}"
-SUBJECT_ADV_RECOVERY_MAX_STEPS="${SUBJECT_ADV_RECOVERY_MAX_STEPS:-10}"
+CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 CALIBRATION_UNFREEZE_LAYERS="${CALIBRATION_UNFREEZE_LAYERS:-2}"
 PREDICTION_LATENT_SAMPLES="${PREDICTION_LATENT_SAMPLES:-20}"
+VREX_PENALTY_WEIGHT="${VREX_PENALTY_WEIGHT:-1.0}"
+USE_SUBJECT_ADVERSARIAL="${USE_SUBJECT_ADVERSARIAL:-true}"
+ARCHITECTURE_MODE="${ARCHITECTURE_MODE:-serial}"
+FUSION_UNITS="${FUSION_UNITS:-128}"
+FUSION_DROPOUT="${FUSION_DROPOUT:-0.20}"
+FOCAL_GAMMA="${FOCAL_GAMMA:-1.0}"
+FOCAL_ALPHA="${FOCAL_ALPHA:-}"
+
+
+export VREX_PENALTY_WEIGHT
+export USE_SUBJECT_ADVERSARIAL
 
 cd "$PROJECT_DIR"
 
@@ -55,6 +66,7 @@ elif [[ -n "${CUDA_HOME:-}" && -d "${CUDA_HOME}" ]]; then
 elif command -v nvcc >/dev/null 2>&1; then
     MODULE_CUDA_ROOT="$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")"
 fi
+
 find_libdevice() {
     local roots=()
     [[ -n "$MODULE_CUDA_ROOT" && -d "$MODULE_CUDA_ROOT" ]] && roots+=("$MODULE_CUDA_ROOT")
@@ -64,6 +76,7 @@ find_libdevice() {
     [[ ${#roots[@]} -eq 0 ]] && return 0
     find "${roots[@]}" -type f -path "*/nvvm/libdevice/libdevice.10.bc" -print -quit 2>/dev/null || true
 }
+
 LIBDEVICE_PATH="$(find_libdevice)"
 if [[ -z "$LIBDEVICE_PATH" ]]; then
     if command -v flock >/dev/null 2>&1; then
@@ -109,6 +122,11 @@ print(json.dumps({
     "bilstm_units": 128,
     "n_bilstm_layers": 1,
     "bilstm_dropout": 0.30,
+    "architecture_mode": "${ARCHITECTURE_MODE}",
+    "fusion_units": int("${FUSION_UNITS}"),
+    "fusion_dropout": float("${FUSION_DROPOUT}"),
+    "focal_gamma": float("${FOCAL_GAMMA}"),
+    "focal_alpha": (None if "${FOCAL_ALPHA}" == "" else float("${FOCAL_ALPHA}")),
     "z_dim": 64,
     "classification_hidden_units": [128, 64],
     "classification_dropout": 0.20,
@@ -121,14 +139,13 @@ print(json.dumps({
     "vae_loss_weight": 0.10,
     "vae_beta": 0.05,
     "decoder_dropout": 0.10,
-    "use_subject_adversarial": True,
+    "use_vrex": True,
+    "vrex_penalty_weight": float("${VREX_PENALTY_WEIGHT}"),
+    "use_subject_adversarial": str("${USE_SUBJECT_ADVERSARIAL}").lower() == "true",
     "subject_adversarial_weight": 0.8,
     "subject_loss_weight": 1.0,
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
-    "use_subject_adversarial_upperbound": str("${USE_SUBJECT_ADV_UPPERBOUND}").lower() == "true",
-    "subject_adversarial_loss_upperbound": float("${SUBJECT_ADV_UPPERBOUND}"),
-    "subject_adversarial_recovery_max_steps": int("${SUBJECT_ADV_RECOVERY_MAX_STEPS}"),
     "calibration_unfreeze_layers": int("${CALIBRATION_UNFREEZE_LAYERS}"),
     "calibration_use_vc_target": True,
     "use_class_weight": False
@@ -138,13 +155,20 @@ PY
 
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
-echo "Model: SIC (Subject Invariant Calibrator)"
-echo "Protocol: source-independent pretraining + 3-fold six-trial calibration"
+echo "Model: SIC + V-REx"
+echo "Protocol: source LOSO pretraining + 3-fold six-trial calibration"
+echo "Classification level: window"
+echo "Architecture mode: $ARCHITECTURE_MODE"
+echo "Focal gamma: $FOCAL_GAMMA"
+echo "Focal alpha: ${FOCAL_ALPHA:-None}"
 echo "Source epochs: $SOURCE_EPOCHS"
+echo "Source batch size: $SOURCE_BATCH_SIZE"
 echo "Calibration epochs: $CALIBRATION_EPOCHS"
+echo "Calibration batch size: $CALIBRATION_BATCH_SIZE"
+echo "V-REx penalty weight: $VREX_PENALTY_WEIGHT"
+echo "Subject adversarial enabled: $USE_SUBJECT_ADVERSARIAL"
+echo "Adversarial takeover/recovery: REMOVED"
 echo "Calibration unfreeze layers: $CALIBRATION_UNFREEZE_LAYERS"
-echo "Adversarial upper bound enabled: $USE_SUBJECT_ADV_UPPERBOUND"
-echo "Adversarial upper bound: $SUBJECT_ADV_UPPERBOUND"
 echo "Prediction latent samples: $PREDICTION_LATENT_SAMPLES"
 python --version
 nvidia-smi
@@ -160,8 +184,8 @@ print("SIC module:", sic_model.__file__)
 print("SIC builder API:", sic_model.SIC_BUILDER_API_VERSION)
 print("SIC builder:", inspect.signature(sic_model.build_sic_model))
 print("Calibration CV:", inspect.signature(cross_val.subject_calibration_cv))
-if sic_model.SIC_BUILDER_API_VERSION < 2:
-    raise RuntimeError("Stale SIC model; expected builder API >= 2.")
+if sic_model.SIC_BUILDER_API_VERSION < 4:
+    raise RuntimeError("Stale SIC model; expected V-REx builder API >= 3.")
 gpus = tf.config.list_physical_devices("GPU")
 print("Available GPUs:", gpus)
 if len(gpus) < 4:
@@ -172,15 +196,15 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
     --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
     --label-dimension valence \
-    --classification-level trial \
+    --classification-level window \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/sic/DREAMER/valence \
-    --run-name dreamer_valence_sic \
+    --out-dir runs/sic_vrex/DREAMER/valence \
+    --run-name dreamer_valence_sic_vrex \
     --source-epochs "$SOURCE_EPOCHS" \
-    --source-batch-size 8 \
+    --source-batch-size "$SOURCE_BATCH_SIZE" \
     --calibration-epochs "$CALIBRATION_EPOCHS" \
-    --calibration-batch-size 6 \
+    --calibration-batch-size "$CALIBRATION_BATCH_SIZE" \
     --calibration-trials 6 \
     --calibration-folds 3 \
     --calibration-learning-rate 0.0001 \

@@ -56,3 +56,8 @@
     - Feature fusion is a difficult path to go down. Depends on too much dimensionality and ablative testing. Best to have a spatio spectral -> temporal -> classifier setup. This produces a contiguous latent space, making it easier for the final heads.
 - 8/9/2026
     - MTLFuseNet claims subject-independence, but the paper lacks a significant amount of information in order to replicate. CHMFE-DAN reports a very small increase above baseline.
+    - Because the GCNMTL oracle didn't work, it is possible that this wasn't implemented correctly.
+    - Focus on v6, an sts subject invariant calibration (SIC) model. Builds subject invariant vae and identification adversarial, then fine tunes classifier head for accuracy. This will be great for counterfactuals as the accuracy should be enhanced.
+- 8/10/2026
+    - Joint v4 performed below baseline on valence (58% acc).
+    - 
