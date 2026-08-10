@@ -85,7 +85,7 @@ except ImportError:
     )
 
 
-SIC_BUILDER_API_VERSION = 4
+SIC_BUILDER_API_VERSION = 5
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
 
 
@@ -209,6 +209,98 @@ def _source_only_mi_adjacency(
         zero_diagonal=bool(zero_diagonal),
         band_reduction=str(band_reduction),
     )
+
+
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
+class StreamingBalancedAccuracy(tf.keras.metrics.Metric):
+    """Balanced accuracy accumulated from one epoch-wide confusion matrix."""
+
+    def __init__(self, n_classes: int = 2, name="balanced_accuracy", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.n_classes = int(n_classes)
+        if self.n_classes < 2:
+            raise ValueError("n_classes must be >= 2.")
+        self.confusion_matrix = self.add_weight(
+            name="confusion_matrix",
+            shape=(self.n_classes, self.n_classes),
+            initializer="zeros",
+            dtype=tf.float32,
+        )
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_true = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+        y_pred = tf.convert_to_tensor(y_pred)
+        if y_pred.shape.rank is not None and y_pred.shape.rank > 1:
+            y_pred = tf.argmax(y_pred, axis=-1, output_type=tf.int32)
+        else:
+            y_pred = tf.cast(tf.reshape(y_pred, [-1]), tf.int32)
+        y_pred = tf.reshape(y_pred, [-1])
+
+        weights = None
+        if sample_weight is not None:
+            weights = tf.cast(tf.reshape(sample_weight, [-1]), tf.float32)
+
+        matrix = tf.math.confusion_matrix(
+            y_true,
+            y_pred,
+            num_classes=self.n_classes,
+            weights=weights,
+            dtype=tf.float32,
+        )
+        self.confusion_matrix.assign_add(matrix)
+
+    def result(self):
+        true_counts = tf.reduce_sum(self.confusion_matrix, axis=1)
+        recalls = tf.math.divide_no_nan(
+            tf.linalg.diag_part(self.confusion_matrix),
+            true_counts,
+        )
+        return tf.reduce_mean(recalls)
+
+    def reset_state(self):
+        self.confusion_matrix.assign(tf.zeros_like(self.confusion_matrix))
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"n_classes": self.n_classes})
+        return config
+
+
+@tf.keras.utils.register_keras_serializable(package="EEGProc")
+class StreamingR2(tf.keras.metrics.Metric):
+    """Epoch-wide R^2 for continuous decoder reconstruction."""
+
+    def __init__(self, name="decoder_r2", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.ss_res = self.add_weight(name="ss_res", initializer="zeros")
+        self.sum_y = self.add_weight(name="sum_y", initializer="zeros")
+        self.sum_y_sq = self.add_weight(name="sum_y_sq", initializer="zeros")
+        self.count = self.add_weight(name="count", initializer="zeros")
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        del sample_weight
+        y_true = tf.cast(tf.reshape(y_true, [-1]), self.dtype)
+        y_pred = tf.cast(tf.reshape(y_pred, [-1]), self.dtype)
+        self.ss_res.assign_add(tf.reduce_sum(tf.square(y_true - y_pred)))
+        self.sum_y.assign_add(tf.reduce_sum(y_true))
+        self.sum_y_sq.assign_add(tf.reduce_sum(tf.square(y_true)))
+        self.count.assign_add(tf.cast(tf.size(y_true), self.dtype))
+
+    def result(self):
+        ss_tot = self.sum_y_sq - tf.math.divide_no_nan(
+            tf.square(self.sum_y),
+            self.count,
+        )
+        eps = tf.cast(tf.keras.backend.epsilon(), self.dtype)
+        return tf.where(
+            ss_tot > eps,
+            1.0 - tf.math.divide_no_nan(self.ss_res, ss_tot),
+            tf.zeros((), dtype=self.dtype),
+        )
+
+    def reset_state(self):
+        for variable in (self.ss_res, self.sum_y, self.sum_y_sq, self.count):
+            variable.assign(tf.zeros_like(variable))
 
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
@@ -547,13 +639,27 @@ class SICModel(tf.keras.Model):
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
         self.cross_entropy_tracker = tf.keras.metrics.Mean(name="cross_entropy")
         self.focal_loss_tracker = tf.keras.metrics.Mean(name="focal_loss")
+        metric_prefix = self.classification_level
         self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
-            name="accuracy"
+            name=f"{metric_prefix}_accuracy"
+        )
+        self.balanced_accuracy_tracker = StreamingBalancedAccuracy(
+            n_classes=self.n_classes,
+            name=f"{metric_prefix}_balanced_accuracy",
+        )
+        # Exact epoch-wide class fractions. During validation Keras exposes
+        # these as val_predicted_class_1_fraction / val_true_class_1_fraction.
+        self.predicted_class_1_fraction_tracker = tf.keras.metrics.Mean(
+            name="predicted_class_1_fraction"
+        )
+        self.true_class_1_fraction_tracker = tf.keras.metrics.Mean(
+            name="true_class_1_fraction"
         )
         self.vae_loss_tracker = tf.keras.metrics.Mean(name="vae_loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
         )
+        self.decoder_r2_tracker = StreamingR2(name="decoder_r2")
         self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
         self.vrex_penalty_tracker = tf.keras.metrics.Mean(name="vrex_penalty")
         self.vrex_subject_risk_mean_tracker = tf.keras.metrics.Mean(
@@ -575,8 +681,12 @@ class SICModel(tf.keras.Model):
             self.cross_entropy_tracker,
             self.focal_loss_tracker,
             self.accuracy_tracker,
+            self.balanced_accuracy_tracker,
+            self.predicted_class_1_fraction_tracker,
+            self.true_class_1_fraction_tracker,
             self.vae_loss_tracker,
             self.reconstruction_loss_tracker,
+            self.decoder_r2_tracker,
             self.kl_loss_tracker,
         ]
         if self.use_vrex:
@@ -1154,10 +1264,28 @@ class SICModel(tf.keras.Model):
         self.focal_loss_tracker.update_state(
             vc_components.get("focal_loss", vc_components["cross_entropy"])
         )
+        # Reporting metrics are deliberately unweighted. Class/sample weights
+        # may shape the optimization loss, but "window_accuracy" and
+        # "window_balanced_accuracy" should describe the model's natural
+        # predictions on the observed windows.
         self.accuracy_tracker.update_state(
             y_flat,
             outputs["logits"],
-            sample_weight=sample_weight,
+        )
+        self.balanced_accuracy_tracker.update_state(
+            y_flat,
+            outputs["logits"],
+        )
+        predicted_ids = tf.argmax(
+            outputs["logits"],
+            axis=-1,
+            output_type=tf.int32,
+        )
+        self.predicted_class_1_fraction_tracker.update_state(
+            tf.cast(tf.equal(predicted_ids, 1), tf.float32)
+        )
+        self.true_class_1_fraction_tracker.update_state(
+            tf.cast(tf.equal(tf.cast(y_flat, tf.int32), 1), tf.float32)
         )
         self.vae_loss_tracker.update_state(
             zero if vae_components is None else vae_components["vae_loss"]
@@ -1167,6 +1295,11 @@ class SICModel(tf.keras.Model):
             if vae_components is None
             else vae_components["reconstruction_loss"]
         )
+        if vae_components is not None:
+            self.decoder_r2_tracker.update_state(
+                outputs["flat_windows"],
+                vae_components["reconstruction"],
+            )
         self.kl_loss_tracker.update_state(
             zero if vae_components is None else vae_components["kl_loss"]
         )

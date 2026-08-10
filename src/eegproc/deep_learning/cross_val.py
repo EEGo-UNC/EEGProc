@@ -1712,7 +1712,7 @@ def _evaluate_trial_tensor_fold(
         batch_size=batch_size,
     )
     keras_model_loss = float(keras_evaluation["loss"])
-    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+    decoder_r2 = keras_evaluation.get("decoder_r2")
 
     trial_scores = _level_scores(
         y_true=y_true_trial,
@@ -1721,8 +1721,8 @@ def _evaluate_trial_tensor_fold(
         metrics=metrics,
     )
     trial_scores["joint_loss"] = keras_model_loss
-    if decoder_accuracy is not None:
-        trial_scores["decoder_accuracy"] = float(decoder_accuracy)
+    if decoder_r2 is not None:
+        trial_scores["decoder_r2"] = float(decoder_r2)
 
     n_trials = int(len(y_true_trial))
     n_windows_per_trial = int(X_test.shape[1])
@@ -1738,8 +1738,8 @@ def _evaluate_trial_tensor_fold(
         "keras_model_loss": keras_model_loss,
         "joint_loss": keras_model_loss,
         **(
-            {"decoder_accuracy": float(decoder_accuracy)}
-            if decoder_accuracy is not None
+            {"decoder_r2": float(decoder_r2)}
+            if decoder_r2 is not None
             else {}
         ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
@@ -1754,8 +1754,8 @@ def _evaluate_trial_tensor_fold(
         "classification_available": False,
         "joint_loss": keras_model_loss,
         **(
-            {"decoder_accuracy": float(decoder_accuracy)}
-            if decoder_accuracy is not None
+            {"decoder_r2": float(decoder_r2)}
+            if decoder_r2 is not None
             else {}
         ),
     }
@@ -1900,7 +1900,7 @@ def _evaluate_classification_fold(
 
     # model.evaluate() is retained as a diagnostic because joint Keras models
     # may include reconstruction/regularization terms beyond classification.
-    # It also exposes decoder_accuracy for continuous reconstruction quality.
+    # It also exposes decoder_r2 for continuous reconstruction quality.
     keras_evaluation = _keras_evaluation_results(
         model=model,
         X=X_test,
@@ -1908,7 +1908,7 @@ def _evaluate_classification_fold(
         batch_size=batch_size,
     )
     keras_model_loss = keras_evaluation["loss"]
-    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+    decoder_r2 = keras_evaluation.get("decoder_r2")
 
     window_scores = _level_scores(
         y_true=y_true_window,
@@ -1919,8 +1919,8 @@ def _evaluate_classification_fold(
     # ``loss`` above is classifier probability log loss. ``joint_loss`` is
     # the model's complete weighted VAE + VC objective returned by Keras.
     window_scores["joint_loss"] = float(keras_model_loss)
-    if decoder_accuracy is not None:
-        window_scores["decoder_accuracy"] = float(decoder_accuracy)
+    if decoder_r2 is not None:
+        window_scores["decoder_r2"] = float(decoder_r2)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
@@ -1954,8 +1954,8 @@ def _evaluate_classification_fold(
         "keras_model_loss": float(keras_model_loss),
         "joint_loss": float(keras_model_loss),
         **(
-            {"decoder_accuracy": float(decoder_accuracy)}
-            if decoder_accuracy is not None
+            {"decoder_r2": float(decoder_r2)}
+            if decoder_r2 is not None
             else {}
         ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
@@ -3038,15 +3038,15 @@ def _aggregate_loso_config_result(
 
     mean_scores, std_scores = _mean_std_rows(
         fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_r2"],
     )
     window_mean_scores, window_std_scores = _mean_std_rows(
         window_fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_r2"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
         trial_fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_r2"],
     )
 
     selection_means = (

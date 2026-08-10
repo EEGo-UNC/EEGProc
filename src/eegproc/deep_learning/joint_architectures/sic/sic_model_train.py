@@ -73,6 +73,7 @@ class SICTrainingConfig:
     early_stopping_min_delta: float = 0.001
     early_stopping_monitor: str = "val_loss"
     early_stopping_mode: str = "min"
+    best_epoch_metric: str | None = None
     restore_best_weights: bool = True
     calibration_epochs: int = 30
     calibration_batch_size: int = 6
@@ -402,6 +403,31 @@ def train_sic_loso_validation(
     # requests otherwise. The dedicated smoke script sets this False.
     model_config.setdefault("use_vrex", False)
 
+    if config.best_epoch_metric is not None:
+        if config.classification_level != "window":
+            raise ValueError(
+                "--best-epoch-metric currently selects window-level metrics and "
+                "therefore requires --classification-level window."
+            )
+        effective_early_stopping_monitor = (
+            f"val_window_{config.best_epoch_metric}"
+        )
+        effective_early_stopping_mode = "max"
+    else:
+        effective_early_stopping_monitor = config.early_stopping_monitor
+        effective_early_stopping_mode = config.early_stopping_mode
+        if config.classification_level == "window":
+            legacy_window_monitor_aliases = {
+                "val_accuracy": "val_window_accuracy",
+                "val_balanced_accuracy": "val_window_balanced_accuracy",
+                "accuracy": "window_accuracy",
+                "balanced_accuracy": "window_balanced_accuracy",
+            }
+            effective_early_stopping_monitor = legacy_window_monitor_aliases.get(
+                effective_early_stopping_monitor,
+                effective_early_stopping_monitor,
+            )
+
     _write_json(run_dir / "training_config.json", asdict(config))
     _write_json(run_dir / "model_config.json", model_config)
 
@@ -411,8 +437,8 @@ def train_sic_loso_validation(
     logger.info("Validation subjects per fold: %d", config.validation_subjects)
     logger.info(
         "Early stopping: monitor=%s mode=%s patience=%s min_delta=%s restore_best=%s",
-        config.early_stopping_monitor,
-        config.early_stopping_mode,
+        effective_early_stopping_monitor,
+        effective_early_stopping_mode,
         config.early_stopping_patience,
         config.early_stopping_min_delta,
         config.restore_best_weights,
@@ -457,14 +483,18 @@ def train_sic_loso_validation(
         validation_seed=config.validation_seed,
         early_stopping_patience=config.early_stopping_patience,
         early_stopping_min_delta=config.early_stopping_min_delta,
-        early_stopping_monitor=config.early_stopping_monitor,
-        early_stopping_mode=config.early_stopping_mode,
+        early_stopping_monitor=effective_early_stopping_monitor,
+        early_stopping_mode=effective_early_stopping_mode,
         restore_best_weights=config.restore_best_weights,
         decision_thresholds=(config.decision_threshold,),
         threshold_selection_metric="balanced_accuracy",
         threshold_selection_level=config.classification_level,
         verbose=config.verbose,
-        extra_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
+        extra_fit_kwargs={
+            "callbacks": [
+                tf.keras.callbacks.TerminateOnNaN(),
+            ]
+        },
         n_jobs=config.n_jobs,
         gpu_ids=config.gpu_ids,
         cpus_per_worker=config.cpus_per_worker,
@@ -672,6 +702,17 @@ def parse_args(argv=None):
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.001)
     parser.add_argument("--early-stopping-monitor", default="val_loss")
     parser.add_argument(
+        "--best-epoch-metric",
+        choices=("accuracy", "balanced_accuracy"),
+        default=None,
+        help=(
+            "Select/restores the best LOSO-validation epoch using the requested "
+            "window metric. 'accuracy' monitors val_window_accuracy; "
+            "'balanced_accuracy' monitors val_window_balanced_accuracy. "
+            "When omitted, --early-stopping-monitor/--early-stopping-mode are used."
+        ),
+    )
+    parser.add_argument(
         "--early-stopping-mode",
         choices=("auto", "min", "max"),
         default="min",
@@ -726,6 +767,10 @@ def _validate_args(args, model_config):
         raise ValueError("--early-stopping-patience must be >= 1.")
     if args.early_stopping_min_delta < 0.0:
         raise ValueError("--early-stopping-min-delta must be non-negative.")
+    if args.best_epoch_metric is not None and args.classification_level != "window":
+        raise ValueError(
+            "--best-epoch-metric requires --classification-level window."
+        )
     if (
         args.calibration_trials * args.calibration_folds != 18
         and args.dataset == "dreamer"
@@ -794,6 +839,7 @@ def main(argv=None):
         early_stopping_min_delta=args.early_stopping_min_delta,
         early_stopping_monitor=args.early_stopping_monitor,
         early_stopping_mode=args.early_stopping_mode,
+        best_epoch_metric=args.best_epoch_metric,
         restore_best_weights=not args.no_restore_best_weights,
         calibration_epochs=args.calibration_epochs,
         calibration_batch_size=args.calibration_batch_size,

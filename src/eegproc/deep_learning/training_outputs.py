@@ -222,6 +222,12 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
     """
 
     _PREFERRED_METRIC_ORDER = (
+        "window_accuracy",
+        "val_window_accuracy",
+        "window_balanced_accuracy",
+        "val_window_balanced_accuracy",
+        "decoder_r2",
+        "val_decoder_r2",
         "accuracy",
         "val_accuracy",
         "trial_f1",
@@ -230,8 +236,6 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         "val_trial_balanced_accuracy",
         "balanced_accuracy",
         "val_balanced_accuracy",
-        "decoder_accuracy",
-        "val_decoder_accuracy",
         "subject_accuracy",
         "val_subject_accuracy",
         "precision",
@@ -369,36 +373,26 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         logs: Mapping[str, object],
         validation: bool,
     ) -> str | None:
+        """Print exact class-1 prediction and target fractions for the epoch."""
         prefix = "val_" if validation else ""
-        class_ids: set[int] = set()
-        for name in logs:
-            if not name.startswith(prefix):
-                continue
-            base = name[len(prefix):]
-            for distribution_name in ("predicted_class_", "true_class_"):
-                if base.startswith(distribution_name) and base.endswith("_fraction"):
-                    class_text = base[
-                        len(distribution_name) : -len("_fraction")
-                    ]
-                    try:
-                        class_ids.add(int(class_text))
-                    except ValueError:
-                        pass
-
-        if not class_ids:
+        pred1 = self._log_value(
+            logs,
+            f"{prefix}predicted_class_1_fraction",
+        )
+        true1 = self._log_value(
+            logs,
+            f"{prefix}true_class_1_fraction",
+        )
+        if pred1 is None and true1 is None:
             return None
 
-        def values(kind: str) -> str:
-            entries = []
-            for class_id in sorted(class_ids):
-                key = f"{prefix}{kind}_class_{class_id}_fraction"
-                value = self._log_value(logs, key)
-                if value is not None:
-                    entries.append(f"{class_id}:{self._format_value(value)}")
-            return "{" + ", ".join(entries) + "}"
-
         split = "val" if validation else "train"
-        return f"{split} pred={values('predicted')} true={values('true')}"
+        parts = []
+        if pred1 is not None:
+            parts.append(f"pred1={self._format_value(pred1)}")
+        if true1 is not None:
+            parts.append(f"true1={self._format_value(true1)}")
+        return f"{split} " + " ".join(parts)
 
     def _weighted_contribution(
         self,
