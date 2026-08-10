@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import inspect
 import itertools
 import multiprocessing as mp
 import os
@@ -246,6 +247,62 @@ def _split_config(config: dict) -> tuple[dict, dict]:
     model_hp = {k: v for k, v in config.items() if k not in _FIT_RESERVED_KEYS}
     fit_hp = {k: v for k, v in config.items() if k in _FIT_RESERVED_KEYS}
     return model_hp, fit_hp
+
+
+def _build_model_with_fold_training_context(
+    model_builder_function: Callable[..., tf.keras.Model],
+    model_hp: dict,
+    *,
+    training_features: np.ndarray,
+    training_labels: np.ndarray,
+    training_subject_ids: np.ndarray,
+    training_trial_ids: np.ndarray,
+) -> tf.keras.Model:
+    """Build a model with leakage-safe fold-local training context when supported.
+
+    Some architectures, including SIC, need the actual gradient-training
+    partition at construction time. SIC uses it to estimate its fixed
+    MTLFuseNet-style mutual-information adjacency and to determine the
+    fold-local subject-adversarial class count.
+
+    To preserve compatibility with older EEGProc builders, training-context
+    arguments are supplied only when the builder explicitly declares them in
+    its signature. Validation and test samples are never included.
+    """
+    builder_kwargs = dict(model_hp)
+    training_context = {
+        "training_features": training_features,
+        "training_labels": training_labels,
+        "training_subject_ids": training_subject_ids,
+        "training_trial_ids": training_trial_ids,
+    }
+
+    try:
+        parameters = inspect.signature(model_builder_function).parameters
+    except (TypeError, ValueError):
+        # Preserve legacy behavior for unusual callables whose signatures
+        # cannot be inspected.
+        return model_builder_function(**builder_kwargs)
+
+    accepted_context_keys = [
+        key for key in training_context if key in parameters
+    ]
+    for key in accepted_context_keys:
+        if key in builder_kwargs:
+            raise ValueError(
+                f"{key!r} must be supplied fold-locally by loso_cv; do not "
+                "put it in the hyperparameter configuration."
+            )
+        builder_kwargs[key] = training_context[key]
+
+    if accepted_context_keys:
+        print(
+            "Model builder fold-training context: "
+            + ", ".join(accepted_context_keys),
+            flush=True,
+        )
+
+    return model_builder_function(**builder_kwargs)
 
 
 def _balanced_two_subject_sets(
@@ -2598,7 +2655,14 @@ def _run_loso_fold(
         fit_call_kwargs["callbacks"] = callbacks
 
     tf.keras.backend.clear_session()
-    model = model_builder_function(**model_hp)
+    model = _build_model_with_fold_training_context(
+        model_builder_function,
+        model_hp,
+        training_features=X_fit_train,
+        training_labels=y_fit_train,
+        training_subject_ids=subject_ids_fit_train,
+        training_trial_ids=trial_ids_fit_train,
+    )
     X_fit_train_for_fit = _prepare_fit_inputs_with_subject_ids(
         model,
         X_fit_train,
