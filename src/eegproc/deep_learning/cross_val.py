@@ -85,6 +85,11 @@ _DEFAULT_SEQUENCE_HYPERPARAMETER_DEPTHS = {
     "pool_sizes": 1,
     "gcn_units": 1,
     "temporal_pool_sizes": 1,
+    # Dense classifier layer widths are one architecture value, e.g.
+    # [128, 64] means Dense(128) -> Dense(64), not two grid candidates.
+    # Multiple classifier architectures can still be supplied with one
+    # additional nesting level, e.g. [[128, 64], [256, 128]].
+    "classification_hidden_units": 1,
     "spatial_pool_sizes": 2,
 }
 _EMPTY_SEQUENCE_ALLOWED_KEYS = frozenset(
