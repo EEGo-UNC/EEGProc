@@ -123,7 +123,7 @@ print(json.dumps({
     "decoder_dropout": 0.10,
     "use_vrex": False,
     "vrex_penalty_weight": 0.0,
-    "use_subject_adversarial": true,
+    "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
     "subject_loss_weight": 1.0,
     "subject_hidden_units": 64,
