@@ -503,6 +503,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         lambda_: float = 0.0,
         logits: tf.Tensor | None = None,
         sample_weight: tf.Tensor | None = None,
+        include_classification: bool = True,
     ) -> dict[str, tf.Tensor]:
         """Return every raw and weighted component of the VC objective.
 
@@ -510,29 +511,38 @@ class VariationalClassifier(tf.keras.layers.Layer):
         terms. Passing the logits already produced by the joint model avoids a
         duplicate classifier call and guarantees that the logged focal loss
         corresponds to the logits used for the accuracy metric.
+
+        Set ``include_classification=False`` when a parent model supplies its
+        own deterministic classifier objective. In that mode this method does
+        not calculate or add a categorical classification loss; it returns
+        only the variational regularizers.
         """
         y = self._class_ids(y)
         y_onehot = tf.one_hot(y, self.n_classes, dtype=mh.dtype)
-        if logits is None:
-            logits = self(mh, training=True)
-
-        base_ce_per_sample, focal_per_sample = _categorical_focal_terms(
-            y=y,
-            logits=logits,
-            n_classes=self.n_classes,
-            label_smoothing=self.label_smoothing,
-            focal_gamma=self.focal_gamma,
-            focal_alpha=self.focal_alpha,
-        )
-        base_cross_entropy = self._weighted_mean(
-            base_ce_per_sample,
-            sample_weight=sample_weight,
-        )
-        focal_loss = self._weighted_mean(
-            focal_per_sample,
-            sample_weight=sample_weight,
-        )
-        weighted_focal_loss = tf.cast(alpha, focal_loss.dtype) * focal_loss
+        if include_classification:
+            if logits is None:
+                logits = self(mh, training=True)
+            base_ce_per_sample, focal_per_sample = _categorical_focal_terms(
+                y=y,
+                logits=logits,
+                n_classes=self.n_classes,
+                label_smoothing=self.label_smoothing,
+                focal_gamma=self.focal_gamma,
+                focal_alpha=self.focal_alpha,
+            )
+            base_cross_entropy = self._weighted_mean(
+                base_ce_per_sample,
+                sample_weight=sample_weight,
+            )
+            focal_loss = self._weighted_mean(
+                focal_per_sample,
+                sample_weight=sample_weight,
+            )
+            weighted_focal_loss = tf.cast(alpha, focal_loss.dtype) * focal_loss
+        else:
+            focal_loss = tf.zeros((), dtype=mh.dtype)
+            weighted_focal_loss = tf.zeros((), dtype=mh.dtype)
+            base_cross_entropy = tf.zeros((), dtype=mh.dtype)
 
         latent_posterior_kl = self._gaussian_kl_latent_posterior(mh, y)
         weighted_latent_posterior_kl = (
@@ -785,4 +795,3 @@ class HybridClassifier(VariationalClassifier):
             }
         )
         return config
-

@@ -33,10 +33,10 @@ VAE, and (when enabled) subject-adversarial objectives are optimized together
 in the same source update.
 
 V-REx can additionally regularize source training.  Each source subject present
-in a minibatch is treated as an environment.  SIC computes the classification
-cross-entropy risk separately for each subject and adds the variance of those
-risks to the ordinary source objective.  This uses the same batched forward
-pass and a single backward/optimizer step.
+in a minibatch is treated as an environment.  SIC computes the focal risk
+separately for each subject and adds the variance of those risks to the ordinary
+source objective.  This uses the same batched forward pass and a single
+backward/optimizer step.
 
 Subject calibration
 -------------------
@@ -637,7 +637,6 @@ class SICModel(tf.keras.Model):
         # paired zero-shot and post-calibration trial metrics.
         self.loss_tracker = tf.keras.metrics.Mean(name="loss")
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
-        self.cross_entropy_tracker = tf.keras.metrics.Mean(name="cross_entropy")
         self.focal_loss_tracker = tf.keras.metrics.Mean(name="focal_loss")
         metric_prefix = self.classification_level
         self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
@@ -678,7 +677,6 @@ class SICModel(tf.keras.Model):
         output = [
             self.loss_tracker,
             self.vc_loss_tracker,
-            self.cross_entropy_tracker,
             self.focal_loss_tracker,
             self.accuracy_tracker,
             self.balanced_accuracy_tracker,
@@ -1011,19 +1009,18 @@ class SICModel(tf.keras.Model):
     def _per_sample_focal_loss(self, logits, y_flat):
         """Sparse binary/multiclass focal loss from deterministic logits."""
         y_flat = tf.cast(tf.reshape(y_flat, [-1]), tf.int32)
-        ce = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            labels=y_flat,
-            logits=logits,
-        )
-        probs = tf.nn.softmax(logits, axis=-1)
+        log_probs = tf.nn.log_softmax(logits, axis=-1)
+        probs = tf.exp(log_probs)
         row_ids = tf.range(tf.shape(y_flat)[0], dtype=tf.int32)
         gather_ids = tf.stack([row_ids, y_flat], axis=1)
         p_t = tf.gather_nd(probs, gather_ids)
+        log_p_t = tf.gather_nd(log_probs, gather_ids)
         modulating = tf.pow(
             tf.maximum(1.0 - p_t, tf.keras.backend.epsilon()),
             tf.cast(self.focal_gamma, p_t.dtype),
         )
-        loss = modulating * ce
+        # Direct focal objective: -(1 - p_t)^gamma * log(p_t).
+        loss = -modulating * log_p_t
 
         if self.focal_alpha is not None:
             if self.n_classes != 2:
@@ -1058,9 +1055,9 @@ class SICModel(tf.keras.Model):
         *,
         calibration: bool,
     ):
-        # The deterministic classifier term is focal loss. The VC target still
-        # contributes its latent/distribution regularizers, but its CE term is
-        # replaced so we do not optimize both CE and focal simultaneously.
+        # The deterministic classifier term is focal loss. The VC target is
+        # asked for variational regularizers only, so no second categorical
+        # classification objective is calculated or optimized.
         focal_per_sample = self._per_sample_focal_loss(logits, y_flat)
         focal_loss = self._weighted_mean(focal_per_sample, sample_weight)
 
@@ -1068,9 +1065,10 @@ class SICModel(tf.keras.Model):
             zero = tf.zeros((), dtype=focal_loss.dtype)
             return {
                 "total_loss": focal_loss,
-                "cross_entropy": focal_loss,
-                "weighted_cross_entropy": focal_loss,
+                "classification_loss": focal_loss,
+                "weighted_classification_loss": focal_loss,
                 "focal_loss": focal_loss,
+                "weighted_focal_loss": focal_loss,
                 "latent_posterior_kl": zero,
                 "weighted_latent_posterior_kl": zero,
                 "discriminator_kl": zero,
@@ -1089,19 +1087,25 @@ class SICModel(tf.keras.Model):
             lambda_=(self.calibration_vc_lambda if calibration else self.vc_lambda),
             logits=logits,
             sample_weight=sample_weight,
+            include_classification=False,
         )
 
-        # VariationalClassifier's alpha-weighted deterministic CE is replaced
-        # by alpha-weighted focal loss, preserving all non-deterministic VC
-        # terms exactly as configured.
+        # Add the model's focal objective to the VC regularizers. Because the
+        # VC target was called with include_classification=False, its total is
+        # regularization-only and there is no classification term to subtract.
         dtype = components["total_loss"].dtype
-        ce_term = tf.cast(components["weighted_cross_entropy"], dtype)
         focal_term = tf.cast(alpha, dtype) * tf.cast(focal_loss, dtype)
         components = dict(components)
-        components["total_loss"] = (
-            tf.cast(components["total_loss"], dtype) - ce_term + focal_term
-        )
+        components["total_loss"] = tf.cast(components["total_loss"], dtype) + focal_term
+        components["classification_loss"] = tf.cast(focal_loss, dtype)
+        components["weighted_classification_loss"] = focal_term
         components["focal_loss"] = tf.cast(focal_loss, dtype)
+        components["weighted_focal_loss"] = focal_term
+        # Do not expose the VariationalClassifier's legacy cross-entropy
+        # aliases: older code used those names for the focal value, which made
+        # logs incorrectly show identical cross_entropy and focal_loss fields.
+        components.pop("cross_entropy", None)
+        components.pop("weighted_cross_entropy", None)
         return components
 
     def _vae_components(self, outputs, training: bool):
@@ -1260,10 +1264,7 @@ class SICModel(tf.keras.Model):
         zero = tf.zeros((), dtype=total_loss.dtype)
         self.loss_tracker.update_state(total_loss)
         self.vc_loss_tracker.update_state(vc_components["total_loss"])
-        self.cross_entropy_tracker.update_state(vc_components["cross_entropy"])
-        self.focal_loss_tracker.update_state(
-            vc_components.get("focal_loss", vc_components["cross_entropy"])
-        )
+        self.focal_loss_tracker.update_state(vc_components["focal_loss"])
         # Reporting metrics are deliberately unweighted. Class/sample weights
         # may shape the optimization loss, but "window_accuracy" and
         # "window_balanced_accuracy" should describe the model's natural

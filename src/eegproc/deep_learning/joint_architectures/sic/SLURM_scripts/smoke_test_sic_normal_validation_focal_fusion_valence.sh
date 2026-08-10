@@ -201,7 +201,7 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --early-stopping-patience 20 \
     --early-stopping-min-delta 0.001 \
     --early-stopping-monitor val_balanced_accuracy \
-    --early-stopping-mode min \
+    --early-stopping-mode max \
     --decision-threshold 0.5 \
     --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
