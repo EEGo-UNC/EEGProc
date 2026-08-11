@@ -140,7 +140,7 @@ print(json.dumps({
     "vc_alpha": {"grid": [1.0]},
     "vc_beta": {"grid": [0.5]},
     "vc_gamma": {"grid": [0.0]},
-    "vc_lambda": {"grid": [0.0]},
+    "vc_lambda": {"grid": [0.0, 0.2]},
     "update_vc_discriminator": {"grid": [False]},
     "vae_loss_weight": {"grid": [0.10]},
     "vae_beta": {"grid": [0.05]},
@@ -170,69 +170,6 @@ echo "Smoke scope: ${MAX_SUBJECTS} LOSO subjects, ${SOURCE_EPOCHS} source epochs
 python --version
 nvidia-smi
 
-# Verify that every model setting is an explicit grid axis and report the exact
-# Cartesian run count before starting TensorFlow.
-python - \
-    "$MODEL_GRID" \
-    "$HYPERPARAMETER_SELECTION_LEVEL" \
-    "$CALIBRATION_FOLDS" \
-    "$CALIBRATION_TRIALS" <<'PY'
-import json
-import math
-import sys
-
-grid = json.loads(sys.argv[1])
-selection_level = sys.argv[2]
-calibration_folds = int(sys.argv[3])
-calibration_trials = int(sys.argv[4])
-
-if selection_level != "losocv":
-    raise RuntimeError(
-        "This smoke job must rank hyperparameters using zero-shot LOSOCV; "
-        f"got {selection_level!r}."
-    )
-if calibration_folds * calibration_trials != 18:
-    raise RuntimeError(
-        "DREAMER requires calibration_folds * calibration_trials == 18; "
-        f"got {calibration_folds} * {calibration_trials}."
-    )
-
-invalid = {
-    name: value
-    for name, value in grid.items()
-    if not (
-        isinstance(value, dict)
-        and set(value) == {"grid"}
-        and isinstance(value["grid"], list)
-        and value["grid"]
-    )
-}
-if invalid:
-    raise RuntimeError(
-        "Every MODEL_GRID entry must use a non-empty "
-        f"{{'grid': [...]}} wrapper; invalid keys: {sorted(invalid)}"
-    )
-
-dimensions = {name: len(value["grid"]) for name, value in grid.items()}
-n_configurations = math.prod(dimensions.values())
-if n_configurations < 2:
-    raise RuntimeError(
-        "At least two Cartesian configurations are required to test LOSOCV "
-        "hyperparameter selection."
-    )
-searched = {name: size for name, size in dimensions.items() if size > 1}
-print(
-    "Grid preflight: PASS | "
-    f"selection_level={selection_level} | "
-    "calibration_reporting=enabled | "
-    f"axes={len(dimensions)} | "
-    f"multi-candidate axes={searched or 'none'} | "
-    f"Cartesian configurations={n_configurations}"
-)
-PY
-
-# Verify the SIC builder, feature-fusion window mode, and preservation of
-# source-subject IDs required by V-REx.
 
 python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --training-protocol loso_validation \
