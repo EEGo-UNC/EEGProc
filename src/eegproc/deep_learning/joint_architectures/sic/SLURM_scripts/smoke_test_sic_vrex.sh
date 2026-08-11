@@ -198,7 +198,7 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --selection-metric "$SELECTION_METRIC" \
     --hyperparameter-selection-level "$HYPERPARAMETER_SELECTION_LEVEL" \
     --best-epoch-metric "$BEST_EPOCH_METRIC" \
-    --decision-threshold 0.45 0.5 0.55 \
+    --decision-threshold 0.5 \
     --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
     --max-subjects "$MAX_SUBJECTS" \
