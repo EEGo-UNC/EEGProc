@@ -74,6 +74,7 @@ class SICTrainingConfig:
     early_stopping_monitor: str = "val_loss"
     early_stopping_mode: str = "min"
     best_epoch_metric: str | None = None
+    selection_metric: str = "balanced_accuracy"
     restore_best_weights: bool = True
     calibration_epochs: int = 30
     calibration_batch_size: int = 6
@@ -103,6 +104,17 @@ class SICTrainingConfig:
     label_threshold_mode: str = "global"
     window_normalization: str = "global_rms"
     model_config: dict = field(default_factory=dict)
+
+
+# These model arguments are sequences themselves.  loso_cv uses this metadata
+# to distinguish one fixed sequence (for example, gcn_units=[32]) from a grid
+# of sequence-valued candidates (for example, gcn_units=[[32], [64, 32]]).
+SIC_SEQUENCE_HYPERPARAMETER_DEPTHS = {
+    "gcn_units": 1,
+    "temporal_pool_sizes": 1,
+    "classification_hidden_units": 1,
+    "focal_alpha": 1,
+}
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -444,12 +456,20 @@ def train_sic_loso_validation(
         config.restore_best_weights,
     )
     logger.info(
+        "Hyperparameter-grid selection: level=%s metric=%s",
+        config.classification_level,
+        config.selection_metric,
+    )
+    logger.info(
         "V-REx: enabled=%s weight=%s",
         model_config.get("use_vrex", False),
         model_config.get("vrex_penalty_weight", 0.0),
     )
 
     builder = partial(build_sic_model, input_shape=tuple(X.shape[1:]))
+    builder._sequence_hyperparameter_depths = dict(
+        SIC_SEQUENCE_HYPERPARAMETER_DEPTHS
+    )
 
     results = loso_cv(
         model_builder_function=builder,
@@ -461,7 +481,7 @@ def train_sic_loso_validation(
         batch_size=config.source_batch_size,
         hyperparameters=model_config,
         evaluation_level=config.classification_level,
-        selection_metric="balanced_accuracy",
+        selection_metric=config.selection_metric,
         selection_level=config.classification_level,
         maximize_metric=True,
         metrics=(
@@ -487,7 +507,7 @@ def train_sic_loso_validation(
         early_stopping_mode=effective_early_stopping_mode,
         restore_best_weights=config.restore_best_weights,
         decision_thresholds=(config.decision_threshold,),
-        threshold_selection_metric="balanced_accuracy",
+        threshold_selection_metric=config.selection_metric,
         threshold_selection_level=config.classification_level,
         verbose=config.verbose,
         extra_fit_kwargs={
@@ -713,6 +733,17 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument(
+        "--selection-metric",
+        choices=("accuracy", "balanced_accuracy"),
+        default="balanced_accuracy",
+        help=(
+            "Validation metric used to select the best hyperparameter-grid "
+            "configuration. The selection level is set by "
+            "--classification-level. This is separate from "
+            "--best-epoch-metric, which controls checkpoint/epoch selection."
+        ),
+    )
+    parser.add_argument(
         "--early-stopping-mode",
         choices=("auto", "min", "max"),
         default="min",
@@ -748,8 +779,12 @@ def parse_args(argv=None):
         "--hyperparameters-json",
         default=None,
         help=(
-            "Fixed SIC model configuration JSON. Unlike LOSO grid search, values "
-            "are direct values; e.g. gcn_units=[64,32], not [[64,32]]."
+            "SIC model configuration or LOSO-validation hyperparameter grid as "
+            "JSON. Use candidate lists for scalar parameters, for example "
+            "focal_gamma=[0.5,1.0,2.0]. Sequence-valued parameters need one "
+            "extra level of nesting when searched, for example "
+            "gcn_units=[[32],[64,32]]. In subject_calibration mode this must be "
+            "one fixed configuration rather than a grid."
         ),
     )
     return parser.parse_args(argv)
@@ -794,6 +829,26 @@ def _validate_args(args, model_config):
             "Do not put epochs/batch_size inside --hyperparameters-json; SIC has "
             "separate source and calibration epoch/batch arguments."
         )
+    if args.training_protocol == "subject_calibration":
+        search_dimensions = []
+        for name, value in model_config.items():
+            if not isinstance(value, (list, tuple)):
+                continue
+            if name in SIC_SEQUENCE_HYPERPARAMETER_DEPTHS:
+                is_search_dimension = bool(value) and isinstance(
+                    value[0], (list, tuple)
+                )
+            else:
+                is_search_dimension = True
+            if is_search_dimension:
+                search_dimensions.append(name)
+        if search_dimensions:
+            raise ValueError(
+                "Hyperparameter grids require --training-protocol "
+                "loso_validation. subject_calibration accepts one fixed model "
+                "configuration; grid-valued keys were: "
+                f"{sorted(search_dimensions)}."
+            )
 
 
 def main(argv=None):
@@ -840,6 +895,7 @@ def main(argv=None):
         early_stopping_monitor=args.early_stopping_monitor,
         early_stopping_mode=args.early_stopping_mode,
         best_epoch_metric=args.best_epoch_metric,
+        selection_metric=args.selection_metric,
         restore_best_weights=not args.no_restore_best_weights,
         calibration_epochs=args.calibration_epochs,
         calibration_batch_size=args.calibration_batch_size,

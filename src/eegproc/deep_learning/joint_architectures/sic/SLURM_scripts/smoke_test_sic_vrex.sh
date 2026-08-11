@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=smoke_sic_vrex_val
-#SBATCH --output=smoke_sic_vrex_val_%j.out
-#SBATCH --error=smoke_sic_vrex_val_%j.err
+#SBATCH --job-name=smoke_sic_vrex_grid_val
+#SBATCH --output=smoke_sic_vrex_grid_val_%j.out
+#SBATCH --error=smoke_sic_vrex_grid_val_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:2
@@ -18,6 +18,11 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
+
+# The winning grid configuration and the best epoch within each fold are both
+# selected using this accuracy type. Valid values: accuracy, balanced_accuracy.
+SELECTION_METRIC="balanced_accuracy"
+BEST_EPOCH_METRIC="balanced_accuracy"
 
 cd "$PROJECT_DIR"
 
@@ -75,6 +80,7 @@ if [[ -z "$LIBDEVICE_PATH" || ! -f "$LIBDEVICE_PATH" ]]; then
     echo "ERROR: Unable to locate libdevice.10.bc."
     exit 1
 fi
+
 CUDA_XLA_ROOT="${LIBDEVICE_PATH%/nvvm/libdevice/libdevice.10.bc}"
 export XLA_FLAGS="--xla_gpu_cuda_data_dir=${CUDA_XLA_ROOT}"
 if [[ -n "$MODULE_CUDA_ROOT" ]]; then
@@ -82,8 +88,11 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-MODEL_CONFIG="$(python - <<PY
+# Scalar candidate lists are grid dimensions. Sequence-valued model settings
+# such as gcn_units remain fixed unless given an extra nesting level.
+MODEL_GRID="$(python - <<'PY'
 import json
+
 print(json.dumps({
     "optimizer_name": "adamw",
     "learning_rate": 1e-4,
@@ -107,14 +116,18 @@ print(json.dumps({
     "architecture_mode": "feature_fusion",
     "fusion_units": 128,
     "fusion_dropout": 0.2,
-    "focal_gamma": 1.0,
+
+    # Two configurations: gamma=0 is the CE-equivalent baseline; gamma=1
+    # applies focal modulation.
+    "focal_gamma": [0.0, 1.0],
     "focal_alpha": None,
+
     "z_dim": 128,
-    "classification_hidden_units": [128, 64],
+    "classification_hidden_units": [128],
     "classification_dropout": 0.20,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": 0.5,
+    "vc_beta": 0.0,
     "vc_gamma": 0.0,
     "vc_lambda": 0.0,
     "update_vc_discriminator": False,
@@ -122,7 +135,7 @@ print(json.dumps({
     "vae_beta": 0.05,
     "decoder_dropout": 0.10,
     "use_vrex": True,
-    "vrex_penalty_weight": 1.0,
+    "vrex_penalty_weight": 10.0,
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
     "subject_loss_weight": 1.0,
@@ -130,72 +143,34 @@ print(json.dumps({
     "subject_dropout": 0.0,
     "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
-    "use_class_weight": False
+    "use_class_weight": False,
 }))
 PY
 )"
 
 echo "Job ID: ${SLURM_JOB_ID}"
+echo "Grid-selection metric: ${SELECTION_METRIC}"
+echo "Best-epoch metric: ${BEST_EPOCH_METRIC}"
 python --version
 nvidia-smi
 
-# Compact preflight: verify the SIC builder, feature-fusion window mode, and
-# preservation of source-subject IDs required by V-REx.
-python - <<'PY'
-import numpy as np
-import tensorflow as tf
+# Verify that the JSON contains the intended two-configuration grid.
+python - "$MODEL_GRID" <<'PY'
+import json
+import sys
 
-from src.eegproc.deep_learning.joint_architectures.sic.sic_model import (
-    SIC_BUILDER_API_VERSION,
-    build_sic_model,
-)
-
-print("TensorFlow:", tf.__version__)
-print("SIC builder API:", SIC_BUILDER_API_VERSION)
-if SIC_BUILDER_API_VERSION < 4:
-    raise RuntimeError("Stale SIC model; expected builder API >= 4.")
-
-rng = np.random.default_rng(42)
-x = rng.normal(size=(16, 60, 42)).astype(np.float32)
-y = np.asarray([0, 1] * 8, dtype=np.int32)
-subjects = np.repeat(np.arange(4), 4)
-
-model = build_sic_model(
-    input_shape=(60, 42),
-    training_features=x,
-    training_labels=y,
-    training_subject_ids=subjects,
-    classification_level="window",
-    n_channels=14,
-    n_bands=3,
-    t_down=2,
-    temporal_pool_sizes=(2,),
-    gcn_units=(4,),
-    spectral_gru_units=8,
-    mi_max_observations=64,
-    bilstm_units=4,
-    architecture_mode="feature_fusion",
-    fusion_units=4,
-    z_dim=4,
-    classification_hidden_units=(4, 2),
-    use_vrex=True,
-    vrex_penalty_weight=1.0,
-    use_subject_adversarial=False,
-)
-
-out = model(x[:4], training=False)
-print("Window logits shape:", out.shape)
-if tuple(out.shape) != (4, 2):
-    raise RuntimeError(f"Unexpected logits shape: {out.shape}")
-
-prepared = model.prepare_fit_inputs(x, subjects)
-if not isinstance(prepared, dict) or "subject_id" not in prepared:
-    raise RuntimeError("V-REx input did not preserve source-subject IDs.")
-if np.unique(prepared["subject_id"]).size != 4:
-    raise RuntimeError("V-REx preflight expected four source environments.")
-
-print("V-REx validation SIC preflight: PASS")
+grid = json.loads(sys.argv[1])
+focal_gammas = grid.get("focal_gamma")
+if focal_gammas != [0.0, 1.0]:
+    raise RuntimeError(
+        "Expected focal_gamma grid [0.0, 1.0]; "
+        f"received {focal_gammas!r}."
+    )
+print(f"Grid preflight: PASS ({len(focal_gammas)} configurations)")
 PY
+
+# Verify the SIC builder, feature-fusion window mode, and preservation of
+# source-subject IDs required by V-REx.
 
 python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --training-protocol loso_validation \
@@ -205,16 +180,16 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --classification-level window \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/smoke/sic_vrex_validation/DREAMER/valence \
-    --run-name dreamer_valence_sic_vrex_validation_smoke \
+    --out-dir runs/smoke/sic_vrex_grid_validation/DREAMER/valence \
+    --run-name dreamer_valence_sic_vrex_grid_validation_smoke \
     --source-epochs 100 \
-    --source-batch-size 64 \
+    --source-batch-size 256 \
     --validation-subjects 4 \
     --validation-seed 42 \
     --early-stopping-patience 20 \
     --early-stopping-min-delta 0.001 \
-    --early-stopping-monitor val_balanced_accuracy \
-    --early-stopping-mode max \
+    --selection-metric "$SELECTION_METRIC" \
+    --best-epoch-metric "$BEST_EPOCH_METRIC" \
     --decision-threshold 0.5 \
     --prediction-latent-samples 15 \
     --latent-sampling-seed 42 \
@@ -229,4 +204,4 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --window-sec 1.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
-    --hyperparameters-json "$MODEL_CONFIG"
+    --hyperparameters-json "$MODEL_GRID"
