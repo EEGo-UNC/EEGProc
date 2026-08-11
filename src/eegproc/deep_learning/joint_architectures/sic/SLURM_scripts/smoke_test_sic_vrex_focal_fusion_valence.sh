@@ -82,9 +82,8 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-MODEL_CONFIG="$(python - <<'PY'
+MODEL_CONFIG="$(python - <<PY
 import json
-
 print(json.dumps({
     "optimizer_name": "adamw",
     "learning_rate": 1e-4,
@@ -96,7 +95,7 @@ print(json.dumps({
     "gcn_activation": "relu",
     "gcn_use_batch_norm": False,
     "spectral_gru_units": 384,
-    "spectral_gru_dropout": 0.20,
+    "spectral_gru_dropout": 0.2,
     "mi_n_neighbors": 3,
     "mi_random_state": 42,
     "mi_zero_diagonal": False,
@@ -104,10 +103,10 @@ print(json.dumps({
     "mi_max_observations": 15000,
     "bilstm_units": 128,
     "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.30,
+    "bilstm_dropout": 0.3,
     "architecture_mode": "feature_fusion",
     "fusion_units": 128,
-    "fusion_dropout": 0.20,
+    "fusion_dropout": 0.2,
     "focal_gamma": 1.0,
     "focal_alpha": None,
     "z_dim": 128,
@@ -131,7 +130,7 @@ print(json.dumps({
     "subject_dropout": 0.0,
     "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
-    "use_class_weight": False,
+    "use_class_weight": False
 }))
 PY
 )"
@@ -140,7 +139,7 @@ echo "Job ID: ${SLURM_JOB_ID}"
 python --version
 nvidia-smi
 
-# Compact preflight: verify the current SIC builder, window-mode output, and
+# Compact preflight: verify the SIC builder, feature-fusion window mode, and
 # preservation of source-subject IDs required by V-REx.
 python - <<'PY'
 import numpy as np
@@ -210,7 +209,7 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --run-name dreamer_valence_sic_vrex_validation_smoke \
     --source-epochs 100 \
     --source-batch-size 64 \
-    --validation-subjects 6 \
+    --validation-subjects 4 \
     --validation-seed 42 \
     --early-stopping-patience 20 \
     --early-stopping-min-delta 0.001 \
