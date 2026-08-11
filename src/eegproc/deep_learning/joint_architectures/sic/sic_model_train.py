@@ -2,16 +2,19 @@
 
 Protocol
 --------
-For every target subject:
+For every hyperparameter configuration and target subject:
   1. pretrain one source model on all other subjects;
   2. evaluate the untouched source model on all target trials (0 calibration);
   3. partition the target's 18 trials into three disjoint six-trial sets;
   4. for each set, restore source weights, evaluate zero-shot on the other
      12 trials, fine-tune only the configured dense/softmax suffix on the six
-     calibration trials, and evaluate those same 12 trials again.
+     calibration trials, and evaluate those same 12 trials again;
+  5. aggregate the three calibration evaluations into one subject result.
 
 The expensive source model is fit once per target subject.  The three
-calibration fits use fresh optimizers and restored source weights.
+calibration fits use fresh optimizers and restored source weights. Grid ranking
+can use either the zero-shot LOSO aggregate or the post-calibration aggregate;
+calibration is always run and reported regardless of the selection level.
 """
 
 from __future__ import annotations
@@ -39,9 +42,9 @@ except ImportError:
     from sic_model import SIC_BUILDER_API_VERSION, build_sic_model
 
 try:
-    from ...cross_val import loso_cv, subject_calibration_cv
+    from ...cross_val import subject_calibration_cv
 except ImportError:
-    from eegproc.deep_learning.cross_val import loso_cv, subject_calibration_cv
+    from eegproc.deep_learning.cross_val import subject_calibration_cv
 
 try:
     from ..joint_v2_data import (
@@ -76,6 +79,7 @@ class SICTrainingConfig:
     early_stopping_mode: str = "min"
     best_epoch_metric: str | None = None
     selection_metric: str = "balanced_accuracy"
+    hyperparameter_selection_level: str = "calibration"
     restore_best_weights: bool = True
     calibration_epochs: int = 30
     calibration_batch_size: int = 6
@@ -107,9 +111,9 @@ class SICTrainingConfig:
     model_config: dict = field(default_factory=dict)
 
 
-# These model arguments are sequences themselves.  loso_cv uses this metadata
-# to distinguish one fixed sequence (for example, gcn_units=[32]) from a grid
-# of sequence-valued candidates (for example, gcn_units=[[32], [64, 32]]).
+# These model arguments are sequences themselves. Grid decoding uses this
+# metadata to distinguish one fixed sequence (for example, gcn_units=[32])
+# from sequence-valued candidates (for example, gcn_units=[[32], [64, 32]]).
 SIC_SEQUENCE_HYPERPARAMETER_DEPTHS = {
     "gcn_units": 1,
     "temporal_pool_sizes": 1,
@@ -117,10 +121,21 @@ SIC_SEQUENCE_HYPERPARAMETER_DEPTHS = {
     "focal_alpha": 1,
 }
 
-# The grid is expanded here, rather than leaving the Cartesian-product behavior
-# implicit in cross_val.py.  loso_cv therefore receives one explicit search
-# dimension whose candidates are complete SIC model configurations.
-SIC_EXPLICIT_GRID_KEY = "sic_grid_configuration"
+SIC_SELECTION_OVERALL_KEYS = {
+    "losocv": "zero_shot_all_trials_mean_scores",
+    "calibration": "calibrated_mean_scores",
+}
+
+SIC_CLASSIFICATION_METRICS = (
+    "accuracy",
+    "f1",
+    "precision",
+    "recall",
+    "macro_f1",
+    "macro_precision",
+    "macro_recall",
+    "balanced_accuracy",
+)
 
 
 def _json_fingerprint(value) -> str:
@@ -204,62 +219,6 @@ def expand_cartesian_grid(model_config: dict) -> tuple[list[dict], dict[str, int
         for name, candidates in zip(axis_names, axis_candidates)
     }
     return configurations, dimensions
-
-
-def _build_sic_from_explicit_grid(
-    *args,
-    sic_grid_configuration=None,
-    training_features=None,
-    training_labels=None,
-    training_subject_ids=None,
-    training_trial_ids=None,
-    adjacency=None,
-    **kwargs,
-):
-    """Expose one complete grid candidate without hiding fold context.
-
-    ``cross_val._build_model_with_fold_training_context`` discovers supported
-    fold-local inputs from the builder signature.  Keep the ``training_*``
-    arguments explicit here so LOSO passes source-training data through to
-    ``build_sic_model`` for leakage-free MI-adjacency estimation.
-    """
-    if sic_grid_configuration is None:
-        raise ValueError(
-            f"Missing required explicit-grid key {SIC_EXPLICIT_GRID_KEY!r}."
-        )
-    if not isinstance(sic_grid_configuration, dict):
-        raise TypeError(
-            f"{SIC_EXPLICIT_GRID_KEY!r} must be a dictionary; got "
-            f"{type(sic_grid_configuration).__name__}."
-        )
-    if "hyperparameters" in sic_grid_configuration:
-        model_hyperparameters = sic_grid_configuration["hyperparameters"]
-        if not isinstance(model_hyperparameters, dict):
-            raise TypeError("Explicit-grid 'hyperparameters' must be a dictionary.")
-    else:
-        # Backward-compatible with a raw complete configuration.
-        model_hyperparameters = sic_grid_configuration
-
-    fold_context = {
-        "training_features": training_features,
-        "training_labels": training_labels,
-        "training_subject_ids": training_subject_ids,
-        "training_trial_ids": training_trial_ids,
-        "adjacency": adjacency,
-    }
-    overlap = (set(kwargs) | set(fold_context)).intersection(model_hyperparameters)
-    if overlap:
-        raise ValueError(
-            "Grid configuration collides with direct or fold-context builder "
-            "arguments: "
-            f"{sorted(overlap)}."
-        )
-    return build_sic_model(
-        *args,
-        **fold_context,
-        **kwargs,
-        **model_hyperparameters,
-    )
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -516,6 +475,176 @@ def _calibration_fold_rows(results: dict) -> list[dict]:
     return rows
 
 
+def _selection_score_from_calibration_results(
+    results: dict,
+    *,
+    selection_level: str,
+    selection_metric: str,
+) -> float:
+    """Return the subject-aggregated score used to rank one configuration."""
+    if selection_level not in SIC_SELECTION_OVERALL_KEYS:
+        raise ValueError(
+            f"Unknown hyperparameter selection level {selection_level!r}; "
+            f"expected one of {sorted(SIC_SELECTION_OVERALL_KEYS)}."
+        )
+    score_group = SIC_SELECTION_OVERALL_KEYS[selection_level]
+    overall = results.get("overall", {})
+    scores = overall.get(score_group, {})
+    if selection_metric not in scores:
+        raise KeyError(
+            f"Calibration results do not contain metric {selection_metric!r} "
+            f"under overall.{score_group}. Available metrics: "
+            f"{sorted(scores)}."
+        )
+    score = float(scores[selection_metric])
+    if not np.isfinite(score):
+        raise ValueError(
+            f"Configuration produced a non-finite selection score: "
+            f"level={selection_level!r}, metric={selection_metric!r}, "
+            f"score={score!r}."
+        )
+    return score
+
+
+def _configuration_summary_row(summary: dict) -> dict:
+    """Flatten one configuration summary for the search-results CSV."""
+    row = {
+        "rank": summary.get("rank"),
+        "configuration_id": summary["configuration_id"],
+        "status": summary.get("status"),
+        "selection_level": summary["selection_level"],
+        "selection_metric": summary["selection_metric"],
+        "selection_score": summary["selection_score"],
+        "configuration_dir": summary.get("configuration_dir"),
+        "hyperparameters_json": _json_fingerprint(summary["hyperparameters"]),
+    }
+    for prefix, score_group in (
+        ("losocv", summary.get("zero_shot_all_trials_mean_scores", {})),
+        ("paired_zero_shot", summary.get("paired_zero_shot_mean_scores", {})),
+        ("calibration", summary.get("calibrated_mean_scores", {})),
+        ("calibration_delta", summary.get("delta_mean_scores", {})),
+    ):
+        row.update({f"{prefix}_{name}": value for name, value in score_group.items()})
+    return row
+
+
+def _save_calibration_artifacts(
+    configuration_dir: Path,
+    *,
+    model_config: dict,
+    results: dict,
+) -> None:
+    """Persist all zero-shot and calibration artifacts for one grid candidate."""
+    _write_json(configuration_dir / "model_config.json", model_config)
+    _write_json(configuration_dir / "sic_calibration_results.json", results)
+    _write_json(
+        configuration_dir / "sic_overall_metrics.json",
+        results.get("overall", {}),
+    )
+    _write_csv(
+        configuration_dir / "sic_subject_summary.csv",
+        _subject_summary_rows(results),
+    )
+    _write_csv(
+        configuration_dir / "sic_calibration_folds.csv",
+        _calibration_fold_rows(results),
+    )
+    for filename, result_key in (
+        ("sic_window_predictions.csv", "window_prediction_log"),
+        ("sic_trial_predictions.csv", "trial_prediction_log"),
+        ("sic_window_uncertainty.csv", "window_variational_interval_log"),
+        ("sic_trial_uncertainty.csv", "trial_variational_interval_log"),
+    ):
+        rows = list(results.get(result_key, []))
+        if rows:
+            _write_csv(configuration_dir / filename, rows)
+
+
+def _source_checkpoint_settings(
+    config: SICTrainingConfig,
+) -> tuple[str, str]:
+    """Resolve source-only checkpoint monitor aliases for nested LOSO."""
+    if config.best_epoch_metric is not None:
+        if config.classification_level != "window":
+            raise ValueError(
+                "--best-epoch-metric currently selects window-level metrics and "
+                "requires --classification-level window."
+            )
+        return f"val_window_{config.best_epoch_metric}", "max"
+
+    monitor = config.early_stopping_monitor
+    aliases = {
+        "val_accuracy": f"val_{config.classification_level}_accuracy",
+        "val_balanced_accuracy": (
+            f"val_{config.classification_level}_balanced_accuracy"
+        ),
+        "accuracy": f"{config.classification_level}_accuracy",
+        "balanced_accuracy": (
+            f"{config.classification_level}_balanced_accuracy"
+        ),
+    }
+    return aliases.get(monitor, monitor), config.early_stopping_mode
+
+
+def _run_subject_calibration_configuration(
+    *,
+    builder,
+    X,
+    y,
+    subjects,
+    trials,
+    model_config: dict,
+    config: SICTrainingConfig,
+) -> dict:
+    """Run the common LOSO + three-fold calibration evaluator once."""
+    source_monitor, source_monitor_mode = _source_checkpoint_settings(config)
+    return subject_calibration_cv(
+        model_builder_function=builder,
+        feature_array=X,
+        label_array=y,
+        subject_id_array=subjects,
+        trial_id_array=trials,
+        fixed_config=model_config,
+        source_epochs=config.source_epochs,
+        source_batch_size=config.source_batch_size,
+        calibration_epochs=config.calibration_epochs,
+        calibration_batch_size=config.calibration_batch_size,
+        calibration_trials=config.calibration_trials,
+        calibration_folds=config.calibration_folds,
+        calibration_learning_rate=config.calibration_learning_rate,
+        calibration_optimizer=config.calibration_optimizer,
+        calibration_weight_decay=config.calibration_weight_decay,
+        calibration_seed=config.calibration_seed,
+        stratify_calibration=config.stratify_calibration,
+        validation_subjects_per_fold=config.validation_subjects,
+        validation_seed=config.validation_seed,
+        early_stopping_patience=config.early_stopping_patience,
+        early_stopping_min_delta=config.early_stopping_min_delta,
+        early_stopping_monitor=source_monitor,
+        early_stopping_mode=source_monitor_mode,
+        restore_best_weights=config.restore_best_weights,
+        evaluation_level=config.classification_level,
+        metrics=SIC_CLASSIFICATION_METRICS,
+        decision_threshold=config.decision_threshold,
+        n_prediction_latent_samples=config.prediction_latent_samples,
+        latent_sampling_seed=config.latent_sampling_seed,
+        log_predictions=True,
+        log_variational_intervals=config.log_variational_intervals,
+        n_uncertainty_samples=config.uncertainty_samples,
+        source_use_class_weight=config.source_use_class_weight,
+        calibration_use_class_weight=config.calibration_use_class_weight,
+        source_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
+        calibration_fit_kwargs={
+            "callbacks": [tf.keras.callbacks.TerminateOnNaN()]
+        },
+        verbose=config.verbose,
+        n_jobs=config.n_jobs,
+        gpu_ids=config.gpu_ids,
+        cpus_per_worker=config.cpus_per_worker,
+        max_subjects=config.max_subjects,
+    )
+
+
 def train_sic_loso_validation(
     feature_array,
     label_array,
@@ -523,12 +652,13 @@ def train_sic_loso_validation(
     trial_id_array,
     config: SICTrainingConfig,
 ):
-    """Ordinary SIC LOSO training with subject-disjoint validation.
+    """Full Cartesian SIC search with calibration nested inside every LOSO fold.
 
-    This mode intentionally bypasses subject calibration. It exists to verify
-    that the SIC architecture learns under conventional ERM before introducing
-    V-REx. One LOSO subject is held out for test; a seeded subset of the
-    remaining source subjects is held out for validation in each fold.
+    Every configuration runs the same target-subject loop. The source model is
+    evaluated zero-shot, then restored independently for each of the three
+    calibration folds. ``hyperparameter_selection_level`` changes only which
+    aggregate ranks configurations; it never disables calibration or its
+    reports.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = _ensure_dir(config.output_dir / f"{config.run_name}_{timestamp}")
@@ -549,6 +679,11 @@ def train_sic_loso_validation(
             f"SIC {config.classification_level} mode expects rank {expected_rank}; "
             f"got {X.shape}."
         )
+    if X.shape[-1] != config.n_channels * config.n_bands:
+        raise ValueError(
+            f"features={X.shape[-1]} but {config.n_channels}*{config.n_bands}="
+            f"{config.n_channels * config.n_bands}."
+        )
 
     model_config = dict(config.model_config)
     model_config.setdefault("classification_level", config.classification_level)
@@ -568,40 +703,28 @@ def train_sic_loso_validation(
         for index, candidate in enumerate(grid_configurations, start=1)
     ]
 
-    if config.best_epoch_metric is not None:
-        if config.classification_level != "window":
-            raise ValueError(
-                "--best-epoch-metric currently selects window-level metrics and "
-                "therefore requires --classification-level window."
-            )
-        effective_early_stopping_monitor = (
-            f"val_window_{config.best_epoch_metric}"
-        )
-        effective_early_stopping_mode = "max"
-    else:
-        effective_early_stopping_monitor = config.early_stopping_monitor
-        effective_early_stopping_mode = config.early_stopping_mode
-        if config.classification_level == "window":
-            legacy_window_monitor_aliases = {
-                "val_accuracy": "val_window_accuracy",
-                "val_balanced_accuracy": "val_window_balanced_accuracy",
-                "accuracy": "window_accuracy",
-                "balanced_accuracy": "window_balanced_accuracy",
-            }
-            effective_early_stopping_monitor = legacy_window_monitor_aliases.get(
-                effective_early_stopping_monitor,
-                effective_early_stopping_monitor,
-            )
-
     _write_json(run_dir / "training_config.json", asdict(config))
     _write_json(run_dir / "model_config.json", model_config)
     _write_json(
         run_dir / "hyperparameter_grid.json",
         {
             "search_type": "full_cartesian_product",
-            "selection_level": config.classification_level,
+            "hyperparameter_selection_level": (
+                config.hyperparameter_selection_level
+            ),
+            "evaluation_level": config.classification_level,
             "selection_metric": config.selection_metric,
             "maximize_metric": True,
+            "selection_score_source": (
+                f"overall.{SIC_SELECTION_OVERALL_KEYS[config.hyperparameter_selection_level]}"
+            ),
+            "calibration_always_runs": True,
+            "calibration_aggregation": {
+                "within_subject": (
+                    f"mean of {config.calibration_folds} calibration-fold metrics"
+                ),
+                "across_subjects": "mean of subject-level aggregates",
+            },
             "dimensions": grid_dimensions,
             "n_configurations": len(grid_configurations),
             "configurations": grid_records,
@@ -609,21 +732,34 @@ def train_sic_loso_validation(
     )
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
-    logger.info("Training protocol: ordinary LOSO + subject-disjoint validation")
-    logger.info("Classification level: %s", config.classification_level)
-    logger.info("Validation subjects per fold: %d", config.validation_subjects)
     logger.info(
-        "Early stopping: monitor=%s mode=%s patience=%s min_delta=%s restore_best=%s",
-        effective_early_stopping_monitor,
-        effective_early_stopping_mode,
+        "Training protocol: configuration -> LOSO subject -> %d calibration folds",
+        config.calibration_folds,
+    )
+    logger.info("Classification level: %s", config.classification_level)
+    logger.info(
+        "Each target: zero-shot report + %d independent %d-trial fine-tunes",
+        config.calibration_folds,
+        config.calibration_trials,
+    )
+    logger.info(
+        "Hyperparameter-grid selection: level=%s metric=%s source=overall.%s",
+        config.hyperparameter_selection_level,
+        config.selection_metric,
+        SIC_SELECTION_OVERALL_KEYS[config.hyperparameter_selection_level],
+    )
+    logger.info("Calibration runs and is saved for every configuration.")
+    logger.info(
+        "Source checkpoint selection: %d source-validation subjects, "
+        "monitor=%s mode=%s patience=%s restore_best=%s",
+        config.validation_subjects,
+        *_source_checkpoint_settings(config),
         config.early_stopping_patience,
-        config.early_stopping_min_delta,
         config.restore_best_weights,
     )
     logger.info(
-        "Hyperparameter-grid selection: level=%s metric=%s",
-        config.classification_level,
-        config.selection_metric,
+        "LOSO target data never enters source fitting, source checkpoint "
+        "selection, or MI-adjacency estimation."
     )
     logger.info(
         "Full Cartesian grid: dimensions=%s total_configurations=%d",
@@ -637,77 +773,176 @@ def train_sic_loso_validation(
             len(grid_configurations),
             _json_fingerprint(candidate),
         )
-    logger.info(
-        "V-REx: enabled=%s weight=%s",
-        model_config.get("use_vrex", False),
-        model_config.get("vrex_penalty_weight", 0.0),
-    )
 
-    # The only search dimension handed to loso_cv is a list of already-expanded
-    # complete configurations.  This guarantees that all and only the full
-    # Cartesian combinations above are evaluated in every LOSO fold.
-    builder = partial(
-        _build_sic_from_explicit_grid,
-        input_shape=tuple(X.shape[1:]),
-    )
-    builder._sequence_hyperparameter_depths = {}
-    explicit_grid = {SIC_EXPLICIT_GRID_KEY: grid_records}
+    builder = partial(build_sic_model, input_shape=tuple(X.shape[1:]))
+    progress_path = run_dir / "hyperparameter_search_progress.json"
+    completed_summaries: list[dict] = []
+    failed_configurations: list[dict] = []
 
-    results = loso_cv(
-        model_builder_function=builder,
-        feature_array=X,
-        label_array=y,
-        subject_id_array=subjects,
-        trial_id_array=trials,
-        n_epochs=config.source_epochs,
-        batch_size=config.source_batch_size,
-        hyperparameters=explicit_grid,
-        evaluation_level=config.classification_level,
-        selection_metric=config.selection_metric,
-        selection_level=config.classification_level,
-        maximize_metric=True,
-        metrics=(
-            "accuracy",
-            "f1",
-            "precision",
-            "recall",
-            "macro_f1",
-            "macro_precision",
-            "macro_recall",
-            "balanced_accuracy",
+    for index, candidate in enumerate(grid_configurations, start=1):
+        configuration_dir = _ensure_dir(run_dir / f"configuration_{index:04d}")
+        logger.info(
+            "Starting configuration %d/%d: %s",
+            index,
+            len(grid_configurations),
+            _json_fingerprint(candidate),
+        )
+        _write_json(configuration_dir / "model_config.json", candidate)
+        try:
+            if config.seed is not None:
+                tf.keras.utils.set_random_seed(config.seed)
+                np.random.seed(config.seed)
+            results = _run_subject_calibration_configuration(
+                builder=builder,
+                X=X,
+                y=y,
+                subjects=subjects,
+                trials=trials,
+                model_config=candidate,
+                config=config,
+            )
+            _save_calibration_artifacts(
+                configuration_dir,
+                model_config=candidate,
+                results=results,
+            )
+            overall = dict(results.get("overall", {}))
+            selection_score = _selection_score_from_calibration_results(
+                results,
+                selection_level=config.hyperparameter_selection_level,
+                selection_metric=config.selection_metric,
+            )
+            summary = {
+                "configuration_id": index,
+                "status": "completed",
+                "configuration_dir": str(configuration_dir),
+                "hyperparameters": candidate,
+                "selection_level": config.hyperparameter_selection_level,
+                "selection_metric": config.selection_metric,
+                "selection_score": selection_score,
+                "zero_shot_all_trials_mean_scores": overall.get(
+                    "zero_shot_all_trials_mean_scores", {}
+                ),
+                "zero_shot_all_trials_std_scores": overall.get(
+                    "zero_shot_all_trials_std_scores", {}
+                ),
+                "paired_zero_shot_mean_scores": overall.get(
+                    "paired_zero_shot_mean_scores", {}
+                ),
+                "calibrated_mean_scores": overall.get(
+                    "calibrated_mean_scores", {}
+                ),
+                "calibrated_std_scores": overall.get(
+                    "calibrated_std_scores", {}
+                ),
+                "delta_mean_scores": overall.get("delta_mean_scores", {}),
+                "delta_std_scores": overall.get("delta_std_scores", {}),
+            }
+            completed_summaries.append(summary)
+            logger.info(
+                "Completed configuration %d/%d | zero-shot %s=%s | "
+                "calibration %s=%s | selected score=%s",
+                index,
+                len(grid_configurations),
+                config.selection_metric,
+                summary["zero_shot_all_trials_mean_scores"].get(
+                    config.selection_metric
+                ),
+                config.selection_metric,
+                summary["calibrated_mean_scores"].get(config.selection_metric),
+                selection_score,
+            )
+        except Exception as exc:
+            failed = {
+                "configuration_id": index,
+                "status": "failed",
+                "configuration_dir": str(configuration_dir),
+                "hyperparameters": candidate,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+            failed_configurations.append(failed)
+            _write_json(configuration_dir / "failure.json", failed)
+            _write_json(
+                progress_path,
+                {
+                    "completed": completed_summaries,
+                    "failed": failed_configurations,
+                    "remaining_configuration_ids": list(
+                        range(index + 1, len(grid_configurations) + 1)
+                    ),
+                },
+            )
+            logger.exception("Configuration %d failed; progress was saved.", index)
+            raise
+        finally:
+            tf.keras.backend.clear_session()
+
+        _write_json(
+            progress_path,
+            {
+                "completed": completed_summaries,
+                "failed": failed_configurations,
+                "remaining_configuration_ids": list(
+                    range(index + 1, len(grid_configurations) + 1)
+                ),
+            },
+        )
+
+    ranked_summaries = sorted(
+        completed_summaries,
+        key=lambda row: (-float(row["selection_score"]), row["configuration_id"]),
+    )
+    for rank, summary in enumerate(ranked_summaries, start=1):
+        summary["rank"] = rank
+    best = ranked_summaries[0]
+    search_results = {
+        "search_type": "full_cartesian_product_with_nested_subject_calibration",
+        "hyperparameter_selection_level": config.hyperparameter_selection_level,
+        "selection_metric": config.selection_metric,
+        "maximize_metric": True,
+        "selection_score_source": (
+            f"overall.{SIC_SELECTION_OVERALL_KEYS[config.hyperparameter_selection_level]}"
         ),
-        log_predictions=True,
-        log_variational_intervals=config.log_variational_intervals,
-        n_prediction_latent_samples=config.prediction_latent_samples,
-        latent_sampling_seed=config.latent_sampling_seed,
-        n_uncertainty_samples=config.uncertainty_samples,
-        validation_subjects_per_fold=config.validation_subjects,
-        validation_seed=config.validation_seed,
-        early_stopping_patience=config.early_stopping_patience,
-        early_stopping_min_delta=config.early_stopping_min_delta,
-        early_stopping_monitor=effective_early_stopping_monitor,
-        early_stopping_mode=effective_early_stopping_mode,
-        restore_best_weights=config.restore_best_weights,
-        decision_thresholds=(config.decision_threshold,),
-        threshold_selection_metric=config.selection_metric,
-        threshold_selection_level=config.classification_level,
-        verbose=config.verbose,
-        extra_fit_kwargs={
-            "callbacks": [
-                tf.keras.callbacks.TerminateOnNaN(),
-            ]
+        "calibration_always_runs": True,
+        "calibration_aggregation": {
+            "within_subject": (
+                f"mean of {config.calibration_folds} calibration-fold metrics"
+            ),
+            "across_subjects": "mean of subject-level aggregates",
         },
-        n_jobs=config.n_jobs,
-        gpu_ids=config.gpu_ids,
-        cpus_per_worker=config.cpus_per_worker,
-        max_folds=config.max_subjects,
-        alternate_subject_sets=False,
-        use_mldg=False,
+        "n_configurations": len(grid_configurations),
+        "best_configuration_id": best["configuration_id"],
+        "best_score": best["selection_score"],
+        "best_hyperparameters": best["hyperparameters"],
+        "ranked_configurations": ranked_summaries,
+    }
+    _write_json(run_dir / "hyperparameter_search_results.json", search_results)
+    _write_json(
+        run_dir / "best_hyperparameters.json",
+        {
+            "configuration_id": best["configuration_id"],
+            "selection_level": config.hyperparameter_selection_level,
+            "selection_metric": config.selection_metric,
+            "selection_score": best["selection_score"],
+            "hyperparameters": best["hyperparameters"],
+            "configuration_dir": best["configuration_dir"],
+        },
     )
-
-    _write_json(run_dir / "sic_loso_validation_results.json", results)
-    logger.info("Saved normal-validation SIC artifacts to %s", run_dir)
-    return {"run_dir": str(run_dir), "results": results}
+    _write_csv(
+        run_dir / "hyperparameter_search_summary.csv",
+        [_configuration_summary_row(row) for row in ranked_summaries],
+    )
+    logger.info(
+        "Best configuration: id=%d %s/%s=%s hyperparameters=%s",
+        best["configuration_id"],
+        config.hyperparameter_selection_level,
+        config.selection_metric,
+        best["selection_score"],
+        _json_fingerprint(best["hyperparameters"]),
+    )
+    logger.info("Saved nested LOSO/calibration grid artifacts to %s", run_dir)
+    return {"run_dir": str(run_dir), "results": search_results}
 
 
 def train_sic(
@@ -750,9 +985,9 @@ def train_sic(
     fixed_configurations, grid_dimensions = expand_cartesian_grid(model_config)
     if grid_dimensions:
         raise ValueError(
-            "subject_calibration cannot select hyperparameters without a "
-            "subject-disjoint validation set. Run the grid with "
-            "--training-protocol loso_validation first; grid axes were "
+            "subject_calibration accepts one fixed configuration. Use "
+            "--training-protocol loso_validation for the nested LOSO/calibration "
+            "Cartesian search; grid axes were "
             f"{sorted(grid_dimensions)}."
         )
     model_config = fixed_configurations[0]
@@ -781,65 +1016,21 @@ def train_sic(
 
     builder = partial(build_sic_model, input_shape=tuple(X.shape[1:]))
 
-    results = subject_calibration_cv(
-        model_builder_function=builder,
-        feature_array=X,
-        label_array=y,
-        subject_id_array=subjects,
-        trial_id_array=trials,
-        fixed_config=model_config,
-        source_epochs=config.source_epochs,
-        source_batch_size=config.source_batch_size,
-        calibration_epochs=config.calibration_epochs,
-        calibration_batch_size=config.calibration_batch_size,
-        calibration_trials=config.calibration_trials,
-        calibration_folds=config.calibration_folds,
-        calibration_learning_rate=config.calibration_learning_rate,
-        calibration_optimizer=config.calibration_optimizer,
-        calibration_weight_decay=config.calibration_weight_decay,
-        calibration_seed=config.calibration_seed,
-        stratify_calibration=config.stratify_calibration,
-        evaluation_level=config.classification_level,
-        metrics=(
-            "accuracy",
-            "f1",
-            "precision",
-            "recall",
-            "macro_f1",
-            "macro_precision",
-            "macro_recall",
-            "balanced_accuracy",
-        ),
-        decision_threshold=config.decision_threshold,
-        n_prediction_latent_samples=config.prediction_latent_samples,
-        latent_sampling_seed=config.latent_sampling_seed,
-        log_predictions=True,
-        log_variational_intervals=config.log_variational_intervals,
-        n_uncertainty_samples=config.uncertainty_samples,
-        source_use_class_weight=config.source_use_class_weight,
-        calibration_use_class_weight=config.calibration_use_class_weight,
-        source_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
-        calibration_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
-        verbose=config.verbose,
-        n_jobs=config.n_jobs,
-        gpu_ids=config.gpu_ids,
-        cpus_per_worker=config.cpus_per_worker,
-        max_subjects=config.max_subjects,
+    results = _run_subject_calibration_configuration(
+        builder=builder,
+        X=X,
+        y=y,
+        subjects=subjects,
+        trials=trials,
+        model_config=model_config,
+        config=config,
     )
 
-    _write_json(run_dir / "sic_calibration_results.json", results)
-    _write_json(run_dir / "sic_overall_metrics.json", results.get("overall", {}))
-    _write_csv(run_dir / "sic_subject_summary.csv", _subject_summary_rows(results))
-    _write_csv(run_dir / "sic_calibration_folds.csv", _calibration_fold_rows(results))
-    _write_csv(
-        run_dir / "sic_trial_predictions.csv",
-        list(results.get("trial_prediction_log", [])),
+    _save_calibration_artifacts(
+        run_dir,
+        model_config=model_config,
+        results=results,
     )
-    if results.get("trial_variational_interval_log"):
-        _write_csv(
-            run_dir / "sic_trial_uncertainty.csv",
-            list(results["trial_variational_interval_log"]),
-        )
 
     overall = results.get("overall", {})
     logger.info(
@@ -902,8 +1093,10 @@ def parse_args(argv=None):
         choices=("subject_calibration", "loso_validation"),
         default="subject_calibration",
         help=(
-            "subject_calibration runs SIC pretraining + six-trial calibration; "
-            "loso_validation runs ordinary ERM/V-REx LOSO with subject-disjoint validation."
+            "subject_calibration runs one fixed SIC configuration. "
+            "loso_validation runs the full Cartesian configuration -> LOSO "
+            "subject -> calibration-fold search. Both report zero-shot and "
+            "post-calibration metrics."
         ),
     )
     parser.add_argument("--source-epochs", type=_positive_int, default=100)
@@ -918,10 +1111,10 @@ def parse_args(argv=None):
         choices=("accuracy", "balanced_accuracy"),
         default=None,
         help=(
-            "Select/restores the best LOSO-validation epoch using the requested "
-            "window metric. 'accuracy' monitors val_window_accuracy; "
-            "'balanced_accuracy' monitors val_window_balanced_accuracy. "
-            "When omitted, --early-stopping-monitor/--early-stopping-mode are used."
+            "Select and restore the best source-model epoch using source-only "
+            "validation subjects. 'accuracy' monitors val_window_accuracy; "
+            "'balanced_accuracy' monitors val_window_balanced_accuracy. This "
+            "is separate from outer hyperparameter selection."
         ),
     )
     parser.add_argument(
@@ -938,10 +1131,20 @@ def parse_args(argv=None):
         ),
         default="balanced_accuracy",
         help=(
-            "Validation metric used to select the best hyperparameter-grid "
-            "configuration. The selection level is set by "
-            "--classification-level. This is separate from "
-            "--best-epoch-metric, which controls checkpoint/epoch selection."
+            "Metric used by the outer hyperparameter search. Its score source "
+            "is chosen by --hyperparameter-selection-level."
+        ),
+    )
+    parser.add_argument(
+        "--hyperparameter-selection-level",
+        choices=("losocv", "calibration"),
+        default="calibration",
+        help=(
+            "Choose which subject-aggregated result ranks configurations. "
+            "'losocv' uses the zero-shot score on all held-out target trials; "
+            "'calibration' uses the per-subject aggregate of the three "
+            "post-calibration evaluations. Calibration always runs and is "
+            "reported for both choices."
         ),
     )
     parser.add_argument(
@@ -986,8 +1189,9 @@ def parse_args(argv=None):
             "sequence-valued parameters, prefer an explicit wrapper such as "
             "gcn_units={\"grid\":[[32],[64,32]]}; the legacy nested-list form "
             "gcn_units=[[32],[64,32]] also works. Use {\"fixed\":value} to "
-            "force any JSON value to remain fixed. subject_calibration accepts "
-            "only one fixed configuration."
+            "force any JSON value to remain fixed. loso_validation searches "
+            "the full grid with nested calibration; subject_calibration accepts "
+            "one fixed configuration."
         ),
     )
     parser.add_argument(
@@ -1004,11 +1208,6 @@ def parse_args(argv=None):
 def _validate_args(args, model_config):
     if args.validation_subjects < 0:
         raise ValueError("--validation-subjects must be >= 0.")
-    if args.training_protocol == "loso_validation" and args.validation_subjects < 1:
-        raise ValueError(
-            "--training-protocol loso_validation requires at least one "
-            "subject-disjoint validation subject."
-        )
     if args.early_stopping_patience is not None and args.early_stopping_patience < 1:
         raise ValueError("--early-stopping-patience must be >= 1.")
     if args.early_stopping_min_delta < 0.0:
@@ -1035,11 +1234,6 @@ def _validate_args(args, model_config):
         raise ValueError("prediction-latent-samples must be >= 0.")
     if not isinstance(model_config, dict):
         raise ValueError("--hyperparameters-json must decode to a JSON object.")
-    if SIC_EXPLICIT_GRID_KEY in model_config:
-        raise ValueError(
-            f"{SIC_EXPLICIT_GRID_KEY!r} is reserved for the internal explicit-grid "
-            "adapter."
-        )
     if "epochs" in model_config or "batch_size" in model_config:
         raise ValueError(
             "Do not put epochs/batch_size inside --hyperparameters-json; SIC has "
@@ -1069,8 +1263,15 @@ def main(argv=None):
             json.dumps(
                 {
                     "search_type": "full_cartesian_product",
-                    "selection_level": args.classification_level,
+                    "hyperparameter_selection_level": (
+                        args.hyperparameter_selection_level
+                    ),
+                    "evaluation_level": args.classification_level,
                     "selection_metric": args.selection_metric,
+                    "selection_score_source": (
+                        f"overall.{SIC_SELECTION_OVERALL_KEYS[args.hyperparameter_selection_level]}"
+                    ),
+                    "calibration_always_runs": True,
                     "dimensions": dimensions,
                     "n_configurations": len(configurations),
                     "configurations": [
@@ -1122,6 +1323,7 @@ def main(argv=None):
         early_stopping_mode=args.early_stopping_mode,
         best_epoch_metric=args.best_epoch_metric,
         selection_metric=args.selection_metric,
+        hyperparameter_selection_level=args.hyperparameter_selection_level,
         restore_best_weights=not args.no_restore_best_weights,
         calibration_epochs=args.calibration_epochs,
         calibration_batch_size=args.calibration_batch_size,

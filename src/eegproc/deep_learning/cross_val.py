@@ -1289,6 +1289,91 @@ class TrialValidationMetrics(tf.keras.callbacks.Callback):
         )
 
 
+class EvaluationLevelValidationMetrics(tf.keras.callbacks.Callback):
+    """Add complete window- or trial-level validation metrics to epoch logs.
+
+    This is used by nested subject-calibration LOSO folds so source-model epoch
+    selection is based only on source-validation subjects. The outer target
+    subject and all of its calibration/evaluation trials remain untouched.
+    """
+
+    _METRICS = (
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "macro_f1",
+        "macro_precision",
+        "macro_recall",
+        "balanced_accuracy",
+    )
+
+    def __init__(
+        self,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        subject_ids_val: np.ndarray,
+        trial_ids_val: np.ndarray,
+        evaluation_level: Literal["window", "trial"],
+        batch_size: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.X_val = np.asarray(X_val)
+        self.y_val = np.asarray(y_val)
+        self.subject_ids_val = np.asarray(subject_ids_val)
+        self.trial_ids_val = np.asarray(trial_ids_val)
+        self.evaluation_level = evaluation_level
+        self.batch_size = batch_size
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        if logs is None:
+            return
+        probabilities = _predict_probabilities(
+            model=self.model,
+            X=self.X_val,
+            batch_size=self.batch_size,
+            n_prediction_latent_samples=0,
+            latent_sampling_seed=None,
+        )
+        if self.evaluation_level == "trial":
+            if _is_trial_tensor(self.X_val):
+                aggregation = _direct_trial_aggregation(
+                    probabilities=probabilities,
+                    y_true=self.y_val,
+                    subject_ids=self.subject_ids_val,
+                    trial_ids=self.trial_ids_val,
+                    n_windows_per_trial=self.X_val.shape[1],
+                )
+            else:
+                aggregation = _aggregate_window_probabilities_by_trial(
+                    probabilities=probabilities,
+                    y_true=self.y_val,
+                    subject_ids=self.subject_ids_val,
+                    trial_ids=self.trial_ids_val,
+                )
+            probabilities = aggregation["probabilities"]
+            y_true = aggregation["y_true"]
+            y_pred = aggregation["y_pred"]
+        else:
+            y_true = _as_numpy_1d(self.y_val).astype(np.int64)
+            y_pred = _predict_labels(probabilities)
+
+        scores = _classification_metrics(
+            y_true=y_true,
+            y_pred=y_pred,
+            probabilities=probabilities,
+            metrics=self._METRICS,
+            n_classes=probabilities.shape[1],
+        )
+        prefix = f"val_{self.evaluation_level}_"
+        for metric_name, value in scores.items():
+            logs[f"{prefix}{metric_name}"] = float(value)
+        logs[f"{prefix}loss"] = _probability_log_loss(
+            y_true=y_true,
+            probabilities=probabilities,
+        )
+
+
 def _level_scores(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -1712,7 +1797,7 @@ def _evaluate_trial_tensor_fold(
         batch_size=batch_size,
     )
     keras_model_loss = float(keras_evaluation["loss"])
-    decoder_r2 = keras_evaluation.get("decoder_r2")
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
 
     trial_scores = _level_scores(
         y_true=y_true_trial,
@@ -1721,8 +1806,8 @@ def _evaluate_trial_tensor_fold(
         metrics=metrics,
     )
     trial_scores["joint_loss"] = keras_model_loss
-    if decoder_r2 is not None:
-        trial_scores["decoder_r2"] = float(decoder_r2)
+    if decoder_accuracy is not None:
+        trial_scores["decoder_accuracy"] = float(decoder_accuracy)
 
     n_trials = int(len(y_true_trial))
     n_windows_per_trial = int(X_test.shape[1])
@@ -1738,8 +1823,8 @@ def _evaluate_trial_tensor_fold(
         "keras_model_loss": keras_model_loss,
         "joint_loss": keras_model_loss,
         **(
-            {"decoder_r2": float(decoder_r2)}
-            if decoder_r2 is not None
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
             else {}
         ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
@@ -1754,8 +1839,8 @@ def _evaluate_trial_tensor_fold(
         "classification_available": False,
         "joint_loss": keras_model_loss,
         **(
-            {"decoder_r2": float(decoder_r2)}
-            if decoder_r2 is not None
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
             else {}
         ),
     }
@@ -1900,7 +1985,7 @@ def _evaluate_classification_fold(
 
     # model.evaluate() is retained as a diagnostic because joint Keras models
     # may include reconstruction/regularization terms beyond classification.
-    # It also exposes decoder_r2 for continuous reconstruction quality.
+    # It also exposes decoder_accuracy for continuous reconstruction quality.
     keras_evaluation = _keras_evaluation_results(
         model=model,
         X=X_test,
@@ -1908,7 +1993,7 @@ def _evaluate_classification_fold(
         batch_size=batch_size,
     )
     keras_model_loss = keras_evaluation["loss"]
-    decoder_r2 = keras_evaluation.get("decoder_r2")
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
 
     window_scores = _level_scores(
         y_true=y_true_window,
@@ -1919,8 +2004,8 @@ def _evaluate_classification_fold(
     # ``loss`` above is classifier probability log loss. ``joint_loss`` is
     # the model's complete weighted VAE + VC objective returned by Keras.
     window_scores["joint_loss"] = float(keras_model_loss)
-    if decoder_r2 is not None:
-        window_scores["decoder_r2"] = float(decoder_r2)
+    if decoder_accuracy is not None:
+        window_scores["decoder_accuracy"] = float(decoder_accuracy)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
@@ -1954,8 +2039,8 @@ def _evaluate_classification_fold(
         "keras_model_loss": float(keras_model_loss),
         "joint_loss": float(keras_model_loss),
         **(
-            {"decoder_r2": float(decoder_r2)}
-            if decoder_r2 is not None
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
             else {}
         ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
@@ -3038,15 +3123,15 @@ def _aggregate_loso_config_result(
 
     mean_scores, std_scores = _mean_std_rows(
         fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_r2"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     window_mean_scores, window_std_scores = _mean_std_rows(
         window_fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_r2"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
         trial_fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_r2"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
     )
 
     selection_means = (
@@ -4286,6 +4371,13 @@ def _run_subject_calibration_subject(
     fixed_config: dict,
     source_epochs: int,
     source_batch_size: int,
+    validation_subjects_per_fold: int,
+    validation_seed: int | None,
+    early_stopping_patience: int | None,
+    early_stopping_min_delta: float,
+    early_stopping_monitor: str,
+    early_stopping_mode: Literal["auto", "min", "max"],
+    restore_best_weights: bool,
     calibration_epochs: int,
     calibration_batch_size: int,
     calibration_trials: int,
@@ -4313,17 +4405,55 @@ def _run_subject_calibration_subject(
     """Train one source model and run all target-subject calibration folds."""
     target_mask = subject_id_array == target_subject
     target_indices = np.flatnonzero(target_mask)
-    source_indices = np.flatnonzero(~target_mask)
-    if not len(target_indices) or not len(source_indices):
+    outer_source_indices = np.flatnonzero(~target_mask)
+    if not len(target_indices) or not len(outer_source_indices):
         raise ValueError(
             f"Invalid source/target split for subject {target_subject!r}: "
-            f"source={len(source_indices)}, target={len(target_indices)}."
+            f"source={len(outer_source_indices)}, target={len(target_indices)}."
         )
+
+    outer_source_subjects = np.sort(
+        np.unique(subject_id_array[outer_source_indices])
+    )
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if validation_subjects_per_fold >= len(outer_source_subjects):
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one non-target "
+            f"subject for source fitting; got {validation_subjects_per_fold} "
+            f"from {len(outer_source_subjects)} source subjects."
+        )
+    if validation_subjects_per_fold:
+        base_seed = 0 if validation_seed is None else int(validation_seed)
+        validation_rng = np.random.default_rng(
+            np.random.SeedSequence([base_seed, int(subject_number)])
+        )
+        validation_subjects = np.sort(
+            validation_rng.choice(
+                outer_source_subjects,
+                size=int(validation_subjects_per_fold),
+                replace=False,
+            )
+        )
+        validation_mask = np.isin(
+            subject_id_array[outer_source_indices],
+            validation_subjects,
+        )
+        source_validation_indices = outer_source_indices[validation_mask]
+        source_indices = outer_source_indices[~validation_mask]
+    else:
+        validation_subjects = np.asarray([], dtype=outer_source_subjects.dtype)
+        source_validation_indices = np.asarray([], dtype=np.int64)
+        source_indices = outer_source_indices
 
     X_source = feature_array[source_indices]
     y_source = label_array[source_indices]
     source_subject_ids = subject_id_array[source_indices]
     source_trial_ids = trial_id_array[source_indices]
+    X_source_validation = feature_array[source_validation_indices]
+    y_source_validation = label_array[source_validation_indices]
+    source_validation_subject_ids = subject_id_array[source_validation_indices]
+    source_validation_trial_ids = trial_id_array[source_validation_indices]
 
     X_target = feature_array[target_indices]
     y_target = label_array[target_indices]
@@ -4349,10 +4479,17 @@ def _run_subject_calibration_subject(
         "\n" + "=" * 100 +
         f"\n[Target subject {subject_number:>3} / {total_subjects}] "
         f"subject={_python_scalar(target_subject)!r} | "
-        f"source={len(source_indices)} {sample_level} | "
+        f"source_fit={len(source_indices)} {sample_level} | "
+        f"source_validation={len(source_validation_indices)} {sample_level} | "
         f"target={len(target_indices)} {sample_level}",
         flush=True,
     )
+    if len(validation_subjects):
+        print(
+            "Source-only validation subjects: "
+            f"{[_python_scalar(value) for value in validation_subjects]}",
+            flush=True,
+        )
 
     model_hp, ignored_fit_hp = _split_config(fixed_config)
     if ignored_fit_hp:
@@ -4386,26 +4523,95 @@ def _run_subject_calibration_subject(
             source_subject_ids,
         )
         source_kwargs = dict(source_fit_kwargs)
+        source_callbacks = list(source_kwargs.pop("callbacks", []))
         source_class_weight = (
             _class_weight_from_labels(y_source) if source_use_class_weight else None
         )
         if source_class_weight is not None:
             source_kwargs["class_weight"] = source_class_weight
 
+        source_validation_data = None
+        if len(source_validation_indices):
+            source_validation_data = (X_source_validation, y_source_validation)
+            source_callbacks.append(
+                EvaluationLevelValidationMetrics(
+                    X_val=X_source_validation,
+                    y_val=y_source_validation,
+                    subject_ids_val=source_validation_subject_ids,
+                    trial_ids_val=source_validation_trial_ids,
+                    evaluation_level=evaluation_level,
+                    batch_size=int(source_batch_size),
+                )
+            )
+            if early_stopping_patience is not None:
+                source_callbacks.append(
+                    tf.keras.callbacks.EarlyStopping(
+                        monitor=early_stopping_monitor,
+                        patience=int(early_stopping_patience),
+                        min_delta=float(early_stopping_min_delta),
+                        mode=early_stopping_mode,
+                        restore_best_weights=bool(restore_best_weights),
+                        verbose=1 if verbose else 0,
+                    )
+                )
+        if source_callbacks:
+            source_kwargs["callbacks"] = source_callbacks
+
         print(
             f"Source pretraining for target subject {_python_scalar(target_subject)!r}: "
             f"{len(np.unique(source_subject_ids))} source subjects, "
-            f"epochs={source_epochs}, batch_size={source_batch_size}",
+            f"validation_subjects={len(validation_subjects)}, "
+            f"epochs={source_epochs}, batch_size={source_batch_size}, "
+            f"monitor={early_stopping_monitor!r}",
             flush=True,
         )
         source_history = model.fit(
             X_source_for_fit,
             y_source,
+            validation_data=source_validation_data,
             epochs=int(source_epochs),
             batch_size=int(source_batch_size),
             verbose=int(verbose),
             **source_kwargs,
         )
+
+        source_epochs_ran = int(len(source_history.history.get("loss", [])))
+        source_best_epoch: int | None = None
+        source_best_monitored_value: float | None = None
+        monitored_history = source_history.history.get(early_stopping_monitor)
+        if monitored_history:
+            monitored_values = np.asarray(monitored_history, dtype=np.float64)
+            finite_indices = np.flatnonzero(np.isfinite(monitored_values))
+            if len(finite_indices):
+                finite_values = monitored_values[finite_indices]
+                if early_stopping_mode == "max":
+                    best_local_index = int(np.argmax(finite_values))
+                elif early_stopping_mode == "min":
+                    best_local_index = int(np.argmin(finite_values))
+                else:
+                    maximize_tokens = (
+                        "acc",
+                        "auc",
+                        "f1",
+                        "precision",
+                        "recall",
+                    )
+                    maximize = any(
+                        token in early_stopping_monitor.lower()
+                        for token in maximize_tokens
+                    )
+                    best_local_index = int(
+                        np.argmax(finite_values)
+                        if maximize
+                        else np.argmin(finite_values)
+                    )
+                best_history_index = int(finite_indices[best_local_index])
+                source_best_epoch = best_history_index + 1
+                source_best_monitored_value = float(
+                    monitored_values[best_history_index]
+                )
+        if source_best_epoch is None and source_epochs_ran:
+            source_best_epoch = source_epochs_ran
 
         # get_weights() captures only model state, not optimizer state. That is
         # intentional: every calibration fold gets a newly compiled calibration
@@ -4654,11 +4860,21 @@ def _run_subject_calibration_subject(
                 _python_scalar(value)
                 for value in np.sort(np.unique(source_subject_ids)).tolist()
             ],
+            "source_validation_subjects": [
+                _python_scalar(value) for value in validation_subjects.tolist()
+            ],
             "n_source_samples": int(len(source_indices)),
+            "n_source_validation_samples": int(len(source_validation_indices)),
+            "n_outer_source_samples": int(len(outer_source_indices)),
             "n_target_samples": int(len(target_indices)),
             "n_target_trials": int(len(np.unique(target_trial_ids))),
             "source_training": {
-                "epochs_ran": int(len(source_history.history.get("loss", []))),
+                "epochs_ran": source_epochs_ran,
+                "best_epoch": source_best_epoch,
+                "best_monitored_value": source_best_monitored_value,
+                "early_stopping_monitor": early_stopping_monitor,
+                "stopped_early": bool(source_epochs_ran < int(source_epochs)),
+                "restore_best_weights": bool(restore_best_weights),
                 "final_history": _final_history_values(source_history),
                 "class_weight": source_class_weight,
             },
@@ -4733,6 +4949,13 @@ def subject_calibration_cv(
     calibration_weight_decay: float = 0.0,
     calibration_seed: int | None = 42,
     stratify_calibration: bool = True,
+    validation_subjects_per_fold: int = 0,
+    validation_seed: int | None = 42,
+    early_stopping_patience: int | None = None,
+    early_stopping_min_delta: float = 0.0,
+    early_stopping_monitor: str = "val_loss",
+    early_stopping_mode: Literal["auto", "min", "max"] = "auto",
+    restore_best_weights: bool = True,
     evaluation_level: Literal["window", "trial"] = "trial",
     metrics: list[str] | tuple[str, ...] = (
         "accuracy",
@@ -4764,11 +4987,13 @@ def subject_calibration_cv(
     """Three-fold six-trial subject-calibration evaluation.
 
     For each target subject, a fresh subject-independent source model is first
-    trained using every *other* subject. The target subject is never used to
-    construct or optimize that source model. This is especially important for
-    v6's MTLFuseNet-style GCN: ``model_builder_function`` receives the four
-    ``training_*`` arrays so its fixed mutual-information adjacency can be
-    estimated from source subjects only.
+    trained using the other subjects. When ``validation_subjects_per_fold`` is
+    positive, a seeded subset of those source subjects is excluded from gradient
+    updates and used only for source checkpoint selection. The target subject is
+    never used to construct, optimize, or select that source model. This is
+    especially important for v6's MTLFuseNet-style GCN: the four ``training_*``
+    arrays contain only gradient-training source subjects, so its fixed
+    mutual-information adjacency remains training-only.
 
     The source model is evaluated zero-shot on all target trials once. The
     target trials are then partitioned into ``calibration_folds`` disjoint sets
@@ -4844,6 +5069,16 @@ def subject_calibration_cv(
         raise ValueError(
             "source_batch_size and calibration_batch_size must be >= 1."
         )
+    if validation_subjects_per_fold < 0:
+        raise ValueError("validation_subjects_per_fold must be >= 0.")
+    if early_stopping_patience is not None and early_stopping_patience < 1:
+        raise ValueError("early_stopping_patience must be >= 1 when provided.")
+    if early_stopping_min_delta < 0.0:
+        raise ValueError("early_stopping_min_delta must be non-negative.")
+    if early_stopping_mode not in {"auto", "min", "max"}:
+        raise ValueError("early_stopping_mode must be 'auto', 'min', or 'max'.")
+    if not isinstance(early_stopping_monitor, str) or not early_stopping_monitor:
+        raise ValueError("early_stopping_monitor must be a non-empty string.")
     if calibration_learning_rate <= 0.0:
         raise ValueError("calibration_learning_rate must be positive.")
     if calibration_weight_decay < 0.0:
@@ -4888,9 +5123,10 @@ def subject_calibration_cv(
             )
         if "validation_data" in fit_kwargs:
             raise ValueError(
-                f"{fit_name} must not provide validation_data. The target "
-                "subject cannot be used for source-model selection, and the "
-                "six calibration trials are intentionally used only for fitting."
+                f"{fit_name} must not provide validation_data. Source-validation "
+                "subjects are managed by subject_calibration_cv, the target "
+                "subject cannot select the source model, and the six calibration "
+                "trials are intentionally used only for fitting."
             )
 
     metrics = tuple(metrics)
@@ -4904,6 +5140,13 @@ def subject_calibration_cv(
     unique_subjects = np.sort(np.unique(subject_id_array))
     if len(unique_subjects) < 2:
         raise ValueError("subject_calibration_cv requires at least two subjects.")
+    if validation_subjects_per_fold >= len(unique_subjects) - 1:
+        raise ValueError(
+            "validation_subjects_per_fold must leave at least one non-target "
+            "subject for source fitting. Got "
+            f"{validation_subjects_per_fold} validation subjects with "
+            f"{len(unique_subjects)} total subjects."
+        )
     target_subjects = unique_subjects
     if max_subjects is not None:
         target_subjects = target_subjects[: int(max_subjects)]
@@ -4944,6 +5187,13 @@ def subject_calibration_cv(
     print("=" * 80)
     print(f"Target subjects: {total_subjects}")
     print(f"Source-model fits: {total_subjects}")
+    print(
+        "Source-only validation per target: "
+        f"{validation_subjects_per_fold} subject(s) | "
+        f"monitor={early_stopping_monitor!r} | "
+        f"patience={early_stopping_patience} | "
+        f"restore_best={bool(restore_best_weights)}"
+    )
     print(f"Calibration fits: {total_subjects * int(calibration_folds)}")
     print(
         f"Per target: {calibration_trials} calibration trials + "
@@ -4968,6 +5218,13 @@ def subject_calibration_cv(
         "fixed_config": fixed_config,
         "source_epochs": int(source_epochs),
         "source_batch_size": int(source_batch_size),
+        "validation_subjects_per_fold": int(validation_subjects_per_fold),
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": float(early_stopping_min_delta),
+        "early_stopping_monitor": str(early_stopping_monitor),
+        "early_stopping_mode": str(early_stopping_mode),
+        "restore_best_weights": bool(restore_best_weights),
         "calibration_epochs": int(calibration_epochs),
         "calibration_batch_size": int(calibration_batch_size),
         "calibration_trials": int(calibration_trials),
@@ -5035,6 +5292,13 @@ def subject_calibration_cv(
         "stratify_calibration": bool(stratify_calibration),
         "source_epochs": int(source_epochs),
         "source_batch_size": int(source_batch_size),
+        "validation_subjects_per_fold": int(validation_subjects_per_fold),
+        "validation_seed": validation_seed,
+        "early_stopping_patience": early_stopping_patience,
+        "early_stopping_min_delta": float(early_stopping_min_delta),
+        "early_stopping_monitor": str(early_stopping_monitor),
+        "early_stopping_mode": str(early_stopping_mode),
+        "restore_best_weights": bool(restore_best_weights),
         "calibration_epochs": int(calibration_epochs),
         "calibration_batch_size": int(calibration_batch_size),
         "calibration_learning_rate": float(calibration_learning_rate),

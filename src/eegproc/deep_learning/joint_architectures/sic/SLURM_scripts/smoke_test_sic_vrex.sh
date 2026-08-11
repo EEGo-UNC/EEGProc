@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=smoke_sic_vrex_grid_val
-#SBATCH --output=smoke_sic_vrex_grid_val_%j.out
-#SBATCH --error=smoke_sic_vrex_grid_val_%j.err
+#SBATCH --job-name=smoke_sic_vrex_loso_cal
+#SBATCH --output=smoke_sic_vrex_loso_cal_%j.out
+#SBATCH --error=smoke_sic_vrex_loso_cal_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:2
@@ -19,10 +19,22 @@ module load cudnn/9.11.0
 PROJECT_DIR="$HOME/EEGProc"
 VENV_DIR="$PROJECT_DIR/venv312"
 
-# The winning grid configuration and the best epoch within each fold are both
-# selected using this accuracy type. Valid values: accuracy, balanced_accuracy.
+# For every grid candidate and held-out subject, the training script:
+#   1. trains the source model and reports zero-shot LOSOCV metrics;
+#   2. restores that source checkpoint independently for three fine-tunes;
+#   3. calibrates on 6 trials and evaluates on the other 12 trials;
+#   4. saves both zero-shot and subject-calibration metrics.
+#
+# The outer grid winner is selected ONLY from the zero-shot LOSOCV metric.
+# Subject calibration still runs and is reported for every configuration.
 SELECTION_METRIC="balanced_accuracy"
+HYPERPARAMETER_SELECTION_LEVEL="losocv"
 BEST_EPOCH_METRIC="balanced_accuracy"
+CALIBRATION_FOLDS=2
+CALIBRATION_TRIALS=9
+SOURCE_EPOCHS=200
+CALIBRATION_EPOCHS=40
+MAX_SUBJECTS=4
 
 cd "$PROJECT_DIR"
 
@@ -102,7 +114,7 @@ print(json.dumps({
     "weight_decay": {"grid": [5e-5]},
     "t_down": {"grid": [2]},
     "temporal_pool_sizes": {"grid": [[2]]},
-    "gcn_units": {"grid": [[32]]},
+    "gcn_units": {"grid": [[128, 64]]},
     "gcn_dropout": {"grid": [0.20]},
     "gcn_activation": {"grid": ["relu"]},
     "gcn_use_batch_norm": {"grid": [False]},
@@ -119,14 +131,14 @@ print(json.dumps({
     "architecture_mode": {"grid": ["feature_fusion"]},
     "fusion_units": {"grid": [128]},
     "fusion_dropout": {"grid": [0.20]},
-    "focal_gamma": {"grid": [1.0]},
+    "focal_gamma": {"grid": [1.5]},
     "focal_alpha": {"grid": [None]},
     "z_dim": {"grid": [128]},
-    "classification_hidden_units": {"grid": [[32, 16]]},
+    "classification_hidden_units": {"grid": [[128, 64]]},
     "classification_dropout": {"grid": [0.20]},
     "vc_loss_weight": {"grid": [1.0]},
     "vc_alpha": {"grid": [1.0]},
-    "vc_beta": {"grid": [0.5, 1.5]},
+    "vc_beta": {"grid": [0.5]},
     "vc_gamma": {"grid": [0.0]},
     "vc_lambda": {"grid": [0.0]},
     "update_vc_discriminator": {"grid": [False]},
@@ -134,7 +146,9 @@ print(json.dumps({
     "vae_beta": {"grid": [0.05]},
     "decoder_dropout": {"grid": [0.10]},
     "use_vrex": {"grid": [True]},
-    "vrex_penalty_weight": {"grid": [50.0, 100.0]},
+    # Two candidates make this a real selection smoke test rather than a
+    # one-configuration plumbing check. Keep use_vrex=True for both.
+    "vrex_penalty_weight": {"grid": [50.0]},
     "use_subject_adversarial": {"grid": [True]},
     "subject_adversarial_weight": {"grid": [0.60]},
     "subject_loss_weight": {"grid": [1.0]},
@@ -148,19 +162,41 @@ PY
 )"
 
 echo "Job ID: ${SLURM_JOB_ID}"
+echo "Hyperparameter selection level: ${HYPERPARAMETER_SELECTION_LEVEL} (zero-shot LOSOCV)"
 echo "Grid-selection metric: ${SELECTION_METRIC}"
 echo "Best-epoch metric: ${BEST_EPOCH_METRIC}"
+echo "Subject calibration reporting: enabled (${CALIBRATION_FOLDS} folds x ${CALIBRATION_TRIALS} trials)"
+echo "Smoke scope: ${MAX_SUBJECTS} LOSO subjects, ${SOURCE_EPOCHS} source epochs, ${CALIBRATION_EPOCHS} calibration epochs"
 python --version
 nvidia-smi
 
 # Verify that every model setting is an explicit grid axis and report the exact
 # Cartesian run count before starting TensorFlow.
-python - "$MODEL_GRID" <<'PY'
+python - \
+    "$MODEL_GRID" \
+    "$HYPERPARAMETER_SELECTION_LEVEL" \
+    "$CALIBRATION_FOLDS" \
+    "$CALIBRATION_TRIALS" <<'PY'
 import json
 import math
 import sys
 
 grid = json.loads(sys.argv[1])
+selection_level = sys.argv[2]
+calibration_folds = int(sys.argv[3])
+calibration_trials = int(sys.argv[4])
+
+if selection_level != "losocv":
+    raise RuntimeError(
+        "This smoke job must rank hyperparameters using zero-shot LOSOCV; "
+        f"got {selection_level!r}."
+    )
+if calibration_folds * calibration_trials != 18:
+    raise RuntimeError(
+        "DREAMER requires calibration_folds * calibration_trials == 18; "
+        f"got {calibration_folds} * {calibration_trials}."
+    )
+
 invalid = {
     name: value
     for name, value in grid.items()
@@ -179,9 +215,16 @@ if invalid:
 
 dimensions = {name: len(value["grid"]) for name, value in grid.items()}
 n_configurations = math.prod(dimensions.values())
+if n_configurations < 2:
+    raise RuntimeError(
+        "At least two Cartesian configurations are required to test LOSOCV "
+        "hyperparameter selection."
+    )
 searched = {name: size for name, size in dimensions.items() if size > 1}
 print(
     "Grid preflight: PASS | "
+    f"selection_level={selection_level} | "
+    "calibration_reporting=enabled | "
     f"axes={len(dimensions)} | "
     f"multi-candidate axes={searched or 'none'} | "
     f"Cartesian configurations={n_configurations}"
@@ -199,20 +242,29 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --classification-level window \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir runs/smoke/sic_vrex_grid_validation/DREAMER/valence \
-    --run-name dreamer_valence_sic_vrex_grid_validation_smoke \
-    --source-epochs 100 \
-    --source-batch-size 256 \
-    --validation-subjects 4 \
+    --out-dir runs/smoke/sic_vrex_loso_selection_with_calibration/DREAMER/valence \
+    --run-name dreamer_valence_sic_vrex_loso_selection_with_calibration_smoke \
+    --source-epochs "$SOURCE_EPOCHS" \
+    --source-batch-size 512 \
+    --validation-subjects 3 \
     --validation-seed 42 \
-    --early-stopping-patience 20 \
+    --early-stopping-patience 3 \
     --early-stopping-min-delta 0.001 \
+    --calibration-epochs "$CALIBRATION_EPOCHS" \
+    --calibration-batch-size 32 \
+    --calibration-trials "$CALIBRATION_TRIALS" \
+    --calibration-folds "$CALIBRATION_FOLDS" \
+    --calibration-learning-rate 0.0001 \
+    --calibration-optimizer adamw \
+    --calibration-weight-decay 0.00005 \
+    --calibration-seed 42 \
     --selection-metric "$SELECTION_METRIC" \
+    --hyperparameter-selection-level "$HYPERPARAMETER_SELECTION_LEVEL" \
     --best-epoch-metric "$BEST_EPOCH_METRIC" \
-    --decision-threshold 0.5 \
-    --prediction-latent-samples 15 \
+    --decision-threshold 0.45 0.5 0.55 \
+    --prediction-latent-samples 20 \
     --latent-sampling-seed 42 \
-    --max-subjects 4 \
+    --max-subjects "$MAX_SUBJECTS" \
     --n-jobs 2 \
     --gpu-ids 0 1 \
     --cpus-per-worker 2 \
