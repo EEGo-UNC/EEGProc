@@ -119,7 +119,7 @@ print(json.dumps({
 
     # Two configurations: gamma=0 is the CE-equivalent baseline; gamma=1
     # applies focal modulation.
-    "focal_gamma": [0.0, 1.0],
+    "focal_gamma": 1.0,
     "focal_alpha": None,
 
     "z_dim": 128,
@@ -127,7 +127,7 @@ print(json.dumps({
     "classification_dropout": 0.20,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": 0.0,
+    "vc_beta": 2.0,
     "vc_gamma": 0.0,
     "vc_lambda": 0.0,
     "update_vc_discriminator": False,
