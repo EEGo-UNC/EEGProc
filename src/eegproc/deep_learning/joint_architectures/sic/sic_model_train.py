@@ -21,6 +21,7 @@ import csv
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
+from itertools import product
 import json
 import logging
 from pathlib import Path
@@ -115,6 +116,126 @@ SIC_SEQUENCE_HYPERPARAMETER_DEPTHS = {
     "classification_hidden_units": 1,
     "focal_alpha": 1,
 }
+
+# The grid is expanded here, rather than leaving the Cartesian-product behavior
+# implicit in cross_val.py.  loso_cv therefore receives one explicit search
+# dimension whose candidates are complete SIC model configurations.
+SIC_EXPLICIT_GRID_KEY = "sic_grid_configuration"
+
+
+def _json_fingerprint(value) -> str:
+    """Return a stable, human-readable representation for logs/errors."""
+    return json.dumps(value, sort_keys=True, default=_json_default)
+
+
+def _decode_grid_value(name: str, value):
+    """Return (is_grid_axis, value_or_candidates) for one JSON entry.
+
+    Unambiguous wrappers are supported for every parameter::
+
+        {"grid": [candidate_1, candidate_2]}
+        {"fixed": any_json_value}
+
+    The legacy shorthand remains supported.  A list is a grid for scalar
+    parameters.  For parameters whose value is itself a sequence, one list is
+    fixed and a nested list denotes a grid (for example,
+    ``gcn_units=[[32], [64, 32]]``).
+    """
+    if isinstance(value, dict) and set(value) in ({"grid"}, {"fixed"}):
+        if "fixed" in value:
+            return False, value["fixed"]
+        candidates = value["grid"]
+        if not isinstance(candidates, list):
+            raise ValueError(
+                f"Grid wrapper for {name!r} must contain a JSON list; "
+                f"got {type(candidates).__name__}."
+            )
+        if not candidates:
+            raise ValueError(f"Grid axis {name!r} has no candidates.")
+        return True, candidates
+
+    if not isinstance(value, list):
+        return False, value
+    if not value:
+        if name in SIC_SEQUENCE_HYPERPARAMETER_DEPTHS:
+            return False, value
+        raise ValueError(f"Grid axis {name!r} has no candidates.")
+
+    if name in SIC_SEQUENCE_HYPERPARAMETER_DEPTHS:
+        # Sequence-valued model settings need one extra nesting level to be a
+        # legacy grid.  The explicit {"grid": [...]} form is preferred because
+        # it also handles None and other mixed candidate types without ambiguity.
+        is_grid = any(isinstance(item, (list, tuple)) for item in value)
+        return (True, value) if is_grid else (False, value)
+    return True, value
+
+
+def expand_cartesian_grid(model_config: dict) -> tuple[list[dict], dict[str, int]]:
+    """Expand every requested axis into the complete Cartesian product.
+
+    Returns the fully materialized configurations and an ordered mapping of
+    grid-axis names to candidate counts.  Fixed values are copied into every
+    configuration.  No random sampling or one-factor-at-a-time reduction is
+    performed.
+    """
+    if not isinstance(model_config, dict):
+        raise ValueError("Hyperparameter configuration must be a JSON object.")
+
+    fixed: dict = {}
+    axis_names: list[str] = []
+    axis_candidates: list[list] = []
+    for name, raw_value in model_config.items():
+        is_axis, decoded = _decode_grid_value(name, raw_value)
+        if is_axis:
+            axis_names.append(name)
+            axis_candidates.append(list(decoded))
+        else:
+            fixed[name] = decoded
+
+    combinations = product(*axis_candidates) if axis_candidates else [()]
+    configurations: list[dict] = []
+    for values in combinations:
+        configuration = dict(fixed)
+        configuration.update(dict(zip(axis_names, values)))
+        configurations.append(configuration)
+
+    dimensions = {
+        name: len(candidates)
+        for name, candidates in zip(axis_names, axis_candidates)
+    }
+    return configurations, dimensions
+
+
+def _build_sic_from_explicit_grid(
+    *args,
+    sic_grid_configuration=None,
+    **kwargs,
+):
+    """Adapter that exposes a complete configuration as one grid candidate."""
+    if sic_grid_configuration is None:
+        raise ValueError(
+            f"Missing required explicit-grid key {SIC_EXPLICIT_GRID_KEY!r}."
+        )
+    if not isinstance(sic_grid_configuration, dict):
+        raise TypeError(
+            f"{SIC_EXPLICIT_GRID_KEY!r} must be a dictionary; got "
+            f"{type(sic_grid_configuration).__name__}."
+        )
+    if "hyperparameters" in sic_grid_configuration:
+        model_hyperparameters = sic_grid_configuration["hyperparameters"]
+        if not isinstance(model_hyperparameters, dict):
+            raise TypeError("Explicit-grid 'hyperparameters' must be a dictionary.")
+    else:
+        # Backward-compatible with a raw complete configuration.
+        model_hyperparameters = sic_grid_configuration
+
+    overlap = set(kwargs).intersection(model_hyperparameters)
+    if overlap:
+        raise ValueError(
+            "Grid configuration collides with direct builder arguments: "
+            f"{sorted(overlap)}."
+        )
+    return build_sic_model(*args, **kwargs, **model_hyperparameters)
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -415,6 +536,14 @@ def train_sic_loso_validation(
     # requests otherwise. The dedicated smoke script sets this False.
     model_config.setdefault("use_vrex", False)
 
+    grid_configurations, grid_dimensions = expand_cartesian_grid(model_config)
+    if not grid_configurations:  # Defensive: product() always yields at least one.
+        raise ValueError("Hyperparameter grid produced no configurations.")
+    grid_records = [
+        {"configuration_id": index, "hyperparameters": candidate}
+        for index, candidate in enumerate(grid_configurations, start=1)
+    ]
+
     if config.best_epoch_metric is not None:
         if config.classification_level != "window":
             raise ValueError(
@@ -442,6 +571,18 @@ def train_sic_loso_validation(
 
     _write_json(run_dir / "training_config.json", asdict(config))
     _write_json(run_dir / "model_config.json", model_config)
+    _write_json(
+        run_dir / "hyperparameter_grid.json",
+        {
+            "search_type": "full_cartesian_product",
+            "selection_level": config.classification_level,
+            "selection_metric": config.selection_metric,
+            "maximize_metric": True,
+            "dimensions": grid_dimensions,
+            "n_configurations": len(grid_configurations),
+            "configurations": grid_records,
+        },
+    )
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
     logger.info("Training protocol: ordinary LOSO + subject-disjoint validation")
@@ -461,15 +602,32 @@ def train_sic_loso_validation(
         config.selection_metric,
     )
     logger.info(
+        "Full Cartesian grid: dimensions=%s total_configurations=%d",
+        grid_dimensions or {"fixed_configuration": 1},
+        len(grid_configurations),
+    )
+    for index, candidate in enumerate(grid_configurations, start=1):
+        logger.info(
+            "Grid configuration %d/%d: %s",
+            index,
+            len(grid_configurations),
+            _json_fingerprint(candidate),
+        )
+    logger.info(
         "V-REx: enabled=%s weight=%s",
         model_config.get("use_vrex", False),
         model_config.get("vrex_penalty_weight", 0.0),
     )
 
-    builder = partial(build_sic_model, input_shape=tuple(X.shape[1:]))
-    builder._sequence_hyperparameter_depths = dict(
-        SIC_SEQUENCE_HYPERPARAMETER_DEPTHS
+    # The only search dimension handed to loso_cv is a list of already-expanded
+    # complete configurations.  This guarantees that all and only the full
+    # Cartesian combinations above are evaluated in every LOSO fold.
+    builder = partial(
+        _build_sic_from_explicit_grid,
+        input_shape=tuple(X.shape[1:]),
     )
+    builder._sequence_hyperparameter_depths = {}
+    explicit_grid = {SIC_EXPLICIT_GRID_KEY: grid_records}
 
     results = loso_cv(
         model_builder_function=builder,
@@ -479,7 +637,7 @@ def train_sic_loso_validation(
         trial_id_array=trials,
         n_epochs=config.source_epochs,
         batch_size=config.source_batch_size,
-        hyperparameters=model_config,
+        hyperparameters=explicit_grid,
         evaluation_level=config.classification_level,
         selection_metric=config.selection_metric,
         selection_level=config.classification_level,
@@ -564,6 +722,16 @@ def train_sic(
     model_config.setdefault("n_classes", _n_classes(y))
     model_config.setdefault("n_channels", config.n_channels)
     model_config.setdefault("n_bands", config.n_bands)
+
+    fixed_configurations, grid_dimensions = expand_cartesian_grid(model_config)
+    if grid_dimensions:
+        raise ValueError(
+            "subject_calibration cannot select hyperparameters without a "
+            "subject-disjoint validation set. Run the grid with "
+            "--training-protocol loso_validation first; grid axes were "
+            f"{sorted(grid_dimensions)}."
+        )
+    model_config = fixed_configurations[0]
 
     _write_json(run_dir / "training_config.json", asdict(config))
     _write_json(run_dir / "model_config.json", model_config)
@@ -734,7 +902,16 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--selection-metric",
-        choices=("accuracy", "balanced_accuracy"),
+        choices=(
+            "accuracy",
+            "balanced_accuracy",
+            "f1",
+            "macro_f1",
+            "precision",
+            "macro_precision",
+            "recall",
+            "macro_recall",
+        ),
         default="balanced_accuracy",
         help=(
             "Validation metric used to select the best hyperparameter-grid "
@@ -779,12 +956,22 @@ def parse_args(argv=None):
         "--hyperparameters-json",
         default=None,
         help=(
-            "SIC model configuration or LOSO-validation hyperparameter grid as "
-            "JSON. Use candidate lists for scalar parameters, for example "
-            "focal_gamma=[0.5,1.0,2.0]. Sequence-valued parameters need one "
-            "extra level of nesting when searched, for example "
-            "gcn_units=[[32],[64,32]]. In subject_calibration mode this must be "
-            "one fixed configuration rather than a grid."
+            "SIC model configuration or full Cartesian LOSO-validation grid as "
+            "JSON. Every candidate list is crossed with every other candidate "
+            "list. Use focal_gamma=[0.5,1.0,2.0] for scalar parameters. For "
+            "sequence-valued parameters, prefer an explicit wrapper such as "
+            "gcn_units={\"grid\":[[32],[64,32]]}; the legacy nested-list form "
+            "gcn_units=[[32],[64,32]] also works. Use {\"fixed\":value} to "
+            "force any JSON value to remain fixed. subject_calibration accepts "
+            "only one fixed configuration."
+        ),
+    )
+    parser.add_argument(
+        "--print-grid-only",
+        action="store_true",
+        help=(
+            "Expand and print the exact Cartesian configurations, then exit "
+            "before loading data or creating a model."
         ),
     )
     return parser.parse_args(argv)
@@ -824,30 +1011,24 @@ def _validate_args(args, model_config):
         raise ValueError("prediction-latent-samples must be >= 0.")
     if not isinstance(model_config, dict):
         raise ValueError("--hyperparameters-json must decode to a JSON object.")
+    if SIC_EXPLICIT_GRID_KEY in model_config:
+        raise ValueError(
+            f"{SIC_EXPLICIT_GRID_KEY!r} is reserved for the internal explicit-grid "
+            "adapter."
+        )
     if "epochs" in model_config or "batch_size" in model_config:
         raise ValueError(
             "Do not put epochs/batch_size inside --hyperparameters-json; SIC has "
             "separate source and calibration epoch/batch arguments."
         )
+    _, grid_dimensions = expand_cartesian_grid(model_config)
     if args.training_protocol == "subject_calibration":
-        search_dimensions = []
-        for name, value in model_config.items():
-            if not isinstance(value, (list, tuple)):
-                continue
-            if name in SIC_SEQUENCE_HYPERPARAMETER_DEPTHS:
-                is_search_dimension = bool(value) and isinstance(
-                    value[0], (list, tuple)
-                )
-            else:
-                is_search_dimension = True
-            if is_search_dimension:
-                search_dimensions.append(name)
-        if search_dimensions:
+        if grid_dimensions:
             raise ValueError(
                 "Hyperparameter grids require --training-protocol "
                 "loso_validation. subject_calibration accepts one fixed model "
                 "configuration; grid-valued keys were: "
-                f"{sorted(search_dimensions)}."
+                f"{sorted(grid_dimensions)}."
             )
 
 
@@ -857,6 +1038,27 @@ def main(argv=None):
         json.loads(args.hyperparameters_json) if args.hyperparameters_json else {}
     )
     _validate_args(args, model_config)
+
+    if args.print_grid_only:
+        configurations, dimensions = expand_cartesian_grid(model_config)
+        print(
+            json.dumps(
+                {
+                    "search_type": "full_cartesian_product",
+                    "selection_level": args.classification_level,
+                    "selection_metric": args.selection_metric,
+                    "dimensions": dimensions,
+                    "n_configurations": len(configurations),
+                    "configurations": [
+                        {"configuration_id": index, "hyperparameters": candidate}
+                        for index, candidate in enumerate(configurations, start=1)
+                    ],
+                },
+                indent=2,
+                default=_json_default,
+            )
+        )
+        return 0
 
     dataset_config = get_dataset_config(args.dataset)
     eeg_path = args.raw_eeg_npy or dataset_config.eeg_path

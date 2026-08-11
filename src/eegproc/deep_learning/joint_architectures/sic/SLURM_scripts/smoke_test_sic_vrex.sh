@@ -88,62 +88,61 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# Scalar candidate lists are grid dimensions. Sequence-valued model settings
-# such as gcn_units remain fixed unless given an extra nesting level.
+# Every entry below is an explicit grid axis. Add candidates to any "grid"
+# list to search that hyperparameter. Sequence-valued candidates need one
+# additional list level, for example:
+#   "gcn_units": {"grid": [[32], [64, 32]]}
+# The training script evaluates the complete Cartesian product of all axes.
 MODEL_GRID="$(python - <<'PY'
 import json
 
 print(json.dumps({
-    "optimizer_name": "adamw",
-    "learning_rate": 1e-4,
-    "weight_decay": 5e-5,
-    "t_down": 2,
-    "temporal_pool_sizes": [2],
-    "gcn_units": [32],
-    "gcn_dropout": 0.20,
-    "gcn_activation": "relu",
-    "gcn_use_batch_norm": False,
-    "spectral_gru_units": 384,
-    "spectral_gru_dropout": 0.2,
-    "mi_n_neighbors": 3,
-    "mi_random_state": 42,
-    "mi_zero_diagonal": False,
-    "mi_band_reduction": "mean",
-    "mi_max_observations": 15000,
-    "bilstm_units": 128,
-    "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.3,
-    "architecture_mode": "feature_fusion",
-    "fusion_units": 128,
-    "fusion_dropout": 0.2,
-
-    # Two configurations: gamma=0 is the CE-equivalent baseline; gamma=1
-    # applies focal modulation.
-    "focal_gamma": [1.0],
-    "focal_alpha": None,
-
-    "z_dim": 128,
-    "classification_hidden_units": [128],
-    "classification_dropout": 0.20,
-    "vc_loss_weight": 1.0,
-    "vc_alpha": 1.0,
-    "vc_beta": 2.0,
-    "vc_gamma": 0.0,
-    "vc_lambda": 0.0,
-    "update_vc_discriminator": False,
-    "vae_loss_weight": 0.10,
-    "vae_beta": 0.05,
-    "decoder_dropout": 0.10,
-    "use_vrex": True,
-    "vrex_penalty_weight": 10.0,
-    "use_subject_adversarial": True,
-    "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": 1.0,
-    "subject_hidden_units": 64,
-    "subject_dropout": 0.0,
-    "calibration_unfreeze_layers": 2,
-    "calibration_use_vc_target": True,
-    "use_class_weight": False,
+    "optimizer_name": {"grid": ["adamw"]},
+    "learning_rate": {"grid": [1e-4]},
+    "weight_decay": {"grid": [5e-5]},
+    "t_down": {"grid": [2]},
+    "temporal_pool_sizes": {"grid": [[2]]},
+    "gcn_units": {"grid": [[32]]},
+    "gcn_dropout": {"grid": [0.20]},
+    "gcn_activation": {"grid": ["relu"]},
+    "gcn_use_batch_norm": {"grid": [False]},
+    "spectral_gru_units": {"grid": [384]},
+    "spectral_gru_dropout": {"grid": [0.20]},
+    "mi_n_neighbors": {"grid": [3]},
+    "mi_random_state": {"grid": [42]},
+    "mi_zero_diagonal": {"grid": [False]},
+    "mi_band_reduction": {"grid": ["mean"]},
+    "mi_max_observations": {"grid": [15000]},
+    "bilstm_units": {"grid": [128]},
+    "n_bilstm_layers": {"grid": [1]},
+    "bilstm_dropout": {"grid": [0.30]},
+    "architecture_mode": {"grid": ["feature_fusion"]},
+    "fusion_units": {"grid": [128]},
+    "fusion_dropout": {"grid": [0.20]},
+    "focal_gamma": {"grid": [1.0]},
+    "focal_alpha": {"grid": [None]},
+    "z_dim": {"grid": [128]},
+    "classification_hidden_units": {"grid": [[32, 16]]},
+    "classification_dropout": {"grid": [0.20]},
+    "vc_loss_weight": {"grid": [1.0]},
+    "vc_alpha": {"grid": [1.0]},
+    "vc_beta": {"grid": [0.5, 1.5]},
+    "vc_gamma": {"grid": [0.0]},
+    "vc_lambda": {"grid": [0.0]},
+    "update_vc_discriminator": {"grid": [False]},
+    "vae_loss_weight": {"grid": [0.10]},
+    "vae_beta": {"grid": [0.05]},
+    "decoder_dropout": {"grid": [0.10]},
+    "use_vrex": {"grid": [True]},
+    "vrex_penalty_weight": {"grid": [50.0, 100.0]},
+    "use_subject_adversarial": {"grid": [True]},
+    "subject_adversarial_weight": {"grid": [0.60]},
+    "subject_loss_weight": {"grid": [1.0]},
+    "subject_hidden_units": {"grid": [64]},
+    "subject_dropout": {"grid": [0.0]},
+    "calibration_unfreeze_layers": {"grid": [2]},
+    "calibration_use_vc_target": {"grid": [True]},
+    "use_class_weight": {"grid": [False]},
 }))
 PY
 )"
@@ -154,19 +153,39 @@ echo "Best-epoch metric: ${BEST_EPOCH_METRIC}"
 python --version
 nvidia-smi
 
-# Verify that the JSON contains the intended two-configuration grid.
+# Verify that every model setting is an explicit grid axis and report the exact
+# Cartesian run count before starting TensorFlow.
 python - "$MODEL_GRID" <<'PY'
 import json
+import math
 import sys
 
 grid = json.loads(sys.argv[1])
-focal_gammas = grid.get("focal_gamma")
-if focal_gammas != [0.0, 1.0]:
-    raise RuntimeError(
-        "Expected focal_gamma grid [0.0, 1.0]; "
-        f"received {focal_gammas!r}."
+invalid = {
+    name: value
+    for name, value in grid.items()
+    if not (
+        isinstance(value, dict)
+        and set(value) == {"grid"}
+        and isinstance(value["grid"], list)
+        and value["grid"]
     )
-print(f"Grid preflight: PASS ({len(focal_gammas)} configurations)")
+}
+if invalid:
+    raise RuntimeError(
+        "Every MODEL_GRID entry must use a non-empty "
+        f"{{'grid': [...]}} wrapper; invalid keys: {sorted(invalid)}"
+    )
+
+dimensions = {name: len(value["grid"]) for name, value in grid.items()}
+n_configurations = math.prod(dimensions.values())
+searched = {name: size for name, size in dimensions.items() if size > 1}
+print(
+    "Grid preflight: PASS | "
+    f"axes={len(dimensions)} | "
+    f"multi-candidate axes={searched or 'none'} | "
+    f"Cartesian configurations={n_configurations}"
+)
 PY
 
 # Verify the SIC builder, feature-fusion window mode, and preservation of
