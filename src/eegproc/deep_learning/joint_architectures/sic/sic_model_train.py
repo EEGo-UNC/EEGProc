@@ -209,9 +209,20 @@ def expand_cartesian_grid(model_config: dict) -> tuple[list[dict], dict[str, int
 def _build_sic_from_explicit_grid(
     *args,
     sic_grid_configuration=None,
+    training_features=None,
+    training_labels=None,
+    training_subject_ids=None,
+    training_trial_ids=None,
+    adjacency=None,
     **kwargs,
 ):
-    """Adapter that exposes a complete configuration as one grid candidate."""
+    """Expose one complete grid candidate without hiding fold context.
+
+    ``cross_val._build_model_with_fold_training_context`` discovers supported
+    fold-local inputs from the builder signature.  Keep the ``training_*``
+    arguments explicit here so LOSO passes source-training data through to
+    ``build_sic_model`` for leakage-free MI-adjacency estimation.
+    """
     if sic_grid_configuration is None:
         raise ValueError(
             f"Missing required explicit-grid key {SIC_EXPLICIT_GRID_KEY!r}."
@@ -229,13 +240,26 @@ def _build_sic_from_explicit_grid(
         # Backward-compatible with a raw complete configuration.
         model_hyperparameters = sic_grid_configuration
 
-    overlap = set(kwargs).intersection(model_hyperparameters)
+    fold_context = {
+        "training_features": training_features,
+        "training_labels": training_labels,
+        "training_subject_ids": training_subject_ids,
+        "training_trial_ids": training_trial_ids,
+        "adjacency": adjacency,
+    }
+    overlap = (set(kwargs) | set(fold_context)).intersection(model_hyperparameters)
     if overlap:
         raise ValueError(
-            "Grid configuration collides with direct builder arguments: "
+            "Grid configuration collides with direct or fold-context builder "
+            "arguments: "
             f"{sorted(overlap)}."
         )
-    return build_sic_model(*args, **kwargs, **model_hyperparameters)
+    return build_sic_model(
+        *args,
+        **fold_context,
+        **kwargs,
+        **model_hyperparameters,
+    )
 
 
 def _ensure_dir(path: Path) -> Path:
