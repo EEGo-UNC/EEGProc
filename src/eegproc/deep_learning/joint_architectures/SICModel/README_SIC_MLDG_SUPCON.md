@@ -1,4 +1,4 @@
-# Subject Invariant Calibrator (SIC)
+# Subject Invariant Calibration (SIC)
 
 SIC is an EEG emotion classifier designed for cross-subject generalization and rapid subject calibration. This version trains on DREAMER valence with strict leave-one-subject-out (LOSO) evaluation, first-order MLDG, supervised contrastive regularization, and multi-shot calibration.
 
