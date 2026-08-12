@@ -1,25 +1,28 @@
-"""SIC: Subject Invariant Calibrator.
+"""SIC: Subject Invariant Calibrator model.
 
 MTLFuseNet GCN/GRU -> temporal BiLSTM -> variational z -> dense-softmax.
 
 Architecture
 ------------
-For each EEG window::
+For each EEG window, two independent encoders produce factorized variational
+posteriors::
 
-    channel-band EEG
-        -> MTLFuseNet-style fixed-MI shared GCN
-        -> spectral GRU across frequency bands
-        -> temporal BiLSTM
-        -> q(z | x) = N(z_mean, diag(exp(z_log_var)))
+    channel-band EEG -> fixed-MI GCN -> spectral GRU -> q_g(z_g | x)
+    channel-band EEG -> temporal BiLSTM              -> q_b(z_b | x)
 
-The pooled z representation feeds a conventional dense -> softmax emotion
+The sampled branch latents are concatenated directly.  There is no learned
+fusion projection between the branch posteriors and the classifier::
+
+    z_joint = concat([z_g, z_b]) -> dense-softmax classifier
+
+The pooled joint-z representation feeds a conventional dense -> softmax emotion
 classifier.  EEGProc's existing VariationalClassifier is used as an auxiliary
 VC target/regularizer on the dense classifier embedding; the dense logits are
 still the actual prediction logits.
 
 The generative path uses EEGProc's existing graph-aware MTL decoder::
 
-    z sequence
+    concatenated branch-z sequence
         -> temporal projection / upsampling
         -> fixed-MI MTL-style graph decoding
         -> reconstructed channel-band EEG
@@ -27,7 +30,8 @@ The generative path uses EEGProc's existing graph-aware MTL decoder::
 The decoder is intentionally simpler than the encoder: it is a reconstruction
 module, not a claimed mathematical inverse of the GCN/GRU/BiLSTM encoder.
 
-Subject invariance can be imposed directly on pooled z with ordinary gradient
+Subject invariance can be imposed directly on the pooled concatenated posterior
+mean with ordinary gradient
 reversal.  There is no adversarial takeover/recovery controller: emotion/VC,
 VAE, and (when enabled) subject-adversarial objectives are optimized together
 in the same source update.
@@ -99,7 +103,7 @@ except ImportError:
     )
 
 
-SIC_BUILDER_API_VERSION = 7
+SIC_BUILDER_API_VERSION = 8
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
 
 
@@ -568,7 +572,7 @@ class GradientReversal(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
 class SICModel(tf.keras.Model):
-    """SIC with serial or parallel feature-fusion encoder and focal classifier."""
+    """SIC with parallel variational GCN-GRU and BiLSTM encoder branches."""
 
     def __init__(
         self,
@@ -580,12 +584,10 @@ class SICModel(tf.keras.Model):
         bilstm_units: int = 128,
         n_bilstm_layers: int = 1,
         bilstm_dropout: float = 0.30,
-        architecture_mode: str = "serial",
+        architecture_mode: str | None = None,
         use_gcn_gru_branch: bool = True,
         use_bilstm_branch: bool = True,
         use_decoder: bool = True,
-        fusion_units: int = 128,
-        fusion_dropout: float = 0.20,
         temporal_downsample_factor: int = 1,
         z_dim: int = 64,
         z_log_var_clip_min: float = -20.0,
@@ -649,13 +651,16 @@ class SICModel(tf.keras.Model):
             raise ValueError("n_classes must be >= 2.")
         if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1 or int(z_dim) < 1:
             raise ValueError("BiLSTM and z dimensions must be positive.")
-        architecture_mode = str(architecture_mode).lower()
-        if architecture_mode not in {"serial", "feature_fusion"}:
-            raise ValueError("architecture_mode must be 'serial' or 'feature_fusion'.")
-        if int(fusion_units) < 1:
-            raise ValueError("fusion_units must be positive.")
-        if not 0.0 <= float(fusion_dropout) < 1.0:
-            raise ValueError("fusion_dropout must be in [0, 1).")
+        # Compatibility with older configurations.  The corrected encoder is
+        # always parallel and concatenates branch latents directly; the old
+        # learned feature-fusion projection no longer exists.
+        if architecture_mode is not None:
+            architecture_mode = str(architecture_mode).lower()
+            if architecture_mode not in {"feature_fusion", "parallel_variational"}:
+                raise ValueError(
+                    "SIC now uses parallel variational branches only; remove "
+                    "architecture_mode='serial'."
+                )
         if int(temporal_downsample_factor) < 1:
             raise ValueError("temporal_downsample_factor must be >= 1.")
         if float(focal_gamma) < 0.0:
@@ -719,14 +724,16 @@ class SICModel(tf.keras.Model):
         self.bilstm_units = int(bilstm_units)
         self.n_bilstm_layers = int(n_bilstm_layers)
         self.bilstm_dropout_rate = float(bilstm_dropout)
-        self.architecture_mode = architecture_mode
         self.use_gcn_gru_branch = use_gcn_gru_branch
         self.use_bilstm_branch = use_bilstm_branch
         self.use_decoder = use_decoder
-        self.fusion_units = int(fusion_units)
-        self.fusion_dropout_rate = float(fusion_dropout)
         self.temporal_downsample_factor = int(temporal_downsample_factor)
+        # z_dim is the posterior width of each active branch.  The classifier,
+        # decoder, and subject adversary consume their direct concatenation.
         self.z_dim = int(z_dim)
+        self.combined_z_dim = self.z_dim * (
+            int(self.use_gcn_gru_branch) + int(self.use_bilstm_branch)
+        )
         self.z_log_var_clip_min = float(z_log_var_clip_min)
         self.z_log_var_clip_max = float(z_log_var_clip_max)
         self.classification_hidden_units = hidden_units
@@ -835,40 +842,54 @@ class SICModel(tf.keras.Model):
                 )
             )
 
-        # In serial mode the BiLSTM consumes the GCN-GRU sequence.
-        # In feature_fusion mode the BiLSTM is an independent raw-EEG branch;
-        # it is downsampled to the GCN-GRU temporal resolution and fused before z.
+        # The BiLSTM is an independent raw-EEG branch.  Pool its deterministic
+        # features before its posterior heads so its latent time axis matches
+        # the GCN-GRU branch without averaging already-sampled noise.
         self.parallel_temporal_pool = tf.keras.layers.AveragePooling1D(
             pool_size=self.temporal_downsample_factor,
             strides=self.temporal_downsample_factor,
             padding="same",
             name="v6_parallel_bilstm_pool",
         )
-        self.fusion_projection = tf.keras.layers.Dense(
-            self.fusion_units,
-            activation=self.activation_name,
-            name="v6_feature_fusion_dense",
+        self.gcn_z_mean_projection = (
+            tf.keras.layers.Dense(
+                self.z_dim,
+                activation=None,
+                name="v6_gcn_z_mean",
+            )
+            if self.use_gcn_gru_branch
+            else None
         )
-        self.fusion_norm = tf.keras.layers.LayerNormalization(
-            axis=-1,
-            name="v6_feature_fusion_ln",
+        self.gcn_z_log_var_projection = (
+            tf.keras.layers.Dense(
+                self.z_dim,
+                activation=None,
+                kernel_initializer="zeros",
+                bias_initializer="zeros",
+                name="v6_gcn_z_log_var",
+            )
+            if self.use_gcn_gru_branch
+            else None
         )
-        self.fusion_dropout_layer = tf.keras.layers.Dropout(
-            self.fusion_dropout_rate,
-            name="v6_feature_fusion_dropout",
+        self.bilstm_z_mean_projection = (
+            tf.keras.layers.Dense(
+                self.z_dim,
+                activation=None,
+                name="v6_bilstm_z_mean",
+            )
+            if self.use_bilstm_branch
+            else None
         )
-
-        self.z_mean_projection = tf.keras.layers.Dense(
-            self.z_dim,
-            activation=None,
-            name="v6_z_mean",
-        )
-        self.z_log_var_projection = tf.keras.layers.Dense(
-            self.z_dim,
-            activation=None,
-            kernel_initializer="zeros",
-            bias_initializer="zeros",
-            name="v6_z_log_var",
+        self.bilstm_z_log_var_projection = (
+            tf.keras.layers.Dense(
+                self.z_dim,
+                activation=None,
+                kernel_initializer="zeros",
+                bias_initializer="zeros",
+                name="v6_bilstm_z_log_var",
+            )
+            if self.use_bilstm_branch
+            else None
         )
         self.z_pool = tf.keras.layers.GlobalAveragePooling1D(name="v6_z_pool")
 
@@ -906,7 +927,7 @@ class SICModel(tf.keras.Model):
         vc_dim = (
             self.classification_hidden_units[-1]
             if self.classification_hidden_units
-            else self.z_dim
+            else self.combined_z_dim
         )
         self.vc_target = VariationalClassifier(
             n_classes=self.n_classes,
@@ -956,6 +977,10 @@ class SICModel(tf.keras.Model):
         )
         self.decoder_r2_tracker = StreamingR2(name="decoder_r2")
         self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
+        self.gcn_kl_loss_tracker = tf.keras.metrics.Mean(name="gcn_kl_loss")
+        self.bilstm_kl_loss_tracker = tf.keras.metrics.Mean(
+            name="bilstm_kl_loss"
+        )
         self.vrex_penalty_tracker = tf.keras.metrics.Mean(name="vrex_penalty")
         self.vrex_subject_risk_mean_tracker = tf.keras.metrics.Mean(
             name="vrex_subject_risk_mean"
@@ -996,6 +1021,10 @@ class SICModel(tf.keras.Model):
             self.vae_loss_tracker,
             self.kl_loss_tracker,
         ]
+        if self.use_gcn_gru_branch:
+            output.append(self.gcn_kl_loss_tracker)
+        if self.use_bilstm_branch:
+            output.append(self.bilstm_kl_loss_tracker)
         if self.use_decoder:
             output.extend([self.reconstruction_loss_tracker, self.decoder_r2_tracker])
         if self.use_vrex:
@@ -1291,8 +1320,8 @@ class SICModel(tf.keras.Model):
             shape[1],
         )
 
-    def _temporal_encode(self, graph_sequence, training: bool):
-        x = graph_sequence
+    def _temporal_encode(self, eeg_sequence, training: bool):
+        x = eeg_sequence
         for bilstm, norm, dropout in zip(
             self.temporal_bilstms,
             self.temporal_norms,
@@ -1309,71 +1338,68 @@ class SICModel(tf.keras.Model):
             if self.use_gcn_gru_branch
             else None
         )
-        bilstm_sequence = None
+        bilstm_sequence = (
+            self._temporal_encode(flat_windows, training=training)
+            if self.use_bilstm_branch
+            else None
+        )
+        pooled_bilstm = (
+            self.parallel_temporal_pool(bilstm_sequence)
+            if bilstm_sequence is not None
+            else None
+        )
 
-        if self.architecture_mode == "serial":
-            if self.use_gcn_gru_branch and self.use_bilstm_branch:
-                bilstm_sequence = self._temporal_encode(
-                    graph_sequence,
-                    training=training,
-                )
-                fused_sequence = bilstm_sequence
-            elif self.use_gcn_gru_branch:
-                fused_sequence = graph_sequence
-            else:
-                bilstm_sequence = self._temporal_encode(
-                    flat_windows,
-                    training=training,
-                )
-                fused_sequence = self.parallel_temporal_pool(bilstm_sequence)
-        else:
-            pooled_bilstm = None
-            if self.use_bilstm_branch:
-                # Independent temporal branch directly from the raw EEG feature
-                # sequence. No GCN/GRU features enter this BiLSTM branch.
-                bilstm_sequence = self._temporal_encode(
-                    flat_windows,
-                    training=training,
-                )
-                pooled_bilstm = self.parallel_temporal_pool(bilstm_sequence)
+        if graph_sequence is not None and pooled_bilstm is not None:
+            tf.debugging.assert_equal(
+                tf.shape(graph_sequence)[1],
+                tf.shape(pooled_bilstm)[1],
+                message=(
+                    "GCN-GRU and BiLSTM posterior sequence lengths do not match."
+                ),
+            )
 
-            if self.use_gcn_gru_branch and self.use_bilstm_branch:
-                tf.debugging.assert_equal(
-                    tf.shape(graph_sequence)[1],
-                    tf.shape(pooled_bilstm)[1],
-                    message=(
-                        "GCN-GRU and BiLSTM branch sequence lengths do not match "
-                        "for feature fusion."
-                    ),
-                )
-                fused_sequence = tf.concat(
-                    [graph_sequence, pooled_bilstm],
-                    axis=-1,
-                )
-                fused_sequence = self.fusion_projection(fused_sequence)
-                fused_sequence = self.fusion_norm(fused_sequence)
-                fused_sequence = self.fusion_dropout_layer(
-                    fused_sequence,
-                    training=training,
-                )
-            elif self.use_gcn_gru_branch:
-                fused_sequence = graph_sequence
-            else:
-                fused_sequence = pooled_bilstm
-        temporal_sequence = fused_sequence
+        gcn_z_mean = gcn_z_log_var = None
+        bilstm_z_mean = bilstm_z_log_var = None
+        mean_parts = []
+        log_var_parts = []
 
-        z_mean = self.z_mean_projection(fused_sequence)
-        raw_log_var = self.z_log_var_projection(fused_sequence)
-        z_log_var = tf.clip_by_value(
-            raw_log_var,
-            self.z_log_var_clip_min,
-            self.z_log_var_clip_max,
+        if graph_sequence is not None:
+            gcn_z_mean = self.gcn_z_mean_projection(graph_sequence)
+            gcn_z_log_var = tf.clip_by_value(
+                self.gcn_z_log_var_projection(graph_sequence),
+                self.z_log_var_clip_min,
+                self.z_log_var_clip_max,
+            )
+            mean_parts.append(gcn_z_mean)
+            log_var_parts.append(gcn_z_log_var)
+
+        if pooled_bilstm is not None:
+            bilstm_z_mean = self.bilstm_z_mean_projection(pooled_bilstm)
+            bilstm_z_log_var = tf.clip_by_value(
+                self.bilstm_z_log_var_projection(pooled_bilstm),
+                self.z_log_var_clip_min,
+                self.z_log_var_clip_max,
+            )
+            mean_parts.append(bilstm_z_mean)
+            log_var_parts.append(bilstm_z_log_var)
+
+        # Concatenating posterior parameters and sampling once is exactly the
+        # block-diagonal factorized distribution obtained by independently
+        # sampling each branch and concatenating z_g and z_b.
+        z_mean = mean_parts[0] if len(mean_parts) == 1 else tf.concat(mean_parts, -1)
+        z_log_var = (
+            log_var_parts[0]
+            if len(log_var_parts) == 1
+            else tf.concat(log_var_parts, -1)
         )
         return {
             "graph_sequence": graph_sequence,
-            "temporal_sequence": temporal_sequence,
             "bilstm_sequence": bilstm_sequence,
-            "fused_sequence": fused_sequence,
+            "pooled_bilstm_sequence": pooled_bilstm,
+            "gcn_z_mean": gcn_z_mean,
+            "gcn_z_log_var": gcn_z_log_var,
+            "bilstm_z_mean": bilstm_z_mean,
+            "bilstm_z_log_var": bilstm_z_log_var,
             "z_mean": z_mean,
             "z_log_var": z_log_var,
         }
@@ -1398,7 +1424,10 @@ class SICModel(tf.keras.Model):
         window_z = self.z_pool(flat_z)
         if self.classification_level == "window":
             return window_z, window_z
-        window_z = tf.reshape(window_z, [batch_size, n_windows, self.z_dim])
+        window_z = tf.reshape(
+            window_z,
+            [batch_size, n_windows, self.combined_z_dim],
+        )
         trial_z = tf.reduce_mean(window_z, axis=1)
         return trial_z, window_z
 
@@ -1458,6 +1487,14 @@ class SICModel(tf.keras.Model):
             if sample_latent
             else posterior["z_mean"]
         )
+        offset = 0
+        gcn_z = None
+        bilstm_z = None
+        if self.use_gcn_gru_branch:
+            gcn_z = z[..., offset : offset + self.z_dim]
+            offset += self.z_dim
+        if self.use_bilstm_branch:
+            bilstm_z = z[..., offset : offset + self.z_dim]
         pooled_z, window_z = self._pool_z_for_prediction(
             z,
             batch_size=batch_size,
@@ -1476,6 +1513,8 @@ class SICModel(tf.keras.Model):
             {
                 "flat_windows": flat_windows,
                 "z": z,
+                "gcn_z": gcn_z,
+                "bilstm_z": bilstm_z,
                 "pooled_z": pooled_z,
                 "window_z": window_z,
                 "pooled_z_mean": pooled_z_mean,
@@ -1603,10 +1642,35 @@ class SICModel(tf.keras.Model):
         return components
 
     def _vae_components(self, outputs, training: bool):
-        z_mean = outputs["z_mean"]
-        z_log_var = outputs["z_log_var"]
-        kl_values = -0.5 * (1.0 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
-        kl_loss = tf.reduce_mean(kl_values)
+        def posterior_kl(z_mean, z_log_var):
+            if z_mean is None or z_log_var is None:
+                return None
+            values = -0.5 * (
+                1.0
+                + z_log_var
+                - tf.square(z_mean)
+                - tf.exp(z_log_var)
+            )
+            return tf.reduce_mean(values)
+
+        gcn_kl_loss = posterior_kl(
+            outputs["gcn_z_mean"],
+            outputs["gcn_z_log_var"],
+        )
+        bilstm_kl_loss = posterior_kl(
+            outputs["bilstm_z_mean"],
+            outputs["bilstm_z_log_var"],
+        )
+        active_kl_losses = [
+            value for value in (gcn_kl_loss, bilstm_kl_loss) if value is not None
+        ]
+        # Average active branch KLs so enabling the second encoder does not
+        # silently double the regularizer scale.  Both branches contribute
+        # equally even if different branch widths are introduced later.
+        kl_loss = tf.add_n(active_kl_losses) / tf.cast(
+            len(active_kl_losses),
+            active_kl_losses[0].dtype,
+        )
         if self.use_decoder:
             reconstruction = self.decoder(outputs["z"], training=training)
             reconstruction_loss = tf.reduce_mean(
@@ -1627,6 +1691,8 @@ class SICModel(tf.keras.Model):
             "vae_loss": vae_loss,
             "reconstruction_loss": reconstruction_loss,
             "kl_loss": kl_loss,
+            "gcn_kl_loss": gcn_kl_loss,
+            "bilstm_kl_loss": bilstm_kl_loss,
             "reconstruction": reconstruction,
         }
 
@@ -1862,6 +1928,18 @@ class SICModel(tf.keras.Model):
         self.kl_loss_tracker.update_state(
             zero if vae_components is None else vae_components["kl_loss"]
         )
+        if self.use_gcn_gru_branch:
+            self.gcn_kl_loss_tracker.update_state(
+                zero
+                if vae_components is None
+                else vae_components["gcn_kl_loss"]
+            )
+        if self.use_bilstm_branch:
+            self.bilstm_kl_loss_tracker.update_state(
+                zero
+                if vae_components is None
+                else vae_components["bilstm_kl_loss"]
+            )
         if self.use_vrex:
             self.vrex_penalty_tracker.update_state(
                 zero if vrex_components is None else vrex_components["penalty"]
@@ -2301,11 +2379,14 @@ class SICModel(tf.keras.Model):
         for layer in self.temporal_dropouts:
             layer.trainable = False
         self.parallel_temporal_pool.trainable = False
-        self.fusion_projection.trainable = False
-        self.fusion_norm.trainable = False
-        self.fusion_dropout_layer.trainable = False
-        self.z_mean_projection.trainable = False
-        self.z_log_var_projection.trainable = False
+        for layer in (
+            self.gcn_z_mean_projection,
+            self.gcn_z_log_var_projection,
+            self.bilstm_z_mean_projection,
+            self.bilstm_z_log_var_projection,
+        ):
+            if layer is not None:
+                layer.trainable = False
         if self.decoder is not None:
             self.decoder.trainable = False
         self.vc_target.trainable = False
@@ -2409,7 +2490,7 @@ class SICModel(tf.keras.Model):
         if self.classification_level == "trial":
             pooled_windows = tf.reshape(
                 pooled_windows,
-                [int(n_samples), batch_size, n_windows, self.z_dim],
+                [int(n_samples), batch_size, n_windows, self.combined_z_dim],
             )
             pooled = tf.reduce_mean(pooled_windows, axis=2)
         else:
@@ -2417,7 +2498,10 @@ class SICModel(tf.keras.Model):
 
         sample_count = tf.shape(pooled)[0]
         sample_batch = tf.shape(pooled)[1]
-        flat_pooled = tf.reshape(pooled, [sample_count * sample_batch, self.z_dim])
+        flat_pooled = tf.reshape(
+            pooled,
+            [sample_count * sample_batch, self.combined_z_dim],
+        )
         embedding, logits = self._classifier_forward(flat_pooled, training=False)
         del embedding
         probabilities = tf.nn.softmax(logits, axis=-1)
@@ -2442,6 +2526,12 @@ class SICModel(tf.keras.Model):
             "z_mean": outputs["z_mean"],
             "z_log_var": outputs["z_log_var"],
             "pooled_z": outputs["pooled_z_mean"],
+            "gcn_z_mean": outputs["gcn_z_mean"],
+            "gcn_z_log_var": outputs["gcn_z_log_var"],
+            "bilstm_z_mean": outputs["bilstm_z_mean"],
+            "bilstm_z_log_var": outputs["bilstm_z_log_var"],
+            "combined_z_mean": outputs["z_mean"],
+            "pooled_combined_z_mean": outputs["pooled_z_mean"],
             "classification_embedding": outputs["classification_embedding"],
             "probabilities": outputs["probabilities"],
         }
@@ -2478,12 +2568,9 @@ class SICModel(tf.keras.Model):
                 "bilstm_units": self.bilstm_units,
                 "n_bilstm_layers": self.n_bilstm_layers,
                 "bilstm_dropout": self.bilstm_dropout_rate,
-                "architecture_mode": self.architecture_mode,
                 "use_gcn_gru_branch": self.use_gcn_gru_branch,
                 "use_bilstm_branch": self.use_bilstm_branch,
                 "use_decoder": self.use_decoder,
-                "fusion_units": self.fusion_units,
-                "fusion_dropout": self.fusion_dropout_rate,
                 "temporal_downsample_factor": self.temporal_downsample_factor,
                 "z_dim": self.z_dim,
                 "z_log_var_clip_min": self.z_log_var_clip_min,
@@ -2576,12 +2663,12 @@ def build_sic_model(
     bilstm_units: int = 128,
     n_bilstm_layers: int = 1,
     bilstm_dropout: float = 0.30,
-    architecture_mode: str = "serial",
+    architecture_mode: str | None = None,
     use_gcn_gru_branch: bool = True,
     use_bilstm_branch: bool = True,
     use_decoder: bool = True,
-    fusion_units: int = 128,
-    fusion_dropout: float = 0.20,
+    fusion_units: int | None = None,
+    fusion_dropout: float | None = None,
     z_dim: int = 64,
     z_log_var_clip_min: float = -20.0,
     z_log_var_clip_max: float = 20.0,
@@ -2640,6 +2727,12 @@ def build_sic_model(
     """
     del training_labels, unused_kwargs
 
+    if fusion_units is not None or fusion_dropout is not None:
+        raise ValueError(
+            "fusion_units/fusion_dropout were removed. Branch-specific z values "
+            "are concatenated directly and reduced only by the classifier."
+        )
+
     classification_level = str(classification_level).lower()
     input_shape = tuple(int(value) for value in input_shape)
     if classification_level == "window":
@@ -2677,6 +2770,9 @@ def build_sic_model(
         raise ValueError(
             "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
         )
+    combined_z_dim = int(z_dim) * (
+        int(use_gcn_gru_branch) + int(use_bilstm_branch)
+    )
 
     needs_graph = use_gcn_gru_branch or use_decoder
     if adjacency is None and needs_graph:
@@ -2734,7 +2830,7 @@ def build_sic_model(
             gcn_units=gcn_units,
             temporal_pool_sizes=pools,
             adjacency=adjacency,
-            emb_dim=int(z_dim),
+            emb_dim=combined_z_dim,
             dropout=float(decoder_dropout),
             activation=str(activation),
             use_batch_norm=bool(gcn_use_batch_norm),
@@ -2752,12 +2848,10 @@ def build_sic_model(
         bilstm_units=int(bilstm_units),
         n_bilstm_layers=int(n_bilstm_layers),
         bilstm_dropout=float(bilstm_dropout),
-        architecture_mode=str(architecture_mode),
+        architecture_mode=architecture_mode,
         use_gcn_gru_branch=use_gcn_gru_branch,
         use_bilstm_branch=use_bilstm_branch,
         use_decoder=use_decoder,
-        fusion_units=int(fusion_units),
-        fusion_dropout=float(fusion_dropout),
         temporal_downsample_factor=int(t_down),
         z_dim=int(z_dim),
         z_log_var_clip_min=float(z_log_var_clip_min),
@@ -2840,14 +2934,14 @@ def build_sic_model(
     # built (the failure mode that affected earlier subject-adversarial models).
     if bool(use_subject_adversarial) and n_subject_classes is not None:
         _ = model._subject_logits(
-            tf.zeros((1, int(z_dim)), dtype=tf.float32),
+            tf.zeros((1, combined_z_dim), dtype=tf.float32),
             training=False,
             use_grl=False,
         )
     latent_timesteps = int(np.ceil(float(timesteps) / float(t_down)))
     if decoder is not None:
         _ = decoder(
-            tf.zeros((1, latent_timesteps, int(z_dim)), dtype=tf.float32),
+            tf.zeros((1, latent_timesteps, combined_z_dim), dtype=tf.float32),
             training=False,
         )
     if not bool(use_subject_adversarial) or n_subject_classes is not None:
