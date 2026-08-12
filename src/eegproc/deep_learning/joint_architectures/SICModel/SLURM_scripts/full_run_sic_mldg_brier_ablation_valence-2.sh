@@ -299,7 +299,7 @@ nvidia-smi
 # ---------------------------------------------------------------------------
 # Run the selected full ablation profile
 # ---------------------------------------------------------------------------
-python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
+python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train \
     --training-protocol loso_validation \
     --raw-eeg-npy datasets/dreamer_eeg.npy \
     --raw-labels-npy datasets/dreamer_labels.npy \
