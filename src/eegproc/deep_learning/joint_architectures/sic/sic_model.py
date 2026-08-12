@@ -38,6 +38,14 @@ separately for each subject and adds the variance of those risks to the ordinary
 source objective.  This uses the same batched forward pass and a single
 backward/optimizer step.
 
+First-order MLDG is available as a mutually exclusive source-training method.
+Every source epoch is composed of subject-disjoint meta-train/meta-test
+episodes.  A temporary plain-SGD step is taken on the meta-train objective,
+the meta-test focal-classification gradient is evaluated at those adapted
+parameters, and the original parameters receive one combined outer-optimizer
+update.  The temporary assignment is detached, so no Hessian or
+gradient-through-gradient path is constructed.
+
 Subject calibration
 -------------------
 ``prepare_for_subject_calibration`` freezes the complete representation,
@@ -57,6 +65,12 @@ reduces naturally to fitting the output decision boundary.
 This file is designed for ``cross_val.subject_calibration_cv``.  Its builder
 accepts ``training_features`` and computes the fixed MI adjacency from source
 subjects only, avoiding target-subject leakage.
+
+Ablations are controlled by ``use_gcn_gru_branch``, ``use_bilstm_branch``, and
+``use_decoder``. At least one encoder branch must remain enabled. Disabling the
+decoder removes reconstruction and decoder parameters while retaining the
+variational posterior KL term, which isolates the decoder/reconstruction
+contribution without converting the classifier into a deterministic model.
 """
 
 from __future__ import annotations
@@ -85,8 +99,239 @@ except ImportError:
     )
 
 
-SIC_BUILDER_API_VERSION = 5
+SIC_BUILDER_API_VERSION = 7
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
+
+
+_TRAINING_METHOD_ALIASES = {
+    "normal": "erm",
+    "standard": "erm",
+    "joint": "erm",
+    "erm": "erm",
+    "vrex": "vrex",
+    "v-rex": "vrex",
+    "v_rex": "vrex",
+    "mldg": "mldg",
+    "fo_mldg": "mldg",
+    "first_order_mldg": "mldg",
+}
+
+
+def _resolve_training_method(
+    training_method: str | None,
+    use_vrex: bool,
+) -> str:
+    """Resolve the new method selector while preserving old V-REx configs."""
+    if training_method is None:
+        return "vrex" if bool(use_vrex) else "erm"
+    normalized = str(training_method).strip().lower().replace("-", "_")
+    normalized = _TRAINING_METHOD_ALIASES.get(normalized, normalized)
+    if normalized not in {"erm", "vrex", "mldg"}:
+        raise ValueError(
+            "training_method must be one of 'erm', 'vrex', or 'mldg'; "
+            f"got {training_method!r}."
+        )
+    if bool(use_vrex) and normalized != "vrex":
+        raise ValueError(
+            "use_vrex=true conflicts with training_method="
+            f"{training_method!r}. Use training_method='vrex' or remove the "
+            "legacy use_vrex setting."
+        )
+    return normalized
+
+
+class _MLDGEpisodeSequence(tf.keras.utils.Sequence):
+    """Precompute balanced, complete-trial first-order MLDG episodes.
+
+    Every item is one meta-learning episode and therefore one Keras train step.
+    Subject roles are balanced across an epoch.  Trial groups are sampled as
+    indivisible units, so window-level training never splits a selected trial.
+    """
+
+    def __init__(
+        self,
+        *,
+        eeg,
+        labels,
+        subject_ids,
+        trial_ids,
+        sample_weight,
+        meta_train_subjects: int | None,
+        meta_test_subjects: int,
+        trials_per_subject: int,
+        steps_per_epoch: int | None,
+        seed: int | None,
+    ):
+        super().__init__()
+        self.eeg = np.asarray(eeg)
+        self.labels = np.asarray(labels)
+        self.subject_ids = np.asarray(subject_ids).reshape(-1)
+        self.trial_ids = np.asarray(trial_ids).reshape(-1)
+        self.sample_weight = (
+            None
+            if sample_weight is None
+            else np.asarray(sample_weight, dtype=np.float32).reshape(-1)
+        )
+        n_samples = len(self.eeg)
+        if not (
+            len(self.labels)
+            == len(self.subject_ids)
+            == len(self.trial_ids)
+            == n_samples
+        ):
+            raise ValueError(
+                "MLDG EEG, labels, subject IDs, and trial IDs must align."
+            )
+        if self.sample_weight is not None and len(self.sample_weight) != n_samples:
+            raise ValueError("MLDG sample weights must align with EEG inputs.")
+
+        self.subjects = np.sort(np.unique(self.subject_ids))
+        self.meta_test_subjects = int(meta_test_subjects)
+        if self.meta_test_subjects < 1:
+            raise ValueError("mldg_meta_test_subjects must be >= 1.")
+        if self.meta_test_subjects >= len(self.subjects):
+            raise ValueError(
+                "MLDG needs at least one meta-train subject in addition to its "
+                f"{self.meta_test_subjects} meta-test subjects; only "
+                f"{len(self.subjects)} source subjects are available."
+            )
+        self.meta_train_subjects = (
+            len(self.subjects) - self.meta_test_subjects
+            if meta_train_subjects is None
+            else int(meta_train_subjects)
+        )
+        if self.meta_train_subjects < 1:
+            raise ValueError("mldg_meta_train_subjects must be >= 1 or null.")
+        if self.meta_train_subjects + self.meta_test_subjects > len(self.subjects):
+            raise ValueError(
+                "mldg_meta_train_subjects + mldg_meta_test_subjects cannot "
+                f"exceed the {len(self.subjects)} available source subjects."
+            )
+
+        self.trials_per_subject = int(trials_per_subject)
+        if self.trials_per_subject < 1:
+            raise ValueError("mldg_trials_per_subject must be >= 1.")
+        self._trial_groups: dict[Any, list[np.ndarray]] = {}
+        total_trial_groups = 0
+        for subject_id in self.subjects.tolist():
+            subject_mask = self.subject_ids == subject_id
+            groups = []
+            for trial_id in np.unique(self.trial_ids[subject_mask]).tolist():
+                indices = np.flatnonzero(
+                    subject_mask & (self.trial_ids == trial_id)
+                ).astype(np.int64)
+                if len(indices):
+                    groups.append(indices)
+            if not groups:
+                raise ValueError(f"Subject {subject_id!r} has no MLDG trials.")
+            self._trial_groups[subject_id] = groups
+            total_trial_groups += len(groups)
+
+        subjects_per_episode = (
+            self.meta_train_subjects + self.meta_test_subjects
+        )
+        default_steps = int(
+            np.ceil(
+                total_trial_groups
+                / float(subjects_per_episode * self.trials_per_subject)
+            )
+        )
+        self.steps_per_epoch = (
+            max(1, default_steps)
+            if steps_per_epoch is None
+            else int(steps_per_epoch)
+        )
+        if self.steps_per_epoch < 1:
+            raise ValueError("mldg_steps_per_epoch must be >= 1 or null.")
+        self.seed = None if seed is None else int(seed)
+        self._epoch = 0
+        self._episodes: list[tuple[np.ndarray, np.ndarray]] = []
+        self._build_epoch()
+
+    def __len__(self):
+        return self.steps_per_epoch
+
+    @staticmethod
+    def _balanced_subject_choice(subjects, counts, n_select, rng):
+        candidates = list(subjects)
+        rng.shuffle(candidates)
+        candidates.sort(key=lambda subject_id: counts[subject_id])
+        chosen = candidates[:n_select]
+        for subject_id in chosen:
+            counts[subject_id] += 1
+        return chosen
+
+    def _sample_complete_trials(self, subject_id, rng, trial_queues):
+        groups = self._trial_groups[subject_id]
+        chosen = []
+        for _ in range(self.trials_per_subject):
+            if not trial_queues[subject_id]:
+                trial_queues[subject_id].extend(
+                    rng.permutation(len(groups)).tolist()
+                )
+            chosen.append(trial_queues[subject_id].pop())
+        return np.concatenate([groups[int(index)] for index in chosen])
+
+    def _build_epoch(self):
+        epoch_seed = None if self.seed is None else self.seed + self._epoch
+        rng = np.random.default_rng(epoch_seed)
+        meta_test_counts = {subject_id: 0 for subject_id in self.subjects.tolist()}
+        meta_train_counts = {subject_id: 0 for subject_id in self.subjects.tolist()}
+        episodes = []
+        all_subjects = self.subjects.tolist()
+        trial_queues = {subject_id: [] for subject_id in all_subjects}
+        for _ in range(self.steps_per_epoch):
+            meta_test = self._balanced_subject_choice(
+                all_subjects,
+                meta_test_counts,
+                self.meta_test_subjects,
+                rng,
+            )
+            remaining = [
+                subject_id
+                for subject_id in all_subjects
+                if subject_id not in set(meta_test)
+            ]
+            meta_train = self._balanced_subject_choice(
+                remaining,
+                meta_train_counts,
+                self.meta_train_subjects,
+                rng,
+            )
+
+            episode_indices = []
+            episode_roles = []
+            for role, selected_subjects in ((0, meta_train), (1, meta_test)):
+                for subject_id in selected_subjects:
+                    indices = self._sample_complete_trials(
+                        subject_id,
+                        rng,
+                        trial_queues,
+                    )
+                    episode_indices.append(indices)
+                    episode_roles.append(
+                        np.full(len(indices), role, dtype=np.int32)
+                    )
+            indices = np.concatenate(episode_indices)
+            roles = np.concatenate(episode_roles)
+            order = rng.permutation(len(indices))
+            episodes.append((indices[order], roles[order]))
+        self._episodes = episodes
+
+    def __getitem__(self, index):
+        indices, roles = self._episodes[int(index)]
+        inputs = {
+            "eeg": self.eeg[indices],
+            "subject_id": self.subject_ids[indices],
+            "mldg_role": roles,
+        }
+        if self.sample_weight is None:
+            return inputs, self.labels[indices]
+        return inputs, self.labels[indices], self.sample_weight[indices]
+
+    def on_epoch_end(self):
+        self._epoch += 1
+        self._build_epoch()
 
 
 def _build_optimizer(
@@ -338,14 +583,17 @@ class SICModel(tf.keras.Model):
     def __init__(
         self,
         *,
-        graph_encoder: GCNMTLEncoder,
-        decoder: GCNMTLDecoder,
+        graph_encoder: GCNMTLEncoder | None,
+        decoder: GCNMTLDecoder | None,
         classification_level: str = "trial",
         n_classes: int = 2,
         bilstm_units: int = 128,
         n_bilstm_layers: int = 1,
         bilstm_dropout: float = 0.30,
         architecture_mode: str = "serial",
+        use_gcn_gru_branch: bool = True,
+        use_bilstm_branch: bool = True,
+        use_decoder: bool = True,
         fusion_units: int = 128,
         fusion_dropout: float = 0.20,
         temporal_downsample_factor: int = 1,
@@ -366,8 +614,16 @@ class SICModel(tf.keras.Model):
         update_vc_discriminator: bool = False,
         vae_loss_weight: float = 0.10,
         vae_beta: float = 0.05,
+        training_method: str | None = None,
         use_vrex: bool = False,
         vrex_penalty_weight: float = 1.0,
+        mldg_meta_train_subjects: int | None = None,
+        mldg_meta_test_subjects: int = 4,
+        mldg_trials_per_subject: int = 1,
+        mldg_steps_per_epoch: int | None = None,
+        mldg_inner_learning_rate: float = 1e-4,
+        mldg_meta_test_weight: float = 1.0,
+        mldg_seed: int | None = 42,
         use_subject_adversarial: bool = True,
         n_subject_classes: int | None = None,
         subject_adversarial_weight: float = 0.8,
@@ -388,8 +644,17 @@ class SICModel(tf.keras.Model):
         classification_level = str(classification_level).lower()
         if classification_level not in {"window", "trial"}:
             raise ValueError("classification_level must be 'window' or 'trial'.")
-        if graph_encoder is None or decoder is None:
-            raise ValueError("graph_encoder and decoder are required.")
+        use_gcn_gru_branch = bool(use_gcn_gru_branch)
+        use_bilstm_branch = bool(use_bilstm_branch)
+        use_decoder = bool(use_decoder)
+        if not use_gcn_gru_branch and not use_bilstm_branch:
+            raise ValueError(
+                "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
+            )
+        if use_gcn_gru_branch and graph_encoder is None:
+            raise ValueError("graph_encoder is required when use_gcn_gru_branch=true.")
+        if use_decoder and decoder is None:
+            raise ValueError("decoder is required when use_decoder=true.")
         if int(n_classes) < 2:
             raise ValueError("n_classes must be >= 2.")
         if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1 or int(z_dim) < 1:
@@ -435,6 +700,22 @@ class SICModel(tf.keras.Model):
             raise ValueError("subject_dropout must be in [0, 1).")
         if float(vrex_penalty_weight) < 0.0:
             raise ValueError("vrex_penalty_weight must be non-negative.")
+        resolved_training_method = _resolve_training_method(
+            training_method,
+            use_vrex,
+        )
+        if mldg_meta_train_subjects is not None and int(mldg_meta_train_subjects) < 1:
+            raise ValueError("mldg_meta_train_subjects must be >= 1 or null.")
+        if int(mldg_meta_test_subjects) < 1:
+            raise ValueError("mldg_meta_test_subjects must be >= 1.")
+        if int(mldg_trials_per_subject) < 1:
+            raise ValueError("mldg_trials_per_subject must be >= 1.")
+        if mldg_steps_per_epoch is not None and int(mldg_steps_per_epoch) < 1:
+            raise ValueError("mldg_steps_per_epoch must be >= 1 or null.")
+        if float(mldg_inner_learning_rate) <= 0.0:
+            raise ValueError("mldg_inner_learning_rate must be positive.")
+        if float(mldg_meta_test_weight) < 0.0:
+            raise ValueError("mldg_meta_test_weight must be non-negative.")
         calibration_unfreeze_layers = int(calibration_unfreeze_layers)
         max_calibration_layers = len(hidden_units) + 1
         if not 1 <= calibration_unfreeze_layers <= max_calibration_layers:
@@ -451,6 +732,9 @@ class SICModel(tf.keras.Model):
         self.n_bilstm_layers = int(n_bilstm_layers)
         self.bilstm_dropout_rate = float(bilstm_dropout)
         self.architecture_mode = architecture_mode
+        self.use_gcn_gru_branch = use_gcn_gru_branch
+        self.use_bilstm_branch = use_bilstm_branch
+        self.use_decoder = use_decoder
         self.fusion_units = int(fusion_units)
         self.fusion_dropout_rate = float(fusion_dropout)
         self.temporal_downsample_factor = int(temporal_downsample_factor)
@@ -474,8 +758,23 @@ class SICModel(tf.keras.Model):
         self.vae_beta = float(vae_beta)
         self.use_class_weight = bool(use_class_weight)
 
-        self.use_vrex = bool(use_vrex)
+        self.training_method = resolved_training_method
+        self.use_vrex = self.training_method == "vrex"
+        self.use_mldg = self.training_method == "mldg"
         self.vrex_penalty_weight = float(vrex_penalty_weight)
+        self.mldg_meta_train_subjects = (
+            None
+            if mldg_meta_train_subjects is None
+            else int(mldg_meta_train_subjects)
+        )
+        self.mldg_meta_test_subjects = int(mldg_meta_test_subjects)
+        self.mldg_trials_per_subject = int(mldg_trials_per_subject)
+        self.mldg_steps_per_epoch = (
+            None if mldg_steps_per_epoch is None else int(mldg_steps_per_epoch)
+        )
+        self.mldg_inner_learning_rate = float(mldg_inner_learning_rate)
+        self.mldg_meta_test_weight = float(mldg_meta_test_weight)
+        self.mldg_seed = None if mldg_seed is None else int(mldg_seed)
 
         self.subject_adversarial_enabled = bool(use_subject_adversarial)
         self.n_subject_classes = (
@@ -502,12 +801,17 @@ class SICModel(tf.keras.Model):
         )
         self.calibration_mode = False
 
-        self.requires_subject_ids = self.subject_adversarial_enabled or self.use_vrex
+        self.requires_subject_ids = (
+            self.subject_adversarial_enabled or self.use_vrex or self.use_mldg
+        )
         # Current EEGProc cross_val uses ``use_subject_adversarial`` as the
         # compatibility gate for attaching source subject IDs.  Keep that gate
-        # true whenever V-REx needs subject metadata; actual GRL computation is
-        # still controlled exclusively by ``subject_adversarial_enabled``.
+        # true whenever V-REx or MLDG needs subject metadata; actual GRL
+        # computation is still controlled exclusively by
+        # ``subject_adversarial_enabled``.
         self.use_subject_adversarial = self.requires_subject_ids
+        self._source_subject_ids = None
+        self._source_trial_ids = None
 
         # MTL encoder already performs GCN + spectral GRU.  This recurrent
         # stack is exclusively temporal, preserving the reduced time axis.
@@ -667,6 +971,21 @@ class SICModel(tf.keras.Model):
         self.vrex_subjects_per_batch_tracker = tf.keras.metrics.Mean(
             name="vrex_subjects_per_batch"
         )
+        self.mldg_meta_train_loss_tracker = tf.keras.metrics.Mean(
+            name="mldg_meta_train_loss"
+        )
+        self.mldg_meta_test_loss_tracker = tf.keras.metrics.Mean(
+            name="mldg_meta_test_loss"
+        )
+        self.mldg_meta_train_subjects_tracker = tf.keras.metrics.Mean(
+            name="mldg_meta_train_subjects"
+        )
+        self.mldg_meta_test_subjects_tracker = tf.keras.metrics.Mean(
+            name="mldg_meta_test_subjects"
+        )
+        self.mldg_gradient_cosine_tracker = tf.keras.metrics.Mean(
+            name="mldg_gradient_cosine"
+        )
         self.subject_loss_tracker = tf.keras.metrics.Mean(name="subject_loss")
         self.subject_accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
             name="subject_accuracy"
@@ -683,16 +1002,28 @@ class SICModel(tf.keras.Model):
             self.predicted_class_1_fraction_tracker,
             self.true_class_1_fraction_tracker,
             self.vae_loss_tracker,
-            self.reconstruction_loss_tracker,
-            self.decoder_r2_tracker,
             self.kl_loss_tracker,
         ]
+        if self.use_decoder:
+            output.extend(
+                [self.reconstruction_loss_tracker, self.decoder_r2_tracker]
+            )
         if self.use_vrex:
             output.extend(
                 [
                     self.vrex_penalty_tracker,
                     self.vrex_subject_risk_mean_tracker,
                     self.vrex_subjects_per_batch_tracker,
+                ]
+            )
+        if self.use_mldg:
+            output.extend(
+                [
+                    self.mldg_meta_train_loss_tracker,
+                    self.mldg_meta_test_loss_tracker,
+                    self.mldg_meta_train_subjects_tracker,
+                    self.mldg_meta_test_subjects_tracker,
+                    self.mldg_gradient_cosine_tracker,
                 ]
             )
         if self.subject_adversarial_enabled:
@@ -717,10 +1048,128 @@ class SICModel(tf.keras.Model):
         self.main_optimizer = main_optimizer
         self.vc_discriminator_optimizer = vc_discriminator_optimizer
 
-    def fit(self, *args, **kwargs):
+    def fit(
+        self,
+        x=None,
+        y=None,
+        batch_size=None,
+        epochs=1,
+        verbose="auto",
+        callbacks=None,
+        validation_split=0.0,
+        validation_data=None,
+        shuffle=True,
+        class_weight=None,
+        sample_weight=None,
+        initial_epoch=0,
+        steps_per_epoch=None,
+        validation_steps=None,
+        validation_batch_size=None,
+        validation_freq=1,
+        **kwargs,
+    ):
         if not self.use_class_weight:
-            kwargs.pop("class_weight", None)
-        return super().fit(*args, **kwargs)
+            class_weight = None
+        if not self.use_mldg or self.calibration_mode:
+            return super().fit(
+                x=x,
+                y=y,
+                batch_size=batch_size,
+                epochs=epochs,
+                verbose=verbose,
+                callbacks=callbacks,
+                validation_split=validation_split,
+                validation_data=validation_data,
+                shuffle=shuffle,
+                class_weight=class_weight,
+                sample_weight=sample_weight,
+                initial_epoch=initial_epoch,
+                steps_per_epoch=steps_per_epoch,
+                validation_steps=validation_steps,
+                validation_batch_size=validation_batch_size,
+                validation_freq=validation_freq,
+                **kwargs,
+            )
+
+        if validation_split not in (None, 0, 0.0):
+            raise ValueError(
+                "MLDG does not support sample-level validation_split. Use "
+                "subject-disjoint validation_data or validation_subjects=0."
+            )
+        if not isinstance(x, Mapping):
+            raise ValueError(
+                "MLDG source fitting requires inputs prepared by "
+                "model.prepare_fit_inputs(...)."
+            )
+        missing = {"eeg", "subject_id", "trial_id"}.difference(x)
+        if missing:
+            raise ValueError(
+                "MLDG source inputs are missing "
+                f"{sorted(missing)}. The model builder must receive aligned "
+                "training_subject_ids and training_trial_ids."
+            )
+        if y is None:
+            raise ValueError("MLDG source fitting requires labels.")
+
+        resolved_sample_weight = (
+            None
+            if sample_weight is None
+            else np.asarray(sample_weight, dtype=np.float32).reshape(-1)
+        )
+        if class_weight is not None:
+            labels_array = np.asarray(y)
+            if labels_array.ndim == 2 and labels_array.shape[-1] > 1:
+                class_ids = np.argmax(labels_array, axis=-1)
+            else:
+                class_ids = labels_array.reshape(-1)
+            class_weights = np.asarray(
+                [class_weight.get(int(class_id), 1.0) for class_id in class_ids],
+                dtype=np.float32,
+            )
+            resolved_sample_weight = (
+                class_weights
+                if resolved_sample_weight is None
+                else resolved_sample_weight * class_weights
+            )
+
+        episode_steps = (
+            self.mldg_steps_per_epoch
+            if self.mldg_steps_per_epoch is not None
+            else steps_per_epoch
+        )
+        episodes = _MLDGEpisodeSequence(
+            eeg=x["eeg"],
+            labels=y,
+            subject_ids=x["subject_id"],
+            trial_ids=x["trial_id"],
+            sample_weight=resolved_sample_weight,
+            meta_train_subjects=self.mldg_meta_train_subjects,
+            meta_test_subjects=self.mldg_meta_test_subjects,
+            trials_per_subject=self.mldg_trials_per_subject,
+            steps_per_epoch=episode_steps,
+            seed=self.mldg_seed,
+        )
+        # One Sequence item is already one complete MLDG episode. Ordinary
+        # source_batch_size/shuffle semantics must not rebatch or split it.
+        return super().fit(
+            x=episodes,
+            y=None,
+            batch_size=None,
+            epochs=epochs,
+            verbose=verbose,
+            callbacks=callbacks,
+            validation_split=0.0,
+            validation_data=validation_data,
+            shuffle=False,
+            class_weight=None,
+            sample_weight=None,
+            initial_epoch=initial_epoch,
+            steps_per_epoch=None,
+            validation_steps=validation_steps,
+            validation_batch_size=validation_batch_size,
+            validation_freq=validation_freq,
+            **kwargs,
+        )
 
     @staticmethod
     def _flatten_labels(labels):
@@ -772,6 +1221,19 @@ class SICModel(tf.keras.Model):
             name="v6_subject_logits",
         )
 
+    def set_source_training_metadata(self, subject_ids, trial_ids):
+        """Retain source-only IDs so MLDG can keep complete trials together."""
+        if subject_ids is None or trial_ids is None:
+            self._source_subject_ids = None
+            self._source_trial_ids = None
+            return
+        subjects = np.asarray(subject_ids).reshape(-1)
+        trials = np.asarray(trial_ids).reshape(-1)
+        if len(subjects) != len(trials):
+            raise ValueError("Source subject IDs and trial IDs must align.")
+        self._source_subject_ids = subjects.copy()
+        self._source_trial_ids = trials.copy()
+
     def prepare_fit_inputs(self, eeg_inputs, subject_ids):
         """Attach contiguous source-fold subject labels for adversarial training."""
         if not self.requires_subject_ids:
@@ -794,7 +1256,32 @@ class SICModel(tf.keras.Model):
             ],
             dtype=np.int32,
         )
-        return {"eeg": eeg_array, "subject_id": remapped}
+        output = {"eeg": eeg_array, "subject_id": remapped}
+        matching_trial_ids = None
+        if self._source_subject_ids is not None and self._source_trial_ids is not None:
+            if len(subjects) == len(self._source_subject_ids) and np.array_equal(
+                subjects,
+                self._source_subject_ids,
+            ):
+                matching_trial_ids = self._source_trial_ids
+            else:
+                # cross_val may build from all source subjects and subsequently
+                # reserve whole validation subjects. Boolean subject filtering
+                # preserves row order, so recover the aligned trial IDs without
+                # exposing target-subject data or guessing individual windows.
+                source_mask = np.isin(
+                    self._source_subject_ids,
+                    np.unique(subjects),
+                )
+                candidate_subjects = self._source_subject_ids[source_mask]
+                if len(candidate_subjects) == len(subjects) and np.array_equal(
+                    candidate_subjects,
+                    subjects,
+                ):
+                    matching_trial_ids = self._source_trial_ids[source_mask]
+        if self.use_mldg and matching_trial_ids is not None:
+            output["trial_id"] = np.asarray(matching_trial_ids).copy()
+        return output
 
     def prepare_calibration_inputs(self, eeg_inputs):
         """Calibration intentionally has no subject-adversarial input."""
@@ -827,46 +1314,63 @@ class SICModel(tf.keras.Model):
         return x
 
     def _posterior_from_flat_windows(self, flat_windows, training: bool):
-        graph_sequence = self.graph_encoder(flat_windows, training=training)
+        graph_sequence = (
+            self.graph_encoder(flat_windows, training=training)
+            if self.use_gcn_gru_branch
+            else None
+        )
+        bilstm_sequence = None
 
         if self.architecture_mode == "serial":
-            temporal_sequence = self._temporal_encode(
-                graph_sequence,
-                training=training,
-            )
-            fused_sequence = temporal_sequence
-            bilstm_sequence = temporal_sequence
+            if self.use_gcn_gru_branch and self.use_bilstm_branch:
+                bilstm_sequence = self._temporal_encode(
+                    graph_sequence,
+                    training=training,
+                )
+                fused_sequence = bilstm_sequence
+            elif self.use_gcn_gru_branch:
+                fused_sequence = graph_sequence
+            else:
+                bilstm_sequence = self._temporal_encode(
+                    flat_windows,
+                    training=training,
+                )
+                fused_sequence = self.parallel_temporal_pool(bilstm_sequence)
         else:
-            # Independent temporal branch directly from the raw EEG feature
-            # sequence. No GCN/GRU features enter this BiLSTM branch.
-            bilstm_sequence = self._temporal_encode(
-                flat_windows,
-                training=training,
-            )
-            pooled_bilstm = self.parallel_temporal_pool(bilstm_sequence)
+            pooled_bilstm = None
+            if self.use_bilstm_branch:
+                # Independent temporal branch directly from the raw EEG feature
+                # sequence. No GCN/GRU features enter this BiLSTM branch.
+                bilstm_sequence = self._temporal_encode(
+                    flat_windows,
+                    training=training,
+                )
+                pooled_bilstm = self.parallel_temporal_pool(bilstm_sequence)
 
-            # The builder sets temporal_downsample_factor=t_down, so the two
-            # branches normally align exactly. The assertion catches any future
-            # encoder pooling change rather than silently mis-fusing tensors.
-            tf.debugging.assert_equal(
-                tf.shape(graph_sequence)[1],
-                tf.shape(pooled_bilstm)[1],
-                message=(
-                    "GCN-GRU and BiLSTM branch sequence lengths do not match "
-                    "for feature fusion."
-                ),
-            )
-            fused_sequence = tf.concat(
-                [graph_sequence, pooled_bilstm],
-                axis=-1,
-            )
-            fused_sequence = self.fusion_projection(fused_sequence)
-            fused_sequence = self.fusion_norm(fused_sequence)
-            fused_sequence = self.fusion_dropout_layer(
-                fused_sequence,
-                training=training,
-            )
-            temporal_sequence = fused_sequence
+            if self.use_gcn_gru_branch and self.use_bilstm_branch:
+                tf.debugging.assert_equal(
+                    tf.shape(graph_sequence)[1],
+                    tf.shape(pooled_bilstm)[1],
+                    message=(
+                        "GCN-GRU and BiLSTM branch sequence lengths do not match "
+                        "for feature fusion."
+                    ),
+                )
+                fused_sequence = tf.concat(
+                    [graph_sequence, pooled_bilstm],
+                    axis=-1,
+                )
+                fused_sequence = self.fusion_projection(fused_sequence)
+                fused_sequence = self.fusion_norm(fused_sequence)
+                fused_sequence = self.fusion_dropout_layer(
+                    fused_sequence,
+                    training=training,
+                )
+            elif self.use_gcn_gru_branch:
+                fused_sequence = graph_sequence
+            else:
+                fused_sequence = pooled_bilstm
+        temporal_sequence = fused_sequence
 
         z_mean = self.z_mean_projection(fused_sequence)
         raw_log_var = self.z_log_var_projection(fused_sequence)
@@ -1109,16 +1613,20 @@ class SICModel(tf.keras.Model):
         return components
 
     def _vae_components(self, outputs, training: bool):
-        reconstruction = self.decoder(outputs["z"], training=training)
-        reconstruction_loss = tf.reduce_mean(
-            tf.square(outputs["flat_windows"] - reconstruction)
-        )
         z_mean = outputs["z_mean"]
         z_log_var = outputs["z_log_var"]
         kl_values = -0.5 * (
             1.0 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var)
         )
         kl_loss = tf.reduce_mean(kl_values)
+        if self.use_decoder:
+            reconstruction = self.decoder(outputs["z"], training=training)
+            reconstruction_loss = tf.reduce_mean(
+                tf.square(outputs["flat_windows"] - reconstruction)
+            )
+        else:
+            reconstruction = None
+            reconstruction_loss = tf.zeros((), dtype=kl_loss.dtype)
         vae_loss = reconstruction_loss + tf.cast(
             self.vae_beta,
             kl_loss.dtype,
@@ -1178,6 +1686,56 @@ class SICModel(tf.keras.Model):
         ]
         if pairs:
             optimizer.apply_gradients(pairs)
+
+    @staticmethod
+    def _dense_gradient(gradient):
+        if gradient is None:
+            return None
+        if isinstance(gradient, tf.IndexedSlices):
+            return tf.convert_to_tensor(gradient)
+        return gradient
+
+    @classmethod
+    def _combine_first_order_gradients(cls, meta_train, meta_test, beta):
+        combined = []
+        for train_gradient, test_gradient in zip(meta_train, meta_test):
+            train_gradient = cls._dense_gradient(train_gradient)
+            test_gradient = cls._dense_gradient(test_gradient)
+            if train_gradient is None:
+                gradient = (
+                    None
+                    if test_gradient is None
+                    else tf.cast(beta, test_gradient.dtype) * test_gradient
+                )
+            elif test_gradient is None:
+                gradient = train_gradient
+            else:
+                gradient = train_gradient + tf.cast(
+                    beta,
+                    test_gradient.dtype,
+                ) * test_gradient
+            combined.append(gradient)
+        return combined
+
+    @classmethod
+    def _gradient_cosine_similarity(cls, left, right):
+        dot = tf.zeros((), dtype=tf.float32)
+        left_norm_sq = tf.zeros((), dtype=tf.float32)
+        right_norm_sq = tf.zeros((), dtype=tf.float32)
+        for left_gradient, right_gradient in zip(left, right):
+            left_gradient = cls._dense_gradient(left_gradient)
+            right_gradient = cls._dense_gradient(right_gradient)
+            if left_gradient is None or right_gradient is None:
+                continue
+            left_flat = tf.cast(tf.reshape(left_gradient, [-1]), tf.float32)
+            right_flat = tf.cast(tf.reshape(right_gradient, [-1]), tf.float32)
+            dot += tf.reduce_sum(left_flat * right_flat)
+            left_norm_sq += tf.reduce_sum(tf.square(left_flat))
+            right_norm_sq += tf.reduce_sum(tf.square(right_flat))
+        return tf.math.divide_no_nan(
+            dot,
+            tf.sqrt(left_norm_sq * right_norm_sq),
+        )
 
     def _subject_head_variables(self):
         if self.subject_logits_layer is None:
@@ -1291,12 +1849,16 @@ class SICModel(tf.keras.Model):
         self.vae_loss_tracker.update_state(
             zero if vae_components is None else vae_components["vae_loss"]
         )
-        self.reconstruction_loss_tracker.update_state(
-            zero
-            if vae_components is None
-            else vae_components["reconstruction_loss"]
-        )
-        if vae_components is not None:
+        if self.use_decoder:
+            self.reconstruction_loss_tracker.update_state(
+                zero
+                if vae_components is None
+                else vae_components["reconstruction_loss"]
+            )
+        if (
+            vae_components is not None
+            and vae_components.get("reconstruction") is not None
+        ):
             self.decoder_r2_tracker.update_state(
                 outputs["flat_windows"],
                 vae_components["reconstruction"],
@@ -1411,6 +1973,184 @@ class SICModel(tf.keras.Model):
             vrex_components=vrex_components,
         )
 
+    def _mldg_train_step(self, x, y_flat, sample_weight):
+        if not isinstance(x, Mapping) or "mldg_role" not in x:
+            raise ValueError(
+                "MLDG train_step requires the episode roles produced by the "
+                "MLDG fit adapter."
+            )
+        eeg_inputs, subject_ids = self._split_eeg_and_subject_inputs(x)
+        if subject_ids is None:
+            raise ValueError("MLDG source training requires subject IDs.")
+        roles = tf.cast(tf.reshape(x["mldg_role"], [-1]), tf.int32)
+        meta_train_mask = tf.equal(roles, 0)
+        meta_test_mask = tf.equal(roles, 1)
+        tf.debugging.assert_positive(
+            tf.reduce_sum(tf.cast(meta_train_mask, tf.int32)),
+            message="Every MLDG episode needs meta-train examples.",
+        )
+        tf.debugging.assert_positive(
+            tf.reduce_sum(tf.cast(meta_test_mask, tf.int32)),
+            message="Every MLDG episode needs meta-test examples.",
+        )
+
+        def masked(value, mask):
+            return None if value is None else tf.boolean_mask(value, mask)
+
+        meta_train_eeg = masked(eeg_inputs, meta_train_mask)
+        meta_train_y = masked(y_flat, meta_train_mask)
+        meta_train_subject_ids = masked(subject_ids, meta_train_mask)
+        meta_train_weight = masked(sample_weight, meta_train_mask)
+        meta_test_eeg = masked(eeg_inputs, meta_test_mask)
+        meta_test_y = masked(y_flat, meta_test_mask)
+        meta_test_subject_ids = masked(subject_ids, meta_test_mask)
+        meta_test_weight = masked(sample_weight, meta_test_mask)
+
+        # The inner/meta-train loss retains SIC's full source objective. The
+        # virtual-unseen loss intentionally measures focal classification only:
+        # reconstruction, VC distribution regularizers, and subject
+        # identification are source auxiliaries, not evidence that emotion
+        # prediction transferred.
+        with tf.GradientTape() as meta_train_tape:
+            meta_train_outputs = self._encode(
+                meta_train_eeg,
+                training=True,
+                sample_latent=True,
+            )
+            meta_train_vc = self._vc_components(
+                meta_train_outputs["classification_embedding"],
+                meta_train_outputs["logits"],
+                meta_train_y,
+                meta_train_weight,
+                calibration=False,
+            )
+            meta_train_vae = self._vae_components(
+                meta_train_outputs,
+                training=True,
+            )
+            meta_train_subject = self._subject_components(
+                meta_train_outputs["pooled_z_mean"],
+                meta_train_subject_ids,
+                training=True,
+                use_grl=True,
+            )
+            dtype = meta_train_vc["total_loss"].dtype
+            meta_train_loss = (
+                tf.cast(self.vc_loss_weight, dtype)
+                * meta_train_vc["total_loss"]
+                + tf.cast(self.vae_loss_weight, dtype)
+                * tf.cast(meta_train_vae["vae_loss"], dtype)
+                + tf.cast(self.subject_loss_weight, dtype)
+                * tf.cast(meta_train_subject["subject_loss"], dtype)
+                + self._regularization_loss(dtype)
+            )
+        variables = self.trainable_variables
+        meta_train_gradients = meta_train_tape.gradient(
+            meta_train_loss,
+            variables,
+        )
+
+        # Assigning stop-gradient tensors into the existing variables creates
+        # theta' without retaining a differentiable path back through g_A.
+        # That is the explicit first-order approximation.
+        original_values = [tf.identity(variable) for variable in variables]
+        for variable, gradient in zip(variables, meta_train_gradients):
+            gradient = self._dense_gradient(gradient)
+            if gradient is not None:
+                variable.assign_sub(
+                    tf.cast(self.mldg_inner_learning_rate, gradient.dtype)
+                    * tf.stop_gradient(gradient)
+                )
+
+        with tf.GradientTape() as meta_test_tape:
+            meta_test_outputs = self._encode(
+                meta_test_eeg,
+                training=True,
+                sample_latent=True,
+            )
+            meta_test_vc = self._vc_components(
+                meta_test_outputs["classification_embedding"],
+                meta_test_outputs["logits"],
+                meta_test_y,
+                meta_test_weight,
+                calibration=False,
+            )
+            meta_test_loss = (
+                tf.cast(
+                    self.vc_loss_weight,
+                    meta_test_vc["weighted_focal_loss"].dtype,
+                )
+                * meta_test_vc["weighted_focal_loss"]
+            )
+        meta_test_gradients = meta_test_tape.gradient(
+            meta_test_loss,
+            variables,
+        )
+
+        # Restore theta before the sole persistent optimizer update.
+        for variable, original_value in zip(variables, original_values):
+            variable.assign(original_value)
+        combined_gradients = self._combine_first_order_gradients(
+            meta_train_gradients,
+            meta_test_gradients,
+            self.mldg_meta_test_weight,
+        )
+        self._apply_gradients(
+            self.main_optimizer,
+            combined_gradients,
+            variables,
+        )
+
+        if self.update_vc_discriminator:
+            if self.vc_discriminator_optimizer is None:
+                raise RuntimeError(
+                    "update_vc_discriminator=True requires a discriminator optimizer."
+                )
+            embedding_frozen = tf.stop_gradient(
+                meta_train_outputs["classification_embedding"]
+            )
+            with tf.GradientTape() as disc_tape:
+                disc_loss = self.vc_target.discriminator_loss(
+                    embedding_frozen,
+                    meta_train_y,
+                )
+            disc_variables = self._vc_discriminator_variables()
+            disc_gradients = disc_tape.gradient(disc_loss, disc_variables)
+            self._apply_gradients(
+                self.vc_discriminator_optimizer,
+                disc_gradients,
+                disc_variables,
+            )
+
+        outer_loss = meta_train_loss + tf.cast(
+            self.mldg_meta_test_weight,
+            meta_test_loss.dtype,
+        ) * meta_test_loss
+        self._update_metrics(
+            total_loss=outer_loss,
+            vc_components=meta_train_vc,
+            outputs=meta_train_outputs,
+            y_flat=meta_train_y,
+            sample_weight=meta_train_weight,
+            vae_components=meta_train_vae,
+            subject_components=meta_train_subject,
+            vrex_components=None,
+        )
+        self.mldg_meta_train_loss_tracker.update_state(meta_train_loss)
+        self.mldg_meta_test_loss_tracker.update_state(meta_test_loss)
+        self.mldg_meta_train_subjects_tracker.update_state(
+            tf.cast(tf.size(tf.unique(meta_train_subject_ids).y), tf.float32)
+        )
+        self.mldg_meta_test_subjects_tracker.update_state(
+            tf.cast(tf.size(tf.unique(meta_test_subject_ids).y), tf.float32)
+        )
+        self.mldg_gradient_cosine_tracker.update_state(
+            self._gradient_cosine_similarity(
+                meta_train_gradients,
+                meta_test_gradients,
+            )
+        )
+
     def _calibration_train_step(self, x, y_flat, sample_weight):
         eeg_inputs, _ = self._split_eeg_and_subject_inputs(x)
         # Backbone layers are frozen and posterior mean is used so six-trial
@@ -1456,6 +2196,8 @@ class SICModel(tf.keras.Model):
             raise RuntimeError("Call model.compile(...) before model.fit(...).")
         if self.calibration_mode:
             self._calibration_train_step(x, y_flat, sample_weight)
+        elif self.use_mldg:
+            self._mldg_train_step(x, y_flat, sample_weight)
         else:
             self._source_train_step(x, y_flat, sample_weight)
         return {metric.name: metric.result() for metric in self.metrics}
@@ -1555,7 +2297,8 @@ class SICModel(tf.keras.Model):
         self.calibration_mode = True
 
         # Freeze every major source-trained subsystem first.
-        self.graph_encoder.trainable = False
+        if self.graph_encoder is not None:
+            self.graph_encoder.trainable = False
         for layer in self.temporal_bilstms:
             layer.trainable = False
         for layer in self.temporal_norms:
@@ -1568,7 +2311,8 @@ class SICModel(tf.keras.Model):
         self.fusion_dropout_layer.trainable = False
         self.z_mean_projection.trainable = False
         self.z_log_var_projection.trainable = False
-        self.decoder.trainable = False
+        if self.decoder is not None:
+            self.decoder.trainable = False
         self.vc_target.trainable = False
         if self.subject_gradient_reversal is not None:
             self.subject_gradient_reversal.trainable = False
@@ -1706,9 +2450,13 @@ class SICModel(tf.keras.Model):
         }
 
     def decode_latent(self, latent_sequence):
+        if not self.use_decoder or self.decoder is None:
+            raise RuntimeError("Decoder is disabled for this SIC ablation.")
         return self.decoder(latent_sequence, training=False)
 
     def get_adjacency_matrices(self):
+        if self.graph_encoder is None:
+            return {}
         return {
             "mtl_raw_adjacency": self.graph_encoder.get_raw_adjacency_matrix(),
             "mtl_normalized_adjacency": self.graph_encoder.get_adjacency_matrix(),
@@ -1718,14 +2466,25 @@ class SICModel(tf.keras.Model):
         config = super().get_config()
         config.update(
             {
-                "graph_encoder": _serialize_keras_object(self.graph_encoder),
-                "decoder": _serialize_keras_object(self.decoder),
+                "graph_encoder": (
+                    None
+                    if self.graph_encoder is None
+                    else _serialize_keras_object(self.graph_encoder)
+                ),
+                "decoder": (
+                    None
+                    if self.decoder is None
+                    else _serialize_keras_object(self.decoder)
+                ),
                 "classification_level": self.classification_level,
                 "n_classes": self.n_classes,
                 "bilstm_units": self.bilstm_units,
                 "n_bilstm_layers": self.n_bilstm_layers,
                 "bilstm_dropout": self.bilstm_dropout_rate,
                 "architecture_mode": self.architecture_mode,
+                "use_gcn_gru_branch": self.use_gcn_gru_branch,
+                "use_bilstm_branch": self.use_bilstm_branch,
+                "use_decoder": self.use_decoder,
                 "fusion_units": self.fusion_units,
                 "fusion_dropout": self.fusion_dropout_rate,
                 "temporal_downsample_factor": self.temporal_downsample_factor,
@@ -1746,8 +2505,16 @@ class SICModel(tf.keras.Model):
                 "update_vc_discriminator": self.update_vc_discriminator,
                 "vae_loss_weight": self.vae_loss_weight,
                 "vae_beta": self.vae_beta,
+                "training_method": self.training_method,
                 "use_vrex": self.use_vrex,
                 "vrex_penalty_weight": self.vrex_penalty_weight,
+                "mldg_meta_train_subjects": self.mldg_meta_train_subjects,
+                "mldg_meta_test_subjects": self.mldg_meta_test_subjects,
+                "mldg_trials_per_subject": self.mldg_trials_per_subject,
+                "mldg_steps_per_epoch": self.mldg_steps_per_epoch,
+                "mldg_inner_learning_rate": self.mldg_inner_learning_rate,
+                "mldg_meta_test_weight": self.mldg_meta_test_weight,
+                "mldg_seed": self.mldg_seed,
                 "use_subject_adversarial": self.subject_adversarial_enabled,
                 "n_subject_classes": self.n_subject_classes,
                 "subject_adversarial_weight": self.subject_adversarial_weight,
@@ -1768,8 +2535,16 @@ class SICModel(tf.keras.Model):
     @classmethod
     def from_config(cls, config):
         config = dict(config)
-        config["graph_encoder"] = _deserialize_keras_object(config["graph_encoder"])
-        config["decoder"] = _deserialize_keras_object(config["decoder"])
+        config["graph_encoder"] = (
+            None
+            if config["graph_encoder"] is None
+            else _deserialize_keras_object(config["graph_encoder"])
+        )
+        config["decoder"] = (
+            None
+            if config["decoder"] is None
+            else _deserialize_keras_object(config["decoder"])
+        )
         return cls(**config)
 
 
@@ -1805,6 +2580,9 @@ def build_sic_model(
     n_bilstm_layers: int = 1,
     bilstm_dropout: float = 0.30,
     architecture_mode: str = "serial",
+    use_gcn_gru_branch: bool = True,
+    use_bilstm_branch: bool = True,
+    use_decoder: bool = True,
     fusion_units: int = 128,
     fusion_dropout: float = 0.20,
     z_dim: int = 64,
@@ -1824,8 +2602,16 @@ def build_sic_model(
     update_vc_discriminator: bool = False,
     vae_loss_weight: float = 0.10,
     vae_beta: float = 0.05,
+    training_method: str | None = None,
     use_vrex: bool = False,
     vrex_penalty_weight: float = 1.0,
+    mldg_meta_train_subjects: int | None = None,
+    mldg_meta_test_subjects: int = 4,
+    mldg_trials_per_subject: int = 1,
+    mldg_steps_per_epoch: int | None = None,
+    mldg_inner_learning_rate: float = 1e-4,
+    mldg_meta_test_weight: float = 1.0,
+    mldg_seed: int | None = 42,
     use_subject_adversarial: bool = True,
     n_subject_classes: int | None = None,
     subject_adversarial_weight: float = 0.8,
@@ -1850,12 +2636,12 @@ def build_sic_model(
     """Build SIC, computing its fixed MI graph from source data when needed.
 
     The ``training_*`` arguments are accepted explicitly for
-    ``subject_calibration_cv``. Only ``training_features`` and
-    ``training_subject_ids`` are needed by this builder; labels/trial IDs are
-    accepted to keep the builder contract uniform and to make leakage auditing
-    straightforward.
+    ``subject_calibration_cv``. ``training_features`` estimates the source-only
+    graph, ``training_subject_ids`` configures source metadata/adversity, and
+    ``training_trial_ids`` keeps complete MLDG trials together. Labels are
+    accepted to keep the builder contract uniform and leakage-auditable.
     """
-    del training_labels, training_trial_ids, unused_kwargs
+    del training_labels, unused_kwargs
 
     classification_level = str(classification_level).lower()
     input_shape = tuple(int(value) for value in input_shape)
@@ -1887,7 +2673,16 @@ def build_sic_model(
     pools = _resolve_temporal_pool_sizes(temporal_pool_sizes, t_down)
     gcn_units = _as_positive_tuple("gcn_units", gcn_units)
 
-    if adjacency is None:
+    use_gcn_gru_branch = bool(use_gcn_gru_branch)
+    use_bilstm_branch = bool(use_bilstm_branch)
+    use_decoder = bool(use_decoder)
+    if not use_gcn_gru_branch and not use_bilstm_branch:
+        raise ValueError(
+            "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
+        )
+
+    needs_graph = use_gcn_gru_branch or use_decoder
+    if adjacency is None and needs_graph:
         if training_features is None:
             raise ValueError(
                 "SIC requires either adjacency=... or training_features=... so "
@@ -1903,50 +2698,54 @@ def build_sic_model(
             band_reduction=str(mi_band_reduction),
             max_observations=mi_max_observations,
         )
-    else:
+    elif adjacency is not None:
         adjacency = np.asarray(adjacency, dtype=np.float32)
 
     if n_subject_classes is None and training_subject_ids is not None:
         n_subject_classes = int(len(np.unique(np.asarray(training_subject_ids))))
 
-    graph_encoder = GCNMTLEncoder(
-        timesteps=int(timesteps),
-        t_down=int(t_down),
-        adjacency=adjacency,
-        n_channels=int(n_channels),
-        n_bands=int(n_bands),
-        gcn_units=gcn_units,
-        temporal_pool_sizes=pools,
-        emb_dim=None,
-        dropout=float(gcn_dropout),
-        activation=str(gcn_activation),
-        use_batch_norm=bool(gcn_use_batch_norm),
-        use_spectral_gru=True,
-        spectral_gru_units=int(spectral_gru_units),
-        spectral_gru_dropout=float(spectral_gru_dropout),
-        graph_add_self_loops=bool(graph_add_self_loops),
-        graph_symmetrize=bool(graph_symmetrize),
-        graph_epsilon=float(graph_epsilon),
-        name="v6_mtl_gcn_gru_encoder",
-    )
+    graph_encoder = None
+    if use_gcn_gru_branch:
+        graph_encoder = GCNMTLEncoder(
+            timesteps=int(timesteps),
+            t_down=int(t_down),
+            adjacency=adjacency,
+            n_channels=int(n_channels),
+            n_bands=int(n_bands),
+            gcn_units=gcn_units,
+            temporal_pool_sizes=pools,
+            emb_dim=None,
+            dropout=float(gcn_dropout),
+            activation=str(gcn_activation),
+            use_batch_norm=bool(gcn_use_batch_norm),
+            use_spectral_gru=True,
+            spectral_gru_units=int(spectral_gru_units),
+            spectral_gru_dropout=float(spectral_gru_dropout),
+            graph_add_self_loops=bool(graph_add_self_loops),
+            graph_symmetrize=bool(graph_symmetrize),
+            graph_epsilon=float(graph_epsilon),
+            name="v6_mtl_gcn_gru_encoder",
+        )
 
-    decoder = GCNMTLDecoder(
-        timesteps=int(timesteps),
-        n_channels=int(n_channels),
-        n_bands=int(n_bands),
-        t_down=int(t_down),
-        gcn_units=gcn_units,
-        temporal_pool_sizes=pools,
-        adjacency=adjacency,
-        emb_dim=int(z_dim),
-        dropout=float(decoder_dropout),
-        activation=str(activation),
-        use_batch_norm=bool(gcn_use_batch_norm),
-        graph_add_self_loops=bool(graph_add_self_loops),
-        graph_symmetrize=bool(graph_symmetrize),
-        graph_epsilon=float(graph_epsilon),
-        name="sic_mtl_graph_decoder",
-    )
+    decoder = None
+    if use_decoder:
+        decoder = GCNMTLDecoder(
+            timesteps=int(timesteps),
+            n_channels=int(n_channels),
+            n_bands=int(n_bands),
+            t_down=int(t_down),
+            gcn_units=gcn_units,
+            temporal_pool_sizes=pools,
+            adjacency=adjacency,
+            emb_dim=int(z_dim),
+            dropout=float(decoder_dropout),
+            activation=str(activation),
+            use_batch_norm=bool(gcn_use_batch_norm),
+            graph_add_self_loops=bool(graph_add_self_loops),
+            graph_symmetrize=bool(graph_symmetrize),
+            graph_epsilon=float(graph_epsilon),
+            name="sic_mtl_graph_decoder",
+        )
 
     model = SICModel(
         graph_encoder=graph_encoder,
@@ -1957,6 +2756,9 @@ def build_sic_model(
         n_bilstm_layers=int(n_bilstm_layers),
         bilstm_dropout=float(bilstm_dropout),
         architecture_mode=str(architecture_mode),
+        use_gcn_gru_branch=use_gcn_gru_branch,
+        use_bilstm_branch=use_bilstm_branch,
+        use_decoder=use_decoder,
         fusion_units=int(fusion_units),
         fusion_dropout=float(fusion_dropout),
         temporal_downsample_factor=int(t_down),
@@ -1979,8 +2781,16 @@ def build_sic_model(
         update_vc_discriminator=bool(update_vc_discriminator),
         vae_loss_weight=float(vae_loss_weight),
         vae_beta=float(vae_beta),
+        training_method=training_method,
         use_vrex=bool(use_vrex),
         vrex_penalty_weight=float(vrex_penalty_weight),
+        mldg_meta_train_subjects=mldg_meta_train_subjects,
+        mldg_meta_test_subjects=int(mldg_meta_test_subjects),
+        mldg_trials_per_subject=int(mldg_trials_per_subject),
+        mldg_steps_per_epoch=mldg_steps_per_epoch,
+        mldg_inner_learning_rate=float(mldg_inner_learning_rate),
+        mldg_meta_test_weight=float(mldg_meta_test_weight),
+        mldg_seed=mldg_seed,
         use_subject_adversarial=bool(use_subject_adversarial),
         n_subject_classes=n_subject_classes,
         subject_adversarial_weight=float(subject_adversarial_weight),
@@ -2023,6 +2833,10 @@ def build_sic_model(
         run_eagerly=False,
         jit_compile=False,
     )
+    model.set_source_training_metadata(
+        training_subject_ids,
+        training_trial_ids,
+    )
 
     # Build every stateful branch before the first fit. This avoids Keras 3
     # creating new nested-layer variables after the outer model has been marked
@@ -2034,10 +2848,11 @@ def build_sic_model(
             use_grl=False,
         )
     latent_timesteps = int(np.ceil(float(timesteps) / float(t_down)))
-    _ = decoder(
-        tf.zeros((1, latent_timesteps, int(z_dim)), dtype=tf.float32),
-        training=False,
-    )
+    if decoder is not None:
+        _ = decoder(
+            tf.zeros((1, latent_timesteps, int(z_dim)), dtype=tf.float32),
+            training=False,
+        )
     if not bool(use_subject_adversarial) or n_subject_classes is not None:
         _ = model(tf.zeros(dummy_shape, dtype=tf.float32), training=False)
     return model

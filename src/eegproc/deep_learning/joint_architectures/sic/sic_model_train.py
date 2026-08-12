@@ -5,16 +5,34 @@ Protocol
 For every hyperparameter configuration and target subject:
   1. pretrain one source model on all other subjects;
   2. evaluate the untouched source model on all target trials (0 calibration);
-  3. partition the target's 18 trials into three disjoint six-trial sets;
-  4. for each set, restore source weights, evaluate zero-shot on the other
-     12 trials, fine-tune only the configured dense/softmax suffix on the six
-     calibration trials, and evaluate those same 12 trials again;
-  5. aggregate the three calibration evaluations into one subject result.
+  3. for every requested (shots, folds) calibration pair, construct seeded
+     target-only calibration/evaluation splits;
+  4. for each split, restore the same source weights, evaluate paired zero-shot,
+     fine-tune only the configured dense/softmax suffix, and re-evaluate;
+  5. aggregate folds within each subject and shot level, then across subjects.
 
-The expensive source model is fit once per target subject.  The three
-calibration fits use fresh optimizers and restored source weights. Grid ranking
+The expensive source model is fit once per target subject. Every calibration
+fit uses a fresh optimizer and restored source weights. Grid ranking
 can use either the zero-shot LOSO aggregate or the post-calibration aggregate;
 calibration is always run and reported regardless of the selection level.
+
+``remove_median_label`` is a data hyperparameter. When true, every trial whose
+original target rating equals ``median_label`` is removed in full before SIC
+splitting, including every window from that trial. It may be fixed or searched
+through the same JSON Cartesian grid and is never forwarded to the model.
+
+Source optimization is selected with the model hyperparameter
+``training_method``: ``"erm"`` for ordinary joint training, ``"vrex"`` for
+subject-risk variance regularization, or ``"mldg"`` for first-order
+subject-episodic meta-learning.  MLDG defaults to four rotating virtual-unseen
+subjects and every remaining source subject in meta-train.  Each episode samples
+complete trials and applies one persistent outer update.
+
+For ``architecture_mode="feature_fusion"``, SIC directly concatenates the
+GCN-GRU sequence with an independently encoded raw-EEG BiLSTM sequence. Use
+``bilstm_output_dim`` to choose the BiLSTM's total bidirectional output width
+(for example 84 or 126). ``alternating_branch_optimization=true`` alternates
+GCN-GRU and BiLSTM encoder updates 1:1 while updating shared heads every batch.
 """
 
 from __future__ import annotations
@@ -76,7 +94,7 @@ class SICTrainingConfig:
     early_stopping_patience: int | None = 10
     early_stopping_min_delta: float = 0.001
     early_stopping_monitor: str = "val_loss"
-    early_stopping_mode: str = "min"
+    early_stopping_mode: str = "auto"
     best_epoch_metric: str | None = None
     selection_metric: str = "balanced_accuracy"
     hyperparameter_selection_level: str = "calibration"
@@ -85,6 +103,8 @@ class SICTrainingConfig:
     calibration_batch_size: int = 6
     calibration_trials: int = 6
     calibration_folds: int = 3
+    calibration_levels: tuple[tuple[int, int], ...] = ()
+    calibration_selection_shots: int | None = None
     calibration_learning_rate: float = 1e-4
     calibration_optimizer: str = "adamw"
     calibration_weight_decay: float = 0.0
@@ -96,6 +116,7 @@ class SICTrainingConfig:
     latent_sampling_seed: int | None = 42
     log_variational_intervals: bool = False
     uncertainty_samples: int = 30
+    ece_bins: int = 15
 
     source_use_class_weight: bool = False
     calibration_use_class_weight: bool = False
@@ -107,6 +128,7 @@ class SICTrainingConfig:
     seed: int | None = 42
 
     label_threshold_mode: str = "global"
+    median_label: float = 3.0
     window_normalization: str = "global_rms"
     model_config: dict = field(default_factory=dict)
 
@@ -120,6 +142,11 @@ SIC_SEQUENCE_HYPERPARAMETER_DEPTHS = {
     "classification_hidden_units": 1,
     "focal_alpha": 1,
 }
+
+# These settings participate in the same JSON/Cartesian search as model
+# hyperparameters, but are consumed by the data pipeline and must never be
+# forwarded to ``build_sic_model``.
+SIC_DATA_HYPERPARAMETERS = frozenset({"remove_median_label"})
 
 SIC_SELECTION_OVERALL_KEYS = {
     "losocv": "zero_shot_all_trials_mean_scores",
@@ -135,7 +162,76 @@ SIC_CLASSIFICATION_METRICS = (
     "macro_precision",
     "macro_recall",
     "balanced_accuracy",
+    "roc_auc",
+    "brier_score",
+    "ece",
 )
+
+SIC_MINIMIZE_METRICS = frozenset({"loss", "joint_loss", "brier_score", "ece"})
+
+SIC_TRAINING_METHOD_ALIASES = {
+    "normal": "erm",
+    "standard": "erm",
+    "joint": "erm",
+    "erm": "erm",
+    "vrex": "vrex",
+    "v-rex": "vrex",
+    "v_rex": "vrex",
+    "mldg": "mldg",
+    "fo_mldg": "mldg",
+    "first_order_mldg": "mldg",
+}
+
+
+def _configuration_training_method(configuration: dict) -> str:
+    """Resolve one expanded configuration, including legacy use_vrex."""
+    raw_method = configuration.get("training_method")
+    legacy_vrex = bool(configuration.get("use_vrex", False))
+    if raw_method is None:
+        return "vrex" if legacy_vrex else "erm"
+    normalized = str(raw_method).strip().lower().replace("-", "_")
+    normalized = SIC_TRAINING_METHOD_ALIASES.get(normalized, normalized)
+    if normalized not in {"erm", "vrex", "mldg"}:
+        raise ValueError(
+            "training_method must be one of 'erm', 'vrex', or 'mldg'; "
+            f"got {raw_method!r}."
+        )
+    if legacy_vrex and normalized != "vrex":
+        raise ValueError(
+            "use_vrex=true conflicts with training_method="
+            f"{raw_method!r}. Use training_method='vrex' or remove use_vrex."
+        )
+    return normalized
+
+
+def _metric_mode(metric_name: str) -> str:
+    """Return the mathematically correct optimization direction for a metric."""
+    metric_name = str(metric_name).lower()
+    return "min" if metric_name in SIC_MINIMIZE_METRICS else "max"
+
+
+def _calibration_plan(config: SICTrainingConfig) -> tuple[tuple[int, int], ...]:
+    return config.calibration_levels or (
+        (int(config.calibration_trials), int(config.calibration_folds)),
+    )
+
+
+def _selected_calibration_shots(config: SICTrainingConfig) -> int:
+    levels = _calibration_plan(config)
+    return (
+        max(shots for shots, _ in levels)
+        if config.calibration_selection_shots is None
+        else int(config.calibration_selection_shots)
+    )
+
+
+def _selection_score_source(config: SICTrainingConfig) -> str:
+    if config.hyperparameter_selection_level == "calibration":
+        return (
+            "overall.calibration_levels."
+            f"{_selected_calibration_shots(config)}.calibrated_mean_scores"
+        )
+    return "overall.zero_shot_all_trials_mean_scores"
 
 
 def _json_fingerprint(value) -> str:
@@ -219,6 +315,24 @@ def expand_cartesian_grid(model_config: dict) -> tuple[list[dict], dict[str, int
         for name, candidates in zip(axis_names, axis_candidates)
     }
     return configurations, dimensions
+
+
+def _split_data_hyperparameters(configuration: dict) -> tuple[dict, dict]:
+    """Separate dataset controls from arguments accepted by the SIC builder."""
+    model_configuration = dict(configuration)
+    data_configuration = {
+        name: model_configuration.pop(name)
+        for name in SIC_DATA_HYPERPARAMETERS
+        if name in model_configuration
+    }
+    remove_median_label = data_configuration.get("remove_median_label", False)
+    if not isinstance(remove_median_label, (bool, np.bool_)):
+        raise ValueError(
+            "remove_median_label must be true or false; got "
+            f"{remove_median_label!r}."
+        )
+    data_configuration["remove_median_label"] = bool(remove_median_label)
+    return model_configuration, data_configuration
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -370,22 +484,147 @@ def _normalize_each_window(features, mode="global_rms", epsilon=1e-6):
     raise ValueError(f"Unknown window normalization: {mode}")
 
 
-def _subject_median_window_labels(labels_path, label_dimension, subjects, trials):
+def _original_target_window_ratings(
+    labels_path,
+    label_dimension,
+    subjects,
+    trials,
+):
+    """Map each sample back to its original, continuous trial rating."""
     raw = np.load(Path(labels_path), allow_pickle=False)
     dim = {"valence": 0, "arousal": 1}[label_dimension]
     subjects = np.asarray(subjects).reshape(-1)
     trials = np.asarray(trials).reshape(-1)
-    out = np.empty(len(subjects), dtype=np.int64)
+    if raw.ndim != 3 or raw.shape[-1] <= dim:
+        raise ValueError(
+            "Median-label controls require labels shaped "
+            "(subjects, trials, dimensions); got "
+            f"{raw.shape}."
+        )
+    out = np.empty(len(subjects), dtype=np.float64)
     for subject_row, subject_id in enumerate(sorted(np.unique(subjects).tolist())):
         mask = subjects == subject_id
         unique_trials = sorted(np.unique(trials[mask]).tolist())
         ratings = raw[subject_row, :, dim].astype(np.float64)
-        binary = (ratings >= np.median(ratings)).astype(np.int64)
+        if len(unique_trials) > len(ratings):
+            raise ValueError(
+                f"Subject {subject_id!r} has {len(unique_trials)} trial IDs but "
+                f"only {len(ratings)} raw ratings."
+            )
         mapping = {
-            trial_id: int(binary[index]) for index, trial_id in enumerate(unique_trials)
+            trial_id: float(ratings[index])
+            for index, trial_id in enumerate(unique_trials)
         }
         out[mask] = np.asarray([mapping[trial_id] for trial_id in trials[mask]])
     return out
+
+
+def _subject_median_window_labels(labels_path, label_dimension, subjects, trials):
+    ratings = _original_target_window_ratings(
+        labels_path,
+        label_dimension,
+        subjects,
+        trials,
+    )
+    subjects = np.asarray(subjects).reshape(-1)
+    out = np.empty(len(subjects), dtype=np.int64)
+    for subject_id in sorted(np.unique(subjects).tolist()):
+        mask = subjects == subject_id
+        out[mask] = (ratings[mask] >= np.median(ratings[mask])).astype(np.int64)
+    return out
+
+
+def _group_consistent_trial_values(values, subjects, trials, *, value_name):
+    """Collapse a window-aligned value to one value per subject/trial pair."""
+    values = np.asarray(values).reshape(-1)
+    subjects = np.asarray(subjects).reshape(-1)
+    trials = np.asarray(trials).reshape(-1)
+    grouped = []
+    seen = set()
+    for subject_id, trial_id in zip(subjects.tolist(), trials.tolist()):
+        key = (subject_id, trial_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        indices = np.flatnonzero((subjects == subject_id) & (trials == trial_id))
+        trial_values = values[indices]
+        if not np.allclose(trial_values, trial_values[0], rtol=0.0, atol=1e-8):
+            raise ValueError(
+                f"Inconsistent {value_name} within subject={subject_id}, "
+                f"trial={trial_id}."
+            )
+        grouped.append(trial_values[0])
+    return np.asarray(grouped, dtype=values.dtype)
+
+
+def _apply_median_label_ablation(
+    features,
+    labels,
+    subjects,
+    trials,
+    original_ratings,
+    *,
+    remove_median_label,
+    median_label,
+):
+    """Remove every sample belonging to a trial with the selected raw rating."""
+    arrays = (
+        np.asarray(features),
+        np.asarray(labels),
+        np.asarray(subjects).reshape(-1),
+        np.asarray(trials).reshape(-1),
+    )
+    if not remove_median_label:
+        return (
+            *arrays,
+            {
+                "remove_median_label": False,
+                "removed_samples": 0,
+                "removed_trials": 0,
+            },
+        )
+    if original_ratings is None:
+        raise ValueError(
+            "remove_median_label=true requires original target ratings from "
+            "load_sic_training_data(return_original_ratings=True)."
+        )
+    ratings = np.asarray(original_ratings, dtype=np.float64).reshape(-1)
+    if any(len(array) != len(ratings) for array in arrays):
+        raise ValueError(
+            "Original ratings must align one-to-one with features, labels, "
+            "subjects, and trials."
+        )
+    remove_mask = np.isclose(
+        ratings,
+        float(median_label),
+        rtol=0.0,
+        atol=1e-8,
+    )
+    keep_mask = ~remove_mask
+    if not np.any(keep_mask):
+        raise ValueError(
+            f"Removing original rating {median_label:g} would empty the dataset."
+        )
+    removed_trials = len(
+        {
+            (subject_id, trial_id)
+            for subject_id, trial_id in zip(
+                arrays[2][remove_mask].tolist(),
+                arrays[3][remove_mask].tolist(),
+            )
+        }
+    )
+    filtered = tuple(array[keep_mask] for array in arrays)
+    return (
+        *filtered,
+        {
+            "remove_median_label": True,
+            "median_label": float(median_label),
+            "removed_samples": int(np.sum(remove_mask)),
+            "removed_trials": int(removed_trials),
+            "retained_samples": int(np.sum(keep_mask)),
+        },
+    )
 
 
 def load_sic_training_data(
@@ -400,6 +639,7 @@ def load_sic_training_data(
     window_normalization="global_rms",
     label_threshold_mode="global",
     dataset="dreamer",
+    return_original_ratings=False,
 ):
     arrays = build_joint_v2_dataset(
         eeg_path=eeg_path,
@@ -431,17 +671,26 @@ def load_sic_training_data(
     features, labels, subjects, trials = _flatten_grouped_trials_to_windows(
         features, labels, subjects, trials
     )
-    if label_threshold_mode == "subject_median":
-        labels = _subject_median_window_labels(
+    original_ratings = None
+    if return_original_ratings or label_threshold_mode == "subject_median":
+        original_ratings = _original_target_window_ratings(
             labels_path, label_dimension, subjects, trials
         )
+    if label_threshold_mode == "subject_median":
+        labels = np.empty(len(subjects), dtype=np.int64)
+        for subject_id in sorted(np.unique(subjects).tolist()):
+            mask = subjects == subject_id
+            labels[mask] = (
+                original_ratings[mask] >= np.median(original_ratings[mask])
+            ).astype(np.int64)
     features = _normalize_each_window(features, window_normalization)
-    return (
+    output = (
         np.asarray(features, dtype=np.float32),
         np.asarray(labels),
         np.asarray(subjects),
         np.asarray(trials),
     )
+    return (*output, original_ratings) if return_original_ratings else output
 
 
 def _subject_summary_rows(results: dict) -> list[dict]:
@@ -451,27 +700,31 @@ def _subject_summary_rows(results: dict) -> list[dict]:
 def _calibration_fold_rows(results: dict) -> list[dict]:
     rows: list[dict] = []
     for subject_result in results.get("subject_results", []):
-        for fold in subject_result.get("calibration_folds", []):
-            row = {
-                "target_subject": fold.get("target_subject"),
-                "calibration_fold": fold.get("calibration_fold"),
-                "calibration_trial_ids": json.dumps(
-                    fold.get("calibration_trial_ids", [])
-                ),
-                "evaluation_trial_ids": json.dumps(
-                    fold.get("evaluation_trial_ids", [])
-                ),
-                "n_calibration_samples": fold.get("n_calibration_samples"),
-                "n_evaluation_samples": fold.get("n_evaluation_samples"),
-                "calibration_epochs_ran": fold.get("calibration_epochs_ran"),
-            }
-            for prefix, scores in (
-                ("zero_shot", fold.get("zero_shot_scores", {})),
-                ("calibrated", fold.get("calibrated_scores", {})),
-                ("delta", fold.get("delta_scores", {})),
-            ):
-                row.update({f"{prefix}_{key}": value for key, value in scores.items()})
-            rows.append(row)
+        for level in subject_result.get("calibration_levels", []):
+            for fold in level.get("calibration_runs", []):
+                row = {
+                    "target_subject": fold.get("target_subject"),
+                    "calibration_shots": fold.get("calibration_shots"),
+                    "calibration_fold": fold.get("calibration_fold"),
+                    "calibration_trial_ids": json.dumps(
+                        fold.get("calibration_trial_ids", [])
+                    ),
+                    "evaluation_trial_ids": json.dumps(
+                        fold.get("evaluation_trial_ids", [])
+                    ),
+                    "n_calibration_samples": fold.get("n_calibration_samples"),
+                    "n_evaluation_samples": fold.get("n_evaluation_samples"),
+                    "calibration_epochs_ran": fold.get("calibration_epochs_ran"),
+                }
+                for prefix, scores in (
+                    ("zero_shot", fold.get("zero_shot_scores", {})),
+                    ("calibrated", fold.get("calibrated_scores", {})),
+                    ("delta", fold.get("delta_scores", {})),
+                ):
+                    row.update(
+                        {f"{prefix}_{key}": value for key, value in scores.items()}
+                    )
+                rows.append(row)
     return rows
 
 
@@ -480,6 +733,7 @@ def _selection_score_from_calibration_results(
     *,
     selection_level: str,
     selection_metric: str,
+    calibration_selection_shots: int | None = None,
 ) -> float:
     """Return the subject-aggregated score used to rank one configuration."""
     if selection_level not in SIC_SELECTION_OVERALL_KEYS:
@@ -487,9 +741,24 @@ def _selection_score_from_calibration_results(
             f"Unknown hyperparameter selection level {selection_level!r}; "
             f"expected one of {sorted(SIC_SELECTION_OVERALL_KEYS)}."
         )
-    score_group = SIC_SELECTION_OVERALL_KEYS[selection_level]
     overall = results.get("overall", {})
-    scores = overall.get(score_group, {})
+    if selection_level == "calibration":
+        if calibration_selection_shots is None:
+            calibration_selection_shots = overall.get(
+                "calibration_selection_shots"
+            )
+        score_group = (
+            f"calibration_levels.{calibration_selection_shots}."
+            "calibrated_mean_scores"
+        )
+        scores = (
+            overall.get("calibration_levels", {})
+            .get(str(calibration_selection_shots), {})
+            .get("calibrated_mean_scores", {})
+        )
+    else:
+        score_group = SIC_SELECTION_OVERALL_KEYS[selection_level]
+        scores = overall.get(score_group, {})
     if selection_metric not in scores:
         raise KeyError(
             f"Calibration results do not contain metric {selection_metric!r} "
@@ -525,6 +794,9 @@ def _configuration_summary_row(summary: dict) -> dict:
         ("calibration_delta", summary.get("delta_mean_scores", {})),
     ):
         row.update({f"{prefix}_{name}": value for name, value in score_group.items()})
+    for shots, level in summary.get("calibration_level_metrics", {}).items():
+        for name, value in level.get("calibrated_mean_scores", {}).items():
+            row[f"calibration_{shots}_shot_{name}"] = value
     return row
 
 
@@ -565,12 +837,10 @@ def _source_checkpoint_settings(
 ) -> tuple[str, str]:
     """Resolve source-only checkpoint monitor aliases for nested LOSO."""
     if config.best_epoch_metric is not None:
-        if config.classification_level != "window":
-            raise ValueError(
-                "--best-epoch-metric currently selects window-level metrics and "
-                "requires --classification-level window."
-            )
-        return f"val_window_{config.best_epoch_metric}", "max"
+        return (
+            f"val_{config.classification_level}_{config.best_epoch_metric}",
+            _metric_mode(config.best_epoch_metric),
+        )
 
     monitor = config.early_stopping_monitor
     aliases = {
@@ -582,8 +852,22 @@ def _source_checkpoint_settings(
         "balanced_accuracy": (
             f"{config.classification_level}_balanced_accuracy"
         ),
+        "val_roc_auc": f"val_{config.classification_level}_roc_auc",
+        "val_brier_score": f"val_{config.classification_level}_brier_score",
+        "val_ece": f"val_{config.classification_level}_ece",
+        "roc_auc": f"{config.classification_level}_roc_auc",
+        "brier_score": f"{config.classification_level}_brier_score",
+        "ece": f"{config.classification_level}_ece",
     }
-    return aliases.get(monitor, monitor), config.early_stopping_mode
+    resolved_monitor = aliases.get(monitor, monitor)
+    resolved_mode = config.early_stopping_mode
+    if resolved_mode == "auto":
+        metric_name = resolved_monitor.removeprefix("val_")
+        metric_name = metric_name.removeprefix(
+            f"{config.classification_level}_"
+        )
+        resolved_mode = _metric_mode(metric_name)
+    return resolved_monitor, resolved_mode
 
 
 def _run_subject_calibration_configuration(
@@ -611,6 +895,8 @@ def _run_subject_calibration_configuration(
         calibration_batch_size=config.calibration_batch_size,
         calibration_trials=config.calibration_trials,
         calibration_folds=config.calibration_folds,
+        calibration_levels=_calibration_plan(config),
+        calibration_selection_shots=_selected_calibration_shots(config),
         calibration_learning_rate=config.calibration_learning_rate,
         calibration_optimizer=config.calibration_optimizer,
         calibration_weight_decay=config.calibration_weight_decay,
@@ -625,6 +911,7 @@ def _run_subject_calibration_configuration(
         restore_best_weights=config.restore_best_weights,
         evaluation_level=config.classification_level,
         metrics=SIC_CLASSIFICATION_METRICS,
+        ece_bins=config.ece_bins,
         decision_threshold=config.decision_threshold,
         n_prediction_latent_samples=config.prediction_latent_samples,
         latent_sampling_seed=config.latent_sampling_seed,
@@ -651,6 +938,7 @@ def train_sic_loso_validation(
     subject_id_array,
     trial_id_array,
     config: SICTrainingConfig,
+    original_rating_array=None,
 ):
     """Full Cartesian SIC search with calibration nested inside every LOSO fold.
 
@@ -672,6 +960,11 @@ def train_sic_loso_validation(
     y = np.asarray(label_array)
     subjects = np.asarray(subject_id_array).reshape(-1)
     trials = np.asarray(trial_id_array).reshape(-1)
+    original_ratings = (
+        None
+        if original_rating_array is None
+        else np.asarray(original_rating_array, dtype=np.float64).reshape(-1)
+    )
 
     expected_rank = 4 if config.classification_level == "trial" else 3
     if X.ndim != expected_rank:
@@ -691,9 +984,10 @@ def train_sic_loso_validation(
     model_config.setdefault("n_channels", config.n_channels)
     model_config.setdefault("n_bands", config.n_bands)
 
-    # Normal-validation mode is conventional ERM unless the caller explicitly
-    # requests otherwise. The dedicated smoke script sets this False.
-    model_config.setdefault("use_vrex", False)
+    # ``training_method`` is the primary selector. Preserve legacy JSON files
+    # that still express V-REx with use_vrex=true.
+    if "training_method" not in model_config and "use_vrex" not in model_config:
+        model_config["training_method"] = "erm"
 
     grid_configurations, grid_dimensions = expand_cartesian_grid(model_config)
     if not grid_configurations:  # Defensive: product() always yields at least one.
@@ -714,15 +1008,17 @@ def train_sic_loso_validation(
             ),
             "evaluation_level": config.classification_level,
             "selection_metric": config.selection_metric,
-            "maximize_metric": True,
-            "selection_score_source": (
-                f"overall.{SIC_SELECTION_OVERALL_KEYS[config.hyperparameter_selection_level]}"
-            ),
+            "maximize_metric": _metric_mode(config.selection_metric) == "max",
+            "selection_score_source": _selection_score_source(config),
             "calibration_always_runs": True,
+            "calibration_plan": [
+                {"shots": shots, "folds": folds}
+                for shots, folds in _calibration_plan(config)
+            ],
+            "calibration_selection_shots": _selected_calibration_shots(config),
+            "data_hyperparameters": sorted(SIC_DATA_HYPERPARAMETERS),
             "calibration_aggregation": {
-                "within_subject": (
-                    f"mean of {config.calibration_folds} calibration-fold metrics"
-                ),
+                "within_subject": "mean of each shot level's calibration-fold metrics",
                 "across_subjects": "mean of subject-level aggregates",
             },
             "dimensions": grid_dimensions,
@@ -733,20 +1029,19 @@ def train_sic_loso_validation(
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
     logger.info(
-        "Training protocol: configuration -> LOSO subject -> %d calibration folds",
-        config.calibration_folds,
+        "Training protocol: configuration -> LOSO subject -> calibration plan %s",
+        _calibration_plan(config),
     )
     logger.info("Classification level: %s", config.classification_level)
     logger.info(
-        "Each target: zero-shot report + %d independent %d-trial fine-tunes",
-        config.calibration_folds,
-        config.calibration_trials,
+        "Each target: one source fit + independent fine-tunes for %s",
+        _calibration_plan(config),
     )
     logger.info(
-        "Hyperparameter-grid selection: level=%s metric=%s source=overall.%s",
+        "Hyperparameter-grid selection: level=%s metric=%s source=%s",
         config.hyperparameter_selection_level,
         config.selection_metric,
-        SIC_SELECTION_OVERALL_KEYS[config.hyperparameter_selection_level],
+        _selection_score_source(config),
     )
     logger.info("Calibration runs and is saved for every configuration.")
     logger.info(
@@ -774,7 +1069,6 @@ def train_sic_loso_validation(
             _json_fingerprint(candidate),
         )
 
-    builder = partial(build_sic_model, input_shape=tuple(X.shape[1:]))
     progress_path = run_dir / "hyperparameter_search_progress.json"
     completed_summaries: list[dict] = []
     failed_configurations: list[dict] = []
@@ -792,13 +1086,45 @@ def train_sic_loso_validation(
             if config.seed is not None:
                 tf.keras.utils.set_random_seed(config.seed)
                 np.random.seed(config.seed)
+            builder_config, data_config = _split_data_hyperparameters(candidate)
+            (
+                candidate_X,
+                candidate_y,
+                candidate_subjects,
+                candidate_trials,
+                data_summary,
+            ) = _apply_median_label_ablation(
+                X,
+                y,
+                subjects,
+                trials,
+                original_ratings,
+                remove_median_label=data_config["remove_median_label"],
+                median_label=config.median_label,
+            )
+            logger.info(
+                "Configuration %d dataset: remove_median_label=%s "
+                "median_label=%s removed_trials=%d removed_samples=%d "
+                "retained_samples=%d",
+                index,
+                data_summary["remove_median_label"],
+                config.median_label,
+                data_summary["removed_trials"],
+                data_summary["removed_samples"],
+                data_summary.get("retained_samples", len(candidate_X)),
+            )
+            _write_json(configuration_dir / "dataset_ablation.json", data_summary)
+            builder = partial(
+                build_sic_model,
+                input_shape=tuple(candidate_X.shape[1:]),
+            )
             results = _run_subject_calibration_configuration(
                 builder=builder,
-                X=X,
-                y=y,
-                subjects=subjects,
-                trials=trials,
-                model_config=candidate,
+                X=candidate_X,
+                y=candidate_y,
+                subjects=candidate_subjects,
+                trials=candidate_trials,
+                model_config=builder_config,
                 config=config,
             )
             _save_calibration_artifacts(
@@ -811,6 +1137,7 @@ def train_sic_loso_validation(
                 results,
                 selection_level=config.hyperparameter_selection_level,
                 selection_metric=config.selection_metric,
+                calibration_selection_shots=_selected_calibration_shots(config),
             )
             summary = {
                 "configuration_id": index,
@@ -820,6 +1147,7 @@ def train_sic_loso_validation(
                 "selection_level": config.hyperparameter_selection_level,
                 "selection_metric": config.selection_metric,
                 "selection_score": selection_score,
+                "dataset_ablation": data_summary,
                 "zero_shot_all_trials_mean_scores": overall.get(
                     "zero_shot_all_trials_mean_scores", {}
                 ),
@@ -834,6 +1162,9 @@ def train_sic_loso_validation(
                 ),
                 "calibrated_std_scores": overall.get(
                     "calibrated_std_scores", {}
+                ),
+                "calibration_level_metrics": overall.get(
+                    "calibration_levels", {}
                 ),
                 "delta_mean_scores": overall.get("delta_mean_scores", {}),
                 "delta_std_scores": overall.get("delta_std_scores", {}),
@@ -889,9 +1220,15 @@ def train_sic_loso_validation(
             },
         )
 
+    maximize_metric = _metric_mode(config.selection_metric) == "max"
     ranked_summaries = sorted(
         completed_summaries,
-        key=lambda row: (-float(row["selection_score"]), row["configuration_id"]),
+        key=lambda row: (
+            -float(row["selection_score"])
+            if maximize_metric
+            else float(row["selection_score"]),
+            row["configuration_id"],
+        ),
     )
     for rank, summary in enumerate(ranked_summaries, start=1):
         summary["rank"] = rank
@@ -900,15 +1237,17 @@ def train_sic_loso_validation(
         "search_type": "full_cartesian_product_with_nested_subject_calibration",
         "hyperparameter_selection_level": config.hyperparameter_selection_level,
         "selection_metric": config.selection_metric,
-        "maximize_metric": True,
-        "selection_score_source": (
-            f"overall.{SIC_SELECTION_OVERALL_KEYS[config.hyperparameter_selection_level]}"
-        ),
+        "maximize_metric": maximize_metric,
+        "selection_score_source": _selection_score_source(config),
         "calibration_always_runs": True,
+        "calibration_plan": [
+            {"shots": shots, "folds": folds}
+            for shots, folds in _calibration_plan(config)
+        ],
+        "calibration_selection_shots": _selected_calibration_shots(config),
+        "data_hyperparameters": sorted(SIC_DATA_HYPERPARAMETERS),
         "calibration_aggregation": {
-            "within_subject": (
-                f"mean of {config.calibration_folds} calibration-fold metrics"
-            ),
+            "within_subject": "mean of each shot level's calibration-fold metrics",
             "across_subjects": "mean of subject-level aggregates",
         },
         "n_configurations": len(grid_configurations),
@@ -951,6 +1290,7 @@ def train_sic(
     subject_id_array,
     trial_id_array,
     config: SICTrainingConfig,
+    original_rating_array=None,
 ):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = _ensure_dir(config.output_dir / f"{config.run_name}_{timestamp}")
@@ -964,6 +1304,11 @@ def train_sic(
     y = np.asarray(label_array)
     subjects = np.asarray(subject_id_array).reshape(-1)
     trials = np.asarray(trial_id_array).reshape(-1)
+    original_ratings = (
+        None
+        if original_rating_array is None
+        else np.asarray(original_rating_array, dtype=np.float64).reshape(-1)
+    )
     expected_rank = 4 if config.classification_level == "trial" else 3
     if X.ndim != expected_rank:
         raise ValueError(
@@ -976,13 +1321,18 @@ def train_sic(
             f"{config.n_channels * config.n_bands}."
         )
 
-    model_config = dict(config.model_config)
-    model_config.setdefault("classification_level", config.classification_level)
-    model_config.setdefault("n_classes", _n_classes(y))
-    model_config.setdefault("n_channels", config.n_channels)
-    model_config.setdefault("n_bands", config.n_bands)
+    hyperparameters = dict(config.model_config)
+    hyperparameters.setdefault("classification_level", config.classification_level)
+    hyperparameters.setdefault("n_classes", _n_classes(y))
+    hyperparameters.setdefault("n_channels", config.n_channels)
+    hyperparameters.setdefault("n_bands", config.n_bands)
+    if (
+        "training_method" not in hyperparameters
+        and "use_vrex" not in hyperparameters
+    ):
+        hyperparameters["training_method"] = "erm"
 
-    fixed_configurations, grid_dimensions = expand_cartesian_grid(model_config)
+    fixed_configurations, grid_dimensions = expand_cartesian_grid(hyperparameters)
     if grid_dimensions:
         raise ValueError(
             "subject_calibration accepts one fixed configuration. Use "
@@ -990,27 +1340,53 @@ def train_sic(
             "Cartesian search; grid axes were "
             f"{sorted(grid_dimensions)}."
         )
-    model_config = fixed_configurations[0]
+    hyperparameters = fixed_configurations[0]
+    model_config, data_config = _split_data_hyperparameters(hyperparameters)
+    X, y, subjects, trials, data_summary = _apply_median_label_ablation(
+        X,
+        y,
+        subjects,
+        trials,
+        original_ratings,
+        remove_median_label=data_config["remove_median_label"],
+        median_label=config.median_label,
+    )
 
     _write_json(run_dir / "training_config.json", asdict(config))
-    _write_json(run_dir / "model_config.json", model_config)
+    _write_json(run_dir / "model_config.json", hyperparameters)
+    _write_json(run_dir / "dataset_ablation.json", data_summary)
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
     logger.info("SIC builder API version: %s", SIC_BUILDER_API_VERSION)
     logger.info("Input shape: %s", X.shape)
     logger.info(
-        "Protocol: %d-fold, %d-trial calibration; zero-shot + post-calibration metrics",
-        config.calibration_folds,
-        config.calibration_trials,
+        "Dataset: remove_median_label=%s median_label=%s removed_trials=%d "
+        "removed_samples=%d retained_samples=%d",
+        data_summary["remove_median_label"],
+        config.median_label,
+        data_summary["removed_trials"],
+        data_summary["removed_samples"],
+        data_summary.get("retained_samples", len(X)),
+    )
+    logger.info(
+        "Protocol: strict LOSO followed by calibration plan %s",
+        _calibration_plan(config),
     )
     logger.info(
         "Calibration head depth: %s",
         model_config.get("calibration_unfreeze_layers", 1),
     )
     logger.info(
-        "Source generalization: V-REx enabled=%s penalty_weight=%s; subject_adversarial=%s",
-        model_config.get("use_vrex", False),
-        model_config.get("vrex_penalty_weight", 0.0),
+        "Source optimization: method=%s; V-REx penalty_weight=%s; "
+        "MLDG A=%s B=%s trials_per_subject=%s inner_lr=%s beta=%s; "
+        "subject_adversarial=%s",
+        _configuration_training_method(model_config),
+        model_config.get("vrex_penalty_weight", 1.0),
+        model_config.get("mldg_meta_train_subjects", "all remaining"),
+        model_config.get("mldg_meta_test_subjects", 4),
+        model_config.get("mldg_trials_per_subject", 1),
+        model_config.get("mldg_inner_learning_rate", 1e-4),
+        model_config.get("mldg_meta_test_weight", 1.0),
         model_config.get("use_subject_adversarial", True),
     )
 
@@ -1028,19 +1404,21 @@ def train_sic(
 
     _save_calibration_artifacts(
         run_dir,
-        model_config=model_config,
+        model_config=hyperparameters,
         results=results,
     )
 
     overall = results.get("overall", {})
-    logger.info(
-        "Zero-shot all-target mean: %s", overall.get("zero_shot_all_trials_mean_scores")
+    zero_accuracy = overall.get("zero_shot_all_trials_mean_scores", {}).get(
+        "accuracy"
     )
-    logger.info(
-        "Paired zero-shot mean: %s", overall.get("paired_zero_shot_mean_scores")
-    )
-    logger.info("Post-calibration mean: %s", overall.get("calibrated_mean_scores"))
-    logger.info("Calibration delta mean: %s", overall.get("delta_mean_scores"))
+    logger.info("Final 0-shot mean accuracy: %s", zero_accuracy)
+    for shots, level in overall.get("calibration_levels", {}).items():
+        logger.info(
+            "Final %s-shot mean accuracy: %s",
+            shots,
+            level.get("calibrated_mean_scores", {}).get("accuracy"),
+        )
     logger.info("Saved SIC artifacts to %s", run_dir)
     return {"run_dir": str(run_dir), "results": results}
 
@@ -1055,9 +1433,11 @@ def _positive_int(value: str) -> int:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Train SIC with serial or GCN-GRU/BiLSTM feature-fusion encoder, "
-            "with VAE reconstruction, optional V-REx and subject adversity, "
-            "VC target, and three-fold six-trial subject calibration."
+            "Train SIC with serial or direct-concatenation GCN-GRU/BiLSTM "
+            "feature-fusion encoder, "
+            "with VAE reconstruction, selectable ERM/V-REx/first-order MLDG "
+            "source optimization, optional subject adversity, VC target, and "
+            "configurable multi-level subject calibration."
         )
     )
     parser.add_argument("--out-dir", default="runs/sic")
@@ -1074,6 +1454,17 @@ def parse_args(argv=None):
         "--label-threshold-mode", choices=("global", "subject_median"), default="global"
     )
     parser.add_argument("--median-label", type=float, default=3.0)
+    parser.add_argument(
+        "--remove-median-label",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Fixed CLI override for the remove_median_label data "
+            "hyperparameter. When enabled, discard every trial whose original "
+            "target rating equals --median-label, including all of that "
+            "trial's windows. The default is false."
+        ),
+    )
     parser.add_argument("--window-sec", type=float, default=4.0)
     parser.add_argument("--window-overlap", type=float, default=0.0)
     parser.add_argument("--fs", type=float, default=30.0)
@@ -1100,20 +1491,63 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument("--source-epochs", type=_positive_int, default=100)
-    parser.add_argument("--source-batch-size", type=_positive_int, default=8)
-    parser.add_argument("--validation-subjects", type=int, default=4)
+    parser.add_argument(
+        "--source-batch-size",
+        type=_positive_int,
+        default=8,
+        help=(
+            "Ordinary ERM/V-REx source batch size. For MLDG, one train step is "
+            "one complete subject episode; its size is controlled by the "
+            "mldg_* hyperparameters instead."
+        ),
+    )
+    parser.add_argument(
+        "--training-method",
+        choices=("erm", "vrex", "mldg"),
+        default=None,
+        help=(
+            "Optional fixed override for the source-optimization hyperparameter. "
+            "The same setting can be fixed or grid-searched as training_method "
+            "inside --hyperparameters-json."
+        ),
+    )
+    parser.add_argument(
+        "--validation-subjects",
+        type=int,
+        default=4,
+        help=(
+            "Source-only validation subjects per outer fold. Set 0 for a fixed-"
+            "budget MLDG source fit with no reserved source subjects."
+        ),
+    )
     parser.add_argument("--validation-seed", type=int, default=42)
     parser.add_argument("--early-stopping-patience", type=int, default=10)
+    parser.add_argument(
+        "--no-early-stopping",
+        action="store_true",
+        help=(
+            "Disable source early stopping and use the full --source-epochs "
+            "budget. Recommended with --validation-subjects 0."
+        ),
+    )
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.001)
     parser.add_argument("--early-stopping-monitor", default="val_loss")
     parser.add_argument(
         "--best-epoch-metric",
-        choices=("accuracy", "balanced_accuracy"),
+        choices=(
+            "accuracy",
+            "balanced_accuracy",
+            "roc_auc",
+            "brier_score",
+            "ece",
+        ),
         default=None,
         help=(
             "Select and restore the best source-model epoch using source-only "
-            "validation subjects. 'accuracy' monitors val_window_accuracy; "
-            "'balanced_accuracy' monitors val_window_balanced_accuracy. This "
+            "validation subjects at --classification-level. Probability "
+            "metrics monitor the matching val_window_* or val_trial_* key. "
+            "Brier/ECE are "
+            "minimized; the others are maximized. This "
             "is separate from outer hyperparameter selection."
         ),
     )
@@ -1128,6 +1562,9 @@ def parse_args(argv=None):
             "macro_precision",
             "recall",
             "macro_recall",
+            "roc_auc",
+            "brier_score",
+            "ece",
         ),
         default="balanced_accuracy",
         help=(
@@ -1150,13 +1587,38 @@ def parse_args(argv=None):
     parser.add_argument(
         "--early-stopping-mode",
         choices=("auto", "min", "max"),
-        default="min",
+        default="auto",
     )
     parser.add_argument("--no-restore-best-weights", action="store_true")
     parser.add_argument("--calibration-epochs", type=_positive_int, default=30)
     parser.add_argument("--calibration-batch-size", type=_positive_int, default=6)
     parser.add_argument("--calibration-trials", type=_positive_int, default=6)
     parser.add_argument("--calibration-folds", type=_positive_int, default=3)
+    parser.add_argument(
+        "--calibration-level",
+        type=_positive_int,
+        nargs=2,
+        action="append",
+        metavar=("SHOTS", "FOLDS"),
+        default=None,
+        help=(
+            "Repeat this flag to configure multi-shot calibration pairs, for "
+            "example: --calibration-level 3 6 --calibration-level 6 3 "
+            "--calibration-level 9 2 --calibration-level 12 3. The strict "
+            "LOSO source model is trained once per target, then independently "
+            "restored and calibrated for every requested pair. If omitted, "
+            "the legacy --calibration-trials/--calibration-folds pair is used."
+        ),
+    )
+    parser.add_argument(
+        "--calibration-selection-shots",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Shot level used when --hyperparameter-selection-level calibration. "
+            "Defaults to the largest configured shot level."
+        ),
+    )
     parser.add_argument("--calibration-learning-rate", type=float, default=1e-4)
     parser.add_argument(
         "--calibration-optimizer", choices=("adam", "adamw"), default="adamw"
@@ -1170,6 +1632,12 @@ def parse_args(argv=None):
     parser.add_argument("--latent-sampling-seed", type=int, default=42)
     parser.add_argument("--log-variational-intervals", action="store_true")
     parser.add_argument("--uncertainty-samples", type=_positive_int, default=30)
+    parser.add_argument(
+        "--ece-bins",
+        type=_positive_int,
+        default=15,
+        help="Number of equal-width confidence bins used for ECE reporting.",
+    )
     parser.add_argument("--source-use-class-weight", action="store_true")
     parser.add_argument("--calibration-use-class-weight", action="store_true")
 
@@ -1179,6 +1647,24 @@ def parse_args(argv=None):
     parser.add_argument("--max-subjects", type=_positive_int, default=None)
     parser.add_argument("--verbose", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--use-gcn-gru-branch",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or ablate the GCN-GRU encoder branch.",
+    )
+    parser.add_argument(
+        "--use-bilstm-branch",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or ablate the BiLSTM encoder branch.",
+    )
+    parser.add_argument(
+        "--use-decoder",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or ablate the reconstruction decoder.",
+    )
     parser.add_argument(
         "--hyperparameters-json",
         default=None,
@@ -1191,7 +1677,28 @@ def parse_args(argv=None):
             "gcn_units=[[32],[64,32]] also works. Use {\"fixed\":value} to "
             "force any JSON value to remain fixed. loso_validation searches "
             "the full grid with nested calibration; subject_calibration accepts "
-            "one fixed configuration."
+            "one fixed configuration. Select source optimization with "
+            "training_method=\"erm\", \"vrex\", or \"mldg\"; use "
+            "training_method=[\"erm\",\"vrex\",\"mldg\"] to compare all three "
+            "in a Cartesian search. MLDG settings are "
+            "mldg_meta_train_subjects (null means every non-B subject), "
+            "mldg_meta_test_subjects (default 4), mldg_trials_per_subject, "
+            "mldg_steps_per_epoch, mldg_inner_learning_rate, "
+            "mldg_meta_test_weight, and mldg_seed. For feature fusion, set "
+            "bilstm_output_dim to the total output after both directions (for "
+            "example 84 or 126), and optionally set "
+            "alternating_branch_optimization=true for 1:1 branch updates. "
+            "Ablations can set use_gcn_gru_branch=false, "
+            "use_bilstm_branch=false, or use_decoder=false; at least one "
+            "encoder branch must remain enabled. Equivalent fixed CLI switches "
+            "are --[no-]use-gcn-gru-branch, --[no-]use-bilstm-branch, and "
+            "--[no-]use-decoder. Dataset ablation remove_median_label=true "
+            "removes every trial whose original target rating equals "
+            "--median-label; use remove_median_label=[false,true] to compare "
+            "both datasets in loso_validation, or the fixed CLI override "
+            "--[no-]remove-median-label. This data setting is recorded with "
+            "the hyperparameters but is not passed to the model builder. "
+            "fusion_units and fusion_dropout are legacy no-op settings."
         ),
     )
     parser.add_argument(
@@ -1206,23 +1713,41 @@ def parse_args(argv=None):
 
 
 def _validate_args(args, model_config):
+    if not isinstance(model_config, dict):
+        raise ValueError("--hyperparameters-json must decode to a JSON object.")
     if args.validation_subjects < 0:
         raise ValueError("--validation-subjects must be >= 0.")
+    if args.validation_subjects == 0 and args.best_epoch_metric is not None:
+        raise ValueError(
+            "--best-epoch-metric requires source validation subjects. With "
+            "--validation-subjects 0, use the fixed --source-epochs budget."
+        )
     if args.early_stopping_patience is not None and args.early_stopping_patience < 1:
         raise ValueError("--early-stopping-patience must be >= 1.")
     if args.early_stopping_min_delta < 0.0:
         raise ValueError("--early-stopping-min-delta must be non-negative.")
-    if args.best_epoch_metric is not None and args.classification_level != "window":
+    calibration_levels = tuple(
+        tuple(pair)
+        for pair in (
+            args.calibration_level
+            or [(args.calibration_trials, args.calibration_folds)]
+        )
+    )
+    shot_levels = [shots for shots, _ in calibration_levels]
+    if len(set(shot_levels)) != len(shot_levels):
+        raise ValueError("Each --calibration-level SHOTS value must be unique.")
+    if args.dataset == "dreamer" and any(shots >= 18 for shots in shot_levels):
         raise ValueError(
-            "--best-epoch-metric requires --classification-level window."
+            "DREAMER has 18 trials per subject, so every calibration shot "
+            "level must be < 18 to leave evaluation trials."
         )
     if (
-        args.calibration_trials * args.calibration_folds != 18
-        and args.dataset == "dreamer"
+        args.calibration_selection_shots is not None
+        and args.calibration_selection_shots not in shot_levels
     ):
         raise ValueError(
-            "DREAMER SIC currently uses the complete 18-trial protocol: "
-            "calibration_trials * calibration_folds must equal 18."
+            "--calibration-selection-shots must match one configured "
+            f"--calibration-level; available levels are {shot_levels}."
         )
     if args.calibration_learning_rate <= 0.0:
         raise ValueError("calibration-learning-rate must be positive.")
@@ -1232,14 +1757,77 @@ def _validate_args(args, model_config):
         raise ValueError("decision-threshold must be in (0, 1).")
     if args.prediction_latent_samples < 0:
         raise ValueError("prediction-latent-samples must be >= 0.")
-    if not isinstance(model_config, dict):
-        raise ValueError("--hyperparameters-json must decode to a JSON object.")
+    if args.ece_bins < 2:
+        raise ValueError("--ece-bins must be >= 2.")
     if "epochs" in model_config or "batch_size" in model_config:
         raise ValueError(
             "Do not put epochs/batch_size inside --hyperparameters-json; SIC has "
             "separate source and calibration epoch/batch arguments."
         )
-    _, grid_dimensions = expand_cartesian_grid(model_config)
+    configurations, grid_dimensions = expand_cartesian_grid(model_config)
+    for index, configuration in enumerate(configurations, start=1):
+        builder_config, _ = _split_data_hyperparameters(configuration)
+        training_method = _configuration_training_method(builder_config)
+        if (
+            builder_config.get("use_gcn_gru_branch") is False
+            and builder_config.get("use_bilstm_branch") is False
+        ):
+            raise ValueError(
+                "At least one of use_gcn_gru_branch/use_bilstm_branch must be "
+                f"true; grid configuration {index} disables both."
+            )
+        if training_method == "mldg":
+            meta_train_subjects = builder_config.get(
+                "mldg_meta_train_subjects"
+            )
+            meta_test_subjects = int(
+                builder_config.get("mldg_meta_test_subjects", 4)
+            )
+            trials_per_subject = int(
+                builder_config.get("mldg_trials_per_subject", 1)
+            )
+            steps_per_epoch = builder_config.get("mldg_steps_per_epoch")
+            inner_learning_rate = float(
+                builder_config.get("mldg_inner_learning_rate", 1e-4)
+            )
+            meta_test_weight = float(
+                builder_config.get("mldg_meta_test_weight", 1.0)
+            )
+            if meta_train_subjects is not None and int(meta_train_subjects) < 1:
+                raise ValueError(
+                    "mldg_meta_train_subjects must be >= 1 or null in grid "
+                    f"configuration {index}."
+                )
+            if meta_test_subjects < 1 or trials_per_subject < 1:
+                raise ValueError(
+                    "mldg_meta_test_subjects and mldg_trials_per_subject must "
+                    f"be >= 1 in grid configuration {index}."
+                )
+            if steps_per_epoch is not None and int(steps_per_epoch) < 1:
+                raise ValueError(
+                    "mldg_steps_per_epoch must be >= 1 or null in grid "
+                    f"configuration {index}."
+                )
+            if inner_learning_rate <= 0.0 or meta_test_weight < 0.0:
+                raise ValueError(
+                    "mldg_inner_learning_rate must be positive and "
+                    "mldg_meta_test_weight non-negative in grid configuration "
+                    f"{index}."
+                )
+            if args.dataset == "dreamer" and meta_train_subjects is not None:
+                available_source_subjects = 22 - args.validation_subjects
+                if (
+                    int(meta_train_subjects) + meta_test_subjects
+                    > available_source_subjects
+                ):
+                    raise ValueError(
+                        "DREAMER MLDG has at most 22 outer-source subjects minus "
+                        f"{args.validation_subjects} reserved validation subjects, "
+                        f"but configuration {index} requests "
+                        f"{int(meta_train_subjects)} A + {meta_test_subjects} B. "
+                        "Use mldg_meta_train_subjects=null to consume every "
+                        "remaining source subject, or reduce validation subjects."
+                    )
     if args.training_protocol == "subject_calibration":
         if grid_dimensions:
             raise ValueError(
@@ -1255,7 +1843,35 @@ def main(argv=None):
     model_config = (
         json.loads(args.hyperparameters_json) if args.hyperparameters_json else {}
     )
+    if args.training_method is not None:
+        model_config["training_method"] = args.training_method
+        # The explicit CLI selector supersedes the legacy boolean so it cannot
+        # leave a contradictory pair in the builder configuration.
+        model_config.pop("use_vrex", None)
+    if "training_method" not in model_config and "use_vrex" not in model_config:
+        model_config["training_method"] = "erm"
+    for key in (
+        "use_gcn_gru_branch",
+        "use_bilstm_branch",
+        "use_decoder",
+        "remove_median_label",
+    ):
+        cli_value = getattr(args, key)
+        if cli_value is not None:
+            model_config[key] = bool(cli_value)
     _validate_args(args, model_config)
+    calibration_levels = tuple(
+        tuple(pair)
+        for pair in (
+            args.calibration_level
+            or [(args.calibration_trials, args.calibration_folds)]
+        )
+    )
+    calibration_selection_shots = (
+        max(shots for shots, _ in calibration_levels)
+        if args.calibration_selection_shots is None
+        else int(args.calibration_selection_shots)
+    )
 
     if args.print_grid_only:
         configurations, dimensions = expand_cartesian_grid(model_config)
@@ -1268,10 +1884,22 @@ def main(argv=None):
                     ),
                     "evaluation_level": args.classification_level,
                     "selection_metric": args.selection_metric,
+                    "maximize_metric": _metric_mode(args.selection_metric) == "max",
                     "selection_score_source": (
-                        f"overall.{SIC_SELECTION_OVERALL_KEYS[args.hyperparameter_selection_level]}"
+                        "overall.zero_shot_all_trials_mean_scores"
+                        if args.hyperparameter_selection_level == "losocv"
+                        else (
+                            "overall.calibration_levels."
+                            f"{calibration_selection_shots}.calibrated_mean_scores"
+                        )
                     ),
                     "calibration_always_runs": True,
+                    "calibration_plan": [
+                        {"shots": shots, "folds": folds}
+                        for shots, folds in calibration_levels
+                    ],
+                    "calibration_selection_shots": calibration_selection_shots,
+                    "data_hyperparameters": sorted(SIC_DATA_HYPERPARAMETERS),
                     "dimensions": dimensions,
                     "n_configurations": len(configurations),
                     "configurations": [
@@ -1288,8 +1916,13 @@ def main(argv=None):
     dataset_config = get_dataset_config(args.dataset)
     eeg_path = args.raw_eeg_npy or dataset_config.eeg_path
     labels_path = args.raw_labels_npy or dataset_config.labels_path
+    requested_configurations, _ = expand_cartesian_grid(model_config)
+    needs_original_ratings = any(
+        _split_data_hyperparameters(candidate)[1]["remove_median_label"]
+        for candidate in requested_configurations
+    )
 
-    X, y, subjects, trials = load_sic_training_data(
+    loaded = load_sic_training_data(
         eeg_path=eeg_path,
         labels_path=labels_path,
         label_dimension=args.label_dimension,
@@ -1300,9 +1933,22 @@ def main(argv=None):
         window_normalization=args.window_normalization,
         label_threshold_mode=args.label_threshold_mode,
         dataset=dataset_config,
+        return_original_ratings=needs_original_ratings,
     )
+    if needs_original_ratings:
+        X, y, subjects, trials, original_ratings = loaded
+    else:
+        X, y, subjects, trials = loaded
+        original_ratings = None
 
     if args.classification_level == "trial":
+        if original_ratings is not None:
+            original_ratings = _group_consistent_trial_values(
+                original_ratings,
+                subjects,
+                trials,
+                value_name="original target rating",
+            )
         X, y, subjects, trials = _group_windows_into_trials(X, y, subjects, trials)
 
     config = SICTrainingConfig(
@@ -1317,18 +1963,26 @@ def main(argv=None):
         source_batch_size=args.source_batch_size,
         validation_subjects=args.validation_subjects,
         validation_seed=args.validation_seed,
-        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_patience=(
+            None
+            if args.no_early_stopping or args.validation_subjects == 0
+            else args.early_stopping_patience
+        ),
         early_stopping_min_delta=args.early_stopping_min_delta,
         early_stopping_monitor=args.early_stopping_monitor,
         early_stopping_mode=args.early_stopping_mode,
         best_epoch_metric=args.best_epoch_metric,
         selection_metric=args.selection_metric,
         hyperparameter_selection_level=args.hyperparameter_selection_level,
-        restore_best_weights=not args.no_restore_best_weights,
+        restore_best_weights=(
+            not args.no_restore_best_weights and args.validation_subjects > 0
+        ),
         calibration_epochs=args.calibration_epochs,
         calibration_batch_size=args.calibration_batch_size,
         calibration_trials=args.calibration_trials,
         calibration_folds=args.calibration_folds,
+        calibration_levels=calibration_levels,
+        calibration_selection_shots=calibration_selection_shots,
         calibration_learning_rate=args.calibration_learning_rate,
         calibration_optimizer=args.calibration_optimizer,
         calibration_weight_decay=args.calibration_weight_decay,
@@ -1339,6 +1993,7 @@ def main(argv=None):
         latent_sampling_seed=args.latent_sampling_seed,
         log_variational_intervals=args.log_variational_intervals,
         uncertainty_samples=args.uncertainty_samples,
+        ece_bins=args.ece_bins,
         source_use_class_weight=args.source_use_class_weight,
         calibration_use_class_weight=args.calibration_use_class_weight,
         n_jobs=args.n_jobs,
@@ -1348,13 +2003,28 @@ def main(argv=None):
         verbose=args.verbose,
         seed=args.seed,
         label_threshold_mode=args.label_threshold_mode,
+        median_label=args.median_label,
         window_normalization=args.window_normalization,
         model_config=model_config,
     )
     if args.training_protocol == "loso_validation":
-        train_sic_loso_validation(X, y, subjects, trials, config)
+        train_sic_loso_validation(
+            X,
+            y,
+            subjects,
+            trials,
+            config,
+            original_rating_array=original_ratings,
+        )
     else:
-        train_sic(X, y, subjects, trials, config)
+        train_sic(
+            X,
+            y,
+            subjects,
+            trials,
+            config,
+            original_rating_array=original_ratings,
+        )
     return 0
 
 

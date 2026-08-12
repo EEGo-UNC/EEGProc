@@ -22,6 +22,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.model_selection import StratifiedShuffleSplit
 
 __all__ = [
     "PredictionDiagnostics",
@@ -70,8 +71,12 @@ _CLASSIFICATION_METRICS = frozenset(
         "macro_recall",
         "balanced_accuracy",
         "roc_auc",
+        "brier_score",
+        "ece",
     }
 )
+
+_DEFAULT_ECE_BINS = 15
 
 # Sequence-valued encoder settings need architecture-aware nesting rules.
 # The integer is the nesting depth of one architecture value:
@@ -874,6 +879,7 @@ def _classification_metrics(
     probabilities: np.ndarray,
     metrics: list[str] | tuple[str, ...],
     n_classes: int,
+    ece_bins: int = _DEFAULT_ECE_BINS,
 ) -> dict:
     """Compute selected classification metrics.
 
@@ -885,8 +891,12 @@ def _classification_metrics(
 
     For multiclass tasks, the canonical metrics fall back to macro averaging
     because binary positive-class metrics are undefined. ``roc_auc`` uses the
-    predicted probability for class 1 and is reported as NaN when a binary fold
-    contains only one ground-truth class.
+    class-1 probability for binary tasks and macro one-vs-rest AUC for
+    multiclass tasks; it is reported as NaN when an evaluation partition is
+    missing a required ground-truth class. ``brier_score`` is the conventional
+    binary Brier score for two-class tasks and the mean summed one-hot squared
+    error for multiclass tasks. ``ece`` is equal-width, top-label expected
+    calibration error over ``ece_bins`` confidence bins.
     """
     y_true = _as_numpy_1d(y_true).astype(np.int64)
     y_pred = _as_numpy_1d(y_pred).astype(np.int64)
@@ -894,6 +904,8 @@ def _classification_metrics(
 
     if n_classes < 2:
         raise ValueError(f"n_classes must be >= 2, got {n_classes}.")
+    if int(ece_bins) < 2:
+        raise ValueError(f"ece_bins must be >= 2, got {ece_bins}.")
     if probabilities.ndim != 2 or probabilities.shape != (len(y_true), n_classes):
         raise ValueError(
             "probabilities must have shape (n_samples, n_classes); got "
@@ -918,11 +930,10 @@ def _classification_metrics(
         "binary_f1",
         "binary_precision",
         "binary_recall",
-        "roc_auc",
     }
     if n_classes != 2 and any(metric in binary_metric_names for metric in metrics):
         raise ValueError(
-            "binary_f1, binary_precision, binary_recall, and roc_auc require "
+            "binary_f1, binary_precision, and binary_recall require "
             f"exactly two classes; got n_classes={n_classes}."
         )
 
@@ -1075,10 +1086,50 @@ def _classification_metrics(
             )
 
         elif metric == "roc_auc":
-            if len(np.unique(y_true)) < 2:
+            if len(np.unique(y_true)) < n_classes:
                 scores["roc_auc"] = float("nan")
+            elif n_classes == 2:
+                scores["roc_auc"] = float(
+                    roc_auc_score(y_true, probabilities[:, 1])
+                )
             else:
-                scores["roc_auc"] = float(roc_auc_score(y_true, probabilities[:, 1]))
+                scores["roc_auc"] = float(
+                    roc_auc_score(
+                        y_true,
+                        probabilities,
+                        labels=expected_labels,
+                        multi_class="ovr",
+                        average="macro",
+                    )
+                )
+
+        elif metric == "brier_score":
+            if n_classes == 2:
+                scores["brier_score"] = float(
+                    np.mean(np.square(probabilities[:, 1] - y_true))
+                )
+            else:
+                one_hot = np.eye(n_classes, dtype=np.float64)[y_true]
+                scores["brier_score"] = float(
+                    np.mean(np.sum(np.square(probabilities - one_hot), axis=1))
+                )
+
+        elif metric == "ece":
+            confidences = np.max(probabilities, axis=1)
+            correct = (y_pred == y_true).astype(np.float64)
+            bin_ids = np.minimum(
+                (confidences * int(ece_bins)).astype(np.int64),
+                int(ece_bins) - 1,
+            )
+            ece = 0.0
+            for bin_index in range(int(ece_bins)):
+                mask = bin_ids == bin_index
+                if np.any(mask):
+                    ece += float(np.mean(mask)) * abs(
+                        float(np.mean(correct[mask]))
+                        - float(np.mean(confidences[mask]))
+                    )
+            scores["ece"] = float(ece)
 
     return scores
 
@@ -1306,6 +1357,9 @@ class EvaluationLevelValidationMetrics(tf.keras.callbacks.Callback):
         "macro_precision",
         "macro_recall",
         "balanced_accuracy",
+        "roc_auc",
+        "brier_score",
+        "ece",
     )
 
     def __init__(
@@ -1316,6 +1370,7 @@ class EvaluationLevelValidationMetrics(tf.keras.callbacks.Callback):
         trial_ids_val: np.ndarray,
         evaluation_level: Literal["window", "trial"],
         batch_size: int | None = None,
+        ece_bins: int = _DEFAULT_ECE_BINS,
     ) -> None:
         super().__init__()
         self.X_val = np.asarray(X_val)
@@ -1324,6 +1379,7 @@ class EvaluationLevelValidationMetrics(tf.keras.callbacks.Callback):
         self.trial_ids_val = np.asarray(trial_ids_val)
         self.evaluation_level = evaluation_level
         self.batch_size = batch_size
+        self.ece_bins = int(ece_bins)
 
     def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
         if logs is None:
@@ -1364,6 +1420,7 @@ class EvaluationLevelValidationMetrics(tf.keras.callbacks.Callback):
             probabilities=probabilities,
             metrics=self._METRICS,
             n_classes=probabilities.shape[1],
+            ece_bins=self.ece_bins,
         )
         prefix = f"val_{self.evaluation_level}_"
         for metric_name, value in scores.items():
@@ -1379,6 +1436,7 @@ def _level_scores(
     y_pred: np.ndarray,
     probabilities: np.ndarray,
     metrics: list[str] | tuple[str, ...],
+    ece_bins: int = _DEFAULT_ECE_BINS,
 ) -> dict:
     """Compute loss and requested metrics for one evaluation level."""
     scores = {
@@ -1391,6 +1449,7 @@ def _level_scores(
             probabilities=probabilities,
             metrics=metrics,
             n_classes=probabilities.shape[1],
+            ece_bins=ece_bins,
         )
     )
     return scores
@@ -1771,6 +1830,8 @@ def _evaluate_trial_tensor_fold(
     n_uncertainty_samples: int,
     ci_level: float,
     decision_threshold: float = 0.5,
+    ece_bins: int = _DEFAULT_ECE_BINS,
+    print_results: bool = True,
 ) -> dict:
     """Evaluate a model that emits one classifier prediction per trial."""
     y_true_trial = _as_numpy_1d(y_test).astype(np.int64)
@@ -1785,11 +1846,12 @@ def _evaluate_trial_tensor_fold(
         probabilities_trial,
         decision_threshold=decision_threshold,
     )
-    _print_probability_diagnostics(
-        label=f"fold {fold_index} test trial",
-        probabilities=probabilities_trial,
-        y_true=y_true_trial,
-    )
+    if print_results:
+        _print_probability_diagnostics(
+            label=f"fold {fold_index} test trial",
+            probabilities=probabilities_trial,
+            y_true=y_true_trial,
+        )
     keras_evaluation = _keras_evaluation_results(
         model=model,
         X=X_test,
@@ -1798,16 +1860,20 @@ def _evaluate_trial_tensor_fold(
     )
     keras_model_loss = float(keras_evaluation["loss"])
     decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+    decoder_r2 = keras_evaluation.get("decoder_r2")
 
     trial_scores = _level_scores(
         y_true=y_true_trial,
         y_pred=y_pred_trial,
         probabilities=probabilities_trial,
         metrics=metrics,
+        ece_bins=ece_bins,
     )
     trial_scores["joint_loss"] = keras_model_loss
     if decoder_accuracy is not None:
         trial_scores["decoder_accuracy"] = float(decoder_accuracy)
+    if decoder_r2 is not None:
+        trial_scores["decoder_r2"] = float(decoder_r2)
 
     n_trials = int(len(y_true_trial))
     n_windows_per_trial = int(X_test.shape[1])
@@ -1859,6 +1925,7 @@ def _evaluate_trial_tensor_fold(
             y_pred=y_pred_trial[trial_mask],
             probabilities=probabilities_trial[trial_mask],
             metrics=metrics,
+            ece_bins=ece_bins,
         )
         user_rows.append(
             {
@@ -1903,11 +1970,12 @@ def _evaluate_trial_tensor_fold(
             decision_threshold=decision_threshold,
         )
 
-    _print_metric_row(
-        title=f"Fold {fold_index} metrics (trial primary)",
-        row=fold_scores,
-    )
-    _print_user_metrics(user_rows)
+    if print_results:
+        _print_metric_row(
+            title=f"Fold {fold_index} metrics (trial primary)",
+            row=fold_scores,
+        )
+        _print_user_metrics(user_rows)
 
     return {
         "fold_metrics": fold_scores,
@@ -1938,6 +2006,8 @@ def _evaluate_classification_fold(
     n_uncertainty_samples: int = 30,
     ci_level: float = 0.95,
     decision_threshold: float = 0.5,
+    ece_bins: int = _DEFAULT_ECE_BINS,
+    print_results: bool = True,
 ) -> dict:
     """Evaluate one outer fold at the model's native classification level."""
     _validate_evaluation_level(evaluation_level, "evaluation_level")
@@ -1963,6 +2033,8 @@ def _evaluate_classification_fold(
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
             decision_threshold=decision_threshold,
+            ece_bins=ece_bins,
+            print_results=print_results,
         )
     y_true_window = _as_numpy_1d(y_test).astype(np.int64)
 
@@ -1977,11 +2049,12 @@ def _evaluate_classification_fold(
         probabilities_window,
         decision_threshold=decision_threshold,
     )
-    _print_probability_diagnostics(
-        label=f"fold {fold_index} test window",
-        probabilities=probabilities_window,
-        y_true=y_true_window,
-    )
+    if print_results:
+        _print_probability_diagnostics(
+            label=f"fold {fold_index} test window",
+            probabilities=probabilities_window,
+            y_true=y_true_window,
+        )
 
     # model.evaluate() is retained as a diagnostic because joint Keras models
     # may include reconstruction/regularization terms beyond classification.
@@ -1994,18 +2067,22 @@ def _evaluate_classification_fold(
     )
     keras_model_loss = keras_evaluation["loss"]
     decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+    decoder_r2 = keras_evaluation.get("decoder_r2")
 
     window_scores = _level_scores(
         y_true=y_true_window,
         y_pred=y_pred_window,
         probabilities=probabilities_window,
         metrics=metrics,
+        ece_bins=ece_bins,
     )
     # ``loss`` above is classifier probability log loss. ``joint_loss`` is
     # the model's complete weighted VAE + VC objective returned by Keras.
     window_scores["joint_loss"] = float(keras_model_loss)
     if decoder_accuracy is not None:
         window_scores["decoder_accuracy"] = float(decoder_accuracy)
+    if decoder_r2 is not None:
+        window_scores["decoder_r2"] = float(decoder_r2)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
@@ -2014,17 +2091,23 @@ def _evaluate_classification_fold(
         trial_ids=trial_ids_test,
         decision_threshold=decision_threshold,
     )
-    _print_probability_diagnostics(
-        label=f"fold {fold_index} test trial-aggregated",
-        probabilities=trial_aggregation["probabilities"],
-        y_true=trial_aggregation["y_true"],
-    )
+    if print_results:
+        _print_probability_diagnostics(
+            label=f"fold {fold_index} test trial-aggregated",
+            probabilities=trial_aggregation["probabilities"],
+            y_true=trial_aggregation["y_true"],
+        )
     trial_scores = _level_scores(
         y_true=trial_aggregation["y_true"],
         y_pred=trial_aggregation["y_pred"],
         probabilities=trial_aggregation["probabilities"],
         metrics=metrics,
+        ece_bins=ece_bins,
     )
+    if decoder_accuracy is not None:
+        trial_scores["decoder_accuracy"] = float(decoder_accuracy)
+    if decoder_r2 is not None:
+        trial_scores["decoder_r2"] = float(decoder_r2)
 
     primary_scores = trial_scores if evaluation_level == "trial" else window_scores
     fold_scores = {
@@ -2075,12 +2158,14 @@ def _evaluate_classification_fold(
             y_pred=y_pred_window[window_mask],
             probabilities=probabilities_window[window_mask],
             metrics=metrics,
+            ece_bins=ece_bins,
         )
         user_trial_scores = _level_scores(
             y_true=trial_aggregation["y_true"][trial_mask],
             y_pred=trial_aggregation["y_pred"][trial_mask],
             probabilities=trial_aggregation["probabilities"][trial_mask],
             metrics=metrics,
+            ece_bins=ece_bins,
         )
         user_primary_scores = (
             user_trial_scores if evaluation_level == "trial" else user_window_scores
@@ -2134,11 +2219,12 @@ def _evaluate_classification_fold(
             ci_level=ci_level,
         )
 
-    _print_metric_row(
-        title=f"Fold {fold_index} metrics ({evaluation_level} primary)",
-        row=fold_scores,
-    )
-    _print_user_metrics(user_rows)
+    if print_results:
+        _print_metric_row(
+            title=f"Fold {fold_index} metrics ({evaluation_level} primary)",
+            row=fold_scores,
+        )
+        _print_user_metrics(user_rows)
 
     return {
         "fold_metrics": fold_scores,
@@ -4151,6 +4237,43 @@ def _subject_trial_labels(
     return output
 
 
+def _normalize_calibration_levels(
+    calibration_levels,
+    *,
+    calibration_trials: int,
+    calibration_folds: int,
+) -> tuple[tuple[int, int], ...]:
+    """Return unique ``(shots, folds)`` pairs in requested reporting order."""
+    raw_levels = (
+        [(calibration_trials, calibration_folds)]
+        if calibration_levels is None
+        else list(calibration_levels)
+    )
+    if not raw_levels:
+        raise ValueError("calibration_levels must contain at least one pair.")
+
+    normalized: list[tuple[int, int]] = []
+    seen_shots: set[int] = set()
+    for pair in raw_levels:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError(
+                "Each calibration level must be a (shots, folds) pair; "
+                f"got {pair!r}."
+            )
+        shots, folds = (int(pair[0]), int(pair[1]))
+        if shots < 1:
+            raise ValueError("Calibration shots must be >= 1.")
+        if folds < 1:
+            raise ValueError("Calibration folds must be >= 1.")
+        if shots in seen_shots:
+            raise ValueError(
+                f"Calibration shots must be unique; {shots}-shot was repeated."
+            )
+        seen_shots.add(shots)
+        normalized.append((shots, folds))
+    return tuple(normalized)
+
+
 def _make_subject_calibration_splits(
     labels: np.ndarray,
     trial_ids: np.ndarray,
@@ -4159,37 +4282,89 @@ def _make_subject_calibration_splits(
     calibration_folds: int = 3,
     seed: int | None = 42,
     stratify: bool = True,
+    allow_overlapping_folds: bool = False,
 ) -> list[dict]:
     """Create disjoint fixed-size calibration sets for one target subject.
 
     The v6 protocol is intentionally the reverse of ordinary K-fold CV: one
     fold (six DREAMER trials by default) is used for calibration and every
     remaining target-subject trial is used for evaluation. Across folds, each
-    trial appears exactly once in calibration.
+    trial appears exactly once in calibration. When ``allow_overlapping_folds``
+    is true and the subject does not retain exactly that many trials, each fold
+    instead draws a fixed-size calibration subset and evaluates on every other
+    retained trial. Calibration subsets may then overlap across folds.
     """
     if calibration_trials < 1:
         raise ValueError("calibration_trials must be at least 1.")
-    if calibration_folds < 2:
-        raise ValueError("calibration_folds must be at least 2.")
+    if calibration_folds < 1:
+        raise ValueError("calibration_folds must be at least 1.")
     if seed is not None and int(seed) < 0:
         raise ValueError("calibration seed must be >= 0 or None.")
 
     trial_ids = np.asarray(trial_ids).reshape(-1)
     unique_trials = np.asarray(sorted(np.unique(trial_ids).tolist()))
     required_trials = int(calibration_trials) * int(calibration_folds)
-    if len(unique_trials) != required_trials:
+    exact_partition = len(unique_trials) == required_trials
+    if not exact_partition and not allow_overlapping_folds:
         raise ValueError(
             "The complete calibration-partition protocol requires exactly "
             "calibration_trials * calibration_folds unique trials for every "
             f"target subject. Got {len(unique_trials)} trials, but "
             f"{calibration_trials} * {calibration_folds} = {required_trials}."
         )
+    if not exact_partition and len(unique_trials) <= calibration_trials:
+        raise ValueError(
+            "Repeated calibration holdout requires more retained trials than "
+            "calibration trials so that every fold has an evaluation set. Got "
+            f"{len(unique_trials)} retained trials and "
+            f"calibration_trials={calibration_trials}."
+        )
 
     trial_label_map = _subject_trial_labels(labels, trial_ids)
     rng = np.random.default_rng(seed)
     fold_trials: list[list] = [[] for _ in range(calibration_folds)]
 
-    if not stratify:
+    if not exact_partition:
+        trial_labels = np.asarray(
+            [trial_label_map[_python_scalar(value)] for value in unique_trials]
+        )
+        split_indices: list[np.ndarray] = []
+        if stratify:
+            try:
+                splitter = StratifiedShuffleSplit(
+                    n_splits=calibration_folds,
+                    train_size=calibration_trials,
+                    random_state=seed,
+                )
+                split_indices = [
+                    np.asarray(calibration_indices, dtype=np.int64)
+                    for calibration_indices, _ in splitter.split(
+                        unique_trials,
+                        trial_labels,
+                    )
+                ]
+            except ValueError as exc:
+                warnings.warn(
+                    "Could not stratify the retained trials for repeated "
+                    f"calibration holdouts ({exc}); falling back to seeded "
+                    "unstratified sampling.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        if not split_indices:
+            split_indices = [
+                np.asarray(
+                    rng.choice(
+                        len(unique_trials),
+                        size=calibration_trials,
+                        replace=False,
+                    ),
+                    dtype=np.int64,
+                )
+                for _ in range(calibration_folds)
+            ]
+        fold_trials = [unique_trials[indices].tolist() for indices in split_indices]
+    elif not stratify:
         shuffled = unique_trials.copy()
         rng.shuffle(shuffled)
         for fold_index in range(calibration_folds):
@@ -4274,6 +4449,11 @@ def _make_subject_calibration_splits(
         output.append(
             {
                 "calibration_fold": int(fold_index),
+                "partition_mode": (
+                    "disjoint_complete_partition"
+                    if exact_partition
+                    else "repeated_holdout"
+                ),
                 "calibration_trial_ids": calibration_trial_list,
                 "evaluation_trial_ids": evaluation_trial_list,
                 "calibration_class_counts": calibration_class_counts,
@@ -4281,15 +4461,16 @@ def _make_subject_calibration_splits(
             }
         )
 
-    calibration_occurrences = [
-        trial_id
-        for row in output
-        for trial_id in row["calibration_trial_ids"]
-    ]
-    if sorted(calibration_occurrences) != sorted(all_trials_set):
-        raise RuntimeError(
-            "Calibration folds must partition the target trials exactly once."
-        )
+    if exact_partition:
+        calibration_occurrences = [
+            trial_id
+            for row in output
+            for trial_id in row["calibration_trial_ids"]
+        ]
+        if sorted(calibration_occurrences) != sorted(all_trials_set):
+            raise RuntimeError(
+                "Calibration folds must partition the target trials exactly once."
+            )
     return output
 
 
@@ -4299,6 +4480,7 @@ def _tag_subject_calibration_evaluation(
     target_subject,
     calibration_fold: int | None,
     stage: str,
+    calibration_shots: int | None = None,
 ) -> dict:
     """Annotate evaluation rows so zero-shot/calibrated logs stay separable."""
     tagged = dict(evaluation)
@@ -4308,6 +4490,7 @@ def _tag_subject_calibration_evaluation(
                 **dict(tagged[key]),
                 "target_subject": _python_scalar(target_subject),
                 "calibration_fold": calibration_fold,
+                "calibration_shots": calibration_shots,
                 "stage": stage,
             }
 
@@ -4325,6 +4508,7 @@ def _tag_subject_calibration_evaluation(
                     **dict(row),
                     "target_subject": _python_scalar(target_subject),
                     "calibration_fold": calibration_fold,
+                    "calibration_shots": calibration_shots,
                     "stage": stage,
                 }
             )
@@ -4382,13 +4566,16 @@ def _run_subject_calibration_subject(
     calibration_batch_size: int,
     calibration_trials: int,
     calibration_folds: int,
+    calibration_levels: tuple[tuple[int, int], ...],
     calibration_learning_rate: float,
     calibration_optimizer: str,
     calibration_weight_decay: float,
     calibration_seed: int | None,
     stratify_calibration: bool,
+    allow_overlapping_calibration_folds: bool,
     evaluation_level: Literal["window", "trial"],
     metrics: tuple[str, ...],
+    ece_bins: int,
     decision_threshold: float,
     n_prediction_latent_samples: int,
     latent_sampling_seed: int | None,
@@ -4465,30 +4652,31 @@ def _run_subject_calibration_subject(
         if calibration_seed is None
         else int(calibration_seed) + int(subject_number) - 1
     )
-    calibration_splits = _make_subject_calibration_splits(
-        labels=y_target,
-        trial_ids=target_trial_ids,
-        calibration_trials=calibration_trials,
-        calibration_folds=calibration_folds,
-        seed=fold_seed,
-        stratify=stratify_calibration,
-    )
-
-    sample_level = "trials" if feature_array.ndim == 4 else "windows"
-    print(
-        "\n" + "=" * 100 +
-        f"\n[Target subject {subject_number:>3} / {total_subjects}] "
-        f"subject={_python_scalar(target_subject)!r} | "
-        f"source_fit={len(source_indices)} {sample_level} | "
-        f"source_validation={len(source_validation_indices)} {sample_level} | "
-        f"target={len(target_indices)} {sample_level}",
-        flush=True,
-    )
-    if len(validation_subjects):
-        print(
-            "Source-only validation subjects: "
-            f"{[_python_scalar(value) for value in validation_subjects]}",
-            flush=True,
+    calibration_splits_by_level: list[tuple[int, int, list[dict]]] = []
+    target_trial_count = int(len(np.unique(target_trial_ids)))
+    for level_index, (shots, folds) in enumerate(calibration_levels):
+        level_seed = (
+            None
+            if fold_seed is None
+            else int(fold_seed) + level_index * 1_000_003
+        )
+        calibration_splits_by_level.append(
+            (
+                int(shots),
+                int(folds),
+                _make_subject_calibration_splits(
+                    labels=y_target,
+                    trial_ids=target_trial_ids,
+                    calibration_trials=int(shots),
+                    calibration_folds=int(folds),
+                    seed=level_seed,
+                    stratify=stratify_calibration,
+                    allow_overlapping_folds=(
+                        bool(allow_overlapping_calibration_folds)
+                        or int(shots) * int(folds) != target_trial_count
+                    ),
+                ),
+            )
         )
 
     model_hp, ignored_fit_hp = _split_config(fixed_config)
@@ -4541,6 +4729,7 @@ def _run_subject_calibration_subject(
                     trial_ids_val=source_validation_trial_ids,
                     evaluation_level=evaluation_level,
                     batch_size=int(source_batch_size),
+                    ece_bins=ece_bins,
                 )
             )
             if early_stopping_patience is not None:
@@ -4557,14 +4746,6 @@ def _run_subject_calibration_subject(
         if source_callbacks:
             source_kwargs["callbacks"] = source_callbacks
 
-        print(
-            f"Source pretraining for target subject {_python_scalar(target_subject)!r}: "
-            f"{len(np.unique(source_subject_ids))} source subjects, "
-            f"validation_subjects={len(validation_subjects)}, "
-            f"epochs={source_epochs}, batch_size={source_batch_size}, "
-            f"monitor={early_stopping_monitor!r}",
-            flush=True,
-        )
         source_history = model.fit(
             X_source_for_fit,
             y_source,
@@ -4635,6 +4816,8 @@ def _run_subject_calibration_subject(
             n_uncertainty_samples=n_uncertainty_samples,
             ci_level=ci_level,
             decision_threshold=decision_threshold,
+            ece_bins=ece_bins,
+            print_results=False,
         )
         all_target_evaluation = _tag_subject_calibration_evaluation(
             all_target_evaluation,
@@ -4657,201 +4840,233 @@ def _run_subject_calibration_subject(
                 "trainable, and compile a fresh calibration optimizer."
             )
 
-        metric_names = ("loss", *metrics)
-        calibration_rows: list[dict] = []
-        fold_outputs: list[dict] = []
+        metric_names = ("loss", *metrics, "joint_loss", "decoder_r2")
+        calibration_level_outputs: list[dict] = []
+        evaluation_offset = (int(subject_number) - 1) * sum(
+            level_folds for _, level_folds in calibration_levels
+        )
 
-        for split in calibration_splits:
-            calibration_fold = int(split["calibration_fold"])
-            calibration_mask = np.isin(
-                target_trial_ids,
-                np.asarray(split["calibration_trial_ids"]),
-            )
-            evaluation_mask = np.isin(
-                target_trial_ids,
-                np.asarray(split["evaluation_trial_ids"]),
-            )
-            calibration_local_indices = np.flatnonzero(calibration_mask)
-            evaluation_local_indices = np.flatnonzero(evaluation_mask)
-            if not len(calibration_local_indices) or not len(evaluation_local_indices):
-                raise RuntimeError(
-                    f"Calibration fold {calibration_fold} produced an empty "
-                    "calibration or evaluation partition."
+        for calibration_shots, level_folds, calibration_splits in calibration_splits_by_level:
+            calibration_rows: list[dict] = []
+            fold_outputs: list[dict] = []
+
+            for split in calibration_splits:
+                calibration_fold = int(split["calibration_fold"])
+                calibration_mask = np.isin(
+                    target_trial_ids,
+                    np.asarray(split["calibration_trial_ids"]),
+                )
+                evaluation_mask = np.isin(
+                    target_trial_ids,
+                    np.asarray(split["evaluation_trial_ids"]),
+                )
+                calibration_local_indices = np.flatnonzero(calibration_mask)
+                evaluation_local_indices = np.flatnonzero(evaluation_mask)
+                if not len(calibration_local_indices) or not len(evaluation_local_indices):
+                    raise RuntimeError(
+                        f"{calibration_shots}-shot calibration fold "
+                        f"{calibration_fold} produced an empty calibration or "
+                        "evaluation partition."
+                    )
+
+                X_calibration = X_target[calibration_local_indices]
+                y_calibration = y_target[calibration_local_indices]
+                X_evaluation = X_target[evaluation_local_indices]
+                y_evaluation = y_target[evaluation_local_indices]
+                evaluation_subject_ids = target_subject_ids[evaluation_local_indices]
+                evaluation_trial_ids = target_trial_ids[evaluation_local_indices]
+
+                # Every shot/fold continuation starts from the identical strict
+                # LOSO source checkpoint and receives a fresh optimizer.
+                model.set_weights(source_weights)
+                prepare_zero_shot = getattr(
+                    model, "prepare_for_zero_shot_evaluation", None
+                )
+                if prepare_zero_shot is not None:
+                    prepare_zero_shot()
+                evaluation_index = evaluation_offset + calibration_fold
+                zero_shot = _evaluate_classification_fold(
+                    model=model,
+                    X_test=X_evaluation,
+                    y_test=y_evaluation,
+                    subject_ids_test=evaluation_subject_ids,
+                    trial_ids_test=evaluation_trial_ids,
+                    fold_index=evaluation_index,
+                    metrics=metrics,
+                    evaluation_level=evaluation_level,
+                    batch_size=source_batch_size,
+                    n_prediction_latent_samples=n_prediction_latent_samples,
+                    latent_sampling_seed=latent_sampling_seed,
+                    log_predictions=log_predictions,
+                    log_variational_intervals=log_variational_intervals,
+                    n_uncertainty_samples=n_uncertainty_samples,
+                    ci_level=ci_level,
+                    decision_threshold=decision_threshold,
+                    ece_bins=ece_bins,
+                    print_results=False,
+                )
+                zero_shot = _tag_subject_calibration_evaluation(
+                    zero_shot,
+                    target_subject=target_subject,
+                    calibration_fold=calibration_fold,
+                    calibration_shots=calibration_shots,
+                    stage="zero_shot_paired",
                 )
 
-            X_calibration = X_target[calibration_local_indices]
-            y_calibration = y_target[calibration_local_indices]
-            X_evaluation = X_target[evaluation_local_indices]
-            y_evaluation = y_target[evaluation_local_indices]
-            evaluation_subject_ids = target_subject_ids[evaluation_local_indices]
-            evaluation_trial_ids = target_trial_ids[evaluation_local_indices]
+                model.set_weights(source_weights)
+                prepare_calibration(
+                    learning_rate=float(calibration_learning_rate),
+                    optimizer_name=str(calibration_optimizer),
+                    weight_decay=float(calibration_weight_decay),
+                )
+                trainable_names = [
+                    variable.name for variable in model.trainable_variables
+                ]
+                if not trainable_names:
+                    raise RuntimeError(
+                        "prepare_for_subject_calibration() left no trainable variables."
+                    )
 
-            # Every fold starts from exactly the same source-pretrained model.
-            model.set_weights(source_weights)
-            evaluation_index = (
-                (int(subject_number) - 1) * int(calibration_folds)
-                + calibration_fold
-            )
-            zero_shot = _evaluate_classification_fold(
-                model=model,
-                X_test=X_evaluation,
-                y_test=y_evaluation,
-                subject_ids_test=evaluation_subject_ids,
-                trial_ids_test=evaluation_trial_ids,
-                fold_index=evaluation_index,
-                metrics=metrics,
-                evaluation_level=evaluation_level,
-                batch_size=source_batch_size,
-                n_prediction_latent_samples=n_prediction_latent_samples,
-                latent_sampling_seed=latent_sampling_seed,
-                log_predictions=log_predictions,
-                log_variational_intervals=log_variational_intervals,
-                n_uncertainty_samples=n_uncertainty_samples,
-                ci_level=ci_level,
-                decision_threshold=decision_threshold,
-            )
-            zero_shot = _tag_subject_calibration_evaluation(
-                zero_shot,
-                target_subject=target_subject,
-                calibration_fold=calibration_fold,
-                stage="zero_shot_paired",
-            )
+                prepare_inputs = getattr(model, "prepare_calibration_inputs", None)
+                X_calibration_for_fit = (
+                    prepare_inputs(X_calibration)
+                    if prepare_inputs is not None
+                    else X_calibration
+                )
+                calibration_kwargs = dict(calibration_fit_kwargs)
+                calibration_class_weight = (
+                    _class_weight_from_labels(y_calibration)
+                    if calibration_use_class_weight
+                    else None
+                )
+                if calibration_class_weight is not None:
+                    calibration_kwargs["class_weight"] = calibration_class_weight
 
-            # Restore once more before fitting so even future evaluation hooks
-            # that maintain model state cannot contaminate calibration.
-            model.set_weights(source_weights)
-            prepare_calibration(
-                learning_rate=float(calibration_learning_rate),
-                optimizer_name=str(calibration_optimizer),
-                weight_decay=float(calibration_weight_decay),
-            )
-            trainable_names = [variable.name for variable in model.trainable_variables]
-            if not trainable_names:
-                raise RuntimeError(
-                    "prepare_for_subject_calibration() left no trainable variables."
+                calibration_history = model.fit(
+                    X_calibration_for_fit,
+                    y_calibration,
+                    epochs=int(calibration_epochs),
+                    batch_size=int(calibration_batch_size),
+                    # Calibration continuations are intentionally quiet; the
+                    # terminal reports only final mean accuracy per shot level.
+                    verbose=0,
+                    **calibration_kwargs,
                 )
 
-            prepare_inputs = getattr(model, "prepare_calibration_inputs", None)
-            X_calibration_for_fit = (
-                prepare_inputs(X_calibration)
-                if prepare_inputs is not None
-                else X_calibration
-            )
-            calibration_kwargs = dict(calibration_fit_kwargs)
-            calibration_class_weight = (
-                _class_weight_from_labels(y_calibration)
-                if calibration_use_class_weight
-                else None
-            )
-            if calibration_class_weight is not None:
-                calibration_kwargs["class_weight"] = calibration_class_weight
+                calibrated = _evaluate_classification_fold(
+                    model=model,
+                    X_test=X_evaluation,
+                    y_test=y_evaluation,
+                    subject_ids_test=evaluation_subject_ids,
+                    trial_ids_test=evaluation_trial_ids,
+                    fold_index=evaluation_index,
+                    metrics=metrics,
+                    evaluation_level=evaluation_level,
+                    batch_size=calibration_batch_size,
+                    n_prediction_latent_samples=n_prediction_latent_samples,
+                    latent_sampling_seed=latent_sampling_seed,
+                    log_predictions=log_predictions,
+                    log_variational_intervals=log_variational_intervals,
+                    n_uncertainty_samples=n_uncertainty_samples,
+                    ci_level=ci_level,
+                    decision_threshold=decision_threshold,
+                    ece_bins=ece_bins,
+                    print_results=False,
+                )
+                calibrated = _tag_subject_calibration_evaluation(
+                    calibrated,
+                    target_subject=target_subject,
+                    calibration_fold=calibration_fold,
+                    calibration_shots=calibration_shots,
+                    stage="post_calibration",
+                )
 
-            calibration_label_ids = _as_numpy_1d(y_calibration).astype(np.int64)
-            unique_calibration_classes, calibration_counts = np.unique(
-                calibration_label_ids,
-                return_counts=True,
-            )
-            print(
-                f"Target subject {_python_scalar(target_subject)!r} calibration "
-                f"fold {calibration_fold}/{calibration_folds}: "
-                f"calibration_trials={split['calibration_trial_ids']} | "
-                f"class_counts={dict(zip(unique_calibration_classes.tolist(), calibration_counts.tolist()))} | "
-                f"evaluation_trials={len(split['evaluation_trial_ids'])} | "
-                f"trainable_variables={len(trainable_names)}",
-                flush=True,
-            )
+                zero_scores = _calibration_score_dict(zero_shot, metric_names)
+                calibrated_scores = _calibration_score_dict(
+                    calibrated, metric_names
+                )
+                delta_scores = {
+                    metric_name: float(
+                        calibrated_scores[metric_name] - zero_scores[metric_name]
+                    )
+                    for metric_name in zero_scores.keys() & calibrated_scores.keys()
+                }
+                calibration_row = {
+                    "target_subject": _python_scalar(target_subject),
+                    "calibration_shots": int(calibration_shots),
+                    "calibration_fold": calibration_fold,
+                    "partition_mode": split["partition_mode"],
+                    "calibration_trial_ids": list(split["calibration_trial_ids"]),
+                    "evaluation_trial_ids": list(split["evaluation_trial_ids"]),
+                    "calibration_class_counts": dict(split["calibration_class_counts"]),
+                    "evaluation_class_counts": dict(split["evaluation_class_counts"]),
+                    "n_calibration_samples": int(len(calibration_local_indices)),
+                    "n_evaluation_samples": int(len(evaluation_local_indices)),
+                    "calibration_epochs_ran": int(
+                        len(calibration_history.history.get("loss", []))
+                    ),
+                    "calibration_final_history": _final_history_values(
+                        calibration_history
+                    ),
+                    "calibration_trainable_variables": trainable_names,
+                    "zero_shot_scores": zero_scores,
+                    "calibrated_scores": calibrated_scores,
+                    "delta_scores": delta_scores,
+                }
+                calibration_rows.append(calibration_row)
+                fold_outputs.append(
+                    {
+                        "calibration_shots": int(calibration_shots),
+                        "split": dict(split),
+                        "zero_shot": zero_shot,
+                        "calibrated": calibrated,
+                    }
+                )
 
-            calibration_history = model.fit(
-                X_calibration_for_fit,
-                y_calibration,
-                epochs=int(calibration_epochs),
-                batch_size=int(calibration_batch_size),
-                verbose=int(verbose),
-                **calibration_kwargs,
+            zero_rows = [row["zero_shot_scores"] for row in calibration_rows]
+            calibrated_rows = [
+                row["calibrated_scores"] for row in calibration_rows
+            ]
+            delta_rows = [row["delta_scores"] for row in calibration_rows]
+            paired_zero_mean, paired_zero_std = _mean_std_rows(
+                zero_rows, list(metric_names)
             )
-
-            calibrated = _evaluate_classification_fold(
-                model=model,
-                X_test=X_evaluation,
-                y_test=y_evaluation,
-                subject_ids_test=evaluation_subject_ids,
-                trial_ids_test=evaluation_trial_ids,
-                fold_index=evaluation_index,
-                metrics=metrics,
-                evaluation_level=evaluation_level,
-                batch_size=calibration_batch_size,
-                n_prediction_latent_samples=n_prediction_latent_samples,
-                latent_sampling_seed=latent_sampling_seed,
-                log_predictions=log_predictions,
-                log_variational_intervals=log_variational_intervals,
-                n_uncertainty_samples=n_uncertainty_samples,
-                ci_level=ci_level,
-                decision_threshold=decision_threshold,
+            calibrated_mean, calibrated_std = _mean_std_rows(
+                calibrated_rows, list(metric_names)
             )
-            calibrated = _tag_subject_calibration_evaluation(
-                calibrated,
-                target_subject=target_subject,
-                calibration_fold=calibration_fold,
-                stage="post_calibration",
+            delta_mean, delta_std = _mean_std_rows(
+                delta_rows, list(metric_names)
             )
-
-            zero_scores = _calibration_score_dict(zero_shot, metric_names)
-            calibrated_scores = _calibration_score_dict(calibrated, metric_names)
-            delta_scores = {
-                metric_name: float(calibrated_scores[metric_name] - zero_scores[metric_name])
-                for metric_name in zero_scores.keys() & calibrated_scores.keys()
-            }
-            calibration_row = {
-                "target_subject": _python_scalar(target_subject),
-                "calibration_fold": calibration_fold,
-                "calibration_trial_ids": list(split["calibration_trial_ids"]),
-                "evaluation_trial_ids": list(split["evaluation_trial_ids"]),
-                "calibration_class_counts": dict(split["calibration_class_counts"]),
-                "evaluation_class_counts": dict(split["evaluation_class_counts"]),
-                "n_calibration_samples": int(len(calibration_local_indices)),
-                "n_evaluation_samples": int(len(evaluation_local_indices)),
-                "calibration_epochs_ran": int(
-                    len(calibration_history.history.get("loss", []))
-                ),
-                "calibration_final_history": _final_history_values(calibration_history),
-                "calibration_trainable_variables": trainable_names,
-                "zero_shot_scores": zero_scores,
-                "calibrated_scores": calibrated_scores,
-                "delta_scores": delta_scores,
-            }
-            calibration_rows.append(calibration_row)
-            fold_outputs.append(
+            calibration_level_outputs.append(
                 {
-                    "split": dict(split),
-                    "zero_shot": zero_shot,
-                    "calibrated": calibrated,
+                    "calibration_shots": int(calibration_shots),
+                    "calibration_folds": int(level_folds),
+                    "calibration_runs": calibration_rows,
+                    "fold_outputs": fold_outputs,
+                    "summary": {
+                        "paired_zero_shot_mean_scores": paired_zero_mean,
+                        "paired_zero_shot_std_scores": paired_zero_std,
+                        "calibrated_mean_scores": calibrated_mean,
+                        "calibrated_std_scores": calibrated_std,
+                        "delta_mean_scores": delta_mean,
+                        "delta_std_scores": delta_std,
+                    },
                 }
             )
+            evaluation_offset += int(level_folds)
 
-        zero_rows = [row["zero_shot_scores"] for row in calibration_rows]
-        calibrated_rows = [row["calibrated_scores"] for row in calibration_rows]
-        delta_rows = [row["delta_scores"] for row in calibration_rows]
-        paired_zero_mean, paired_zero_std = _mean_std_rows(
-            zero_rows, list(metric_names)
-        )
-        calibrated_mean, calibrated_std = _mean_std_rows(
-            calibrated_rows, list(metric_names)
-        )
-        delta_mean, delta_std = _mean_std_rows(delta_rows, list(metric_names))
         zero_all_scores = _calibration_score_dict(
             all_target_evaluation,
             metric_names,
         )
-
+        calibration_summaries = {
+            str(level["calibration_shots"]): dict(level["summary"])
+            for level in calibration_level_outputs
+        }
         subject_summary = {
             "target_subject": _python_scalar(target_subject),
             "zero_shot_all_trials_scores": zero_all_scores,
-            "paired_zero_shot_mean_scores": paired_zero_mean,
-            "paired_zero_shot_std_scores": paired_zero_std,
-            "calibrated_mean_scores": calibrated_mean,
-            "calibrated_std_scores": calibrated_std,
-            "delta_mean_scores": delta_mean,
-            "delta_std_scores": delta_std,
+            "calibration_levels": calibration_summaries,
         }
         return {
             "subject_number": int(subject_number),
@@ -4879,8 +5094,7 @@ def _run_subject_calibration_subject(
                 "class_weight": source_class_weight,
             },
             "zero_shot_all_trials": all_target_evaluation,
-            "calibration_folds": calibration_rows,
-            "fold_outputs": fold_outputs,
+            "calibration_levels": calibration_level_outputs,
             "subject_summary": subject_summary,
         }
     finally:
@@ -4944,11 +5158,14 @@ def subject_calibration_cv(
     *,
     calibration_trials: int = 6,
     calibration_folds: int = 3,
+    calibration_levels: list[tuple[int, int]] | tuple[tuple[int, int], ...] | None = None,
+    calibration_selection_shots: int | None = None,
     calibration_learning_rate: float = 1e-4,
     calibration_optimizer: str = "adamw",
     calibration_weight_decay: float = 0.0,
     calibration_seed: int | None = 42,
     stratify_calibration: bool = True,
+    allow_overlapping_calibration_folds: bool = False,
     validation_subjects_per_fold: int = 0,
     validation_seed: int | None = 42,
     early_stopping_patience: int | None = None,
@@ -4966,7 +5183,11 @@ def subject_calibration_cv(
         "macro_precision",
         "macro_recall",
         "balanced_accuracy",
+        "roc_auc",
+        "brier_score",
+        "ece",
     ),
+    ece_bins: int = _DEFAULT_ECE_BINS,
     decision_threshold: float = 0.5,
     n_prediction_latent_samples: int = 0,
     latent_sampling_seed: int | None = None,
@@ -4984,7 +5205,7 @@ def subject_calibration_cv(
     cpus_per_worker: int | None = None,
     max_subjects: int | None = None,
 ) -> dict:
-    """Three-fold six-trial subject-calibration evaluation.
+    """Strict LOSO pretraining followed by one or more calibration levels.
 
     For each target subject, a fresh subject-independent source model is first
     trained using the other subjects. When ``validation_subjects_per_fold`` is
@@ -4995,9 +5216,14 @@ def subject_calibration_cv(
     arrays contain only gradient-training source subjects, so its fixed
     mutual-information adjacency remains training-only.
 
-    The source model is evaluated zero-shot on all target trials once. The
-    target trials are then partitioned into ``calibration_folds`` disjoint sets
-    of ``calibration_trials`` trials. For each fold:
+    The source model is evaluated zero-shot on all target trials once. Pass
+    ``calibration_levels=((3, 6), (6, 3), ...)`` to request ``(shots, folds)``
+    pairs. If omitted, the legacy ``calibration_trials``/``calibration_folds``
+    pair is used. The same source checkpoint is restored for every level and
+    fold; it is never retrained between calibration levels. Exact partitions
+    are used when ``shots * folds`` equals the retained trial count, otherwise
+    seeded repeated holdouts evaluate on every non-calibration trial. For each
+    fold:
 
       1. restore the exact source-pretrained weights;
       2. evaluate zero-shot on the trials not used for calibration;
@@ -5005,10 +5231,9 @@ def subject_calibration_cv(
       4. fine-tune only the model-defined calibration parameters;
       5. evaluate the calibrated model on the same held-out target trials.
 
-    Thus the default DREAMER protocol is 6 calibration trials + 12 evaluation
-    trials, repeated three times so every one of the 18 trials serves exactly
-    once as calibration data. The source model is trained only once per target
-    subject; the three head-calibration fits reuse its frozen source weights.
+    Thus the default DREAMER protocol remains 6 calibration trials + 12
+    evaluation trials repeated three times, while arbitrary valid shot/fold
+    pairs can be evaluated in the same LOSO run.
 
     ``model_builder_function`` contract
     ------------------------------------
@@ -5034,10 +5259,11 @@ def subject_calibration_cv(
 
     Aggregation
     -----------
-    Calibration-fold evaluations overlap (each target trial is evaluated in two
-    of the three folds), so the top-level mean/std are deliberately computed
-    from one aggregated row per subject rather than treating all calibration
-    folds as independent observations.
+    Metrics are first averaged across folds within each subject and shot level,
+    then across subjects. Calibration folds are never treated as independent
+    subjects. JSON output retains every requested metric at every shot level;
+    terminal output reports only the final mean accuracy for 0-shot and each
+    calibrated level.
     """
     feature_array = np.asarray(feature_array)
     label_array = np.asarray(label_array)
@@ -5046,6 +5272,20 @@ def subject_calibration_cv(
     fixed_config = dict(fixed_config or {})
     source_fit_kwargs = dict(source_fit_kwargs or {})
     calibration_fit_kwargs = dict(calibration_fit_kwargs or {})
+    calibration_levels = _normalize_calibration_levels(
+        calibration_levels,
+        calibration_trials=calibration_trials,
+        calibration_folds=calibration_folds,
+    )
+    calibration_level_shots = tuple(shots for shots, _ in calibration_levels)
+    if calibration_selection_shots is None:
+        calibration_selection_shots = max(calibration_level_shots)
+    calibration_selection_shots = int(calibration_selection_shots)
+    if calibration_selection_shots not in calibration_level_shots:
+        raise ValueError(
+            "calibration_selection_shots must match one configured shot level; "
+            f"got {calibration_selection_shots}, available={calibration_level_shots}."
+        )
 
     if feature_array.ndim not in {3, 4}:
         raise ValueError(
@@ -5089,6 +5329,8 @@ def subject_calibration_cv(
         raise ValueError("decision_threshold must lie strictly between 0 and 1.")
     if n_prediction_latent_samples < 0:
         raise ValueError("n_prediction_latent_samples must be >= 0.")
+    if int(ece_bins) < 2:
+        raise ValueError("ece_bins must be >= 2.")
     if not 0.0 < float(ci_level) < 1.0:
         raise ValueError("ci_level must lie between 0 and 1.")
     if n_jobs < 1:
@@ -5152,16 +5394,21 @@ def subject_calibration_cv(
         target_subjects = target_subjects[: int(max_subjects)]
     total_subjects = int(len(target_subjects))
 
-    # Fail early if the requested complete partition cannot be formed for any
-    # selected subject, rather than discovering it after expensive pretraining.
-    expected_trials = int(calibration_trials) * int(calibration_folds)
+    # Fail early if a usable calibration/evaluation split cannot be formed for
+    # any selected subject, rather than discovering it after pretraining.
     for target_subject in target_subjects:
-        target_trial_count = len(np.unique(trial_id_array[subject_id_array == target_subject]))
-        if target_trial_count != expected_trials:
+        target_trial_count = len(
+            np.unique(trial_id_array[subject_id_array == target_subject])
+        )
+        invalid_shots = [
+            shots for shots, _ in calibration_levels if shots >= target_trial_count
+        ]
+        if invalid_shots:
             raise ValueError(
                 f"Target subject {_python_scalar(target_subject)!r} has "
-                f"{target_trial_count} trials; the requested protocol requires "
-                f"exactly {expected_trials}."
+                f"{target_trial_count} retained trials. Every calibration level "
+                "must leave at least one evaluation trial; invalid shot levels="
+                f"{invalid_shots}."
             )
 
     effective_n_jobs = min(int(n_jobs), total_subjects)
@@ -5182,27 +5429,6 @@ def subject_calibration_cv(
                 f"got gpu_ids={normalized_gpu_ids}."
             )
         normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
-
-    print("\nThree-fold six-trial subject calibration evaluation")
-    print("=" * 80)
-    print(f"Target subjects: {total_subjects}")
-    print(f"Source-model fits: {total_subjects}")
-    print(
-        "Source-only validation per target: "
-        f"{validation_subjects_per_fold} subject(s) | "
-        f"monitor={early_stopping_monitor!r} | "
-        f"patience={early_stopping_patience} | "
-        f"restore_best={bool(restore_best_weights)}"
-    )
-    print(f"Calibration fits: {total_subjects * int(calibration_folds)}")
-    print(
-        f"Per target: {calibration_trials} calibration trials + "
-        f"{expected_trials - calibration_trials} evaluation trials, "
-        f"repeated {calibration_folds} times"
-    )
-    print(f"Stratified calibration partitions: {bool(stratify_calibration)}")
-    print(f"Decision threshold: {float(decision_threshold):.4f}")
-    print(f"Workers: {effective_n_jobs}")
 
     tasks = [
         (subject_number, target_subject)
@@ -5229,13 +5455,18 @@ def subject_calibration_cv(
         "calibration_batch_size": int(calibration_batch_size),
         "calibration_trials": int(calibration_trials),
         "calibration_folds": int(calibration_folds),
+        "calibration_levels": calibration_levels,
         "calibration_learning_rate": float(calibration_learning_rate),
         "calibration_optimizer": str(calibration_optimizer),
         "calibration_weight_decay": float(calibration_weight_decay),
         "calibration_seed": calibration_seed,
         "stratify_calibration": bool(stratify_calibration),
+        "allow_overlapping_calibration_folds": bool(
+            allow_overlapping_calibration_folds
+        ),
         "evaluation_level": evaluation_level,
         "metrics": metrics,
+        "ece_bins": int(ece_bins),
         "decision_threshold": float(decision_threshold),
         "n_prediction_latent_samples": int(n_prediction_latent_samples),
         "latent_sampling_seed": latent_sampling_seed,
@@ -5272,24 +5503,35 @@ def subject_calibration_cv(
         )
     subject_outputs.sort(key=lambda row: int(row["subject_number"]))
 
-    metric_names = ("loss", *metrics)
+    metric_names = ("loss", *metrics, "joint_loss", "decoder_r2")
     subject_summary_rows: list[dict] = []
     zero_all_subject_rows: list[dict] = []
-    paired_zero_subject_rows: list[dict] = []
-    calibrated_subject_rows: list[dict] = []
-    delta_subject_rows: list[dict] = []
+    level_subject_rows = {
+        str(shots): {
+            "paired_zero": [],
+            "calibrated": [],
+            "delta": [],
+        }
+        for shots, _ in calibration_levels
+    }
+    total_calibration_folds = sum(folds for _, folds in calibration_levels)
 
     results = {
         "cv_strategy": "subject_independent_pretraining_with_subject_calibration",
-        "protocol_name": "three-fold six-trial calibration evaluation",
+        "protocol_name": "strict LOSO with multi-level calibration continuation",
         "n_subjects": total_subjects,
         "n_source_model_fits": total_subjects,
-        "n_calibration_fits": total_subjects * int(calibration_folds),
-        "calibration_trials_per_fold": int(calibration_trials),
-        "calibration_folds": int(calibration_folds),
-        "evaluation_trials_per_fold": int(expected_trials - calibration_trials),
+        "n_calibration_fits": total_subjects * int(total_calibration_folds),
+        "calibration_plan": [
+            {"shots": int(shots), "folds": int(folds)}
+            for shots, folds in calibration_levels
+        ],
+        "calibration_selection_shots": int(calibration_selection_shots),
         "calibration_seed": calibration_seed,
         "stratify_calibration": bool(stratify_calibration),
+        "allow_overlapping_calibration_folds": bool(
+            allow_overlapping_calibration_folds
+        ),
         "source_epochs": int(source_epochs),
         "source_batch_size": int(source_batch_size),
         "validation_subjects_per_fold": int(validation_subjects_per_fold),
@@ -5307,6 +5549,7 @@ def subject_calibration_cv(
         "decision_threshold": float(decision_threshold),
         "evaluation_level": evaluation_level,
         "metrics": list(metrics),
+        "ece_bins": int(ece_bins),
         "fixed_config": fixed_config,
         "subject_results": subject_outputs,
         "subject_summary_rows": subject_summary_rows,
@@ -5323,28 +5566,37 @@ def subject_calibration_cv(
     for subject_output in subject_outputs:
         summary = subject_output["subject_summary"]
         zero_all = dict(summary["zero_shot_all_trials_scores"])
-        paired_zero = dict(summary["paired_zero_shot_mean_scores"])
-        calibrated = dict(summary["calibrated_mean_scores"])
-        delta = dict(summary["delta_mean_scores"])
-
         zero_all_subject_rows.append(zero_all)
-        paired_zero_subject_rows.append(paired_zero)
-        calibrated_subject_rows.append(calibrated)
-        delta_subject_rows.append(delta)
 
         flat_summary = {"target_subject": subject_output["target_subject"]}
         flat_summary.update({f"zero_shot_all_{k}": v for k, v in zero_all.items()})
-        flat_summary.update({f"paired_zero_shot_{k}": v for k, v in paired_zero.items()})
-        flat_summary.update({f"calibrated_{k}": v for k, v in calibrated.items()})
-        flat_summary.update({f"delta_{k}": v for k, v in delta.items()})
+        for level in subject_output["calibration_levels"]:
+            shots_key = str(level["calibration_shots"])
+            level_summary = dict(level["summary"])
+            paired_zero = dict(level_summary["paired_zero_shot_mean_scores"])
+            calibrated = dict(level_summary["calibrated_mean_scores"])
+            delta = dict(level_summary["delta_mean_scores"])
+            level_subject_rows[shots_key]["paired_zero"].append(paired_zero)
+            level_subject_rows[shots_key]["calibrated"].append(calibrated)
+            level_subject_rows[shots_key]["delta"].append(delta)
+            flat_summary.update(
+                {f"{shots_key}_shot_paired_zero_{k}": v for k, v in paired_zero.items()}
+            )
+            flat_summary.update(
+                {f"{shots_key}_shot_calibrated_{k}": v for k, v in calibrated.items()}
+            )
+            flat_summary.update(
+                {f"{shots_key}_shot_delta_{k}": v for k, v in delta.items()}
+            )
         subject_summary_rows.append(flat_summary)
 
         if log_predictions:
             evaluations = [subject_output["zero_shot_all_trials"]]
-            for fold_output in subject_output["fold_outputs"]:
-                evaluations.extend(
-                    [fold_output["zero_shot"], fold_output["calibrated"]]
-                )
+            for level in subject_output["calibration_levels"]:
+                for fold_output in level["fold_outputs"]:
+                    evaluations.extend(
+                        [fold_output["zero_shot"], fold_output["calibrated"]]
+                    )
             for evaluation in evaluations:
                 if feature_array.ndim == 3:
                     results["window_prediction_log"].extend(
@@ -5356,10 +5608,11 @@ def subject_calibration_cv(
 
         if log_variational_intervals:
             evaluations = [subject_output["zero_shot_all_trials"]]
-            for fold_output in subject_output["fold_outputs"]:
-                evaluations.extend(
-                    [fold_output["zero_shot"], fold_output["calibrated"]]
-                )
+            for level in subject_output["calibration_levels"]:
+                for fold_output in level["fold_outputs"]:
+                    evaluations.extend(
+                        [fold_output["zero_shot"], fold_output["calibrated"]]
+                    )
             for evaluation in evaluations:
                 if feature_array.ndim == 3:
                     results["window_variational_interval_log"].extend(
@@ -5372,39 +5625,63 @@ def subject_calibration_cv(
     zero_all_mean, zero_all_std = _mean_std_rows(
         zero_all_subject_rows, list(metric_names)
     )
-    paired_zero_mean, paired_zero_std = _mean_std_rows(
-        paired_zero_subject_rows, list(metric_names)
-    )
-    calibrated_mean, calibrated_std = _mean_std_rows(
-        calibrated_subject_rows, list(metric_names)
-    )
-    delta_mean, delta_std = _mean_std_rows(
-        delta_subject_rows, list(metric_names)
-    )
+    overall_calibration_levels: dict[str, dict] = {}
+    for shots, folds in calibration_levels:
+        shots_key = str(shots)
+        rows = level_subject_rows[shots_key]
+        paired_zero_mean, paired_zero_std = _mean_std_rows(
+            rows["paired_zero"], list(metric_names)
+        )
+        calibrated_mean, calibrated_std = _mean_std_rows(
+            rows["calibrated"], list(metric_names)
+        )
+        delta_mean, delta_std = _mean_std_rows(
+            rows["delta"], list(metric_names)
+        )
+        overall_calibration_levels[shots_key] = {
+            "calibration_shots": int(shots),
+            "calibration_folds": int(folds),
+            "paired_zero_shot_mean_scores": paired_zero_mean,
+            "paired_zero_shot_std_scores": paired_zero_std,
+            "calibrated_mean_scores": calibrated_mean,
+            "calibrated_std_scores": calibrated_std,
+            "delta_mean_scores": delta_mean,
+            "delta_std_scores": delta_std,
+            "delta_definition": "post_calibration_minus_paired_zero_shot",
+        }
+    selected_level = overall_calibration_levels[str(calibration_selection_shots)]
     results["overall"] = {
         "aggregation_unit": "subject",
         "n_subjects": total_subjects,
         "zero_shot_all_trials_mean_scores": zero_all_mean,
         "zero_shot_all_trials_std_scores": zero_all_std,
-        "paired_zero_shot_mean_scores": paired_zero_mean,
-        "paired_zero_shot_std_scores": paired_zero_std,
-        "calibrated_mean_scores": calibrated_mean,
-        "calibrated_std_scores": calibrated_std,
-        "delta_mean_scores": delta_mean,
-        "delta_std_scores": delta_std,
+        "calibration_selection_shots": int(calibration_selection_shots),
+        "calibration_levels": overall_calibration_levels,
+        # Compatibility aliases point to the explicitly selected shot level.
+        "paired_zero_shot_mean_scores": selected_level["paired_zero_shot_mean_scores"],
+        "paired_zero_shot_std_scores": selected_level["paired_zero_shot_std_scores"],
+        "calibrated_mean_scores": selected_level["calibrated_mean_scores"],
+        "calibrated_std_scores": selected_level["calibrated_std_scores"],
+        "delta_mean_scores": selected_level["delta_mean_scores"],
+        "delta_std_scores": selected_level["delta_std_scores"],
         "delta_definition": "post_calibration_minus_paired_zero_shot",
     }
 
-    print("\nSubject calibration evaluation complete")
+    print("\nFinal mean accuracies by calibration level")
     print("=" * 80)
-    print("Zero-shot all-target-trial mean scores:")
-    print(pformat(zero_all_mean, indent=4, width=120, sort_dicts=False))
-    print("Paired zero-shot mean scores (subject-aggregated):")
-    print(pformat(paired_zero_mean, indent=4, width=120, sort_dicts=False))
-    print("Post-calibration mean scores (subject-aggregated):")
-    print(pformat(calibrated_mean, indent=4, width=120, sort_dicts=False))
-    print("Mean calibration deltas (post - zero-shot):")
-    print(pformat(delta_mean, indent=4, width=120, sort_dicts=False))
+    zero_accuracy = zero_all_mean.get("accuracy")
+    print(
+        "0-shot: "
+        + ("N/A" if zero_accuracy is None else f"{float(zero_accuracy):.6f}")
+    )
+    for shots, _ in calibration_levels:
+        accuracy = overall_calibration_levels[str(shots)][
+            "calibrated_mean_scores"
+        ].get("accuracy")
+        print(
+            f"{shots}-shot: "
+            + ("N/A" if accuracy is None else f"{float(accuracy):.6f}")
+        )
     return results
 
 def fixed_loso_cv(
