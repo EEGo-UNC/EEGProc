@@ -101,12 +101,12 @@ except ImportError:
     from eegproc.deep_learning.cross_val import subject_calibration_cv
 
 try:
-    from ..joint_v2_data import (
+    from ..joint_models_data import (
         build_joint_v2_dataset,
         get_dataset_config,
     )
 except ImportError:
-    from eegproc.deep_learning.joint_architectures.joint_v2_data import (
+    from eegproc.deep_learning.joint_architectures.joint_models_data import (
         build_joint_v2_dataset,
         get_dataset_config,
     )
