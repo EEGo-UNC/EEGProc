@@ -169,28 +169,14 @@ SIC_CLASSIFICATION_METRICS = (
 
 SIC_MINIMIZE_METRICS = frozenset({"loss", "joint_loss", "brier_score", "ece"})
 
-SIC_TRAINING_METHOD_ALIASES = {
-    "normal": "erm",
-    "standard": "erm",
-    "joint": "erm",
-    "erm": "erm",
-    "vrex": "vrex",
-    "v-rex": "vrex",
-    "v_rex": "vrex",
-    "mldg": "mldg",
-    "fo_mldg": "mldg",
-    "first_order_mldg": "mldg",
-}
-
-
 def _configuration_training_method(configuration: dict) -> str:
     """Resolve one expanded configuration, including legacy use_vrex."""
     raw_method = configuration.get("training_method")
     legacy_vrex = bool(configuration.get("use_vrex", False))
     if raw_method is None:
         return "vrex" if legacy_vrex else "erm"
+    
     normalized = str(raw_method).strip().lower().replace("-", "_")
-    normalized = SIC_TRAINING_METHOD_ALIASES.get(normalized, normalized)
     if normalized not in {"erm", "vrex", "mldg"}:
         raise ValueError(
             "training_method must be one of 'erm', 'vrex', or 'mldg'; "

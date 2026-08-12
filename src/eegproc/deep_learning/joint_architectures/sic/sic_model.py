@@ -179,9 +179,7 @@ class _MLDGEpisodeSequence(tf.keras.utils.Sequence):
             == len(self.trial_ids)
             == n_samples
         ):
-            raise ValueError(
-                "MLDG EEG, labels, subject IDs, and trial IDs must align."
-            )
+            raise ValueError("MLDG EEG, labels, subject IDs, and trial IDs must align.")
         if self.sample_weight is not None and len(self.sample_weight) != n_samples:
             raise ValueError("MLDG sample weights must align with EEG inputs.")
 
@@ -227,9 +225,7 @@ class _MLDGEpisodeSequence(tf.keras.utils.Sequence):
             self._trial_groups[subject_id] = groups
             total_trial_groups += len(groups)
 
-        subjects_per_episode = (
-            self.meta_train_subjects + self.meta_test_subjects
-        )
+        subjects_per_episode = self.meta_train_subjects + self.meta_test_subjects
         default_steps = int(
             np.ceil(
                 total_trial_groups
@@ -237,9 +233,7 @@ class _MLDGEpisodeSequence(tf.keras.utils.Sequence):
             )
         )
         self.steps_per_epoch = (
-            max(1, default_steps)
-            if steps_per_epoch is None
-            else int(steps_per_epoch)
+            max(1, default_steps) if steps_per_epoch is None else int(steps_per_epoch)
         )
         if self.steps_per_epoch < 1:
             raise ValueError("mldg_steps_per_epoch must be >= 1 or null.")
@@ -266,9 +260,7 @@ class _MLDGEpisodeSequence(tf.keras.utils.Sequence):
         chosen = []
         for _ in range(self.trials_per_subject):
             if not trial_queues[subject_id]:
-                trial_queues[subject_id].extend(
-                    rng.permutation(len(groups)).tolist()
-                )
+                trial_queues[subject_id].extend(rng.permutation(len(groups)).tolist())
             chosen.append(trial_queues[subject_id].pop())
         return np.concatenate([groups[int(index)] for index in chosen])
 
@@ -309,9 +301,7 @@ class _MLDGEpisodeSequence(tf.keras.utils.Sequence):
                         trial_queues,
                     )
                     episode_indices.append(indices)
-                    episode_roles.append(
-                        np.full(len(indices), role, dtype=np.int32)
-                    )
+                    episode_roles.append(np.full(len(indices), role, dtype=np.int32))
             indices = np.concatenate(episode_indices)
             roles = np.concatenate(episode_roles)
             order = rng.permutation(len(indices))
@@ -661,9 +651,7 @@ class SICModel(tf.keras.Model):
             raise ValueError("BiLSTM and z dimensions must be positive.")
         architecture_mode = str(architecture_mode).lower()
         if architecture_mode not in {"serial", "feature_fusion"}:
-            raise ValueError(
-                "architecture_mode must be 'serial' or 'feature_fusion'."
-            )
+            raise ValueError("architecture_mode must be 'serial' or 'feature_fusion'.")
         if int(fusion_units) < 1:
             raise ValueError("fusion_units must be positive.")
         if not 0.0 <= float(fusion_dropout) < 1.0:
@@ -763,9 +751,7 @@ class SICModel(tf.keras.Model):
         self.use_mldg = self.training_method == "mldg"
         self.vrex_penalty_weight = float(vrex_penalty_weight)
         self.mldg_meta_train_subjects = (
-            None
-            if mldg_meta_train_subjects is None
-            else int(mldg_meta_train_subjects)
+            None if mldg_meta_train_subjects is None else int(mldg_meta_train_subjects)
         )
         self.mldg_meta_test_subjects = int(mldg_meta_test_subjects)
         self.mldg_trials_per_subject = int(mldg_trials_per_subject)
@@ -788,16 +774,22 @@ class SICModel(tf.keras.Model):
         self.calibration_unfreeze_layers = calibration_unfreeze_layers
         self.calibration_use_vc_target = bool(calibration_use_vc_target)
         self.calibration_vc_alpha = (
-            self.vc_alpha if calibration_vc_alpha is None else float(calibration_vc_alpha)
+            self.vc_alpha
+            if calibration_vc_alpha is None
+            else float(calibration_vc_alpha)
         )
         self.calibration_vc_beta = (
             self.vc_beta if calibration_vc_beta is None else float(calibration_vc_beta)
         )
         self.calibration_vc_gamma = (
-            self.vc_gamma if calibration_vc_gamma is None else float(calibration_vc_gamma)
+            self.vc_gamma
+            if calibration_vc_gamma is None
+            else float(calibration_vc_gamma)
         )
         self.calibration_vc_lambda = (
-            self.vc_lambda if calibration_vc_lambda is None else float(calibration_vc_lambda)
+            self.vc_lambda
+            if calibration_vc_lambda is None
+            else float(calibration_vc_lambda)
         )
         self.calibration_mode = False
 
@@ -1005,9 +997,7 @@ class SICModel(tf.keras.Model):
             self.kl_loss_tracker,
         ]
         if self.use_decoder:
-            output.extend(
-                [self.reconstruction_loss_tracker, self.decoder_r2_tracker]
-            )
+            output.extend([self.reconstruction_loss_tracker, self.decoder_r2_tracker])
         if self.use_vrex:
             output.extend(
                 [
@@ -1615,9 +1605,7 @@ class SICModel(tf.keras.Model):
     def _vae_components(self, outputs, training: bool):
         z_mean = outputs["z_mean"]
         z_log_var = outputs["z_log_var"]
-        kl_values = -0.5 * (
-            1.0 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var)
-        )
+        kl_values = -0.5 * (1.0 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
         kl_loss = tf.reduce_mean(kl_values)
         if self.use_decoder:
             reconstruction = self.decoder(outputs["z"], training=training)
@@ -1627,10 +1615,14 @@ class SICModel(tf.keras.Model):
         else:
             reconstruction = None
             reconstruction_loss = tf.zeros((), dtype=kl_loss.dtype)
-        vae_loss = reconstruction_loss + tf.cast(
-            self.vae_beta,
-            kl_loss.dtype,
-        ) * kl_loss
+        vae_loss = (
+            reconstruction_loss
+            + tf.cast(
+                self.vae_beta,
+                kl_loss.dtype,
+            )
+            * kl_loss
+        )
         return {
             "vae_loss": vae_loss,
             "reconstruction_loss": reconstruction_loss,
@@ -1710,10 +1702,14 @@ class SICModel(tf.keras.Model):
             elif test_gradient is None:
                 gradient = train_gradient
             else:
-                gradient = train_gradient + tf.cast(
-                    beta,
-                    test_gradient.dtype,
-                ) * test_gradient
+                gradient = (
+                    train_gradient
+                    + tf.cast(
+                        beta,
+                        test_gradient.dtype,
+                    )
+                    * test_gradient
+                )
             combined.append(gradient)
         return combined
 
@@ -1929,8 +1925,7 @@ class SICModel(tf.keras.Model):
             )
             dtype = vc_components["total_loss"].dtype
             total = (
-                tf.cast(self.vc_loss_weight, dtype)
-                * vc_components["total_loss"]
+                tf.cast(self.vc_loss_weight, dtype) * vc_components["total_loss"]
                 + tf.cast(self.vae_loss_weight, dtype)
                 * tf.cast(vae_components["vae_loss"], dtype)
                 + tf.cast(self.subject_loss_weight, dtype)
@@ -2036,8 +2031,7 @@ class SICModel(tf.keras.Model):
             )
             dtype = meta_train_vc["total_loss"].dtype
             meta_train_loss = (
-                tf.cast(self.vc_loss_weight, dtype)
-                * meta_train_vc["total_loss"]
+                tf.cast(self.vc_loss_weight, dtype) * meta_train_vc["total_loss"]
                 + tf.cast(self.vae_loss_weight, dtype)
                 * tf.cast(meta_train_vae["vae_loss"], dtype)
                 + tf.cast(self.subject_loss_weight, dtype)
@@ -2122,10 +2116,14 @@ class SICModel(tf.keras.Model):
                 disc_variables,
             )
 
-        outer_loss = meta_train_loss + tf.cast(
-            self.mldg_meta_test_weight,
-            meta_test_loss.dtype,
-        ) * meta_test_loss
+        outer_loss = (
+            meta_train_loss
+            + tf.cast(
+                self.mldg_meta_test_weight,
+                meta_test_loss.dtype,
+            )
+            * meta_test_loss
+        )
         self._update_metrics(
             total_loss=outer_loss,
             vc_components=meta_train_vc,
@@ -2170,11 +2168,9 @@ class SICModel(tf.keras.Model):
                 calibration=True,
             )
             dtype = vc_components["total_loss"].dtype
-            total = (
-                tf.cast(self.vc_loss_weight, dtype)
-                * vc_components["total_loss"]
-                + self._regularization_loss(dtype)
-            )
+            total = tf.cast(self.vc_loss_weight, dtype) * vc_components[
+                "total_loss"
+            ] + self._regularization_loss(dtype)
         variables = self.trainable_variables
         gradients = tape.gradient(total, variables)
         self._apply_gradients(self.main_optimizer, gradients, variables)
@@ -2235,8 +2231,7 @@ class SICModel(tf.keras.Model):
             )
             dtype = vc_components["total_loss"].dtype
             total = (
-                tf.cast(self.vc_loss_weight, dtype)
-                * vc_components["total_loss"]
+                tf.cast(self.vc_loss_weight, dtype) * vc_components["total_loss"]
                 + tf.cast(self.vae_loss_weight, dtype)
                 * tf.cast(vae_components["vae_loss"], dtype)
                 + tf.cast(self.subject_loss_weight, dtype)
@@ -2359,7 +2354,9 @@ class SICModel(tf.keras.Model):
         )
         return {
             "calibration_unfreeze_layers": unfreeze_layers,
-            "trainable_variables": [variable.name for variable in self.trainable_variables],
+            "trainable_variables": [
+                variable.name for variable in self.trainable_variables
+            ],
             "calibration_use_vc_target": self.calibration_use_vc_target,
         }
 
@@ -2403,9 +2400,9 @@ class SICModel(tf.keras.Model):
                 seed=stateless_seed,
                 dtype=z_mean.dtype,
             )
-        z_samples = z_mean[tf.newaxis, ...] + tf.exp(
-            0.5 * z_log_var[tf.newaxis, ...]
-        ) * epsilon
+        z_samples = (
+            z_mean[tf.newaxis, ...] + tf.exp(0.5 * z_log_var[tf.newaxis, ...]) * epsilon
+        )
 
         # Pool each sampled latent sequence to one vector per window.
         pooled_windows = tf.reduce_mean(z_samples, axis=2)
