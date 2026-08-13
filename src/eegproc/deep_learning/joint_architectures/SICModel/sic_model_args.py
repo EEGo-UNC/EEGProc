@@ -50,10 +50,6 @@ class SICTrainingConfig:
     stratify_calibration: bool = True
 
     decision_threshold: float = 0.5
-    prediction_latent_samples: int = 0
-    latent_sampling_seed: int | None = 42
-    log_variational_intervals: bool = False
-    uncertainty_samples: int = 30
     ece_bins: int = 15
     prediction_diagnostics: bool = False
     prediction_diagnostics_metric: str = "accuracy"
@@ -343,10 +339,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-stratify-calibration", action="store_true")
 
     parser.add_argument("--decision-threshold", type=float, default=0.5)
-    parser.add_argument("--prediction-latent-samples", type=int, default=0)
-    parser.add_argument("--latent-sampling-seed", type=int, default=42)
-    parser.add_argument("--log-variational-intervals", action="store_true")
-    parser.add_argument("--uncertainty-samples", type=_positive_int, default=30)
     parser.add_argument("--ece-bins", type=_positive_int, default=15)
     parser.add_argument(
         "--prediction-diagnostics",
@@ -475,8 +467,6 @@ def validate_args(args, model_config: dict) -> None:
         raise ValueError("calibration-weight-decay must be non-negative.")
     if not 0.0 < args.decision_threshold < 1.0:
         raise ValueError("decision-threshold must be in (0, 1).")
-    if args.prediction_latent_samples < 0:
-        raise ValueError("prediction-latent-samples must be >= 0.")
     if args.ece_bins < 2:
         raise ValueError("--ece-bins must be >= 2.")
     if args.prediction_diagnostics_threshold_tolerance < 0.0:
@@ -493,20 +483,6 @@ def validate_args(args, model_config: dict) -> None:
     for index, configuration in enumerate(configurations, start=1):
         builder_config, _ = split_data_hyperparameters(configuration)
         training_method = configuration_training_method(builder_config)
-        removed_fusion_settings = {
-            name for name in ("fusion_units", "fusion_dropout") if name in builder_config
-        }
-        if removed_fusion_settings:
-            raise ValueError(
-                "Remove obsolete fusion settings from the model configuration: "
-                f"{sorted(removed_fusion_settings)}. Encoder feature vectors are "
-                "concatenated directly."
-            )
-        if builder_config.get("architecture_mode") == "serial":
-            raise ValueError(
-                "architecture_mode='serial' was removed. SIC now always uses "
-                "independent parallel deterministic branches."
-            )
         if (
             builder_config.get("use_gcn_gru_branch") is False
             and builder_config.get("use_bilstm_branch") is False
@@ -603,10 +579,6 @@ def training_config_from_args(
         calibration_seed=args.calibration_seed,
         stratify_calibration=not args.no_stratify_calibration,
         decision_threshold=args.decision_threshold,
-        prediction_latent_samples=args.prediction_latent_samples,
-        latent_sampling_seed=args.latent_sampling_seed,
-        log_variational_intervals=args.log_variational_intervals,
-        uncertainty_samples=args.uncertainty_samples,
         ece_bins=args.ece_bins,
         prediction_diagnostics=args.prediction_diagnostics,
         prediction_diagnostics_metric=args.prediction_diagnostics_metric,

@@ -6,23 +6,23 @@ set -euo pipefail
 # Organized submission launcher for the SIC Slurm arrays
 # ---------------------------------------------------------------------------
 # Usage:
-#   ./submit_sic_slurm_suite.sh smoke [MAX_CONCURRENT]
-#   ./submit_sic_slurm_suite.sh full [MAX_CONCURRENT]
-#   ./submit_sic_slurm_suite.sh full-after-smoke [MAX_CONCURRENT]
+#   ./submit_sic_direct_concat_v10_suite.sh smoke [MAX_CONCURRENT]
+#   ./submit_sic_direct_concat_v10_suite.sh full [MAX_CONCURRENT]
+#   ./submit_sic_direct_concat_v10_suite.sh full-after-smoke [MAX_CONCURRENT]
 #
 # Examples:
-#   ./submit_sic_slurm_suite.sh smoke 2
-#   ./submit_sic_slurm_suite.sh full 2
-#   ./submit_sic_slurm_suite.sh full-after-smoke 2
+#   ./submit_sic_direct_concat_v10_suite.sh smoke 2
+#   ./submit_sic_direct_concat_v10_suite.sh full 2
+#   ./submit_sic_direct_concat_v10_suite.sh full-after-smoke 2
 #
 # Environment overrides are forwarded to every array task:
-#   SOURCE_EPOCHS=150 MLDG_STEPS_PER_EPOCH=20 ./submit_sic_slurm_suite.sh full 2
+#   SOURCE_EPOCHS=150 MLDG_STEPS_PER_EPOCH=20 ./submit_sic_direct_concat_v10_suite.sh full 2
 #   TARGET_DIMENSION=arousal PREDICTION_DIAGNOSTICS_METRIC=ece \
-#       ./submit_sic_slurm_suite.sh full-after-smoke 2
+#       ./submit_sic_direct_concat_v10_suite.sh full-after-smoke 2
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SMOKE_SCRIPT="$SCRIPT_DIR/smoke_test_sic_mldg_brier.sh"
-FULL_SCRIPT="$SCRIPT_DIR/full_run_sic_mldg_brier_ablation_valence.sh"
+SMOKE_SCRIPT="$SCRIPT_DIR/smoke_test_sic_direct_concat_v10.sh"
+FULL_SCRIPT="$SCRIPT_DIR/full_run_sic_direct_concat_v10.sh"
 
 MODE="${1:-}"
 MAX_CONCURRENT="${2:-2}"

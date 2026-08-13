@@ -1,28 +1,29 @@
 #!/bin/bash
-#SBATCH --job-name=sic_v8_abl_val
-#SBATCH --output=sic_v8_abl_val_%A_%a.out
-#SBATCH --error=sic_v8_abl_val_%A_%a.err
+#SBATCH --job-name=sic_v10_abl
+#SBATCH --output=sic_v10_abl_%A_%a.out
+#SBATCH --error=sic_v10_abl_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
 #SBATCH --time=48:00:00
-#SBATCH --array=0-4%2
+#SBATCH --array=0-3%2
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Full experiment organization
 # ---------------------------------------------------------------------------
+# This worker targets SIC builder API v10: deterministic encoders, no z-width
+# argument, and no learned projection between either encoder and the heads.
 # One Slurm array task runs one one-factor-at-a-time ablation. The %2 limit
 # allows two profiles (four GPUs total) to run concurrently by default.
 ABLATION_PROFILES=(
     full
+    remove_median
     no_gcn_gru
     no_bilstm
-    no_decoder
-    remove_median
 )
 
 PROFILE_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
@@ -44,24 +45,28 @@ PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-100}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-30}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-10}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-20}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
 VREX_PENALTY_WEIGHT="${VREX_PENALTY_WEIGHT:-1.0}"
+PREDICTION_DIAGNOSTICS_METRIC="${PREDICTION_DIAGNOSTICS_METRIC:-brier_score}"
+PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-1}"
+PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-256}"
+EXPECTED_SIC_API_VERSION=10
 SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 
-# One worker supports valence/arousal and ERM/V-REx/MLDG without hand-editing.
-# MLDG remains the default. ERM ignores method-specific settings; V-REx uses
-# VREX_PENALTY_WEIGHT to scale the variance of subject-specific focal risks.
-case "$TARGET_DIMENSION" in
-    valence|arousal) ;;
-    *) echo "ERROR: TARGET_DIMENSION must be valence or arousal."; exit 2 ;;
-esac
-case "$TRAINING_METHOD" in
-    erm|vrex|mldg) ;;
-    *) echo "ERROR: TRAINING_METHOD must be erm, vrex, or mldg."; exit 2 ;;
-esac
+EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_eeg.npy}"
+LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_labels.npy}"
+
+if [[ "$TARGET_DIMENSION" != "valence" && "$TARGET_DIMENSION" != "arousal" ]]; then
+    echo "ERROR: TARGET_DIMENSION must be valence or arousal."
+    exit 2
+fi
+if [[ "$TRAINING_METHOD" != "erm" && "$TRAINING_METHOD" != "vrex" && "$TRAINING_METHOD" != "mldg" ]]; then
+    echo "ERROR: TRAINING_METHOD must be erm, vrex, or mldg."
+    exit 2
+fi
 
 # Brier score is minimized. Every shot level is reported, and 12-shot
 # calibrated performance ranks hyperparameter configurations.
@@ -151,12 +156,26 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
+python - "$EXPECTED_SIC_API_VERSION" <<'PY'
+import sys
+from src.eegproc.deep_learning.joint_architectures.SICModel.sic_model import (
+    SIC_BUILDER_API_VERSION,
+)
+
+expected = int(sys.argv[1])
+if SIC_BUILDER_API_VERSION != expected:
+    raise SystemExit(
+        f"Expected SIC builder API {expected}, found {SIC_BUILDER_API_VERSION}. "
+        "Update the project files before submitting this job."
+    )
+print(f"Verified SIC builder API {SIC_BUILDER_API_VERSION}")
+PY
+
 # ---------------------------------------------------------------------------
 # Resolve one array profile into explicit branch/data switches
 # ---------------------------------------------------------------------------
 use_gcn_gru=true
 use_bilstm=true
-use_decoder=true
 remove_median=false
 
 case "$ABLATION_PROFILE" in
@@ -167,9 +186,6 @@ case "$ABLATION_PROFILE" in
         ;;
     no_bilstm)
         use_bilstm=false
-        ;;
-    no_decoder)
-        use_decoder=false
         ;;
     remove_median)
         remove_median=true
@@ -187,109 +203,94 @@ search_bilstm_width="$use_bilstm"
 # ---------------------------------------------------------------------------
 # Build the profile-specific Cartesian grid as valid JSON
 # ---------------------------------------------------------------------------
-# The full run searches only BiLSTM width (42/63/96 per direction). One layer,
-# dropout 0.30, and z_dim 64 per branch stay fixed. This is a controlled
-# three-configuration search, not a combinatorial depth/dropout/z search.
+# The full run searches BiLSTM width (42/63/96 per direction), focal gamma,
+# and VC beta. GCN-GRU keeps all 384 output features and the BiLSTM keeps
+# 2*bilstm_units features; the classifier and subject head receive their direct
+# concatenation. Focal gamma and VC beta are also searched below.
 MODEL_GRID="$(python - \
     "$use_gcn_gru" \
     "$use_bilstm" \
-    "$use_decoder" \
     "$remove_median" \
     "$MLDG_STEPS_PER_EPOCH" \
     "$search_bilstm_width" \
-    "$TRAINING_METHOD" \
     "$VREX_PENALTY_WEIGHT" <<'PY'
 import json
 import sys
 
-use_gcn_gru, use_bilstm, use_decoder, remove_median = (
-    value.lower() == "true" for value in sys.argv[1:5]
+use_gcn_gru, use_bilstm, remove_median = (
+    value.lower() == "true" for value in sys.argv[1:4]
 )
-mldg_steps_per_epoch = int(sys.argv[5])
-search_bilstm_width = sys.argv[6].lower() == "true"
-training_method = sys.argv[7]
-vrex_penalty_weight = float(sys.argv[8])
+mldg_steps_per_epoch = int(sys.argv[4])
+search_bilstm_width = sys.argv[5].lower() == "true"
+vrex_penalty_weight = float(sys.argv[6])
 
 bilstm_units = {"grid": [42, 63, 96]} if search_bilstm_width else 63
 
 print(json.dumps({
-    # ERM pools source risk; V-REx also penalizes risk variance across users;
-    # MLDG performs subject-disjoint meta-train/meta-test episodes.
-    "training_method": training_method,
-    "vrex_penalty_weight": vrex_penalty_weight,
-
-    # AdamW step size and decoupled L2-style parameter shrinkage.
+    # Source optimizer. The method itself is selected by --training-method.
     "optimizer_name": "adamw",
     "learning_rate": 1e-4,
     "weight_decay": 5e-5,
+    "vrex_penalty_weight": vrex_penalty_weight,
 
-    # First-order MLDG. The meta-train loss includes the full VC, VAE, and
-    # subject-adversarial objectives; meta-test measures focal generalization.
-    "mldg_meta_train_subjects": 18,   # A: subjects used for the inner loss.
-    "mldg_meta_test_subjects": 4,     # B: rotating virtual-unseen subjects.
-    "mldg_trials_per_subject": 1,     # Complete trials sampled per subject.
-    "mldg_steps_per_epoch": mldg_steps_per_epoch, # Episodes per epoch.
-    "mldg_inner_learning_rate": 1e-4, # Temporary A-step learning rate.
-    "mldg_meta_test_weight": 1.0,      # Weight of B's outer gradient.
+    # First-order MLDG. Meta-train uses the VC/classification and subject-
+    # adversarial objectives; meta-test measures focal generalization.
+    "mldg_meta_train_subjects": 18,
+    "mldg_meta_test_subjects": 4,
+    "mldg_trials_per_subject": 1,
+    "mldg_steps_per_epoch": mldg_steps_per_epoch,
+    "mldg_inner_learning_rate": 1e-4,
+    "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
 
     # GCN-GRU spatial/spectral branch.
-    "t_down": 2,                       # Halve encoder time resolution.
-    "temporal_pool_sizes": {"fixed": [2]}, # GCN pooling schedule.
-    "gcn_units": {"fixed": [128, 64]},     # Graph layer widths.
-    "gcn_dropout": 0.20,
+    "t_down": 2,
+    "temporal_pool_sizes": {"fixed": [2]},
+    "gcn_units": {"fixed": [128, 64]},
+    "gcn_dropout": 0.2,
     "gcn_activation": "relu",
     "gcn_use_batch_norm": False,
-    "spectral_gru_units": 384,         # Spectral embedding width.
-    "spectral_gru_dropout": 0.20,
-    "mi_n_neighbors": 3,               # k for source-only kNN MI graph.
+    "spectral_gru_units": 384,
+    "spectral_gru_dropout": 0.2,
+    "mi_n_neighbors": 3,
     "mi_random_state": 42,
     "mi_zero_diagonal": False,
-    "mi_band_reduction": "mean",      # Average channel MI across bands.
-    "mi_max_observations": 15000,      # Bound graph-estimation cost.
+    "mi_band_reduction": "mean",
+    "mi_max_observations": 15000,
 
     # Independent temporal branch. Width is searched per direction; therefore
-    # candidates 42/63/96 produce total outputs 84/126/192 before the posterior.
-    "bilstm_units": bilstm_units,       # Units per forward/backward direction.
-    "n_bilstm_layers": 1,              # One temporal recurrent block.
-    "bilstm_dropout": 0.30,            # Applied after LayerNorm.
+    # candidates 42/63/96 produce complete outputs of 84/126/192 features.
+    "bilstm_units": bilstm_units,
+    "n_bilstm_layers": 1,
+    "bilstm_dropout": 0.3,
 
-    # Independent branch posteriors and joint reconstruction. z_dim is per
-    # active branch: 64 + 64 = 128 for the full encoder.
-    "z_dim": 64,                       # Latent width PER active branch.
-    "z_log_var_clip_min": -20.0,
-    "z_log_var_clip_max": 20.0,
-    "vae_loss_weight": 0.10,           # Scale reconstruction + branch KL.
-    "vae_beta": 0.05,                  # KL weight inside the VAE term.
-    "decoder_dropout": 0.10,
-
-    # Emotion classifier and VC regularizers.
-    "focal_gamma": 1.5,                # Emphasize difficult examples.
+    # Emotion classifier and VariationalClassifier-head regularizers. These do
+    # not project or reduce the deterministic encoder feature vectors.
+    "focal_gamma": {"grid": [0.0, 1.0, 2.0]},
     "focal_alpha": {"fixed": None},
-    "classification_hidden_units": {"fixed": [128, 64]}, # Head widths.
+    "classification_hidden_units": {"fixed": [128, 64]},
     "classification_dropout": 0.20,
-    "vc_loss_weight": 1.0,              # Overall focal + VC term weight.
-    "vc_alpha": 1.0,                    # Focal scale inside VC objective.
-    "vc_beta": 0.5,                     # VC posterior-KL coefficient.
-    "vc_gamma": 0.0,                    # VC discriminator-KL disabled.
-    "vc_lambda": 0.20,                  # Class-prior regularization.
+    "vc_loss_weight": 1.0,
+    "vc_alpha": 1.0,
+    "vc_beta": {"grid": [0.5, 1.5, 2.5]},
+    "vc_gamma": 0.0,
+    "vc_lambda": 0.05,
     "update_vc_discriminator": False,
 
-    # Subject-invariance objective on concatenated posterior means.
+    # Subject-invariance objective on pooled concatenated encoder features.
     "use_subject_adversarial": True,
-    "subject_adversarial_weight": 0.60, # Gradient-reversal strength.
-    "subject_loss_weight": 1.0,         # Scale of adversarial loss.
-    "subject_hidden_units": 64,         # Subject discriminator width.
+    "subject_adversarial_weight": 0.60,
+    "subject_loss_weight": 1.0,
+    "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
     # One-factor-at-a-time architecture/data ablation.
     "use_gcn_gru_branch": use_gcn_gru,
     "use_bilstm_branch": use_bilstm,
-    "use_decoder": use_decoder,
     "remove_median_label": remove_median,
 
     # Subject calibration updates only the selected classifier suffix.
-    "calibration_unfreeze_layers": 2,   # Last hidden block + logits only.
+    "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
     "use_class_weight": False,
 }))
@@ -304,21 +305,17 @@ echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "Array task: ${SLURM_ARRAY_TASK_ID:-0}"
 echo "Node: $(hostname)"
 echo "Ablation profile: $ABLATION_PROFILE"
-echo "DREAMER target: $TARGET_DIMENSION"
+echo "Target: $TARGET_DIMENSION"
 echo "Training method: $TRAINING_METHOD"
-echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm decoder=$use_decoder"
+echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
 echo "Remove median trials: $remove_median"
-echo "Per-branch z_dim: 64"
 if [[ "$search_bilstm_width" == "true" ]]; then
-    echo "BiLSTM grid: 42, 63, 96 units/direction; one layer; dropout 0.30; LayerNorm enabled"
+    echo "Direct feature grid: GCN-GRU=384; BiLSTM=84,126,192; concatenated widths=468,510,576 when both branches are active"
 else
     echo "BiLSTM branch disabled; no duplicate BiLSTM-width grid"
 fi
-if [[ "$TRAINING_METHOD" == "mldg" ]]; then
-    echo "MLDG: A=18 B=4 steps/epoch=$MLDG_STEPS_PER_EPOCH"
-elif [[ "$TRAINING_METHOD" == "vrex" ]]; then
-    echo "V-REx penalty weight: $VREX_PENALTY_WEIGHT"
-fi
+echo "MLDG: A=18 B=4 steps/epoch=$MLDG_STEPS_PER_EPOCH"
+echo "Prediction diagnostics: metric=$PREDICTION_DIAGNOSTICS_METRIC every=$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS epoch(s) max_samples=$PREDICTION_DIAGNOSTICS_MAX_SAMPLES"
 echo "Selection: minimize 12-shot calibrated Brier score"
 echo "Calibration: 3-shot/6-fold, 6-shot/3-fold, 9-shot/2-fold, 12-shot/3-fold"
 echo "Scope: all LOSO targets, $SOURCE_EPOCHS source epochs, $CALIBRATION_EPOCHS calibration epochs"
@@ -328,21 +325,18 @@ nvidia-smi
 # ---------------------------------------------------------------------------
 # Run the selected full ablation profile
 # ---------------------------------------------------------------------------
-# source-epochs is the fixed population-training budget; validation subjects and
-# early stopping are disabled. source-batch-size applies to ERM/V-REx, whereas
-# MLDG step size comes from complete-trial episodes. Calibration epochs/LR apply
-# only to the unfrozen classifier suffix. Twenty posterior samples are averaged
-# for probability reporting. n-jobs=2 maps concurrent LOSO folds to GPUs 0/1.
-python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
+python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train \
     --training-protocol loso_validation \
-    --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
-    --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
+    --dataset dreamer \
+    --raw-eeg-npy "$EEG_PATH" \
+    --raw-labels-npy "$LABELS_PATH" \
     --label-dimension "$TARGET_DIMENSION" \
     --classification-level window \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/full/sic_v8_${TRAINING_METHOD}_brier_ablation/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
-    --run-name "dreamer_${TARGET_DIMENSION}_sic_v8_${TRAINING_METHOD}_${ABLATION_PROFILE}_full" \
+    --out-dir "runs/full/sic_direct_concat_v10_${TRAINING_METHOD}_brier_ablation/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
+    --run-name "dreamer_${TARGET_DIMENSION}_sic_direct_concat_v10_${TRAINING_METHOD}_${ABLATION_PROFILE}_full" \
+    --training-method "$TRAINING_METHOD" \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size 512 \
     --validation-subjects 0 \
@@ -358,8 +352,12 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --selection-metric "$SELECTION_METRIC" \
     --hyperparameter-selection-level "$HYPERPARAMETER_SELECTION_LEVEL" \
     --decision-threshold 0.5 \
-    --prediction-latent-samples 20 \
-    --latent-sampling-seed 42 \
+    --prediction-diagnostics \
+    --prediction-diagnostics-metric "$PREDICTION_DIAGNOSTICS_METRIC" \
+    --prediction-diagnostics-every-n-epochs "$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS" \
+    --prediction-diagnostics-max-samples "$PREDICTION_DIAGNOSTICS_MAX_SAMPLES" \
+    --prediction-diagnostics-threshold-tolerance 0.01 \
+    --prediction-diagnostics-seed 42 \
     --ece-bins 15 \
     --n-jobs 2 \
     --gpu-ids 0 1 \
@@ -368,7 +366,7 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
-    --window-sec 4.0 \
+    --window-sec 1.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --hyperparameters-json "$MODEL_GRID"

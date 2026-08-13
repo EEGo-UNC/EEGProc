@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=smoke_sic_v8
-#SBATCH --output=smoke_sic_v8_%A_%a.out
-#SBATCH --error=smoke_sic_v8_%A_%a.err
+#SBATCH --job-name=smoke_sic_v10
+#SBATCH --output=smoke_sic_v10_%A_%a.out
+#SBATCH --error=smoke_sic_v10_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:2
@@ -15,11 +15,13 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Smoke-test purpose
 # ---------------------------------------------------------------------------
-# Each array task validates one latent layout:
-#   task 0: full encoder,       z = concat(z_gcn[64], z_bilstm[64]) -> 128
-#   task 1: no BiLSTM branch,   z = z_gcn[64]                       -> 64
-# This catches joint/single-branch decoder, classifier, adversary, calibration,
-# and MLDG shape errors without running every full ablation.
+# This worker targets SIC builder API v10: deterministic encoders, no z-width
+# argument, and no learned projection between either encoder and the heads.
+# Each array task validates one deterministic feature layout:
+#   task 0: full encoder,       concat(GCN-GRU[384], BiLSTM[126]) -> 510
+#   task 1: no BiLSTM branch,   GCN-GRU[384]                       -> 384
+# This catches direct-concatenation, classifier, adversary, calibration, and
+# MLDG shape errors without running every full ablation.
 
 SMOKE_PROFILES=(
     full
@@ -51,18 +53,22 @@ INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
 VREX_PENALTY_WEIGHT="${VREX_PENALTY_WEIGHT:-1.0}"
+PREDICTION_DIAGNOSTICS_METRIC="${PREDICTION_DIAGNOSTICS_METRIC:-brier_score}"
+PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-1}"
+PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-128}"
+EXPECTED_SIC_API_VERSION=10
 
-# The same worker supports both DREAMER targets and all source optimizers.
-# MLDG is the default used by this smoke suite. ERM ignores the MLDG/V-REx
-# settings; V-REx uses VREX_PENALTY_WEIGHT to scale variance across subject risk.
-case "$TARGET_DIMENSION" in
-    valence|arousal) ;;
-    *) echo "ERROR: TARGET_DIMENSION must be valence or arousal."; exit 2 ;;
-esac
-case "$TRAINING_METHOD" in
-    erm|vrex|mldg) ;;
-    *) echo "ERROR: TRAINING_METHOD must be erm, vrex, or mldg."; exit 2 ;;
-esac
+EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_eeg.npy}"
+LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_labels.npy}"
+
+if [[ "$TARGET_DIMENSION" != "valence" && "$TARGET_DIMENSION" != "arousal" ]]; then
+    echo "ERROR: TARGET_DIMENSION must be valence or arousal."
+    exit 2
+fi
+if [[ "$TRAINING_METHOD" != "erm" && "$TRAINING_METHOD" != "vrex" && "$TRAINING_METHOD" != "mldg" ]]; then
+    echo "ERROR: TRAINING_METHOD must be erm, vrex, or mldg."
+    exit 2
+fi
 
 # Group every task from the same array under one suite directory.
 SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
@@ -71,10 +77,10 @@ SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 # calibration, and ranks its tiny grid at 6 shots.
 SELECTION_METRIC="brier_score"
 HYPERPARAMETER_SELECTION_LEVEL="calibration"
-CALIBRATION_SELECTION_SHOTS=9
+CALIBRATION_SELECTION_SHOTS=6
 CALIBRATION_LEVEL_ARGS=(
-    --calibration-level 6 3
-    --calibration-level 9 2
+    --calibration-level 3 2
+    --calibration-level 6 2
 )
 
 cd "$PROJECT_DIR"
@@ -153,12 +159,26 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
+python - "$EXPECTED_SIC_API_VERSION" <<'PY'
+import sys
+from src.eegproc.deep_learning.joint_architectures.SICModel.sic_model import (
+    SIC_BUILDER_API_VERSION,
+)
+
+expected = int(sys.argv[1])
+if SIC_BUILDER_API_VERSION != expected:
+    raise SystemExit(
+        f"Expected SIC builder API {expected}, found {SIC_BUILDER_API_VERSION}. "
+        "Update the project files before submitting this job."
+    )
+print(f"Verified SIC builder API {SIC_BUILDER_API_VERSION}")
+PY
+
 # ---------------------------------------------------------------------------
 # Resolve the selected ablation into explicit branch switches
 # ---------------------------------------------------------------------------
 use_gcn_gru=true
 use_bilstm=true
-use_decoder=true
 remove_median=false
 
 case "$ABLATION_PROFILE" in
@@ -174,107 +194,90 @@ case "$ABLATION_PROFILE" in
 esac
 
 # ---------------------------------------------------------------------------
-# Build one fixed smoke configuration as valid JSON
+# Build the small smoke grid as valid JSON
 # ---------------------------------------------------------------------------
-# z_dim is PER ACTIVE BRANCH. The corrected encoder creates an independent
-# Gaussian posterior in each branch, samples each z, and concatenates those z
-# values directly. There is no architecture_mode or fusion projection.
+# The encoders retain their complete deterministic feature widths. There is no
+# posterior, z projection, reparameterization, decoder, or fusion projection.
 MODEL_CONFIG="$(python - \
     "$use_gcn_gru" \
     "$use_bilstm" \
-    "$use_decoder" \
     "$remove_median" \
     "$MLDG_STEPS_PER_EPOCH" \
-    "$TRAINING_METHOD" \
     "$VREX_PENALTY_WEIGHT" <<'PY'
 import json
 import sys
 
-use_gcn_gru, use_bilstm, use_decoder, remove_median = (
-    value.lower() == "true" for value in sys.argv[1:5]
+use_gcn_gru, use_bilstm, remove_median = (
+    value.lower() == "true" for value in sys.argv[1:4]
 )
-mldg_steps_per_epoch = int(sys.argv[5])
-training_method = sys.argv[6]
-vrex_penalty_weight = float(sys.argv[7])
+mldg_steps_per_epoch = int(sys.argv[4])
+vrex_penalty_weight = float(sys.argv[5])
 
 print(json.dumps({
-    # Source optimizer: ERM uses the pooled source loss; V-REx adds variance
-    # across subject-specific focal risks; MLDG simulates unseen subjects.
-    "training_method": training_method,
-    "vrex_penalty_weight": vrex_penalty_weight,
-
-    # AdamW step size and decoupled L2-style parameter shrinkage.
+    # Source optimizer. The method itself is selected by --training-method.
     "optimizer_name": "adamw",
     "learning_rate": 1e-4,
     "weight_decay": 5e-5,
+    "vrex_penalty_weight": vrex_penalty_weight,
 
-    # First-order MLDG: full VC/VAE/adversarial loss on meta-train subjects;
-    # focal emotion loss on the temporarily adapted meta-test subjects.
-    "mldg_meta_train_subjects": 18,   # A: subjects used for the inner loss.
-    "mldg_meta_test_subjects": 4,     # B: rotating virtual-unseen subjects.
-    "mldg_trials_per_subject": 1,     # Complete trials sampled per subject.
-    "mldg_steps_per_epoch": mldg_steps_per_epoch,  # Episodes per epoch.
-    "mldg_inner_learning_rate": 1e-4, # Temporary A-step learning rate.
-    "mldg_meta_test_weight": 1.0,      # Weight of B's outer gradient.
-    "mldg_seed": 42,                   # Reproducible episode sampling.
+    # First-order MLDG: VC/classification and subject-adversarial loss on
+    # meta-train subjects; focal emotion loss on adapted meta-test subjects.
+    "mldg_meta_train_subjects": 18,
+    "mldg_meta_test_subjects": 4,
+    "mldg_trials_per_subject": 1,
+    "mldg_steps_per_epoch": mldg_steps_per_epoch,
+    "mldg_inner_learning_rate": 1e-4,
+    "mldg_meta_test_weight": 1.0,
+    "mldg_seed": 42,
 
     # GCN-GRU spatial/spectral branch.
-    "t_down": 2,                       # Halve the encoder time resolution.
-    "temporal_pool_sizes": {"fixed": [2]}, # GCN temporal pool schedule.
-    "gcn_units": {"fixed": [128, 64]},     # Two graph-convolution widths.
-    "gcn_dropout": 0.20,               # Regularization inside the graph path.
+    "t_down": 2,
+    "temporal_pool_sizes": {"fixed": [2]},
+    "gcn_units": {"fixed": [128, 64]},
+    "gcn_dropout": 0.20,
     "gcn_activation": "relu",
-    "gcn_use_batch_norm": False,       # Avoid batch-dependent subject effects.
-    "spectral_gru_units": 384,         # Width after integrating EEG bands.
+    "gcn_use_batch_norm": False,
+    "spectral_gru_units": 384,
     "spectral_gru_dropout": 0.20,
-    "mi_n_neighbors": 3,               # k for source-only kNN MI adjacency.
+    "mi_n_neighbors": 3,
     "mi_random_state": 42,
-    "mi_zero_diagonal": False,         # Retain self-information before loops.
-    "mi_band_reduction": "mean",      # Average MI estimates across bands.
-    "mi_max_observations": 15000,      # Cap MI computation cost.
+    "mi_zero_diagonal": False,
+    "mi_band_reduction": "mean",
+    "mi_max_observations": 15000,
 
     # Independent temporal branch. Units are per direction, so 63 + 63 gives
-    # a 126-wide deterministic BiLSTM representation before its posterior.
-    "bilstm_units": 63,                # Per direction: 126 total features.
-    "n_bilstm_layers": 1,              # One temporal recurrent block.
-    "bilstm_dropout": 0.30,            # Applied after LayerNorm.
+    # a complete 126-wide deterministic BiLSTM representation.
+    "bilstm_units": 63,
+    "n_bilstm_layers": 1,
+    "bilstm_dropout": 0.30,
 
-    # Each active branch maps to its own 64-D variational posterior. With both
-    # branches enabled, the classifier/decoder/adversary receive 128 features.
-    "z_dim": 64,                       # Latent width PER active branch.
-    "z_log_var_clip_min": -20.0,
-    "z_log_var_clip_max": 20.0,
-    "vae_loss_weight": 0.10,           # Weight of reconstruction + KL.
-    "vae_beta": 0.05,                  # KL strength inside the VAE loss.
-    "decoder_dropout": 0.10,           # Joint decoder regularization.
-
-    # Emotion classifier and VC regularizers.
-    "focal_gamma": 1.5,                # Focus learning on difficult labels.
+    # Emotion classifier and VariationalClassifier-head regularizers. These do
+    # not reduce the encoder feature widths.
+    "focal_gamma": 1.5,
     "focal_alpha": {"fixed": None},
-    "classification_hidden_units": {"fixed": [128, 64]}, # Head widths.
+    "classification_hidden_units": {"fixed": [128, 64]},
     "classification_dropout": 0.20,
-    "vc_loss_weight": 1.0,              # Weight of focal + VC regularizers.
-    "vc_alpha": 1.0,                    # Focal term scale inside VC loss.
-    "vc_beta": 0.5,                     # VC posterior-KL coefficient.
-    "vc_gamma": 0.0,                    # VC discriminator-KL disabled.
-    "vc_lambda": 0.20,                  # Class-prior regularization strength.
+    "vc_loss_weight": 1.0,
+    "vc_alpha": 1.0,
+    "vc_beta": {"grid": [0.5, 1.5, 2.5]},
+    "vc_gamma": 0.0,
+    "vc_lambda": 0.05,
     "update_vc_discriminator": False,
 
-    # Subject-invariance objective on the concatenated posterior means.
+    # Subject-invariance objective on pooled concatenated encoder features.
     "use_subject_adversarial": True,
-    "subject_adversarial_weight": 0.60, # Gradient-reversal strength.
-    "subject_loss_weight": 1.0,         # Scale of subject-adversarial loss.
-    "subject_hidden_units": 64,         # Subject discriminator width.
+    "subject_adversarial_weight": 0.60,
+    "subject_loss_weight": 1.0,
+    "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
     # Selected architecture/data ablation.
     "use_gcn_gru_branch": use_gcn_gru,
     "use_bilstm_branch": use_bilstm,
-    "use_decoder": use_decoder,
     "remove_median_label": remove_median,
 
     # Subject calibration updates only the selected classifier suffix.
-    "calibration_unfreeze_layers": 2,   # Last hidden block + logits only.
+    "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
     "use_class_weight": False,
 }))
@@ -289,16 +292,12 @@ echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "Array task: ${SLURM_ARRAY_TASK_ID:-0}"
 echo "Node: $(hostname)"
 echo "Smoke profile: $ABLATION_PROFILE"
-echo "DREAMER target: $TARGET_DIMENSION"
+echo "Target: $TARGET_DIMENSION"
 echo "Training method: $TRAINING_METHOD"
-echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm decoder=$use_decoder"
-echo "Per-branch z_dim: 64"
-echo "BiLSTM: 63 units/direction, one layer, dropout 0.30, LayerNorm enabled"
-if [[ "$TRAINING_METHOD" == "mldg" ]]; then
-    echo "MLDG: A=18 B=4 steps/epoch=$MLDG_STEPS_PER_EPOCH"
-elif [[ "$TRAINING_METHOD" == "vrex" ]]; then
-    echo "V-REx penalty weight: $VREX_PENALTY_WEIGHT"
-fi
+echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
+echo "Feature widths: GCN-GRU=384; BiLSTM=126 when active; full concatenation=510"
+echo "MLDG: A=18 B=4 steps/epoch=$MLDG_STEPS_PER_EPOCH"
+echo "Prediction diagnostics: metric=$PREDICTION_DIAGNOSTICS_METRIC every=$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS epoch(s) max_samples=$PREDICTION_DIAGNOSTICS_MAX_SAMPLES"
 echo "Selection: minimize 6-shot calibrated Brier score"
 echo "Scope: $MAX_SUBJECTS targets, $SOURCE_EPOCHS source epochs, $CALIBRATION_EPOCHS calibration epochs"
 python --version
@@ -307,22 +306,18 @@ nvidia-smi
 # ---------------------------------------------------------------------------
 # Run the selected smoke profile
 # ---------------------------------------------------------------------------
-# Source epochs are a fixed source-training budget because validation subjects
-# and early stopping are disabled. source-batch-size controls ERM/V-REx; MLDG
-# instead builds complete-trial episodes from its mldg_* settings. Calibration
-# epochs/LR control classifier-only target adaptation. prediction-latent-samples
-# averages five posterior draws for probability reporting. n-jobs=2 assigns one
-# LOSO worker to each requested GPU.
-python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
+python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train \
     --training-protocol loso_validation \
-    --raw-eeg-npy datasets/remove_gamma/dreamer_eeg.npy \
-    --raw-labels-npy datasets/remove_gamma/dreamer_labels.npy \
+    --dataset dreamer \
+    --raw-eeg-npy "$EEG_PATH" \
+    --raw-labels-npy "$LABELS_PATH" \
     --label-dimension "$TARGET_DIMENSION" \
     --classification-level window \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/smoke/sic_v8_${TRAINING_METHOD}_brier/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
-    --run-name "dreamer_${TARGET_DIMENSION}_sic_v8_${TRAINING_METHOD}_${ABLATION_PROFILE}_smoke" \
+    --out-dir "runs/smoke/sic_direct_concat_v10_${TRAINING_METHOD}_brier/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
+    --run-name "dreamer_${TARGET_DIMENSION}_sic_direct_concat_v10_${TRAINING_METHOD}_${ABLATION_PROFILE}_smoke" \
+    --training-method "$TRAINING_METHOD" \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size 512 \
     --validation-subjects 0 \
@@ -338,8 +333,12 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --selection-metric "$SELECTION_METRIC" \
     --hyperparameter-selection-level "$HYPERPARAMETER_SELECTION_LEVEL" \
     --decision-threshold 0.5 \
-    --prediction-latent-samples 5 \
-    --latent-sampling-seed 42 \
+    --prediction-diagnostics \
+    --prediction-diagnostics-metric "$PREDICTION_DIAGNOSTICS_METRIC" \
+    --prediction-diagnostics-every-n-epochs "$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS" \
+    --prediction-diagnostics-max-samples "$PREDICTION_DIAGNOSTICS_MAX_SAMPLES" \
+    --prediction-diagnostics-threshold-tolerance 0.01 \
+    --prediction-diagnostics-seed 42 \
     --ece-bins 15 \
     --max-subjects "$MAX_SUBJECTS" \
     --n-jobs 2 \
@@ -349,7 +348,7 @@ python -m src.eegproc.deep_learning.joint_architectures.sic.sic_model_train \
     --seed 42 \
     --label-threshold-mode global \
     --median-label 3 \
-    --window-sec 4.0 \
+    --window-sec 1.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --hyperparameters-json "$MODEL_CONFIG"

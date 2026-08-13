@@ -1,280 +1,270 @@
 # Subject Invariant Calibrator (SIC)
 
-SIC is an EEG emotion-classification system for studying cross-subject generalization and rapid subject calibration on DREAMER. The experiment measures how well a source-trained population model predicts a completely unseen user at zero shot, then how its predictions change after calibrating its classifier with a small number of that user's trials.
+SIC is an EEG emotion-classification pipeline for measuring cross-subject generalization and rapid user calibration on DREAMER. Each outer fold trains a population model without one target subject, evaluates that subject at zero shot, saves the untouched LOSO model, and then measures how performance changes after fine-tuning the classifier with a small number of the target subject's trials.
 
-The workflow supports both binary **valence** and binary **arousal**. It reports Brier score as the primary calibration-sensitive metric, alongside accuracy, balanced accuracy, F1, precision, recall, ROC-AUC, expected calibration error (ECE), and related macro metrics. Reports are generated at zero shot and at every requested calibration level, such as 3, 6, 9, and 12 shots.
+The current SIC encoder is deterministic. It does not contain an encoder VAE, a learned \(z\) projection, reparameterized sampling, KL loss on the encoder outputs, a reconstruction loss, or a decoder.
 
-This README describes the corrected v8 encoder. In this version, the GCN-GRU and BiLSTM branches have independent variational posteriors. Their latent samples are concatenated directly; there is no learned fusion projection between them and the classifier.
+## Experiment goals
 
-## Research questions
+The supplied experiments answer four main questions:
 
-The supplied experiments are designed to answer:
+1. How well does the population model predict a completely unseen subject?
+2. How do 3-, 6-, 9-, and 12-shot calibration affect discrimination and probability calibration?
+3. How do ERM, V-REx, and first-order MLDG compare?
+4. How much do the GCN-GRU branch, the BiLSTM branch, and median-rating trials contribute?
 
-1. How well does SIC generalize to a user who contributed no training or calibration data?
-2. How much do 3-, 6-, 9-, and 12-shot user calibration change predictive discrimination and probability calibration?
-3. Does calibration improve Brier score consistently across users, or only improve thresholded metrics such as accuracy?
-4. Do ERM, V-REx, and MLDG produce different zero-shot and post-calibration behavior?
-5. How much does each major component contribute: GCN-GRU, BiLSTM, decoder/reconstruction, and median-label trials?
-6. Do conclusions hold for both DREAMER valence and arousal?
+The pipeline reports accuracy, balanced accuracy, F1, precision, recall, their macro variants, ROC-AUC, Brier score, and expected calibration error (ECE). The supplied runs use Brier score as the configuration-selection and prediction-diagnostic metric because lower Brier score means better probability predictions.
 
-## Input and preprocessing
+## Deterministic architecture
 
-The supplied scripts expect DREAMER features with:
+For every EEG window, SIC runs the GCN-GRU and BiLSTM encoders independently.
 
-- 23 subjects and 18 trials per subject;
-- 14 EEG channels;
-- theta, alpha, and beta bands, giving 42 channel-band features per timestep;
-- 4-second non-overlapping windows; and
-- global-RMS window normalization.
-
-The MI adjacency used by the graph branch is estimated from source-subject data only. The held-out target subject is not used to construct the source graph.
-
-## Model architecture
-
-For each EEG window, SIC runs two independent encoders in parallel.
-
-```text
-                                   ┌─ mean_g, log_var_g ─► z_g ─┐
-EEG ─► MI graph ─► GCN ─► GRU ─────┤                           │
-                                   │                           ├─► concatenate
-                                   │                           │       z_joint
-EEG ─► BiLSTM ─► LayerNorm/dropout ├─ mean_b, log_var_b ─► z_b ┘          │
-      └─ temporal pooling ─────────┘                                      │
-                                                                          ├─► classifier
-                                                                          ├─► decoder
-                                                                          └─► subject adversary
+```mermaid
+flowchart TD
+    X["EEG window"] --> G["MI GCN + spectral GRU"]
+    X --> B["BiLSTM + temporal pooling"]
+    G --> C["Direct feature concatenation"]
+    B --> C
+    C --> H["Classifier and subject heads"]
 ```
 
 ### GCN-GRU branch
 
-The spatial/spectral branch uses a source-only mutual-information graph over EEG channels. Band-separated graph convolutions extract channel relationships, and the spectral GRU integrates information across frequency bands. In the supplied configuration, `spectral_gru_units=384` creates a 384-dimensional deterministic spectral representation before the branch posterior.
+The graph branch constructs a mutual-information adjacency matrix from source-training data only. The held-out LOSO subject is never used to estimate this graph.
 
-The branch then produces:
+Band-separated graph convolutions extract spatial/spectral relationships and a spectral GRU combines the band representations. Its output width is
 
-$
-q_g(z_g\mid x)=\mathcal N\left(\mu_g,\operatorname{diag}(\sigma_g^2)\right).
-$
+$$
+d_g=\texttt{spectral\_gru\_units}.
+$$
+
+The supplied scripts use \(d_g=384\).
 
 ### BiLSTM branch
 
-The BiLSTM receives the original 42-dimensional channel-band sequence independently of the graph branch. A forward and backward LSTM model temporal context in both directions. `bilstm_units` is the width of each direction, so 63 units produce a 126-dimensional deterministic output.
+The BiLSTM receives the original channel-band sequence independently of the graph branch. Its forward and backward outputs are concatenated, so
 
-Each BiLSTM block is followed by LayerNorm and dropout. Average pooling then aligns its time axis with the downsampled GCN-GRU sequence. The aligned representation produces its own posterior:
+$$
+d_b=2\,\texttt{bilstm\_units}.
+$$
 
-$
-q_b(z_b\mid x)=\mathcal N\left(\mu_b,\operatorname{diag}(\sigma_b^2)\right).
-$
+Average pooling aligns only the BiLSTM time axis with the downsampled GCN-GRU time axis. It does not reduce the feature dimension.
 
-LayerNorm remains enabled in the supplied experiments and is not currently an ablation.
+### Direct concatenation
 
-### Independent variational latents
+After temporal alignment, the complete branch vectors are concatenated along the feature axis:
 
-During source training, each branch uses reparameterized sampling:
-
-$
-z_g=\mu_g+\sigma_g\odot\epsilon_g,
+$$
+h_{\text{joint},t}=[h_{\text{GCN-GRU},t};h_{\text{BiLSTM},t}],
 \qquad
-z_b=\mu_b+\sigma_b\odot\epsilon_b.
-$
+d_{\text{joint}}=d_g+d_b.
+$$
 
-Their latent vectors are concatenated directly:
+There is no Dense layer, posterior head, or learned fusion network between the encoders and this concatenation. Global average pooling then removes the time axis before the final heads:
 
-$
-z_{joint}=[z_g;z_b].
-$
+$$
+\bar h_{\text{joint}}=\frac{1}{T}\sum_{t=1}^{T}h_{\text{joint},t}.
+$$
 
-`z_dim` is the width per active branch. With `z_dim=64` and both branches enabled, the classifier, decoder, and subject adversary receive 128 features. A single-branch ablation receives 64 features. No `fusion_units`, `fusion_dropout`, or `architecture_mode=serial` setting should be used.
+Pooling reduces the temporal axis, not the feature axis. The classifier and subject-adversarial heads perform the learned fusion.
 
-The VAE KL term averages the KL divergence of the active branch posteriors:
+| Configuration | GCN-GRU width | BiLSTM width | Concatenated width |
+| --- | ---: | ---: | ---: |
+| Model defaults (`bilstm_units=128`) | 384 | 256 | 640 |
+| Smoke/full candidate (`bilstm_units=63`) | 384 | 126 | 510 |
+| Full-grid candidates (`42`, `63`, `96`) | 384 | 84/126/192 | 468/510/576 |
+| `no_bilstm` | 384 | — | 384 |
+| `no_gcn_gru`, 63 units | — | 126 | 126 |
 
-$
-L_{KL}=\frac{KL_g+KL_b}{2}
-$
+At least one encoder branch must remain active.
 
-when both branches are enabled. `gcn_kl_loss`, `bilstm_kl_loss`, and their combined `kl_loss` are logged separately.
+### Classifier and subject adversary
 
-### Classifier, decoder, and subject adversary
+The pooled feature vector enters the dense classifier specified by `classification_hidden_units`, followed by the logits layer. The subject head receives the same pooled encoder vector through gradient reversal.
 
-The concatenated latent sequence is averaged over time. In window mode, the resulting window vector enters the dense classifier. In trial mode, window vectors are additionally averaged within each trial before classification.
+The model still uses the existing `VariationalClassifier` as an auxiliary classifier-head regularizer. This is distinct from variational autoencoding:
 
-The dense classifier uses focal classification loss and the existing VariationalClassifier regularizers. The graph-aware joint decoder reconstructs the EEG window from `z_joint`. A gradient-reversal subject head receives the pooled concatenated posterior means and encourages the representation to discard source-subject identity.
+- it operates inside the final classifier objective;
+- it does not replace or reduce the GCN-GRU or BiLSTM outputs;
+- it does not create the encoder's fused representation; and
+- it does not reconstruct EEG.
 
-For ERM, the source objective is approximately:
+The primary supervised classifier term is focal loss:
 
-$
-L_{ERM}=
-w_{VC}L_{focal+VC}
-+w_{VAE}(L_{reconstruction}+\beta L_{KL})
-+w_{subject}L_{subject}.
-$
+$$
+L_{\text{focal}}
+=
+-\alpha_t(1-p_t)^\gamma\log p_t.
+$$
 
-V-REx adds its subject-risk variance penalty to this objective. MLDG is not another ordinary additive loss: it uses the complete objective for the meta-train gradient, evaluates focal classification after a temporary update on virtual-unseen meta-test subjects, and combines those gradients for the persistent optimizer step.
+The ordinary source objective is approximately
 
-The current v8 model does **not** implement supervised contrastive loss. Do not add `use_supcon` or `supcon_*` settings to its grid; unsupported builder arguments could otherwise be misleading.
+$$
+L_{\text{source}}
+=
+w_{\text{VC}}L_{\text{focal+VC}}
++
+w_{\text{subject}}L_{\text{subject}}
++
+L_{\text{regularization}}.
+$$
+
+There is no encoder-VAE or reconstruction term in this objective.
 
 ## Source-training methods
 
+Select the source method with `--training-method` or the scripts' `TRAINING_METHOD` environment variable.
+
 ### ERM
 
-Empirical risk minimization trains on ordinary source batches and minimizes the pooled source objective. It does not explicitly penalize differences among users or simulate unseen users.
-
-Use:
+ERM minimizes the pooled source objective using ordinary batches:
 
 ```bash
-sbatch --export=ALL,TRAINING_METHOD=erm full_run_sic_mldg_brier_ablation_valence.sh
+TRAINING_METHOD=erm ./submit_sic_direct_concat_v10_suite.sh full 2
 ```
 
 ### V-REx
 
-V-REx treats each source subject represented in a batch as an environment. It calculates focal risk for each subject and adds the variance of those risks:
+V-REx treats source subjects as environments. If \(R_s\) is the focal risk for subject \(s\), it adds
 
-$
-L_{V\text{-}REx}=L_{source}+\lambda_{vrex}\operatorname{Var}(R_1,\ldots,R_S).
-$
+$$
+L_{\text{V-REx}}
+=
+L_{\text{source}}
++
+\lambda_{\text{V-REx}}\operatorname{Var}(R_1,\ldots,R_S).
+$$
 
-The goal is to discourage a solution that performs well for some source users and poorly for others. `VREX_PENALTY_WEIGHT` controls \(\lambda_{vrex}\).
-
-Use:
+Use `VREX_PENALTY_WEIGHT` to set the penalty weight:
 
 ```bash
-sbatch --export=ALL,TRAINING_METHOD=vrex,VREX_PENALTY_WEIGHT=1.0 \
-  full_run_sic_mldg_brier_ablation_valence.sh
+TRAINING_METHOD=vrex VREX_PENALTY_WEIGHT=1.0 \
+  ./submit_sic_direct_concat_v10_suite.sh full 2
 ```
 
 ### First-order MLDG
 
-MLDG creates subject-disjoint episodes. Group A contains meta-train subjects and group B contains rotating virtual-unseen subjects.
+MLDG forms complete-trial episodes with disjoint subject groups:
+
+- A: meta-train subjects;
+- B: rotating virtual-unseen meta-test subjects.
 
 For each episode:
 
-1. Calculate the complete SIC objective on A, including focal/VC, VAE, and subject-adversarial losses.
-2. Take a temporary inner step using `mldg_inner_learning_rate`.
-3. Evaluate focal emotion classification on B using the temporarily adapted parameters.
+1. Compute the complete source objective on A.
+2. Take a temporary inner step with `mldg_inner_learning_rate`.
+3. Evaluate focal emotion classification on B at the temporary parameters.
 4. Restore the original parameters.
-5. Apply one persistent outer update combining the A gradient and the weighted B gradient.
+5. Apply one persistent optimizer update using the A gradient plus `mldg_meta_test_weight` times the B gradient.
 
-The supplied configuration uses 18 A subjects, 4 B subjects, one complete trial per selected subject, and a configurable number of episodes per epoch. MLDG is the default:
+The temporary inner update is detached, so the implementation is first-order MLDG and does not compute Hessians.
 
-```bash
-sbatch full_run_sic_mldg_brier_ablation_valence.sh
+The MLDG implementation is separated into `MetaLearning.py`. That module owns the complete-trial episode sequence, MLDG fit adapter, temporary inner update, gradient combination, and gradient-cosine diagnostic. `sic_model.py` delegates its MLDG update to that module.
+
+The supplied scripts use 18 A subjects, 4 B subjects, and one complete trial per selected subject. This requires all 22 non-target DREAMER subjects to remain in the source-training pool.
+
+## Strict LOSO and zero-shot model saving
+
+For every hyperparameter configuration and target subject:
+
+1. Exclude all data from the target subject.
+2. Build the MI graph from source-training features only.
+3. Train a fresh source model on the remaining subjects.
+4. Evaluate the untouched model on all target trials.
+5. Save that exact zero-shot source model as a native `.keras` file.
+6. Restore the same source weights independently for every calibration continuation.
+
+Saved models are written inside each configuration directory:
+
+```text
+configuration_####/
+└── loso_zero_shot_models/
+    └── loso_fold_####_target_<subject>_zero_shot.keras
 ```
 
-or explicitly:
+`loso_zero_shot_models.json` records the model paths and load metadata. Load a saved model with `compile=False` before installing a new optimizer for later calibration.
 
-```bash
-sbatch --export=ALL,TRAINING_METHOD=mldg,MLDG_STEPS_PER_EPOCH=10 \
-  full_run_sic_mldg_brier_ablation_valence.sh
-```
+Only the zero-shot LOSO models are saved. Calibrated subject-specific continuations are intentionally not saved because calibration is quick and each fold is reproducible from the source model.
 
-## Strict LOSO cross-validation
+## Target-subject calibration
 
-For every hyperparameter configuration, the outer evaluation iterates over target subjects:
+A calibration shot is one complete target-subject trial, not one window. For every requested `(SHOTS, FOLDS)` pair:
 
-1. Select one target subject and exclude all of that subject's data from source training.
-2. Train a fresh source model on the other 22 DREAMER subjects.
-3. Evaluate the untouched source model on all trials of the target subject. This is the strict zero-shot LOSO result.
-4. Save the same source checkpoint for all calibration comparisons for that target.
-5. Move to the next target subject and repeat.
+1. Build a seeded target-only calibration/evaluation split.
+2. Restore the untouched LOSO source weights.
+3. Evaluate zero shot on the fold's evaluation trials.
+4. Freeze the encoder and subject-invariance components.
+5. Unfreeze the requested suffix of the classifier.
+6. Fine-tune on the calibration trials using a fresh optimizer.
+7. Re-evaluate the same held-out evaluation trials.
+8. Report paired zero-shot, calibrated, and calibrated-minus-zero-shot metrics.
 
-The supplied Slurm workers set `validation_subjects=0` and disable early stopping. Every source fold therefore uses a fixed source-epoch budget rather than selecting an epoch using reserved source-validation subjects.
-
-Hyperparameter selection can use either:
-
-- `losocv`: aggregate zero-shot performance; or
-- `calibration`: aggregate post-calibration performance at `CALIBRATION_SELECTION_SHOTS`.
-
-The supplied full run selects the lowest 12-shot calibrated Brier score. Calibration is still executed and reported regardless of which selection level is chosen.
-
-## User calibration
-
-After training the strict LOSO source model, SIC evaluates several target-user shot levels. A shot is one complete target-user trial, not one EEG window.
-
-For every target subject and requested `(shots, folds)` pair:
-
-1. Create a seeded target-only calibration/evaluation split using complete trials.
-2. Restore the unchanged source checkpoint.
-3. Record paired zero-shot predictions on that fold's evaluation trials.
-4. Freeze both encoders, both posterior heads, the decoder, the VC target, and the subject adversary.
-5. Fine-tune only the requested suffix of the dense classifier on the calibration trials.
-6. Re-evaluate the remaining target trials.
-7. Report zero-shot, calibrated, and calibrated-minus-zero-shot metrics.
-
-`calibration_unfreeze_layers=2` unfreezes the final classifier hidden block plus the logits layer. Each calibration fold starts from the same source checkpoint and a fresh optimizer; calibration folds do not inherit weights or optimizer state from one another.
+`calibration_unfreeze_layers=2` selects the final classifier hidden block and logits layer. Every calibration fold begins from the same zero-shot model.
 
 The full script evaluates:
 
-| Calibration level | Folds |
+| Shots | Folds |
 | ---: | ---: |
-| 3 shots | 6 |
-| 6 shots | 3 |
-| 9 shots | 2 |
-| 12 shots | 3 |
+| 3 | 6 |
+| 6 | 3 |
+| 9 | 2 |
+| 12 | 3 |
 
-## Why Brier score is primary
+The full run selects configurations using 12-shot calibrated Brier score. Change `--hyperparameter-selection-level` to `losocv` to rank by zero-shot LOSO while still running and reporting calibration.
 
-For binary classification, Brier score is the mean squared error of the predicted probability:
+## Prediction diagnostics
 
-$
-\operatorname{Brier}=\frac{1}{N}\sum_{i=1}^{N}(p_i-y_i)^2.
-$
+Enable source-training diagnostics with:
 
-Lower is better. Unlike accuracy, Brier score penalizes poorly calibrated confidence. This is important for user calibration: a model may preserve its predicted class while changing a probability from 0.55 to 0.90, which accuracy cannot distinguish.
+```bash
+--prediction-diagnostics \
+--prediction-diagnostics-metric brier_score \
+--prediction-diagnostics-every-n-epochs 1 \
+--prediction-diagnostics-max-samples 256
+```
 
-The reports also include discrimination and thresholded metrics where defined:
+`--prediction-diagnostics-metric` accepts:
 
-- accuracy and balanced accuracy;
-- F1, macro F1, precision, recall, macro precision, and macro recall;
-- ROC-AUC;
-- Brier score; and
-- ECE.
+- `accuracy`
+- `f1`, `precision`, `recall`
+- `macro_f1`, `macro_precision`, `macro_recall`
+- `balanced_accuracy`
+- `roc_auc`
+- `brier_score`
+- `ece`
 
-Results are calculated at window and/or trial aggregation levels by the cross-validation pipeline. The supplied worker invokes `classification_level=window`, while prediction reports also retain trial identifiers and trial-level aggregation where produced.
+Each diagnostic row stores both `reported_metric` and `reported_metric_value`, along with confidence and class-fraction summaries. Rows are saved to `sic_prediction_diagnostics.csv` and retained in the complete JSON results.
+
+The callback evaluates a fixed approximately class-balanced subset. With the supplied MLDG scripts, `--validation-subjects 0` means diagnostics contain the source-training split only. The target LOSO subject is never used for per-epoch diagnostics.
+
+The worker scripts expose three shell overrides:
+
+```bash
+PREDICTION_DIAGNOSTICS_METRIC=ece \
+PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS=5 \
+PREDICTION_DIAGNOSTICS_MAX_SAMPLES=512 \
+  ./submit_sic_direct_concat_v10_suite.sh full 2
+```
+
+SIC predictions are deterministic. The scripts therefore do not request latent Monte Carlo samples or variational uncertainty intervals.
 
 ## Code organization
 
-### `sic_model.py`
+| File | Responsibility |
+| --- | --- |
+| `sic_model.py` | Deterministic GCN-GRU/BiLSTM architecture, ERM and V-REx steps, classifier/subject heads, calibration freezing, prediction |
+| `MetaLearning.py` | SIC MLDG episode sampling, fit adaptation, temporary inner update, first-order gradient combination |
+| `sic_model_train.py` | Data loading, grid execution, experiment orchestration, artifact writing |
+| `sic_model_args.py` | All CLI flags, JSON decoding, Cartesian-grid expansion, validation, and `SICTrainingConfig` |
+| `cross_val.py` | Strict LOSO evaluation, calibration folds, metrics, aggregation, zero-shot model saving |
+| `training_outputs.py` | Prediction diagnostics and compact epoch reporting |
+| `smoke_test_sic_direct_concat_v10.sh` | Two-task structural smoke array |
+| `full_run_sic_direct_concat_v10.sh` | Four-task full ablation array |
+| `submit_sic_direct_concat_v10_suite.sh` | Submission, dependency, and array-throttle launcher |
 
-Defines the neural architecture and optimization behavior:
+The training entry point contains no `argparse` definitions. New experiment flags belong in `sic_model_args.py`.
 
-- GCN-GRU and BiLSTM encoder branches;
-- branch-specific mean/log-variance posterior heads;
-- latent sampling and direct concatenation;
-- dense classifier, joint decoder, and subject adversary;
-- focal/VC, VAE, KL, V-REx, and MLDG loss logic;
-- source, calibration, test, and Monte Carlo prediction steps; and
-- calibration freezing/unfreezing behavior.
-
-### `sic_model_train.py`
-
-Runs the experiment:
-
-- loads and normalizes DREAMER data;
-- optionally removes median-rating trials;
-- creates window- or trial-level inputs;
-- executes one fixed configuration or a Cartesian hyperparameter grid;
-- calls strict LOSO plus target-user calibration;
-- ranks configurations using the requested metric and selection level; and
-- writes JSON, CSV, predictions, and logs.
-
-### `sic_model_args.py`
-
-Owns configuration and parsing so the training module stays readable:
-
-- CLI definitions;
-- JSON parsing;
-- fixed-versus-grid decoding;
-- full Cartesian-grid expansion;
-- data/model hyperparameter separation;
-- argument and configuration validation; and
-- construction of `SICTrainingConfig`.
-
-### Slurm scripts
-
-- `smoke_test_sic_mldg_brier.sh`: two-task smoke array (`full`, `no_bilstm`).
-- `full_run_sic_mldg_brier_ablation_valence.sh`: five-task full ablation array.
-- `submit_sic_slurm_suite.sh`: optional launcher that submits smoke, full, or a full array dependent on successful smoke completion.
-
-## Required project layout
+A representative project layout is:
 
 ```text
 EEGProc/
@@ -282,188 +272,182 @@ EEGProc/
 ├── datasets/remove_gamma/
 │   ├── dreamer_eeg.npy
 │   └── dreamer_labels.npy
-├── smoke_test_sic_mldg_brier.sh
-├── full_run_sic_mldg_brier_ablation_valence.sh
-├── submit_sic_slurm_suite.sh
+├── smoke_test_sic_direct_concat_v10.sh
+├── full_run_sic_direct_concat_v10.sh
+├── submit_sic_direct_concat_v10_suite.sh
 └── src/eegproc/deep_learning/
     ├── cross_val.py
-    ├── supervised/variational_classifier.py
-    ├── unsupervised/GNN/GCNMTL.py
-    └── joint_architectures/sic/
+    ├── training_outputs.py
+    ├── generalize_optimization_strats/
+    │   └── MetaLearning.py
+    ├── supervised/
+    │   └── variational_classifier.py
+    ├── unsupervised/GNN/
+    │   └── GCNMTL.py
+    └── joint_architectures/SICModel/
         ├── sic_model.py
         ├── sic_model_train.py
         └── sic_model_args.py
 ```
 
-The workers default to `$HOME/EEGProc` and `$HOME/EEGProc/venv312`. Override `PROJECT_DIR` or `VENV_DIR` at submission if needed.
+The scripts default to `$HOME/EEGProc` and `$HOME/EEGProc/venv312`. Override `PROJECT_DIR`, `VENV_DIR`, `EEG_PATH`, or `LABELS_PATH` when necessary.
 
-## Running the Slurm scripts
+## Running on Slurm
 
-The workers already contain `#SBATCH --array` directives, so a normal `sbatch` command creates multiple jobs automatically.
+Make the launcher executable once:
+
+```bash
+chmod +x submit_sic_direct_concat_v10_suite.sh
+```
 
 ### Smoke test
 
 ```bash
-sbatch smoke_test_sic_mldg_brier.sh
+./submit_sic_direct_concat_v10_suite.sh smoke 2
 ```
 
-This submits two array tasks:
+or submit the worker directly:
+
+```bash
+sbatch smoke_test_sic_direct_concat_v10.sh
+```
+
+The smoke array runs:
 
 | Task | Profile |
 | ---: | --- |
 | 0 | `full` |
 | 1 | `no_bilstm` |
 
-The smoke defaults to two target subjects, three source epochs, three calibration epochs, and two MLDG episodes per epoch. Override them without editing the script:
+Defaults are two target subjects, three source epochs, three calibration epochs, and two MLDG episodes per epoch.
 
 ```bash
-sbatch --export=ALL,MAX_SUBJECTS=4,SOURCE_EPOCHS=10,CALIBRATION_EPOCHS=10,MLDG_STEPS_PER_EPOCH=10 \
-  smoke_test_sic_mldg_brier.sh
+MAX_SUBJECTS=4 SOURCE_EPOCHS=10 CALIBRATION_EPOCHS=10 \
+MLDG_STEPS_PER_EPOCH=10 ./submit_sic_direct_concat_v10_suite.sh smoke 2
 ```
 
-### Full ablation suite
+### Full ablation
 
 ```bash
-sbatch full_run_sic_mldg_brier_ablation_valence.sh
+./submit_sic_direct_concat_v10_suite.sh full 2
 ```
 
-This submits five independent array tasks:
+or:
+
+```bash
+sbatch full_run_sic_direct_concat_v10.sh
+```
+
+The four array tasks are:
 
 | Task | Profile | Change from full |
 | ---: | --- | --- |
-| 0 | `full` | Both branches and decoder; retain median-label trials |
-| 1 | `no_gcn_gru` | Disable the spatial/spectral branch |
-| 2 | `no_bilstm` | Disable the temporal branch |
-| 3 | `no_decoder` | Disable reconstruction; retain branch KL losses |
-| 4 | `remove_median` | Remove complete trials whose original target rating is 3 |
+| 0 | `full` | Both deterministic branches; retain rating-3 trials |
+| 1 | `remove_median` | Remove complete trials whose raw target rating is 3 |
+| 2 | `no_gcn_gru` | Use only the BiLSTM branch |
+| 3 | `no_bilstm` | Use only the GCN-GRU branch |
 
-The header uses `#SBATCH --array=0-4%2`. Slurm creates five jobs but runs at most two simultaneously. Since each task requests two GPUs, the default concurrency requests at most four GPUs at a time.
+There is no `no_decoder` profile because current SIC has no decoder in any profile.
 
-Every profile with an active BiLSTM searches `bilstm_units` over 42, 63, and 96 units per direction. `no_bilstm` runs only once, avoiding duplicate width configurations.
+The full header uses `#SBATCH --array=0-3%2`: four jobs are created, with at most two active simultaneously. Each active task requests two GPUs.
+
+### Smoke-gated full run
+
+```bash
+./submit_sic_direct_concat_v10_suite.sh full-after-smoke 2
+```
+
+Slurm holds the full array until all smoke tasks finish successfully.
 
 ### Valence and arousal
 
-Valence is the default:
+Valence is the default. To run arousal:
 
 ```bash
-sbatch full_run_sic_mldg_brier_ablation_valence.sh
+TARGET_DIMENSION=arousal ./submit_sic_direct_concat_v10_suite.sh full-after-smoke 2
 ```
 
-Run the same experiment for arousal with:
+The target dimension is included in the output path and run name.
+
+### Resubmitting one profile
 
 ```bash
-sbatch --export=ALL,TARGET_DIMENSION=arousal \
-  full_run_sic_mldg_brier_ablation_valence.sh
+sbatch --array=2 full_run_sic_direct_concat_v10.sh
 ```
 
-The target dimension is incorporated into the run name and output directory, so valence and arousal results do not overwrite one another.
+Task 2 is the `no_gcn_gru` profile.
 
-### Optional launcher
+## Hyperparameter grid size
 
-The launcher makes array throttling and dependencies explicit:
+The full script searches:
 
-```bash
-./submit_sic_slurm_suite.sh smoke 2
-./submit_sic_slurm_suite.sh full 2
-./submit_sic_slurm_suite.sh full-after-smoke 2
-```
+- `bilstm_units`: 42, 63, 96 when the BiLSTM is active;
+- `focal_gamma`: 0, 1, 2; and
+- `vc_beta`: 0.5, 1.5, 2.5.
 
-`full-after-smoke` submits both arrays immediately, but Slurm holds the full array until every smoke task exits successfully.
+This produces:
 
-For arousal:
+| Profile | Candidates |
+| --- | ---: |
+| `full` | 27 |
+| `remove_median` | 27 |
+| `no_gcn_gru` | 27 |
+| `no_bilstm` | 9 |
+| Total per target dimension and training method | 90 |
 
-```bash
-TARGET_DIMENSION=arousal ./submit_sic_slurm_suite.sh full-after-smoke 2
-```
+Every candidate performs the configured target-subject LOSO folds and calibration levels. Run the smoke suite before launching the complete grid.
 
-For V-REx:
+## Output reports
 
-```bash
-TRAINING_METHOD=vrex VREX_PENALTY_WEIGHT=1.0 \
-  ./submit_sic_slurm_suite.sh full 2
-```
+The run root contains the resolved training configuration, submitted grid, progress state, ranked results, and best hyperparameters. Each `configuration_####/` directory contains:
 
-### Monitoring and restarting array tasks
+- `model_config.json`
+- `dataset_ablation.json`
+- `sic_calibration_results.json`
+- `sic_overall_metrics.json`
+- `sic_subject_summary.csv`
+- `sic_calibration_folds.csv`
+- `sic_prediction_diagnostics.csv` when diagnostics are enabled
+- `sic_window_predictions.csv`
+- `sic_trial_predictions.csv`
+- `loso_zero_shot_models.json`
+- `loso_zero_shot_models/*.keras`
 
-Logs contain the array job ID (`%A`) and task ID (`%a`):
+Important aggregate groups include:
+
+- `zero_shot_all_trials_mean_scores`
+- `zero_shot_all_trials_std_scores`
+- `calibration_levels.<shots>.paired_zero_shot_mean_scores`
+- `calibration_levels.<shots>.calibrated_mean_scores`
+- `calibration_levels.<shots>.delta_mean_scores`
+
+Brier score is minimized. Most discrimination metrics are maximized.
+
+## Early stopping and MLDG subject counts
+
+The supplied MLDG scripts use:
 
 ```text
-smoke_sic_v8_<array-job-id>_<task-id>.out
-smoke_sic_v8_<array-job-id>_<task-id>.err
-sic_v8_abl_val_<array-job-id>_<task-id>.out
-sic_v8_abl_val_<array-job-id>_<task-id>.err
+validation_subjects = 0
+A subjects = 18
+B subjects = 4
 ```
 
-Monitor jobs:
+This consumes all 22 non-target DREAMER source subjects in every MLDG episode. Early stopping is disabled and all source epochs run.
 
-```bash
-squeue -j <array-job-id>
-sacct -j <array-job-id> --format=JobID,JobName,State,Elapsed,ExitCode
-```
+If source-validation subjects are introduced, reduce `mldg_meta_train_subjects` and/or `mldg_meta_test_subjects` so their sum does not exceed the remaining gradient-training subjects. For example, four source-validation subjects leave 18 gradient-training subjects, so A=14 and B=4 is valid.
 
-If only task 2 fails, resubmit only that profile:
+## Removed settings
 
-```bash
-sbatch --array=2 full_run_sic_mldg_brier_ablation_valence.sh
-```
+Do not place these obsolete encoder-VAE settings in the JSON configuration:
 
-## Output directories and reports
+- `use_decoder`
+- `z_log_var_clip_min`
+- `z_log_var_clip_max`
+- `vae_loss_weight`
+- `vae_beta`
+- `decoder_dropout`
 
-Each array task writes to a disjoint directory containing the training method, DREAMER target, suite ID, and ablation profile:
+Deterministic SIC always uses active parallel branches and direct feature concatenation.
 
-```text
-runs/full/sic_v8_<method>_brier_ablation/
-└── DREAMER/<valence-or-arousal>/suite_<array-job-id>/<profile>/
-```
-
-The run root contains:
-
-- `training.log`: chronological training and selection log;
-- `training_config.json`: resolved CLI/runtime configuration;
-- `model_config.json`: submitted fixed/grid model configuration;
-- `hyperparameter_grid.json`: every expanded Cartesian configuration;
-- `hyperparameter_search_progress.json`: completed, failed, and remaining configurations;
-- `hyperparameter_search_results.json`: ranked configurations and best score;
-- `best_hyperparameters.json`: selected configuration and its directory; and
-- `hyperparameter_search_summary.csv`: one row per ranked configuration, including zero-shot and calibration aggregates.
-
-Each `configuration_####/` directory contains:
-
-- `model_config.json`: exact candidate hyperparameters;
-- `dataset_ablation.json`: retained/removed trials and samples;
-- `sic_calibration_results.json`: complete nested subject, shot, and fold results;
-- `sic_overall_metrics.json`: aggregate zero-shot and calibration metrics;
-- `sic_subject_summary.csv`: per-target-subject summaries;
-- `sic_calibration_folds.csv`: one row per target/shot/fold, including paired zero-shot, calibrated, and delta metrics;
-- `sic_window_predictions.csv` and `sic_trial_predictions.csv` when prediction logs are produced; and
-- `sic_window_uncertainty.csv` and `sic_trial_uncertainty.csv` when variational interval logging is enabled.
-
-Important keys in `sic_overall_metrics.json` include:
-
-- `zero_shot_all_trials_mean_scores`: strict LOSO zero-shot mean across target users;
-- `zero_shot_all_trials_std_scores`: cross-user zero-shot variation;
-- `calibration_levels.<shots>.paired_zero_shot_mean_scores`: zero-shot scores on the exact evaluation trials used by that shot level;
-- `calibration_levels.<shots>.calibrated_mean_scores`: post-calibration scores;
-- `calibration_levels.<shots>.delta_mean_scores`: calibrated minus paired zero-shot scores; and
-- corresponding standard-deviation groups.
-
-Use `sic_calibration_folds.csv` to inspect whether calibration helped consistently across folds and users. Use the aggregate JSON or search-summary CSV to compare training methods, target dimensions, hyperparameters, and ablations.
-
-## Main configurable hyperparameters
-
-The Slurm scripts comment each important setting in place. The most consequential groups are:
-
-| Group | Hyperparameters | Meaning |
-| --- | --- | --- |
-| GCN-GRU | `gcn_units`, `spectral_gru_units`, `gcn_dropout`, `t_down` | Spatial/spectral capacity and temporal reduction |
-| BiLSTM | `bilstm_units`, `n_bilstm_layers`, `bilstm_dropout` | Independent temporal capacity and regularization |
-| Branch posterior | `z_dim`, `vae_beta`, `vae_loss_weight` | Per-branch bottleneck and VAE strength |
-| Classifier/VC | `classification_hidden_units`, `focal_gamma`, `vc_alpha/beta/gamma/lambda` | Emotion prediction and VC regularizers |
-| Subject adversary | `subject_adversarial_weight`, `subject_loss_weight` | Gradient reversal and adversarial-loss scale |
-| MLDG | `mldg_meta_*`, `mldg_trials_per_subject`, `mldg_steps_per_epoch` | Episode composition and outer generalization gradient |
-| V-REx | `vrex_penalty_weight` | Strength of cross-subject risk-variance penalty |
-| Calibration | shot/fold pairs, epochs, learning rate, `calibration_unfreeze_layers` | Amount and scope of target-user adaptation |
-
-## Experiment-size warning
-
-The full experiment is intentionally large. Four ablation profiles search three BiLSTM widths and `no_bilstm` runs once, for 13 source configuration searches per target dimension and training method. Every configuration performs strict LOSO and all requested calibration folds. Running valence and arousal under ERM, V-REx, and MLDG multiplies that workload further. Use the smoke array first and control concurrency with the array throttle or launcher.
+The current model does not implement a supervised-contrastive-loss option. Do not add `use_supcon` or `supcon_*` keys unless that feature is implemented in the model first.

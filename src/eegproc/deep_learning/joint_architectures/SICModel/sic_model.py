@@ -99,7 +99,7 @@ except ImportError:
     )
 
 
-SIC_BUILDER_API_VERSION = 9
+SIC_BUILDER_API_VERSION = 10
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
 
 
@@ -359,7 +359,6 @@ class SICModel(tf.keras.Model):
         bilstm_units: int = 128,
         n_bilstm_layers: int = 1,
         bilstm_dropout: float = 0.30,
-        architecture_mode: str | None = None,
         use_gcn_gru_branch: bool = True,
         use_bilstm_branch: bool = True,
         temporal_downsample_factor: int = 1,
@@ -419,20 +418,6 @@ class SICModel(tf.keras.Model):
             raise ValueError("gcn_gru_feature_dim must be positive.")
         if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1:
             raise ValueError("BiLSTM dimensions must be positive.")
-        # Compatibility with older configuration labels. The encoder is always
-        # parallel and concatenates complete deterministic branch features;
-        # the old learned fusion projection no longer exists.
-        if architecture_mode is not None:
-            architecture_mode = str(architecture_mode).lower()
-            if architecture_mode not in {
-                "feature_fusion",
-                "parallel_variational",
-                "parallel_deterministic",
-            }:
-                raise ValueError(
-                    "SIC now uses parallel deterministic branches only; remove "
-                    "architecture_mode='serial'."
-                )
         if int(temporal_downsample_factor) < 1:
             raise ValueError("temporal_downsample_factor must be >= 1.")
         if float(focal_gamma) < 0.0:
@@ -1813,11 +1798,8 @@ def build_sic_model(
     bilstm_units: int = 128,
     n_bilstm_layers: int = 1,
     bilstm_dropout: float = 0.30,
-    architecture_mode: str | None = None,
     use_gcn_gru_branch: bool = True,
     use_bilstm_branch: bool = True,
-    fusion_units: int | None = None,
-    fusion_dropout: float | None = None,
     classification_hidden_units: Sequence[int] = (128,),
     classification_dropout: float = 0.20,
     activation: str = "relu",
@@ -1858,7 +1840,6 @@ def build_sic_model(
     weight_decay: float = 5e-5,
     use_class_weight: bool = False,
     model_name: str = "sic_subject_invariant_calibrator",
-    **unused_kwargs,
 ) -> SICModel:
     """Build SIC, computing its fixed MI graph from source data when needed.
 
@@ -1869,28 +1850,6 @@ def build_sic_model(
     accepted to keep the builder contract uniform and leakage-auditable.
     """
     del training_labels
-
-    removed_vae_parameters = {
-        "use_decoder",
-        "z_dim",
-        "z_log_var_clip_min",
-        "z_log_var_clip_max",
-        "vae_loss_weight",
-        "vae_beta",
-        "decoder_dropout",
-    }.intersection(unused_kwargs)
-    if removed_vae_parameters:
-        raise ValueError(
-            "Deterministic SIC no longer accepts VAE/decoder parameters: "
-            f"{sorted(removed_vae_parameters)}. Remove them from the model "
-            "configuration."
-        )
-
-    if fusion_units is not None or fusion_dropout is not None:
-        raise ValueError(
-            "fusion_units/fusion_dropout were removed. Complete branch feature "
-            "vectors are concatenated directly; fusion occurs in the final heads."
-        )
 
     classification_level = str(classification_level).lower()
     input_shape = tuple(int(value) for value in input_shape)
@@ -1987,7 +1946,6 @@ def build_sic_model(
         bilstm_units=int(bilstm_units),
         n_bilstm_layers=int(n_bilstm_layers),
         bilstm_dropout=float(bilstm_dropout),
-        architecture_mode=architecture_mode,
         use_gcn_gru_branch=use_gcn_gru_branch,
         use_bilstm_branch=use_bilstm_branch,
         temporal_downsample_factor=int(t_down),

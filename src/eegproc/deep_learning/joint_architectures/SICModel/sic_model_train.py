@@ -113,28 +113,6 @@ except ImportError:
     )
 
 
-SIC_REMOVED_VAE_HYPERPARAMETERS = frozenset(
-    {
-        "use_decoder",
-        "z_dim",
-        "z_log_var_clip_min",
-        "z_log_var_clip_max",
-        "vae_loss_weight",
-        "vae_beta",
-        "decoder_dropout",
-    }
-)
-
-
-def _deterministic_model_config(model_config: dict) -> tuple[dict, list[str]]:
-    """Remove obsolete encoder-VAE axes before Cartesian expansion."""
-    cleaned = dict(model_config)
-    removed = sorted(SIC_REMOVED_VAE_HYPERPARAMETERS.intersection(cleaned))
-    for key in removed:
-        cleaned.pop(key)
-    return cleaned, removed
-
-
 def _json_fingerprint(value) -> str:
     """Return a stable, human-readable representation for logs/errors."""
     return json.dumps(value, sort_keys=True, default=_json_default)
@@ -741,11 +719,7 @@ def _run_subject_calibration_configuration(
             config.prediction_diagnostics_threshold_tolerance
         ),
         prediction_diagnostics_seed=config.prediction_diagnostics_seed,
-        n_prediction_latent_samples=0,
-        latent_sampling_seed=config.latent_sampling_seed,
         log_predictions=True,
-        log_variational_intervals=False,
-        n_uncertainty_samples=config.uncertainty_samples,
         source_use_class_weight=config.source_use_class_weight,
         calibration_use_class_weight=config.calibration_use_class_weight,
         source_fit_kwargs={"callbacks": [tf.keras.callbacks.TerminateOnNaN()]},
@@ -807,9 +781,7 @@ def train_sic_loso_validation(
             f"{config.n_channels * config.n_bands}."
         )
 
-    model_config, removed_vae_parameters = _deterministic_model_config(
-        config.model_config
-    )
+    model_config = dict(config.model_config)
     model_config.setdefault("classification_level", config.classification_level)
     model_config.setdefault("n_classes", _n_classes(y))
     model_config.setdefault("n_channels", config.n_channels)
@@ -859,11 +831,6 @@ def train_sic_loso_validation(
     )
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
-    if removed_vae_parameters:
-        logger.info(
-            "Removed obsolete deterministic-SIC VAE parameters: %s",
-            removed_vae_parameters,
-        )
     logger.info(
         "Training protocol: configuration -> LOSO subject -> calibration plan %s",
         _calibration_plan(config),
@@ -1158,9 +1125,7 @@ def train_sic(
             f"{config.n_channels * config.n_bands}."
         )
 
-    hyperparameters, removed_vae_parameters = _deterministic_model_config(
-        config.model_config
-    )
+    hyperparameters = dict(config.model_config)
     hyperparameters.setdefault("classification_level", config.classification_level)
     hyperparameters.setdefault("n_classes", _n_classes(y))
     hyperparameters.setdefault("n_channels", config.n_channels)
@@ -1196,11 +1161,6 @@ def train_sic(
     _write_json(run_dir / "dataset_ablation.json", data_summary)
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
-    if removed_vae_parameters:
-        logger.info(
-            "Removed obsolete deterministic-SIC VAE parameters: %s",
-            removed_vae_parameters,
-        )
     logger.info("SIC builder API version: %s", SIC_BUILDER_API_VERSION)
     logger.info("Input shape: %s", X.shape)
     logger.info(
@@ -1270,7 +1230,6 @@ def train_sic(
 
 def main(argv=None):
     args, model_config = parse_cli(argv)
-    model_config, _ = _deterministic_model_config(model_config)
     calibration_levels = calibration_levels_from_args(args)
     calibration_selection_shots = (
         max(shots for shots, _ in calibration_levels)
