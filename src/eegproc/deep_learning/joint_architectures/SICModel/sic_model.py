@@ -14,13 +14,15 @@ After matching their temporal lengths, the complete encoder feature vectors
 are concatenated directly. There is no learned projection, bottleneck, or
 fusion network between the encoders and the prediction heads::
 
-    h_joint = concat([h_g, h_b]) -> pooling -> dense-softmax classifier
+    h_joint = concat([h_g, h_b]) -> pooling -> dense feature blocks -> VC logits
 
 With the default widths, h_g has 384 features and h_b has 2 * 128 = 256
 features, so both active branches give the final heads all 640 features. Fusion
 occurs in the classifier and subject-adversarial heads. EEGProc's existing
-VariationalClassifier remains an auxiliary classifier-head regularizer; it is
-not an encoder VAE and the dense logits remain the actual prediction logits.
+VariationalClassifier is the sole logits-producing classification head; there
+is no parallel dense-logit head. Focal classification and the VC regularizers
+are optimized jointly from that one head and its one logits tensor. The VC is
+not an encoder VAE.
 
 There is no encoder posterior, reparameterization, KL loss, reconstruction
 loss, or decoder. Subject invariance can be imposed directly on the pooled
@@ -42,19 +44,21 @@ gradient-through-gradient path is constructed.
 
 Subject calibration
 -------------------
-``prepare_for_subject_calibration`` freezes the complete representation,
-subject adversary, and VC target parameters. It then
-unfreezes only the last ``calibration_unfreeze_layers`` prediction layers:
+``prepare_for_subject_calibration`` freezes the complete representation and
+subject adversary. It keeps the VC classification head trainable and unfreezes
+only the requested dense suffix before that head:
 
-    1 -> softmax/logits only
-    2 -> last dense hidden block + softmax
-    3 -> last two dense hidden blocks + softmax
+    1 -> VC logits head only
+    2 -> last dense hidden block + VC logits head
+    3 -> last two dense hidden blocks + VC logits head
     ...
 
-The calibration train step uses the dense-softmax classification objective and,
-when enabled, the same frozen VC target.  Therefore VC regularization can shape
-any unfrozen dense hidden representation while a softmax-only calibration
-reduces naturally to fitting the output decision boundary.
+The calibration train step uses focal loss and, when enabled, the VC
+regularizers computed jointly with the same VC logits. The VC head therefore
+adapts in every calibration fold instead of acting as a frozen source target.
+For backward CLI compatibility, ``calibration_use_vc_target=false`` disables
+only the auxiliary VC regularizers; it does not replace or freeze the VC
+classification head that produces the logits.
 
 This file is designed for ``cross_val.subject_calibration_cv``.  Its builder
 accepts ``training_features`` and computes the fixed MI adjacency from source
@@ -603,8 +607,8 @@ class SICModel(tf.keras.Model):
             name="v6_feature_pool"
         )
 
-        # Dense-softmax prediction head. Hidden blocks are explicit so the
-        # calibration policy can unfreeze exactly the last k prediction layers.
+        # Dense feature blocks followed by one VC logits head. The blocks are
+        # explicit so calibration can unfreeze exactly the last k layers.
         self.classification_dense_layers: list[tf.keras.layers.Layer] = []
         self.classification_norm_layers: list[tf.keras.layers.Layer] = []
         self.classification_dropout_layers: list[tf.keras.layers.Layer] = []
@@ -628,25 +632,26 @@ class SICModel(tf.keras.Model):
                     name=f"v6_classifier_dropout_{index}",
                 )
             )
-        self.logits_layer = tf.keras.layers.Dense(
-            self.n_classes,
-            activation=None,
-            name="v6_classifier_logits",
-        )
-
         vc_dim = (
             self.classification_hidden_units[-1]
             if self.classification_hidden_units
             else self.combined_feature_dim
         )
+        vc_focal_alpha = (
+            None
+            if self.focal_alpha is None
+            else (1.0 - self.focal_alpha, self.focal_alpha)
+        )
         self.vc_target = VariationalClassifier(
             n_classes=self.n_classes,
             latent_dim=vc_dim,
             label_smoothing=self.label_smoothing,
+            focal_gamma=self.focal_gamma,
+            focal_alpha=vc_focal_alpha,
             name="v6_vc_target",
         )
-        # We pass externally produced dense logits into vc_loss_components, so
-        # explicitly build the target's Gaussian/discriminator parameters.
+        # This is the sole classification head. Explicitly build its learned
+        # Gaussian class parameters and optional discriminator parameters.
         self.vc_target.build(tf.TensorShape([None, vc_dim]))
 
         self.subject_gradient_reversal = None
@@ -1041,7 +1046,10 @@ class SICModel(tf.keras.Model):
             block_training = bool(training) and bool(dense.trainable)
             x = dropout(x, training=block_training)
         classification_embedding = x
-        logits = self.logits_layer(classification_embedding)
+        logits = self.vc_target(
+            classification_embedding,
+            training=bool(training),
+        )
         return classification_embedding, logits
 
     def _encode(
@@ -1103,7 +1111,7 @@ class SICModel(tf.keras.Model):
         return outputs["logits"]
 
     def _per_sample_focal_loss(self, logits, y_flat):
-        """Sparse binary/multiclass focal loss from deterministic logits."""
+        """Focal loss from the same sole VC logits used for prediction."""
         y_flat = tf.cast(tf.reshape(y_flat, [-1]), tf.int32)
         log_probs = tf.nn.log_softmax(logits, axis=-1)
         probs = tf.exp(log_probs)
@@ -1115,8 +1123,24 @@ class SICModel(tf.keras.Model):
             tf.maximum(1.0 - p_t, tf.keras.backend.epsilon()),
             tf.cast(self.focal_gamma, p_t.dtype),
         )
-        # Direct focal objective: -(1 - p_t)^gamma * log(p_t).
-        loss = -modulating * log_p_t
+        if self.label_smoothing:
+            hard_targets = tf.one_hot(
+                y_flat,
+                depth=self.n_classes,
+                dtype=logits.dtype,
+            )
+            smoothing = tf.cast(self.label_smoothing, logits.dtype)
+            smoothed_targets = (
+                (1.0 - smoothing) * hard_targets
+                + smoothing / tf.cast(self.n_classes, logits.dtype)
+            )
+            base_loss = tf.nn.softmax_cross_entropy_with_logits(
+                labels=smoothed_targets,
+                logits=logits,
+            )
+        else:
+            base_loss = -log_p_t
+        loss = modulating * base_loss
 
         if self.focal_alpha is not None:
             if self.n_classes != 2:
@@ -1151,13 +1175,11 @@ class SICModel(tf.keras.Model):
         *,
         calibration: bool,
     ):
-        # The deterministic classifier term is focal loss. The VC target is
-        # asked for variational regularizers only, so no second categorical
-        # classification objective is calculated or optimized.
-        focal_per_sample = self._per_sample_focal_loss(logits, y_flat)
-        focal_loss = self._weighted_mean(focal_per_sample, sample_weight)
-
         if calibration and not self.calibration_use_vc_target:
+            # The VC head still produces and learns the logits. This switch
+            # disables only its auxiliary variational regularizers.
+            focal_per_sample = self._per_sample_focal_loss(logits, y_flat)
+            focal_loss = self._weighted_mean(focal_per_sample, sample_weight)
             zero = tf.zeros((), dtype=focal_loss.dtype)
             return {
                 "total_loss": focal_loss,
@@ -1183,20 +1205,11 @@ class SICModel(tf.keras.Model):
             lambda_=(self.calibration_vc_lambda if calibration else self.vc_lambda),
             logits=logits,
             sample_weight=sample_weight,
-            include_classification=False,
+            include_classification=True,
         )
-
-        # Add the model's focal objective to the VC regularizers. Because the
-        # VC target was called with include_classification=False, its total is
-        # regularization-only and there is no classification term to subtract.
-        dtype = components["total_loss"].dtype
-        focal_term = tf.cast(alpha, dtype) * tf.cast(focal_loss, dtype)
+        # Focal classification and every enabled VC term were calculated in
+        # one joint objective from the exact logits returned by vc_target.
         components = dict(components)
-        components["total_loss"] = tf.cast(components["total_loss"], dtype) + focal_term
-        components["classification_loss"] = tf.cast(focal_loss, dtype)
-        components["weighted_classification_loss"] = focal_term
-        components["focal_loss"] = tf.cast(focal_loss, dtype)
-        components["weighted_focal_loss"] = focal_term
         # Do not expose the VariationalClassifier's legacy cross-entropy
         # aliases: older code used those names for the focal value, which made
         # logs incorrectly show identical cross_entropy and focal_loss fields.
@@ -1477,8 +1490,8 @@ class SICModel(tf.keras.Model):
 
     def _calibration_train_step(self, x, y_flat, sample_weight):
         eeg_inputs, _ = self._split_eeg_and_subject_inputs(x)
-        # Backbone layers are frozen so calibration fits only the selected
-        # deterministic classifier suffix.
+        # Backbone layers are frozen so calibration fits the selected dense
+        # suffix and the sole VC logits-producing classification head.
         with tf.GradientTape() as tape:
             outputs = self._encode(
                 eeg_inputs,
@@ -1590,12 +1603,12 @@ class SICModel(tf.keras.Model):
         weight_decay: float = 0.0,
         unfreeze_layers: int | None = None,
     ):
-        """Freeze the population model and unfreeze only the final k head layers.
+        """Freeze the backbone and adapt the final k classification layers.
 
         ``unfreeze_layers`` counts prediction layers backward from the output:
-        1 means logits/softmax only, 2 means the final hidden dense block plus
-        logits, and so on.  The VC target is frozen and acts as a source-trained
-        target for any unfrozen hidden classification representation.
+        1 means the VC logits head only, 2 means the final hidden dense block
+        plus the VC head, and so on. The VC parameters always remain trainable
+        because this module is the classifier rather than a frozen target.
         """
         if unfreeze_layers is None:
             unfreeze_layers = self.calibration_unfreeze_layers
@@ -1620,7 +1633,6 @@ class SICModel(tf.keras.Model):
             layer.trainable = False
         self.parallel_temporal_pool.trainable = False
         self.feature_pool.trainable = False
-        self.vc_target.trainable = False
         if self.subject_gradient_reversal is not None:
             self.subject_gradient_reversal.trainable = False
         if self.subject_hidden is not None:
@@ -1630,8 +1642,9 @@ class SICModel(tf.keras.Model):
         if self.subject_logits_layer is not None:
             self.subject_logits_layer.trainable = False
 
-        # Freeze the whole dense prediction head, then unfreeze exactly the
-        # requested suffix.  A hidden block consists of Dense + LN + Dropout.
+        # Freeze every dense feature block, then unfreeze exactly the requested
+        # suffix. A hidden block consists of Dense + LN + Dropout; the final
+        # prediction layer is the VC classification head.
         for dense, norm, dropout in zip(
             self.classification_dense_layers,
             self.classification_norm_layers,
@@ -1640,7 +1653,7 @@ class SICModel(tf.keras.Model):
             dense.trainable = False
             norm.trainable = False
             dropout.trainable = False
-        self.logits_layer.trainable = True
+        self.vc_target.trainable = True
 
         hidden_to_unfreeze = max(0, unfreeze_layers - 1)
         if hidden_to_unfreeze:

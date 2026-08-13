@@ -80,11 +80,12 @@ At least one encoder branch must remain active.
 
 ### Classifier and subject adversary
 
-The pooled feature vector enters the dense classifier specified by `classification_hidden_units`, followed by the logits layer. The subject head receives the same pooled encoder vector through gradient reversal.
+The pooled feature vector enters the dense feature blocks specified by `classification_hidden_units`, followed by one `VariationalClassifier` logits head. The subject head receives the same pooled encoder vector through gradient reversal.
 
-The model still uses the existing `VariationalClassifier` as an auxiliary classifier-head regularizer. This is distinct from variational autoencoding:
+The `VariationalClassifier` is the sole emotion-classification head. There is no parallel dense focal head: its one logits tensor is used for prediction, focal loss, and the joint VC objective. This is distinct from variational autoencoding:
 
 - it operates inside the final classifier objective;
+- its learned class parameters update during source training and subject calibration;
 - it does not replace or reduce the GCN-GRU or BiLSTM outputs;
 - it does not create the encoder's fused representation; and
 - it does not reconstruct EEG.
@@ -193,13 +194,13 @@ A calibration shot is one complete target-subject trial, not one window. For eve
 1. Build a seeded target-only calibration/evaluation split.
 2. Restore the untouched LOSO source weights.
 3. Evaluate zero shot on the fold's evaluation trials.
-4. Freeze the encoder and subject-invariance components.
-5. Unfreeze the requested suffix of the classifier.
+4. Freeze the encoder and subject-invariance components while keeping the VC classification head trainable.
+5. Unfreeze the requested dense suffix before the VC head.
 6. Fine-tune on the calibration trials using a fresh optimizer.
 7. Re-evaluate the same held-out evaluation trials.
 8. Report paired zero-shot, calibrated, and calibrated-minus-zero-shot metrics.
 
-`calibration_unfreeze_layers=2` selects the final classifier hidden block and logits layer. Every calibration fold begins from the same zero-shot model.
+`calibration_unfreeze_layers=2` selects the final classifier hidden block plus the VC logits head. `calibration_use_vc_target=false` disables only the auxiliary VC regularizers during calibration; it does not freeze or replace the VC head. Every calibration fold begins from the same zero-shot model.
 
 The full script evaluates:
 

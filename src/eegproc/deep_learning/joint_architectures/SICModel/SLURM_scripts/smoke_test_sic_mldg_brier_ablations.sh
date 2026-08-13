@@ -259,7 +259,7 @@ print(json.dumps({
     "classification_dropout": 0.4,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": {"grid": [1.0]},
+    "vc_beta": 1.0,
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,

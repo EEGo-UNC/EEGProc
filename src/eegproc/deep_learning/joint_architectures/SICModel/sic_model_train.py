@@ -1214,23 +1214,15 @@ def train_sic(
     )
 
     overall = results.get("overall", {})
-    zero_means = overall.get("zero_shot_all_trials_mean_scores", {})
-    logger.info(
-        "Final 0-shot means | accuracy=%s | balanced_accuracy=%s | "
-        "brier_score=%s",
-        zero_means.get("accuracy"),
-        zero_means.get("balanced_accuracy"),
-        zero_means.get("brier_score"),
+    zero_accuracy = overall.get("zero_shot_all_trials_mean_scores", {}).get(
+        "accuracy"
     )
+    logger.info("Final 0-shot mean accuracy: %s", zero_accuracy)
     for shots, level in overall.get("calibration_levels", {}).items():
-        calibrated_means = level.get("calibrated_mean_scores", {})
         logger.info(
-            "Final %s-shot means | accuracy=%s | balanced_accuracy=%s | "
-            "brier_score=%s",
+            "Final %s-shot mean accuracy: %s",
             shots,
-            calibrated_means.get("accuracy"),
-            calibrated_means.get("balanced_accuracy"),
-            calibrated_means.get("brier_score"),
+            level.get("calibrated_mean_scores", {}).get("accuracy"),
         )
     logger.info("Saved SIC artifacts to %s", run_dir)
     return {"run_dir": str(run_dir), "results": results}

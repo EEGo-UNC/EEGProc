@@ -150,7 +150,7 @@ Temporal pooling aligns sequence lengths. It does not project feature dimensions
 | `vc_lambda` | 0.05 | 0.05 | VC discriminator/divergence regularizer weight. |
 | `update_vc_discriminator` | `False` | `False` | Does not run a separate VC-discriminator optimizer. |
 
-The `VariationalClassifier` regularizes the final classification embedding. It does not turn the encoder outputs into a VAE latent, and it does not change the direct encoder concatenation width.
+The `VariationalClassifier` is the sole logits-producing emotion head. Focal loss and the VC terms use those same logits in one objective, and the head remains trainable during calibration. It does not turn the encoder outputs into a VAE latent or change the direct encoder concatenation width.
 
 ## 8. Subject-adversarial invariance
 
@@ -171,8 +171,8 @@ The subject head receives the pooled concatenated deterministic encoder vector.
 | `use_gcn_gru_branch` | False only in `no_gcn_gru` | Removes the complete graph/spectral branch. |
 | `use_bilstm_branch` | False only in `no_bilstm` | Removes the complete temporal branch. |
 | `remove_median_label` | True only in `remove_median` | Removes complete trials whose raw target rating equals 3. |
-| `calibration_unfreeze_layers` | 2 | Unfreezes the final classifier hidden block and logits layer. |
-| `calibration_use_vc_target` | `True` | Retains the configured frozen VC-target regularization during calibration. |
+| `calibration_unfreeze_layers` | 2 | Unfreezes the final classifier hidden block plus the trainable VC logits head. |
+| `calibration_use_vc_target` | `True` | Includes the configured VC regularizers during calibration. The VC logits head remains trainable for either value. |
 | `use_class_weight` | `False` | Disables model-side class weighting. |
 | `--source-use-class-weight` | Not passed | Disables source class weights in the evaluator. |
 | `--calibration-use-class-weight` | Not passed | Disables calibration class weights. |
