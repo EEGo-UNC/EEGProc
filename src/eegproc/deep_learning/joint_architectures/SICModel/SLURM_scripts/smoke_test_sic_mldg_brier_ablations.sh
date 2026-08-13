@@ -255,7 +255,7 @@ print(json.dumps({
     # not reduce the encoder feature widths.
     "focal_gamma": 1.5,
     "focal_alpha": {"fixed": None},
-    "classification_hidden_units": {"grid": [256, 128, 64], [128, 64]},
+    "classification_hidden_units": {"grid": [[256, 128, 64], [128, 64]]},
     "classification_dropout": 0.4,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
