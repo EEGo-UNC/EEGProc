@@ -5414,8 +5414,8 @@ def subject_calibration_cv(
     Metrics are first averaged across folds within each subject and shot level,
     then across subjects. Calibration folds are never treated as independent
     subjects. JSON output retains every requested metric at every shot level;
-    terminal output reports only the final mean accuracy for 0-shot and each
-    calibrated level.
+    terminal output reports final mean accuracy, balanced accuracy, and Brier
+    score for 0-shot and each calibrated level.
     """
     feature_array = np.asarray(feature_array)
     label_array = np.asarray(label_array)
@@ -5887,21 +5887,24 @@ def subject_calibration_cv(
         "delta_definition": "post_calibration_minus_paired_zero_shot",
     }
 
-    print("\nFinal mean accuracies by calibration level")
+    final_metric_names = ("accuracy", "balanced_accuracy", "brier_score")
+
+    def _format_final_means(mean_scores: dict) -> str:
+        parts = []
+        for metric_name in final_metric_names:
+            value = mean_scores.get(metric_name)
+            formatted_value = "N/A" if value is None else f"{float(value):.6f}"
+            parts.append(f"{metric_name}={formatted_value}")
+        return ", ".join(parts)
+
+    print("\nFinal mean metrics by calibration level")
     print("=" * 80)
-    zero_accuracy = zero_all_mean.get("accuracy")
-    print(
-        "0-shot: "
-        + ("N/A" if zero_accuracy is None else f"{float(zero_accuracy):.6f}")
-    )
+    print(f"0-shot: {_format_final_means(zero_all_mean)}")
     for shots, _ in calibration_levels:
-        accuracy = overall_calibration_levels[str(shots)][
+        calibrated_means = overall_calibration_levels[str(shots)][
             "calibrated_mean_scores"
-        ].get("accuracy")
-        print(
-            f"{shots}-shot: "
-            + ("N/A" if accuracy is None else f"{float(accuracy):.6f}")
-        )
+        ]
+        print(f"{shots}-shot: {_format_final_means(calibrated_means)}")
     return results
 
 def fixed_loso_cv(

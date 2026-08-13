@@ -79,8 +79,8 @@ SELECTION_METRIC="brier_score"
 HYPERPARAMETER_SELECTION_LEVEL="calibration"
 CALIBRATION_SELECTION_SHOTS=6
 CALIBRATION_LEVEL_ARGS=(
-    --calibration-level 3 2
-    --calibration-level 6 2
+    --calibration-level 3 6
+    --calibration-level 6 3
 )
 
 cd "$PROJECT_DIR"
