@@ -55,6 +55,12 @@ class SICTrainingConfig:
     log_variational_intervals: bool = False
     uncertainty_samples: int = 30
     ece_bins: int = 15
+    prediction_diagnostics: bool = False
+    prediction_diagnostics_metric: str = "accuracy"
+    prediction_diagnostics_every_n_epochs: int = 1
+    prediction_diagnostics_max_samples: int = 256
+    prediction_diagnostics_threshold_tolerance: float = 0.01
+    prediction_diagnostics_seed: int | None = 42
 
     source_use_class_weight: bool = False
     calibration_use_class_weight: bool = False
@@ -239,8 +245,8 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Train SIC with independent variational GCN-GRU and BiLSTM "
-            "branches, direct latent concatenation, VAE reconstruction, "
+            "Train SIC with independent deterministic GCN-GRU and BiLSTM "
+            "branches, direct feature concatenation, "
             "ERM/V-REx/first-order MLDG, VC regularization, and multi-level "
             "subject calibration."
         )
@@ -342,6 +348,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-variational-intervals", action="store_true")
     parser.add_argument("--uncertainty-samples", type=_positive_int, default=30)
     parser.add_argument("--ece-bins", type=_positive_int, default=15)
+    parser.add_argument(
+        "--prediction-diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Record prediction diagnostics during LOSO source training.",
+    )
+    parser.add_argument(
+        "--prediction-diagnostics-metric",
+        choices=SIC_CLASSIFICATION_METRICS,
+        default="accuracy",
+        help="Classification metric highlighted in prediction diagnostic rows.",
+    )
+    parser.add_argument(
+        "--prediction-diagnostics-every-n-epochs",
+        type=_positive_int,
+        default=1,
+    )
+    parser.add_argument(
+        "--prediction-diagnostics-max-samples",
+        type=_positive_int,
+        default=256,
+    )
+    parser.add_argument(
+        "--prediction-diagnostics-threshold-tolerance",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument("--prediction-diagnostics-seed", type=int, default=42)
     parser.add_argument("--source-use-class-weight", action="store_true")
     parser.add_argument("--calibration-use-class-weight", action="store_true")
 
@@ -362,17 +396,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
-        "--use-decoder",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-    )
-    parser.add_argument(
         "--hyperparameters-json",
         default=None,
         help=(
-            "Fixed SIC configuration or Cartesian search grid as JSON. z_dim "
-            "is the posterior width per active branch; with both branches, "
-            "the classifier and joint decoder receive 2*z_dim features. "
+            "Fixed SIC configuration or Cartesian search grid as JSON. The "
+            "complete GCN-GRU and BiLSTM encoder features are concatenated; "
+            "there is no z projection or decoder configuration. "
             "Use {\"grid\":[...]} and {\"fixed\":...} for unambiguous values."
         ),
     )
@@ -408,7 +437,6 @@ def model_config_from_args(args) -> dict:
     for key in (
         "use_gcn_gru_branch",
         "use_bilstm_branch",
-        "use_decoder",
         "remove_median_label",
     ):
         cli_value = getattr(args, key)
@@ -451,6 +479,10 @@ def validate_args(args, model_config: dict) -> None:
         raise ValueError("prediction-latent-samples must be >= 0.")
     if args.ece_bins < 2:
         raise ValueError("--ece-bins must be >= 2.")
+    if args.prediction_diagnostics_threshold_tolerance < 0.0:
+        raise ValueError(
+            "--prediction-diagnostics-threshold-tolerance must be non-negative."
+        )
     if "epochs" in model_config or "batch_size" in model_config:
         raise ValueError(
             "Do not put epochs/batch_size inside --hyperparameters-json; use "
@@ -467,13 +499,13 @@ def validate_args(args, model_config: dict) -> None:
         if removed_fusion_settings:
             raise ValueError(
                 "Remove obsolete fusion settings from the model configuration: "
-                f"{sorted(removed_fusion_settings)}. Branch z values are now "
+                f"{sorted(removed_fusion_settings)}. Encoder feature vectors are "
                 "concatenated directly."
             )
         if builder_config.get("architecture_mode") == "serial":
             raise ValueError(
                 "architecture_mode='serial' was removed. SIC now always uses "
-                "independent parallel variational branches."
+                "independent parallel deterministic branches."
             )
         if (
             builder_config.get("use_gcn_gru_branch") is False
@@ -576,6 +608,16 @@ def training_config_from_args(
         log_variational_intervals=args.log_variational_intervals,
         uncertainty_samples=args.uncertainty_samples,
         ece_bins=args.ece_bins,
+        prediction_diagnostics=args.prediction_diagnostics,
+        prediction_diagnostics_metric=args.prediction_diagnostics_metric,
+        prediction_diagnostics_every_n_epochs=(
+            args.prediction_diagnostics_every_n_epochs
+        ),
+        prediction_diagnostics_max_samples=args.prediction_diagnostics_max_samples,
+        prediction_diagnostics_threshold_tolerance=(
+            args.prediction_diagnostics_threshold_tolerance
+        ),
+        prediction_diagnostics_seed=args.prediction_diagnostics_seed,
         source_use_class_weight=args.source_use_class_weight,
         calibration_use_class_weight=args.calibration_use_class_weight,
         n_jobs=args.n_jobs,

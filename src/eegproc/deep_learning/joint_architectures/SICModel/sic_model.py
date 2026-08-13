@@ -1,40 +1,30 @@
 """SIC: Subject Invariant Calibrator model.
 
-MTLFuseNet GCN/GRU -> temporal BiLSTM -> variational z -> dense-softmax.
+Parallel MTLFuseNet GCN-GRU and temporal BiLSTM encoders with head fusion.
 
 Architecture
 ------------
-For each EEG window, two independent encoders produce factorized variational
-posteriors::
+For each EEG window, two independent deterministic encoders produce feature
+sequences::
 
-    channel-band EEG -> fixed-MI GCN -> spectral GRU -> q_g(z_g | x)
-    channel-band EEG -> temporal BiLSTM              -> q_b(z_b | x)
+    channel-band EEG -> fixed-MI GCN -> spectral GRU -> h_g
+    channel-band EEG -> temporal BiLSTM              -> h_b
 
-The sampled branch latents are concatenated directly.  There is no learned
-fusion projection between the branch posteriors and the classifier::
+After matching their temporal lengths, the complete encoder feature vectors
+are concatenated directly. There is no learned projection, bottleneck, or
+fusion network between the encoders and the prediction heads::
 
-    z_joint = concat([z_g, z_b]) -> dense-softmax classifier
+    h_joint = concat([h_g, h_b]) -> pooling -> dense-softmax classifier
 
-The pooled joint-z representation feeds a conventional dense -> softmax emotion
-classifier.  EEGProc's existing VariationalClassifier is used as an auxiliary
-VC target/regularizer on the dense classifier embedding; the dense logits are
-still the actual prediction logits.
+With the default widths, h_g has 384 features and h_b has 2 * 128 = 256
+features, so both active branches give the final heads all 640 features. Fusion
+occurs in the classifier and subject-adversarial heads. EEGProc's existing
+VariationalClassifier remains an auxiliary classifier-head regularizer; it is
+not an encoder VAE and the dense logits remain the actual prediction logits.
 
-The generative path uses EEGProc's existing graph-aware MTL decoder::
-
-    concatenated branch-z sequence
-        -> temporal projection / upsampling
-        -> fixed-MI MTL-style graph decoding
-        -> reconstructed channel-band EEG
-
-The decoder is intentionally simpler than the encoder: it is a reconstruction
-module, not a claimed mathematical inverse of the GCN/GRU/BiLSTM encoder.
-
-Subject invariance can be imposed directly on the pooled concatenated posterior
-mean with ordinary gradient
-reversal.  There is no adversarial takeover/recovery controller: emotion/VC,
-VAE, and (when enabled) subject-adversarial objectives are optimized together
-in the same source update.
+There is no encoder posterior, reparameterization, KL loss, reconstruction
+loss, or decoder. Subject invariance can be imposed directly on the pooled
+concatenated deterministic representation with ordinary gradient reversal.
 
 V-REx can additionally regularize source training.  Each source subject present
 in a minibatch is treated as an environment.  SIC computes the focal risk
@@ -53,7 +43,7 @@ gradient-through-gradient path is constructed.
 Subject calibration
 -------------------
 ``prepare_for_subject_calibration`` freezes the complete representation,
-posterior, decoder, subject adversary, and VC target parameters.  It then
+subject adversary, and VC target parameters. It then
 unfreezes only the last ``calibration_unfreeze_layers`` prediction layers:
 
     1 -> softmax/logits only
@@ -70,11 +60,8 @@ This file is designed for ``cross_val.subject_calibration_cv``.  Its builder
 accepts ``training_features`` and computes the fixed MI adjacency from source
 subjects only, avoiding target-subject leakage.
 
-Ablations are controlled by ``use_gcn_gru_branch``, ``use_bilstm_branch``, and
-``use_decoder``. At least one encoder branch must remain enabled. Disabling the
-decoder removes reconstruction and decoder parameters while retaining the
-variational posterior KL term, which isolates the decoder/reconstruction
-contribution without converting the classifier into a deterministic model.
+Ablations are controlled by ``use_gcn_gru_branch`` and
+``use_bilstm_branch``. At least one encoder branch must remain enabled.
 """
 
 from __future__ import annotations
@@ -86,10 +73,20 @@ import numpy as np
 import tensorflow as tf
 
 try:
+    from ...generalize_optimization_strats.MetaLearning import (
+        fit_sic_mldg,
+        run_sic_mldg_train_step,
+    )
+except ImportError:
+    from eegproc.deep_learning.generalize_optimization_strats.MetaLearning import (
+        fit_sic_mldg,
+        run_sic_mldg_train_step,
+    )
+
+try:
     from ...supervised.variational_classifier import VariationalClassifier
     from ...unsupervised.GNN.GCNMTL import (
         GCNMTLEncoder,
-        GCNMTLDecoder,
         compute_mtl_shared_mi_adjacency,
     )
 except ImportError:
@@ -98,12 +95,11 @@ except ImportError:
     )
     from eegproc.deep_learning.unsupervised.GNN.GCNMTL import (
         GCNMTLEncoder,
-        GCNMTLDecoder,
         compute_mtl_shared_mi_adjacency,
     )
 
 
-SIC_BUILDER_API_VERSION = 8
+SIC_BUILDER_API_VERSION = 9
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
 
 
@@ -142,190 +138,6 @@ def _resolve_training_method(
             "legacy use_vrex setting."
         )
     return normalized
-
-
-class _MLDGEpisodeSequence(tf.keras.utils.Sequence):
-    """Precompute balanced, complete-trial first-order MLDG episodes.
-
-    Every item is one meta-learning episode and therefore one Keras train step.
-    Subject roles are balanced across an epoch.  Trial groups are sampled as
-    indivisible units, so window-level training never splits a selected trial.
-    """
-
-    def __init__(
-        self,
-        *,
-        eeg,
-        labels,
-        subject_ids,
-        trial_ids,
-        sample_weight,
-        meta_train_subjects: int | None,
-        meta_test_subjects: int,
-        trials_per_subject: int,
-        steps_per_epoch: int | None,
-        seed: int | None,
-    ):
-        super().__init__()
-        self.eeg = np.asarray(eeg)
-        self.labels = np.asarray(labels)
-        self.subject_ids = np.asarray(subject_ids).reshape(-1)
-        self.trial_ids = np.asarray(trial_ids).reshape(-1)
-        self.sample_weight = (
-            None
-            if sample_weight is None
-            else np.asarray(sample_weight, dtype=np.float32).reshape(-1)
-        )
-        n_samples = len(self.eeg)
-        if not (
-            len(self.labels)
-            == len(self.subject_ids)
-            == len(self.trial_ids)
-            == n_samples
-        ):
-            raise ValueError("MLDG EEG, labels, subject IDs, and trial IDs must align.")
-        if self.sample_weight is not None and len(self.sample_weight) != n_samples:
-            raise ValueError("MLDG sample weights must align with EEG inputs.")
-
-        self.subjects = np.sort(np.unique(self.subject_ids))
-        self.meta_test_subjects = int(meta_test_subjects)
-        if self.meta_test_subjects < 1:
-            raise ValueError("mldg_meta_test_subjects must be >= 1.")
-        if self.meta_test_subjects >= len(self.subjects):
-            raise ValueError(
-                "MLDG needs at least one meta-train subject in addition to its "
-                f"{self.meta_test_subjects} meta-test subjects; only "
-                f"{len(self.subjects)} source subjects are available."
-            )
-        self.meta_train_subjects = (
-            len(self.subjects) - self.meta_test_subjects
-            if meta_train_subjects is None
-            else int(meta_train_subjects)
-        )
-        if self.meta_train_subjects < 1:
-            raise ValueError("mldg_meta_train_subjects must be >= 1 or null.")
-        if self.meta_train_subjects + self.meta_test_subjects > len(self.subjects):
-            raise ValueError(
-                "mldg_meta_train_subjects + mldg_meta_test_subjects cannot "
-                f"exceed the {len(self.subjects)} available source subjects."
-            )
-
-        self.trials_per_subject = int(trials_per_subject)
-        if self.trials_per_subject < 1:
-            raise ValueError("mldg_trials_per_subject must be >= 1.")
-        self._trial_groups: dict[Any, list[np.ndarray]] = {}
-        total_trial_groups = 0
-        for subject_id in self.subjects.tolist():
-            subject_mask = self.subject_ids == subject_id
-            groups = []
-            for trial_id in np.unique(self.trial_ids[subject_mask]).tolist():
-                indices = np.flatnonzero(
-                    subject_mask & (self.trial_ids == trial_id)
-                ).astype(np.int64)
-                if len(indices):
-                    groups.append(indices)
-            if not groups:
-                raise ValueError(f"Subject {subject_id!r} has no MLDG trials.")
-            self._trial_groups[subject_id] = groups
-            total_trial_groups += len(groups)
-
-        subjects_per_episode = self.meta_train_subjects + self.meta_test_subjects
-        default_steps = int(
-            np.ceil(
-                total_trial_groups
-                / float(subjects_per_episode * self.trials_per_subject)
-            )
-        )
-        self.steps_per_epoch = (
-            max(1, default_steps) if steps_per_epoch is None else int(steps_per_epoch)
-        )
-        if self.steps_per_epoch < 1:
-            raise ValueError("mldg_steps_per_epoch must be >= 1 or null.")
-        self.seed = None if seed is None else int(seed)
-        self._epoch = 0
-        self._episodes: list[tuple[np.ndarray, np.ndarray]] = []
-        self._build_epoch()
-
-    def __len__(self):
-        return self.steps_per_epoch
-
-    @staticmethod
-    def _balanced_subject_choice(subjects, counts, n_select, rng):
-        candidates = list(subjects)
-        rng.shuffle(candidates)
-        candidates.sort(key=lambda subject_id: counts[subject_id])
-        chosen = candidates[:n_select]
-        for subject_id in chosen:
-            counts[subject_id] += 1
-        return chosen
-
-    def _sample_complete_trials(self, subject_id, rng, trial_queues):
-        groups = self._trial_groups[subject_id]
-        chosen = []
-        for _ in range(self.trials_per_subject):
-            if not trial_queues[subject_id]:
-                trial_queues[subject_id].extend(rng.permutation(len(groups)).tolist())
-            chosen.append(trial_queues[subject_id].pop())
-        return np.concatenate([groups[int(index)] for index in chosen])
-
-    def _build_epoch(self):
-        epoch_seed = None if self.seed is None else self.seed + self._epoch
-        rng = np.random.default_rng(epoch_seed)
-        meta_test_counts = {subject_id: 0 for subject_id in self.subjects.tolist()}
-        meta_train_counts = {subject_id: 0 for subject_id in self.subjects.tolist()}
-        episodes = []
-        all_subjects = self.subjects.tolist()
-        trial_queues = {subject_id: [] for subject_id in all_subjects}
-        for _ in range(self.steps_per_epoch):
-            meta_test = self._balanced_subject_choice(
-                all_subjects,
-                meta_test_counts,
-                self.meta_test_subjects,
-                rng,
-            )
-            remaining = [
-                subject_id
-                for subject_id in all_subjects
-                if subject_id not in set(meta_test)
-            ]
-            meta_train = self._balanced_subject_choice(
-                remaining,
-                meta_train_counts,
-                self.meta_train_subjects,
-                rng,
-            )
-
-            episode_indices = []
-            episode_roles = []
-            for role, selected_subjects in ((0, meta_train), (1, meta_test)):
-                for subject_id in selected_subjects:
-                    indices = self._sample_complete_trials(
-                        subject_id,
-                        rng,
-                        trial_queues,
-                    )
-                    episode_indices.append(indices)
-                    episode_roles.append(np.full(len(indices), role, dtype=np.int32))
-            indices = np.concatenate(episode_indices)
-            roles = np.concatenate(episode_roles)
-            order = rng.permutation(len(indices))
-            episodes.append((indices[order], roles[order]))
-        self._episodes = episodes
-
-    def __getitem__(self, index):
-        indices, roles = self._episodes[int(index)]
-        inputs = {
-            "eeg": self.eeg[indices],
-            "subject_id": self.subject_ids[indices],
-            "mldg_role": roles,
-        }
-        if self.sample_weight is None:
-            return inputs, self.labels[indices]
-        return inputs, self.labels[indices], self.sample_weight[indices]
-
-    def on_epoch_end(self):
-        self._epoch += 1
-        self._build_epoch()
 
 
 def _build_optimizer(
@@ -506,43 +318,6 @@ class StreamingBalancedAccuracy(tf.keras.metrics.Metric):
 
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
-class StreamingR2(tf.keras.metrics.Metric):
-    """Epoch-wide R^2 for continuous decoder reconstruction."""
-
-    def __init__(self, name="decoder_r2", **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.ss_res = self.add_weight(name="ss_res", initializer="zeros")
-        self.sum_y = self.add_weight(name="sum_y", initializer="zeros")
-        self.sum_y_sq = self.add_weight(name="sum_y_sq", initializer="zeros")
-        self.count = self.add_weight(name="count", initializer="zeros")
-
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        del sample_weight
-        y_true = tf.cast(tf.reshape(y_true, [-1]), self.dtype)
-        y_pred = tf.cast(tf.reshape(y_pred, [-1]), self.dtype)
-        self.ss_res.assign_add(tf.reduce_sum(tf.square(y_true - y_pred)))
-        self.sum_y.assign_add(tf.reduce_sum(y_true))
-        self.sum_y_sq.assign_add(tf.reduce_sum(tf.square(y_true)))
-        self.count.assign_add(tf.cast(tf.size(y_true), self.dtype))
-
-    def result(self):
-        ss_tot = self.sum_y_sq - tf.math.divide_no_nan(
-            tf.square(self.sum_y),
-            self.count,
-        )
-        eps = tf.cast(tf.keras.backend.epsilon(), self.dtype)
-        return tf.where(
-            ss_tot > eps,
-            1.0 - tf.math.divide_no_nan(self.ss_res, ss_tot),
-            tf.zeros((), dtype=self.dtype),
-        )
-
-    def reset_state(self):
-        for variable in (self.ss_res, self.sum_y, self.sum_y_sq, self.count):
-            variable.assign(tf.zeros_like(variable))
-
-
-@tf.keras.utils.register_keras_serializable(package="EEGProc")
 class GradientReversal(tf.keras.layers.Layer):
     """Identity forward pass with a negative scaled encoder gradient."""
 
@@ -572,26 +347,22 @@ class GradientReversal(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
 class SICModel(tf.keras.Model):
-    """SIC with parallel variational GCN-GRU and BiLSTM encoder branches."""
+    """SIC with direct deterministic GCN-GRU/BiLSTM feature concatenation."""
 
     def __init__(
         self,
         *,
         graph_encoder: GCNMTLEncoder | None,
-        decoder: GCNMTLDecoder | None,
         classification_level: str = "trial",
         n_classes: int = 2,
+        gcn_gru_feature_dim: int = 384,
         bilstm_units: int = 128,
         n_bilstm_layers: int = 1,
         bilstm_dropout: float = 0.30,
         architecture_mode: str | None = None,
         use_gcn_gru_branch: bool = True,
         use_bilstm_branch: bool = True,
-        use_decoder: bool = True,
         temporal_downsample_factor: int = 1,
-        z_dim: int = 64,
-        z_log_var_clip_min: float = -20.0,
-        z_log_var_clip_max: float = 20.0,
         classification_hidden_units: Sequence[int] = (128,),
         classification_dropout: float = 0.20,
         activation: str = "relu",
@@ -604,8 +375,6 @@ class SICModel(tf.keras.Model):
         vc_gamma: float = 0.0,
         vc_lambda: float = 0.0,
         update_vc_discriminator: bool = False,
-        vae_loss_weight: float = 0.10,
-        vae_beta: float = 0.05,
         training_method: str | None = None,
         use_vrex: bool = False,
         vrex_penalty_weight: float = 1.0,
@@ -638,27 +407,30 @@ class SICModel(tf.keras.Model):
             raise ValueError("classification_level must be 'window' or 'trial'.")
         use_gcn_gru_branch = bool(use_gcn_gru_branch)
         use_bilstm_branch = bool(use_bilstm_branch)
-        use_decoder = bool(use_decoder)
         if not use_gcn_gru_branch and not use_bilstm_branch:
             raise ValueError(
                 "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
             )
         if use_gcn_gru_branch and graph_encoder is None:
             raise ValueError("graph_encoder is required when use_gcn_gru_branch=true.")
-        if use_decoder and decoder is None:
-            raise ValueError("decoder is required when use_decoder=true.")
         if int(n_classes) < 2:
             raise ValueError("n_classes must be >= 2.")
-        if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1 or int(z_dim) < 1:
-            raise ValueError("BiLSTM and z dimensions must be positive.")
-        # Compatibility with older configurations.  The corrected encoder is
-        # always parallel and concatenates branch latents directly; the old
-        # learned feature-fusion projection no longer exists.
+        if int(gcn_gru_feature_dim) < 1:
+            raise ValueError("gcn_gru_feature_dim must be positive.")
+        if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1:
+            raise ValueError("BiLSTM dimensions must be positive.")
+        # Compatibility with older configuration labels. The encoder is always
+        # parallel and concatenates complete deterministic branch features;
+        # the old learned fusion projection no longer exists.
         if architecture_mode is not None:
             architecture_mode = str(architecture_mode).lower()
-            if architecture_mode not in {"feature_fusion", "parallel_variational"}:
+            if architecture_mode not in {
+                "feature_fusion",
+                "parallel_variational",
+                "parallel_deterministic",
+            }:
                 raise ValueError(
-                    "SIC now uses parallel variational branches only; remove "
+                    "SIC now uses parallel deterministic branches only; remove "
                     "architecture_mode='serial'."
                 )
         if int(temporal_downsample_factor) < 1:
@@ -667,8 +439,6 @@ class SICModel(tf.keras.Model):
             raise ValueError("focal_gamma must be non-negative.")
         if focal_alpha is not None and not 0.0 <= float(focal_alpha) <= 1.0:
             raise ValueError("focal_alpha must be in [0, 1] or None.")
-        if float(z_log_var_clip_min) >= float(z_log_var_clip_max):
-            raise ValueError("z_log_var_clip_min must be less than max.")
         hidden_units = tuple(int(value) for value in classification_hidden_units)
         if any(value < 1 for value in hidden_units):
             raise ValueError("classification_hidden_units must be positive.")
@@ -680,8 +450,6 @@ class SICModel(tf.keras.Model):
             raise ValueError("label_smoothing must be in [0, 1).")
         for loss_name, value in (
             ("vc_loss_weight", vc_loss_weight),
-            ("vae_loss_weight", vae_loss_weight),
-            ("vae_beta", vae_beta),
             ("subject_adversarial_weight", subject_adversarial_weight),
             ("subject_loss_weight", subject_loss_weight),
         ):
@@ -718,24 +486,20 @@ class SICModel(tf.keras.Model):
             )
 
         self.graph_encoder = graph_encoder
-        self.decoder = decoder
         self.classification_level = classification_level
         self.n_classes = int(n_classes)
+        self.gcn_gru_feature_dim = int(gcn_gru_feature_dim)
         self.bilstm_units = int(bilstm_units)
+        self.bilstm_feature_dim = 2 * self.bilstm_units
         self.n_bilstm_layers = int(n_bilstm_layers)
         self.bilstm_dropout_rate = float(bilstm_dropout)
         self.use_gcn_gru_branch = use_gcn_gru_branch
         self.use_bilstm_branch = use_bilstm_branch
-        self.use_decoder = use_decoder
         self.temporal_downsample_factor = int(temporal_downsample_factor)
-        # z_dim is the posterior width of each active branch.  The classifier,
-        # decoder, and subject adversary consume their direct concatenation.
-        self.z_dim = int(z_dim)
-        self.combined_z_dim = self.z_dim * (
-            int(self.use_gcn_gru_branch) + int(self.use_bilstm_branch)
+        self.combined_feature_dim = (
+            self.gcn_gru_feature_dim * int(self.use_gcn_gru_branch)
+            + self.bilstm_feature_dim * int(self.use_bilstm_branch)
         )
-        self.z_log_var_clip_min = float(z_log_var_clip_min)
-        self.z_log_var_clip_max = float(z_log_var_clip_max)
         self.classification_hidden_units = hidden_units
         self.classification_dropout_rate = float(classification_dropout)
         self.activation_name = str(activation)
@@ -749,9 +513,8 @@ class SICModel(tf.keras.Model):
         self.vc_gamma = float(vc_gamma)
         self.vc_lambda = float(vc_lambda)
         self.update_vc_discriminator = bool(update_vc_discriminator)
-        self.vae_loss_weight = float(vae_loss_weight)
-        self.vae_beta = float(vae_beta)
         self.use_class_weight = bool(use_class_weight)
+        self.supports_latent_sampling = False
 
         self.training_method = resolved_training_method
         self.use_vrex = self.training_method == "vrex"
@@ -842,56 +605,18 @@ class SICModel(tf.keras.Model):
                 )
             )
 
-        # The BiLSTM is an independent raw-EEG branch.  Pool its deterministic
-        # features before its posterior heads so its latent time axis matches
-        # the GCN-GRU branch without averaging already-sampled noise.
+        # The BiLSTM is an independent raw-EEG branch. Pool only its temporal
+        # axis so it can be concatenated position-for-position with the
+        # reduced-time GCN-GRU output. Feature widths are left untouched.
         self.parallel_temporal_pool = tf.keras.layers.AveragePooling1D(
             pool_size=self.temporal_downsample_factor,
             strides=self.temporal_downsample_factor,
             padding="same",
             name="v6_parallel_bilstm_pool",
         )
-        self.gcn_z_mean_projection = (
-            tf.keras.layers.Dense(
-                self.z_dim,
-                activation=None,
-                name="v6_gcn_z_mean",
-            )
-            if self.use_gcn_gru_branch
-            else None
+        self.feature_pool = tf.keras.layers.GlobalAveragePooling1D(
+            name="v6_feature_pool"
         )
-        self.gcn_z_log_var_projection = (
-            tf.keras.layers.Dense(
-                self.z_dim,
-                activation=None,
-                kernel_initializer="zeros",
-                bias_initializer="zeros",
-                name="v6_gcn_z_log_var",
-            )
-            if self.use_gcn_gru_branch
-            else None
-        )
-        self.bilstm_z_mean_projection = (
-            tf.keras.layers.Dense(
-                self.z_dim,
-                activation=None,
-                name="v6_bilstm_z_mean",
-            )
-            if self.use_bilstm_branch
-            else None
-        )
-        self.bilstm_z_log_var_projection = (
-            tf.keras.layers.Dense(
-                self.z_dim,
-                activation=None,
-                kernel_initializer="zeros",
-                bias_initializer="zeros",
-                name="v6_bilstm_z_log_var",
-            )
-            if self.use_bilstm_branch
-            else None
-        )
-        self.z_pool = tf.keras.layers.GlobalAveragePooling1D(name="v6_z_pool")
 
         # Dense-softmax prediction head. Hidden blocks are explicit so the
         # calibration policy can unfreeze exactly the last k prediction layers.
@@ -927,7 +652,7 @@ class SICModel(tf.keras.Model):
         vc_dim = (
             self.classification_hidden_units[-1]
             if self.classification_hidden_units
-            else self.combined_z_dim
+            else self.combined_feature_dim
         )
         self.vc_target = VariationalClassifier(
             n_classes=self.n_classes,
@@ -971,16 +696,6 @@ class SICModel(tf.keras.Model):
         self.true_class_1_fraction_tracker = tf.keras.metrics.Mean(
             name="true_class_1_fraction"
         )
-        self.vae_loss_tracker = tf.keras.metrics.Mean(name="vae_loss")
-        self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
-            name="reconstruction_loss"
-        )
-        self.decoder_r2_tracker = StreamingR2(name="decoder_r2")
-        self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
-        self.gcn_kl_loss_tracker = tf.keras.metrics.Mean(name="gcn_kl_loss")
-        self.bilstm_kl_loss_tracker = tf.keras.metrics.Mean(
-            name="bilstm_kl_loss"
-        )
         self.vrex_penalty_tracker = tf.keras.metrics.Mean(name="vrex_penalty")
         self.vrex_subject_risk_mean_tracker = tf.keras.metrics.Mean(
             name="vrex_subject_risk_mean"
@@ -1018,15 +733,7 @@ class SICModel(tf.keras.Model):
             self.balanced_accuracy_tracker,
             self.predicted_class_1_fraction_tracker,
             self.true_class_1_fraction_tracker,
-            self.vae_loss_tracker,
-            self.kl_loss_tracker,
         ]
-        if self.use_gcn_gru_branch:
-            output.append(self.gcn_kl_loss_tracker)
-        if self.use_bilstm_branch:
-            output.append(self.bilstm_kl_loss_tracker)
-        if self.use_decoder:
-            output.extend([self.reconstruction_loss_tracker, self.decoder_r2_tracker])
         if self.use_vrex:
             output.extend(
                 [
@@ -1110,80 +817,19 @@ class SICModel(tf.keras.Model):
                 **kwargs,
             )
 
-        if validation_split not in (None, 0, 0.0):
-            raise ValueError(
-                "MLDG does not support sample-level validation_split. Use "
-                "subject-disjoint validation_data or validation_subjects=0."
-            )
-        if not isinstance(x, Mapping):
-            raise ValueError(
-                "MLDG source fitting requires inputs prepared by "
-                "model.prepare_fit_inputs(...)."
-            )
-        missing = {"eeg", "subject_id", "trial_id"}.difference(x)
-        if missing:
-            raise ValueError(
-                "MLDG source inputs are missing "
-                f"{sorted(missing)}. The model builder must receive aligned "
-                "training_subject_ids and training_trial_ids."
-            )
-        if y is None:
-            raise ValueError("MLDG source fitting requires labels.")
-
-        resolved_sample_weight = (
-            None
-            if sample_weight is None
-            else np.asarray(sample_weight, dtype=np.float32).reshape(-1)
-        )
-        if class_weight is not None:
-            labels_array = np.asarray(y)
-            if labels_array.ndim == 2 and labels_array.shape[-1] > 1:
-                class_ids = np.argmax(labels_array, axis=-1)
-            else:
-                class_ids = labels_array.reshape(-1)
-            class_weights = np.asarray(
-                [class_weight.get(int(class_id), 1.0) for class_id in class_ids],
-                dtype=np.float32,
-            )
-            resolved_sample_weight = (
-                class_weights
-                if resolved_sample_weight is None
-                else resolved_sample_weight * class_weights
-            )
-
-        episode_steps = (
-            self.mldg_steps_per_epoch
-            if self.mldg_steps_per_epoch is not None
-            else steps_per_epoch
-        )
-        episodes = _MLDGEpisodeSequence(
-            eeg=x["eeg"],
-            labels=y,
-            subject_ids=x["subject_id"],
-            trial_ids=x["trial_id"],
-            sample_weight=resolved_sample_weight,
-            meta_train_subjects=self.mldg_meta_train_subjects,
-            meta_test_subjects=self.mldg_meta_test_subjects,
-            trials_per_subject=self.mldg_trials_per_subject,
-            steps_per_epoch=episode_steps,
-            seed=self.mldg_seed,
-        )
-        # One Sequence item is already one complete MLDG episode. Ordinary
-        # source_batch_size/shuffle semantics must not rebatch or split it.
-        return super().fit(
-            x=episodes,
-            y=None,
-            batch_size=None,
+        return fit_sic_mldg(
+            self,
+            x=x,
+            y=y,
             epochs=epochs,
             verbose=verbose,
             callbacks=callbacks,
-            validation_split=0.0,
+            validation_split=validation_split,
             validation_data=validation_data,
-            shuffle=False,
-            class_weight=None,
-            sample_weight=None,
+            class_weight=class_weight,
+            sample_weight=sample_weight,
             initial_epoch=initial_epoch,
-            steps_per_epoch=None,
+            steps_per_epoch=steps_per_epoch,
             validation_steps=validation_steps,
             validation_batch_size=validation_batch_size,
             validation_freq=validation_freq,
@@ -1332,7 +978,7 @@ class SICModel(tf.keras.Model):
             x = dropout(x, training=training)
         return x
 
-    def _posterior_from_flat_windows(self, flat_windows, training: bool):
+    def _features_from_flat_windows(self, flat_windows, training: bool):
         graph_sequence = (
             self.graph_encoder(flat_windows, training=training)
             if self.use_gcn_gru_branch
@@ -1354,85 +1000,49 @@ class SICModel(tf.keras.Model):
                 tf.shape(graph_sequence)[1],
                 tf.shape(pooled_bilstm)[1],
                 message=(
-                    "GCN-GRU and BiLSTM posterior sequence lengths do not match."
+                    "GCN-GRU and BiLSTM feature sequence lengths do not match."
                 ),
             )
-
-        gcn_z_mean = gcn_z_log_var = None
-        bilstm_z_mean = bilstm_z_log_var = None
-        mean_parts = []
-        log_var_parts = []
-
-        if graph_sequence is not None:
-            gcn_z_mean = self.gcn_z_mean_projection(graph_sequence)
-            gcn_z_log_var = tf.clip_by_value(
-                self.gcn_z_log_var_projection(graph_sequence),
-                self.z_log_var_clip_min,
-                self.z_log_var_clip_max,
-            )
-            mean_parts.append(gcn_z_mean)
-            log_var_parts.append(gcn_z_log_var)
-
-        if pooled_bilstm is not None:
-            bilstm_z_mean = self.bilstm_z_mean_projection(pooled_bilstm)
-            bilstm_z_log_var = tf.clip_by_value(
-                self.bilstm_z_log_var_projection(pooled_bilstm),
-                self.z_log_var_clip_min,
-                self.z_log_var_clip_max,
-            )
-            mean_parts.append(bilstm_z_mean)
-            log_var_parts.append(bilstm_z_log_var)
-
-        # Concatenating posterior parameters and sampling once is exactly the
-        # block-diagonal factorized distribution obtained by independently
-        # sampling each branch and concatenating z_g and z_b.
-        z_mean = mean_parts[0] if len(mean_parts) == 1 else tf.concat(mean_parts, -1)
-        z_log_var = (
-            log_var_parts[0]
-            if len(log_var_parts) == 1
-            else tf.concat(log_var_parts, -1)
+        feature_parts = [
+            value
+            for value in (graph_sequence, pooled_bilstm)
+            if value is not None
+        ]
+        combined_sequence = (
+            feature_parts[0]
+            if len(feature_parts) == 1
+            else tf.concat(feature_parts, axis=-1)
+        )
+        tf.debugging.assert_equal(
+            tf.shape(combined_sequence)[-1],
+            self.combined_feature_dim,
+            message="Concatenated encoder feature width is inconsistent.",
         )
         return {
             "graph_sequence": graph_sequence,
             "bilstm_sequence": bilstm_sequence,
             "pooled_bilstm_sequence": pooled_bilstm,
-            "gcn_z_mean": gcn_z_mean,
-            "gcn_z_log_var": gcn_z_log_var,
-            "bilstm_z_mean": bilstm_z_mean,
-            "bilstm_z_log_var": bilstm_z_log_var,
-            "z_mean": z_mean,
-            "z_log_var": z_log_var,
+            "combined_feature_sequence": combined_sequence,
         }
 
-    @staticmethod
-    def _reparameterize(z_mean, z_log_var, seed=None):
-        if seed is None:
-            epsilon = tf.random.normal(tf.shape(z_mean), dtype=z_mean.dtype)
-        else:
-            if isinstance(seed, tuple):
-                stateless_seed = tf.constant(seed, dtype=tf.int32)
-            else:
-                stateless_seed = tf.constant([int(seed), 0], dtype=tf.int32)
-            epsilon = tf.random.stateless_normal(
-                tf.shape(z_mean),
-                seed=stateless_seed,
-                dtype=z_mean.dtype,
-            )
-        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
-
-    def _pool_z_for_prediction(self, flat_z, batch_size=None, n_windows=None):
-        window_z = self.z_pool(flat_z)
+    def _pool_features_for_prediction(
+        self,
+        flat_features,
+        batch_size=None,
+        n_windows=None,
+    ):
+        window_features = self.feature_pool(flat_features)
         if self.classification_level == "window":
-            return window_z, window_z
-        window_z = tf.reshape(
-            window_z,
-            [batch_size, n_windows, self.combined_z_dim],
+            return window_features, window_features
+        window_features = tf.reshape(
+            window_features,
+            [batch_size, n_windows, self.combined_feature_dim],
         )
-        trial_z = tf.reduce_mean(window_z, axis=1)
-        return trial_z, window_z
+        trial_features = tf.reduce_mean(window_features, axis=1)
+        return trial_features, window_features
 
-    def _classifier_forward(self, pooled_z, training: bool):
-        x = pooled_z
+    def _classifier_forward(self, pooled_features, training: bool):
+        x = pooled_features
         for dense, norm, dropout in zip(
             self.classification_dense_layers,
             self.classification_norm_layers,
@@ -1454,8 +1064,6 @@ class SICModel(tf.keras.Model):
         eeg_inputs,
         *,
         training: bool,
-        sample_latent: bool,
-        seed=None,
         classifier_training: bool | None = None,
     ):
         eeg_inputs = tf.convert_to_tensor(eeg_inputs, dtype=tf.float32)
@@ -1474,51 +1082,24 @@ class SICModel(tf.keras.Model):
                 eeg_inputs
             )
 
-        posterior = self._posterior_from_flat_windows(
+        encoder_outputs = self._features_from_flat_windows(
             flat_windows,
             training=training,
         )
-        z = (
-            self._reparameterize(
-                posterior["z_mean"],
-                posterior["z_log_var"],
-                seed=seed,
-            )
-            if sample_latent
-            else posterior["z_mean"]
-        )
-        offset = 0
-        gcn_z = None
-        bilstm_z = None
-        if self.use_gcn_gru_branch:
-            gcn_z = z[..., offset : offset + self.z_dim]
-            offset += self.z_dim
-        if self.use_bilstm_branch:
-            bilstm_z = z[..., offset : offset + self.z_dim]
-        pooled_z, window_z = self._pool_z_for_prediction(
-            z,
-            batch_size=batch_size,
-            n_windows=n_windows,
-        )
-        pooled_z_mean, window_z_mean = self._pool_z_for_prediction(
-            posterior["z_mean"],
+        pooled_features, window_features = self._pool_features_for_prediction(
+            encoder_outputs["combined_feature_sequence"],
             batch_size=batch_size,
             n_windows=n_windows,
         )
         classification_embedding, logits = self._classifier_forward(
-            pooled_z,
+            pooled_features,
             training=bool(classifier_training),
         )
-        posterior.update(
+        encoder_outputs.update(
             {
                 "flat_windows": flat_windows,
-                "z": z,
-                "gcn_z": gcn_z,
-                "bilstm_z": bilstm_z,
-                "pooled_z": pooled_z,
-                "window_z": window_z,
-                "pooled_z_mean": pooled_z_mean,
-                "window_z_mean": window_z_mean,
+                "pooled_features": pooled_features,
+                "window_features": window_features,
                 "classification_embedding": classification_embedding,
                 "logits": logits,
                 "probabilities": tf.nn.softmax(logits, axis=-1),
@@ -1526,16 +1107,13 @@ class SICModel(tf.keras.Model):
                 "n_windows": n_windows,
             }
         )
-        return posterior
+        return encoder_outputs
 
-    def call(self, inputs, training=False, sample_latent: bool | None = None):
+    def call(self, inputs, training=False):
         eeg_inputs, _ = self._split_eeg_and_subject_inputs(inputs)
-        if sample_latent is None:
-            sample_latent = bool(training) and not self.calibration_mode
         outputs = self._encode(
             eeg_inputs,
             training=bool(training),
-            sample_latent=bool(sample_latent),
         )
         return outputs["logits"]
 
@@ -1641,72 +1219,27 @@ class SICModel(tf.keras.Model):
         components.pop("weighted_cross_entropy", None)
         return components
 
-    def _vae_components(self, outputs, training: bool):
-        def posterior_kl(z_mean, z_log_var):
-            if z_mean is None or z_log_var is None:
-                return None
-            values = -0.5 * (
-                1.0
-                + z_log_var
-                - tf.square(z_mean)
-                - tf.exp(z_log_var)
-            )
-            return tf.reduce_mean(values)
-
-        gcn_kl_loss = posterior_kl(
-            outputs["gcn_z_mean"],
-            outputs["gcn_z_log_var"],
-        )
-        bilstm_kl_loss = posterior_kl(
-            outputs["bilstm_z_mean"],
-            outputs["bilstm_z_log_var"],
-        )
-        active_kl_losses = [
-            value for value in (gcn_kl_loss, bilstm_kl_loss) if value is not None
-        ]
-        # Average active branch KLs so enabling the second encoder does not
-        # silently double the regularizer scale.  Both branches contribute
-        # equally even if different branch widths are introduced later.
-        kl_loss = tf.add_n(active_kl_losses) / tf.cast(
-            len(active_kl_losses),
-            active_kl_losses[0].dtype,
-        )
-        if self.use_decoder:
-            reconstruction = self.decoder(outputs["z"], training=training)
-            reconstruction_loss = tf.reduce_mean(
-                tf.square(outputs["flat_windows"] - reconstruction)
-            )
-        else:
-            reconstruction = None
-            reconstruction_loss = tf.zeros((), dtype=kl_loss.dtype)
-        vae_loss = (
-            reconstruction_loss
-            + tf.cast(
-                self.vae_beta,
-                kl_loss.dtype,
-            )
-            * kl_loss
-        )
-        return {
-            "vae_loss": vae_loss,
-            "reconstruction_loss": reconstruction_loss,
-            "kl_loss": kl_loss,
-            "gcn_kl_loss": gcn_kl_loss,
-            "bilstm_kl_loss": bilstm_kl_loss,
-            "reconstruction": reconstruction,
-        }
-
-    def _subject_logits(self, pooled_z, training: bool, use_grl: bool):
+    def _subject_logits(self, pooled_features, training: bool, use_grl: bool):
         if self.subject_logits_layer is None:
             raise RuntimeError("Subject head has not been configured.")
-        x = self.subject_gradient_reversal(pooled_z) if use_grl else pooled_z
+        x = (
+            self.subject_gradient_reversal(pooled_features)
+            if use_grl
+            else pooled_features
+        )
         x = self.subject_hidden(x)
         x = self.subject_dropout_layer(x, training=training)
         return self.subject_logits_layer(x)
 
-    def _subject_components(self, pooled_z, subject_ids, training: bool, use_grl: bool):
+    def _subject_components(
+        self,
+        pooled_features,
+        subject_ids,
+        training: bool,
+        use_grl: bool,
+    ):
         if not self.subject_adversarial_enabled or subject_ids is None:
-            zero = tf.zeros((), dtype=pooled_z.dtype)
+            zero = tf.zeros((), dtype=pooled_features.dtype)
             return {
                 "subject_loss": zero,
                 "subject_logits": None,
@@ -1714,7 +1247,7 @@ class SICModel(tf.keras.Model):
             }
         targets = tf.cast(tf.reshape(subject_ids, [-1]), tf.int32)
         logits = self._subject_logits(
-            pooled_z,
+            pooled_features,
             training=training,
             use_grl=use_grl,
         )
@@ -1744,60 +1277,6 @@ class SICModel(tf.keras.Model):
         ]
         if pairs:
             optimizer.apply_gradients(pairs)
-
-    @staticmethod
-    def _dense_gradient(gradient):
-        if gradient is None:
-            return None
-        if isinstance(gradient, tf.IndexedSlices):
-            return tf.convert_to_tensor(gradient)
-        return gradient
-
-    @classmethod
-    def _combine_first_order_gradients(cls, meta_train, meta_test, beta):
-        combined = []
-        for train_gradient, test_gradient in zip(meta_train, meta_test):
-            train_gradient = cls._dense_gradient(train_gradient)
-            test_gradient = cls._dense_gradient(test_gradient)
-            if train_gradient is None:
-                gradient = (
-                    None
-                    if test_gradient is None
-                    else tf.cast(beta, test_gradient.dtype) * test_gradient
-                )
-            elif test_gradient is None:
-                gradient = train_gradient
-            else:
-                gradient = (
-                    train_gradient
-                    + tf.cast(
-                        beta,
-                        test_gradient.dtype,
-                    )
-                    * test_gradient
-                )
-            combined.append(gradient)
-        return combined
-
-    @classmethod
-    def _gradient_cosine_similarity(cls, left, right):
-        dot = tf.zeros((), dtype=tf.float32)
-        left_norm_sq = tf.zeros((), dtype=tf.float32)
-        right_norm_sq = tf.zeros((), dtype=tf.float32)
-        for left_gradient, right_gradient in zip(left, right):
-            left_gradient = cls._dense_gradient(left_gradient)
-            right_gradient = cls._dense_gradient(right_gradient)
-            if left_gradient is None or right_gradient is None:
-                continue
-            left_flat = tf.cast(tf.reshape(left_gradient, [-1]), tf.float32)
-            right_flat = tf.cast(tf.reshape(right_gradient, [-1]), tf.float32)
-            dot += tf.reduce_sum(left_flat * right_flat)
-            left_norm_sq += tf.reduce_sum(tf.square(left_flat))
-            right_norm_sq += tf.reduce_sum(tf.square(right_flat))
-        return tf.math.divide_no_nan(
-            dot,
-            tf.sqrt(left_norm_sq * right_norm_sq),
-        )
 
     def _subject_head_variables(self):
         if self.subject_logits_layer is None:
@@ -1877,7 +1356,6 @@ class SICModel(tf.keras.Model):
         outputs,
         y_flat,
         sample_weight,
-        vae_components=None,
         subject_components=None,
         vrex_components=None,
     ):
@@ -1908,38 +1386,6 @@ class SICModel(tf.keras.Model):
         self.true_class_1_fraction_tracker.update_state(
             tf.cast(tf.equal(tf.cast(y_flat, tf.int32), 1), tf.float32)
         )
-        self.vae_loss_tracker.update_state(
-            zero if vae_components is None else vae_components["vae_loss"]
-        )
-        if self.use_decoder:
-            self.reconstruction_loss_tracker.update_state(
-                zero
-                if vae_components is None
-                else vae_components["reconstruction_loss"]
-            )
-        if (
-            vae_components is not None
-            and vae_components.get("reconstruction") is not None
-        ):
-            self.decoder_r2_tracker.update_state(
-                outputs["flat_windows"],
-                vae_components["reconstruction"],
-            )
-        self.kl_loss_tracker.update_state(
-            zero if vae_components is None else vae_components["kl_loss"]
-        )
-        if self.use_gcn_gru_branch:
-            self.gcn_kl_loss_tracker.update_state(
-                zero
-                if vae_components is None
-                else vae_components["gcn_kl_loss"]
-            )
-        if self.use_bilstm_branch:
-            self.bilstm_kl_loss_tracker.update_state(
-                zero
-                if vae_components is None
-                else vae_components["bilstm_kl_loss"]
-            )
         if self.use_vrex:
             self.vrex_penalty_tracker.update_state(
                 zero if vrex_components is None else vrex_components["penalty"]
@@ -1979,7 +1425,6 @@ class SICModel(tf.keras.Model):
             outputs = self._encode(
                 eeg_inputs,
                 training=True,
-                sample_latent=True,
             )
             vc_components = self._vc_components(
                 outputs["classification_embedding"],
@@ -1988,9 +1433,8 @@ class SICModel(tf.keras.Model):
                 sample_weight,
                 calibration=False,
             )
-            vae_components = self._vae_components(outputs, training=True)
             subject_components = self._subject_components(
-                outputs["pooled_z_mean"],
+                outputs["pooled_features"],
                 subject_ids,
                 training=True,
                 use_grl=True,
@@ -2004,8 +1448,6 @@ class SICModel(tf.keras.Model):
             dtype = vc_components["total_loss"].dtype
             total = (
                 tf.cast(self.vc_loss_weight, dtype) * vc_components["total_loss"]
-                + tf.cast(self.vae_loss_weight, dtype)
-                * tf.cast(vae_components["vae_loss"], dtype)
                 + tf.cast(self.subject_loss_weight, dtype)
                 * tf.cast(subject_components["subject_loss"], dtype)
                 + tf.cast(self.vrex_penalty_weight, dtype)
@@ -2041,201 +1483,21 @@ class SICModel(tf.keras.Model):
             outputs=outputs,
             y_flat=y_flat,
             sample_weight=sample_weight,
-            vae_components=vae_components,
             subject_components=subject_components,
             vrex_components=vrex_components,
         )
 
     def _mldg_train_step(self, x, y_flat, sample_weight):
-        if not isinstance(x, Mapping) or "mldg_role" not in x:
-            raise ValueError(
-                "MLDG train_step requires the episode roles produced by the "
-                "MLDG fit adapter."
-            )
-        eeg_inputs, subject_ids = self._split_eeg_and_subject_inputs(x)
-        if subject_ids is None:
-            raise ValueError("MLDG source training requires subject IDs.")
-        roles = tf.cast(tf.reshape(x["mldg_role"], [-1]), tf.int32)
-        meta_train_mask = tf.equal(roles, 0)
-        meta_test_mask = tf.equal(roles, 1)
-        tf.debugging.assert_positive(
-            tf.reduce_sum(tf.cast(meta_train_mask, tf.int32)),
-            message="Every MLDG episode needs meta-train examples.",
-        )
-        tf.debugging.assert_positive(
-            tf.reduce_sum(tf.cast(meta_test_mask, tf.int32)),
-            message="Every MLDG episode needs meta-test examples.",
-        )
-
-        def masked(value, mask):
-            return None if value is None else tf.boolean_mask(value, mask)
-
-        meta_train_eeg = masked(eeg_inputs, meta_train_mask)
-        meta_train_y = masked(y_flat, meta_train_mask)
-        meta_train_subject_ids = masked(subject_ids, meta_train_mask)
-        meta_train_weight = masked(sample_weight, meta_train_mask)
-        meta_test_eeg = masked(eeg_inputs, meta_test_mask)
-        meta_test_y = masked(y_flat, meta_test_mask)
-        meta_test_subject_ids = masked(subject_ids, meta_test_mask)
-        meta_test_weight = masked(sample_weight, meta_test_mask)
-
-        # The inner/meta-train loss retains SIC's full source objective. The
-        # virtual-unseen loss intentionally measures focal classification only:
-        # reconstruction, VC distribution regularizers, and subject
-        # identification are source auxiliaries, not evidence that emotion
-        # prediction transferred.
-        with tf.GradientTape() as meta_train_tape:
-            meta_train_outputs = self._encode(
-                meta_train_eeg,
-                training=True,
-                sample_latent=True,
-            )
-            meta_train_vc = self._vc_components(
-                meta_train_outputs["classification_embedding"],
-                meta_train_outputs["logits"],
-                meta_train_y,
-                meta_train_weight,
-                calibration=False,
-            )
-            meta_train_vae = self._vae_components(
-                meta_train_outputs,
-                training=True,
-            )
-            meta_train_subject = self._subject_components(
-                meta_train_outputs["pooled_z_mean"],
-                meta_train_subject_ids,
-                training=True,
-                use_grl=True,
-            )
-            dtype = meta_train_vc["total_loss"].dtype
-            meta_train_loss = (
-                tf.cast(self.vc_loss_weight, dtype) * meta_train_vc["total_loss"]
-                + tf.cast(self.vae_loss_weight, dtype)
-                * tf.cast(meta_train_vae["vae_loss"], dtype)
-                + tf.cast(self.subject_loss_weight, dtype)
-                * tf.cast(meta_train_subject["subject_loss"], dtype)
-                + self._regularization_loss(dtype)
-            )
-        variables = self.trainable_variables
-        meta_train_gradients = meta_train_tape.gradient(
-            meta_train_loss,
-            variables,
-        )
-
-        # Assigning stop-gradient tensors into the existing variables creates
-        # theta' without retaining a differentiable path back through g_A.
-        # That is the explicit first-order approximation.
-        original_values = [tf.identity(variable) for variable in variables]
-        for variable, gradient in zip(variables, meta_train_gradients):
-            gradient = self._dense_gradient(gradient)
-            if gradient is not None:
-                variable.assign_sub(
-                    tf.cast(self.mldg_inner_learning_rate, gradient.dtype)
-                    * tf.stop_gradient(gradient)
-                )
-
-        with tf.GradientTape() as meta_test_tape:
-            meta_test_outputs = self._encode(
-                meta_test_eeg,
-                training=True,
-                sample_latent=True,
-            )
-            meta_test_vc = self._vc_components(
-                meta_test_outputs["classification_embedding"],
-                meta_test_outputs["logits"],
-                meta_test_y,
-                meta_test_weight,
-                calibration=False,
-            )
-            meta_test_loss = (
-                tf.cast(
-                    self.vc_loss_weight,
-                    meta_test_vc["weighted_focal_loss"].dtype,
-                )
-                * meta_test_vc["weighted_focal_loss"]
-            )
-        meta_test_gradients = meta_test_tape.gradient(
-            meta_test_loss,
-            variables,
-        )
-
-        # Restore theta before the sole persistent optimizer update.
-        for variable, original_value in zip(variables, original_values):
-            variable.assign(original_value)
-        combined_gradients = self._combine_first_order_gradients(
-            meta_train_gradients,
-            meta_test_gradients,
-            self.mldg_meta_test_weight,
-        )
-        self._apply_gradients(
-            self.main_optimizer,
-            combined_gradients,
-            variables,
-        )
-
-        if self.update_vc_discriminator:
-            if self.vc_discriminator_optimizer is None:
-                raise RuntimeError(
-                    "update_vc_discriminator=True requires a discriminator optimizer."
-                )
-            embedding_frozen = tf.stop_gradient(
-                meta_train_outputs["classification_embedding"]
-            )
-            with tf.GradientTape() as disc_tape:
-                disc_loss = self.vc_target.discriminator_loss(
-                    embedding_frozen,
-                    meta_train_y,
-                )
-            disc_variables = self._vc_discriminator_variables()
-            disc_gradients = disc_tape.gradient(disc_loss, disc_variables)
-            self._apply_gradients(
-                self.vc_discriminator_optimizer,
-                disc_gradients,
-                disc_variables,
-            )
-
-        outer_loss = (
-            meta_train_loss
-            + tf.cast(
-                self.mldg_meta_test_weight,
-                meta_test_loss.dtype,
-            )
-            * meta_test_loss
-        )
-        self._update_metrics(
-            total_loss=outer_loss,
-            vc_components=meta_train_vc,
-            outputs=meta_train_outputs,
-            y_flat=meta_train_y,
-            sample_weight=meta_train_weight,
-            vae_components=meta_train_vae,
-            subject_components=meta_train_subject,
-            vrex_components=None,
-        )
-        self.mldg_meta_train_loss_tracker.update_state(meta_train_loss)
-        self.mldg_meta_test_loss_tracker.update_state(meta_test_loss)
-        self.mldg_meta_train_subjects_tracker.update_state(
-            tf.cast(tf.size(tf.unique(meta_train_subject_ids).y), tf.float32)
-        )
-        self.mldg_meta_test_subjects_tracker.update_state(
-            tf.cast(tf.size(tf.unique(meta_test_subject_ids).y), tf.float32)
-        )
-        self.mldg_gradient_cosine_tracker.update_state(
-            self._gradient_cosine_similarity(
-                meta_train_gradients,
-                meta_test_gradients,
-            )
-        )
+        run_sic_mldg_train_step(self, x, y_flat, sample_weight)
 
     def _calibration_train_step(self, x, y_flat, sample_weight):
         eeg_inputs, _ = self._split_eeg_and_subject_inputs(x)
-        # Backbone layers are frozen and posterior mean is used so six-trial
-        # calibration fits a stable subject-specific decision boundary.
+        # Backbone layers are frozen so calibration fits only the selected
+        # deterministic classifier suffix.
         with tf.GradientTape() as tape:
             outputs = self._encode(
                 eeg_inputs,
                 training=False,
-                sample_latent=False,
                 classifier_training=True,
             )
             vc_components = self._vc_components(
@@ -2258,7 +1520,6 @@ class SICModel(tf.keras.Model):
             outputs=outputs,
             y_flat=y_flat,
             sample_weight=sample_weight,
-            vae_components=None,
             subject_components=None,
             vrex_components=None,
         )
@@ -2283,7 +1544,6 @@ class SICModel(tf.keras.Model):
         outputs = self._encode(
             eeg_inputs,
             training=False,
-            sample_latent=False,
         )
         vc_components = self._vc_components(
             outputs["classification_embedding"],
@@ -2293,16 +1553,14 @@ class SICModel(tf.keras.Model):
             calibration=self.calibration_mode,
         )
         if self.calibration_mode:
-            vae_components = None
             subject_components = None
             total = (
                 tf.cast(self.vc_loss_weight, vc_components["total_loss"].dtype)
                 * vc_components["total_loss"]
             )
         else:
-            vae_components = self._vae_components(outputs, training=False)
             subject_components = self._subject_components(
-                outputs["pooled_z_mean"],
+                outputs["pooled_features"],
                 subject_ids,
                 training=False,
                 use_grl=False,
@@ -2310,8 +1568,6 @@ class SICModel(tf.keras.Model):
             dtype = vc_components["total_loss"].dtype
             total = (
                 tf.cast(self.vc_loss_weight, dtype) * vc_components["total_loss"]
-                + tf.cast(self.vae_loss_weight, dtype)
-                * tf.cast(vae_components["vae_loss"], dtype)
                 + tf.cast(self.subject_loss_weight, dtype)
                 * tf.cast(subject_components["subject_loss"], dtype)
             )
@@ -2321,7 +1577,6 @@ class SICModel(tf.keras.Model):
             outputs=outputs,
             y_flat=y_flat,
             sample_weight=sample_weight,
-            vae_components=vae_components,
             subject_components=subject_components,
             vrex_components=None,
         )
@@ -2329,7 +1584,7 @@ class SICModel(tf.keras.Model):
 
     def predict_step(self, data):
         x = data[0] if isinstance(data, tuple) else data
-        return self(x, training=False, sample_latent=False)
+        return self(x, training=False)
 
     def prepare_for_zero_shot_evaluation(self):
         """Restore source-evaluation semantics after a calibration fold.
@@ -2379,16 +1634,7 @@ class SICModel(tf.keras.Model):
         for layer in self.temporal_dropouts:
             layer.trainable = False
         self.parallel_temporal_pool.trainable = False
-        for layer in (
-            self.gcn_z_mean_projection,
-            self.gcn_z_log_var_projection,
-            self.bilstm_z_mean_projection,
-            self.bilstm_z_log_var_projection,
-        ):
-            if layer is not None:
-                layer.trainable = False
-        if self.decoder is not None:
-            self.decoder.trainable = False
+        self.feature_pool.trainable = False
         self.vc_target.trainable = False
         if self.subject_gradient_reversal is not None:
             self.subject_gradient_reversal.trainable = False
@@ -2441,105 +1687,24 @@ class SICModel(tf.keras.Model):
             "calibration_use_vc_target": self.calibration_use_vc_target,
         }
 
-    def predict_mc_probabilities(self, inputs, n_samples: int = 30, seed=None):
-        """Posterior predictive probabilities from VAE latent sampling."""
-        if int(n_samples) < 1:
-            raise ValueError("n_samples must be >= 1.")
-        eeg_inputs, _ = self._split_eeg_and_subject_inputs(inputs)
-        eeg_inputs = tf.convert_to_tensor(eeg_inputs, dtype=tf.float32)
-
-        if self.classification_level == "window":
-            flat_windows = eeg_inputs
-            batch_size = tf.shape(eeg_inputs)[0]
-            n_windows = None
-        else:
-            flat_windows, batch_size, n_windows = self._flatten_trial_windows(
-                eeg_inputs
-            )
-        posterior = self._posterior_from_flat_windows(flat_windows, training=False)
-        z_mean = posterior["z_mean"]
-        z_log_var = posterior["z_log_var"]
-
-        if seed is None:
-            epsilon = tf.random.normal(
-                tf.concat(
-                    [tf.constant([int(n_samples)], dtype=tf.int32), tf.shape(z_mean)],
-                    axis=0,
-                ),
-                dtype=z_mean.dtype,
-            )
-        else:
-            if isinstance(seed, tuple):
-                stateless_seed = tf.constant(seed, dtype=tf.int32)
-            else:
-                stateless_seed = tf.constant([int(seed), 0], dtype=tf.int32)
-            epsilon = tf.random.stateless_normal(
-                tf.concat(
-                    [tf.constant([int(n_samples)], dtype=tf.int32), tf.shape(z_mean)],
-                    axis=0,
-                ),
-                seed=stateless_seed,
-                dtype=z_mean.dtype,
-            )
-        z_samples = (
-            z_mean[tf.newaxis, ...] + tf.exp(0.5 * z_log_var[tf.newaxis, ...]) * epsilon
-        )
-
-        # Pool each sampled latent sequence to one vector per window.
-        pooled_windows = tf.reduce_mean(z_samples, axis=2)
-        if self.classification_level == "trial":
-            pooled_windows = tf.reshape(
-                pooled_windows,
-                [int(n_samples), batch_size, n_windows, self.combined_z_dim],
-            )
-            pooled = tf.reduce_mean(pooled_windows, axis=2)
-        else:
-            pooled = pooled_windows
-
-        sample_count = tf.shape(pooled)[0]
-        sample_batch = tf.shape(pooled)[1]
-        flat_pooled = tf.reshape(
-            pooled,
-            [sample_count * sample_batch, self.combined_z_dim],
-        )
-        embedding, logits = self._classifier_forward(flat_pooled, training=False)
-        del embedding
-        probabilities = tf.nn.softmax(logits, axis=-1)
-        probabilities = tf.reshape(
-            probabilities,
-            [sample_count, sample_batch, self.n_classes],
-        )
-        return {
-            "probability_samples": probabilities,
-            "mean_probabilities": tf.reduce_mean(probabilities, axis=0),
-        }
-
-    def get_latent_distribution(self, inputs):
-        """Return the counterfactual VAE posterior and pooled representation."""
+    def get_encoder_features(self, inputs):
+        """Return both deterministic branches and their direct concatenation."""
         eeg_inputs, _ = self._split_eeg_and_subject_inputs(inputs)
         outputs = self._encode(
             eeg_inputs,
             training=False,
-            sample_latent=False,
         )
         return {
-            "z_mean": outputs["z_mean"],
-            "z_log_var": outputs["z_log_var"],
-            "pooled_z": outputs["pooled_z_mean"],
-            "gcn_z_mean": outputs["gcn_z_mean"],
-            "gcn_z_log_var": outputs["gcn_z_log_var"],
-            "bilstm_z_mean": outputs["bilstm_z_mean"],
-            "bilstm_z_log_var": outputs["bilstm_z_log_var"],
-            "combined_z_mean": outputs["z_mean"],
-            "pooled_combined_z_mean": outputs["pooled_z_mean"],
+            "gcn_gru_features": outputs["graph_sequence"],
+            "bilstm_features": outputs["pooled_bilstm_sequence"],
+            "combined_feature_sequence": outputs[
+                "combined_feature_sequence"
+            ],
+            "pooled_features": outputs["pooled_features"],
+            "window_features": outputs["window_features"],
             "classification_embedding": outputs["classification_embedding"],
             "probabilities": outputs["probabilities"],
         }
-
-    def decode_latent(self, latent_sequence):
-        if not self.use_decoder or self.decoder is None:
-            raise RuntimeError("Decoder is disabled for this SIC ablation.")
-        return self.decoder(latent_sequence, training=False)
 
     def get_adjacency_matrices(self):
         if self.graph_encoder is None:
@@ -2558,23 +1723,15 @@ class SICModel(tf.keras.Model):
                     if self.graph_encoder is None
                     else _serialize_keras_object(self.graph_encoder)
                 ),
-                "decoder": (
-                    None
-                    if self.decoder is None
-                    else _serialize_keras_object(self.decoder)
-                ),
                 "classification_level": self.classification_level,
                 "n_classes": self.n_classes,
+                "gcn_gru_feature_dim": self.gcn_gru_feature_dim,
                 "bilstm_units": self.bilstm_units,
                 "n_bilstm_layers": self.n_bilstm_layers,
                 "bilstm_dropout": self.bilstm_dropout_rate,
                 "use_gcn_gru_branch": self.use_gcn_gru_branch,
                 "use_bilstm_branch": self.use_bilstm_branch,
-                "use_decoder": self.use_decoder,
                 "temporal_downsample_factor": self.temporal_downsample_factor,
-                "z_dim": self.z_dim,
-                "z_log_var_clip_min": self.z_log_var_clip_min,
-                "z_log_var_clip_max": self.z_log_var_clip_max,
                 "classification_hidden_units": self.classification_hidden_units,
                 "classification_dropout": self.classification_dropout_rate,
                 "activation": self.activation_name,
@@ -2587,8 +1744,6 @@ class SICModel(tf.keras.Model):
                 "vc_gamma": self.vc_gamma,
                 "vc_lambda": self.vc_lambda,
                 "update_vc_discriminator": self.update_vc_discriminator,
-                "vae_loss_weight": self.vae_loss_weight,
-                "vae_beta": self.vae_beta,
                 "training_method": self.training_method,
                 "use_vrex": self.use_vrex,
                 "vrex_penalty_weight": self.vrex_penalty_weight,
@@ -2623,11 +1778,6 @@ class SICModel(tf.keras.Model):
             None
             if config["graph_encoder"] is None
             else _deserialize_keras_object(config["graph_encoder"])
-        )
-        config["decoder"] = (
-            None
-            if config["decoder"] is None
-            else _deserialize_keras_object(config["decoder"])
         )
         return cls(**config)
 
@@ -2666,12 +1816,8 @@ def build_sic_model(
     architecture_mode: str | None = None,
     use_gcn_gru_branch: bool = True,
     use_bilstm_branch: bool = True,
-    use_decoder: bool = True,
     fusion_units: int | None = None,
     fusion_dropout: float | None = None,
-    z_dim: int = 64,
-    z_log_var_clip_min: float = -20.0,
-    z_log_var_clip_max: float = 20.0,
     classification_hidden_units: Sequence[int] = (128,),
     classification_dropout: float = 0.20,
     activation: str = "relu",
@@ -2684,8 +1830,6 @@ def build_sic_model(
     vc_gamma: float = 0.0,
     vc_lambda: float = 0.0,
     update_vc_discriminator: bool = False,
-    vae_loss_weight: float = 0.10,
-    vae_beta: float = 0.05,
     training_method: str | None = None,
     use_vrex: bool = False,
     vrex_penalty_weight: float = 1.0,
@@ -2708,7 +1852,6 @@ def build_sic_model(
     calibration_vc_beta: float | None = None,
     calibration_vc_gamma: float | None = None,
     calibration_vc_lambda: float | None = None,
-    decoder_dropout: float = 0.10,
     optimizer_name: str = "adamw",
     learning_rate: float = 1e-4,
     vc_discriminator_learning_rate: float | None = None,
@@ -2725,12 +1868,28 @@ def build_sic_model(
     ``training_trial_ids`` keeps complete MLDG trials together. Labels are
     accepted to keep the builder contract uniform and leakage-auditable.
     """
-    del training_labels, unused_kwargs
+    del training_labels
+
+    removed_vae_parameters = {
+        "use_decoder",
+        "z_dim",
+        "z_log_var_clip_min",
+        "z_log_var_clip_max",
+        "vae_loss_weight",
+        "vae_beta",
+        "decoder_dropout",
+    }.intersection(unused_kwargs)
+    if removed_vae_parameters:
+        raise ValueError(
+            "Deterministic SIC no longer accepts VAE/decoder parameters: "
+            f"{sorted(removed_vae_parameters)}. Remove them from the model "
+            "configuration."
+        )
 
     if fusion_units is not None or fusion_dropout is not None:
         raise ValueError(
-            "fusion_units/fusion_dropout were removed. Branch-specific z values "
-            "are concatenated directly and reduced only by the classifier."
+            "fusion_units/fusion_dropout were removed. Complete branch feature "
+            "vectors are concatenated directly; fusion occurs in the final heads."
         )
 
     classification_level = str(classification_level).lower()
@@ -2765,16 +1924,16 @@ def build_sic_model(
 
     use_gcn_gru_branch = bool(use_gcn_gru_branch)
     use_bilstm_branch = bool(use_bilstm_branch)
-    use_decoder = bool(use_decoder)
     if not use_gcn_gru_branch and not use_bilstm_branch:
         raise ValueError(
             "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
         )
-    combined_z_dim = int(z_dim) * (
-        int(use_gcn_gru_branch) + int(use_bilstm_branch)
+    combined_feature_dim = (
+        int(spectral_gru_units) * int(use_gcn_gru_branch)
+        + 2 * int(bilstm_units) * int(use_bilstm_branch)
     )
 
-    needs_graph = use_gcn_gru_branch or use_decoder
+    needs_graph = use_gcn_gru_branch
     if adjacency is None and needs_graph:
         if training_features is None:
             raise ValueError(
@@ -2820,42 +1979,18 @@ def build_sic_model(
             name="v6_mtl_gcn_gru_encoder",
         )
 
-    decoder = None
-    if use_decoder:
-        decoder = GCNMTLDecoder(
-            timesteps=int(timesteps),
-            n_channels=int(n_channels),
-            n_bands=int(n_bands),
-            t_down=int(t_down),
-            gcn_units=gcn_units,
-            temporal_pool_sizes=pools,
-            adjacency=adjacency,
-            emb_dim=combined_z_dim,
-            dropout=float(decoder_dropout),
-            activation=str(activation),
-            use_batch_norm=bool(gcn_use_batch_norm),
-            graph_add_self_loops=bool(graph_add_self_loops),
-            graph_symmetrize=bool(graph_symmetrize),
-            graph_epsilon=float(graph_epsilon),
-            name="sic_mtl_graph_decoder",
-        )
-
     model = SICModel(
         graph_encoder=graph_encoder,
-        decoder=decoder,
         classification_level=classification_level,
         n_classes=int(n_classes),
+        gcn_gru_feature_dim=int(spectral_gru_units),
         bilstm_units=int(bilstm_units),
         n_bilstm_layers=int(n_bilstm_layers),
         bilstm_dropout=float(bilstm_dropout),
         architecture_mode=architecture_mode,
         use_gcn_gru_branch=use_gcn_gru_branch,
         use_bilstm_branch=use_bilstm_branch,
-        use_decoder=use_decoder,
         temporal_downsample_factor=int(t_down),
-        z_dim=int(z_dim),
-        z_log_var_clip_min=float(z_log_var_clip_min),
-        z_log_var_clip_max=float(z_log_var_clip_max),
         classification_hidden_units=tuple(
             int(value) for value in classification_hidden_units
         ),
@@ -2870,8 +2005,6 @@ def build_sic_model(
         vc_gamma=float(vc_gamma),
         vc_lambda=float(vc_lambda),
         update_vc_discriminator=bool(update_vc_discriminator),
-        vae_loss_weight=float(vae_loss_weight),
-        vae_beta=float(vae_beta),
         training_method=training_method,
         use_vrex=bool(use_vrex),
         vrex_penalty_weight=float(vrex_penalty_weight),
@@ -2934,15 +2067,9 @@ def build_sic_model(
     # built (the failure mode that affected earlier subject-adversarial models).
     if bool(use_subject_adversarial) and n_subject_classes is not None:
         _ = model._subject_logits(
-            tf.zeros((1, combined_z_dim), dtype=tf.float32),
+            tf.zeros((1, combined_feature_dim), dtype=tf.float32),
             training=False,
             use_grl=False,
-        )
-    latent_timesteps = int(np.ceil(float(timesteps) / float(t_down)))
-    if decoder is not None:
-        _ = decoder(
-            tf.zeros((1, latent_timesteps, combined_z_dim), dtype=tf.float32),
-            training=False,
         )
     if not bool(use_subject_adversarial) or n_subject_classes is not None:
         _ = model(tf.zeros(dummy_shape, dtype=tf.float32), training=False)

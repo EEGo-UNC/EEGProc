@@ -4,7 +4,7 @@ SIC is an EEG emotion-classification system for studying cross-subject generaliz
 
 The workflow supports both binary **valence** and binary **arousal**. It reports Brier score as the primary calibration-sensitive metric, alongside accuracy, balanced accuracy, F1, precision, recall, ROC-AUC, expected calibration error (ECE), and related macro metrics. Reports are generated at zero shot and at every requested calibration level, such as 3, 6, 9, and 12 shots.
 
-This README describes the corrected SIC (model version 8) encoder. In this version, the GCN-GRU and BiLSTM branches have independent variational posteriors. Their latent samples are concatenated directly; there is no learned fusion projection between them and the classifier.
+This README describes the corrected v8 encoder. In this version, the GCN-GRU and BiLSTM branches have independent variational posteriors. Their latent samples are concatenated directly; there is no learned fusion projection between them and the classifier.
 
 ## Research questions
 
@@ -35,10 +35,10 @@ For each EEG window, SIC runs two independent encoders in parallel.
 
 ```text
                                    ┌─ mean_g, log_var_g ─► z_g ─┐
-EEG ─► MI graph ─► GCN ─► GRU ─────┤                            │
-                                   │                            ├─► concatenate
-                                   │                            │       z_joint
-EEG ─► BiLSTM ─► LayerNorm/dropout ├─ mean_b, log_var_b ─► z_b  ┘          │
+EEG ─► MI graph ─► GCN ─► GRU ─────┤                           │
+                                   │                           ├─► concatenate
+                                   │                           │       z_joint
+EEG ─► BiLSTM ─► LayerNorm/dropout ├─ mean_b, log_var_b ─► z_b ┘          │
       └─ temporal pooling ─────────┘                                      │
                                                                           ├─► classifier
                                                                           ├─► decoder

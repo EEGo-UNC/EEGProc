@@ -17,6 +17,8 @@ set -euo pipefail
 #
 # Environment overrides are forwarded to every array task:
 #   SOURCE_EPOCHS=150 MLDG_STEPS_PER_EPOCH=20 ./submit_sic_slurm_suite.sh full 2
+#   TARGET_DIMENSION=arousal PREDICTION_DIAGNOSTICS_METRIC=ece \
+#       ./submit_sic_slurm_suite.sh full-after-smoke 2
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SMOKE_SCRIPT="$SCRIPT_DIR/smoke_test_sic_mldg_brier.sh"
@@ -48,7 +50,7 @@ submit_full() {
     local command=(
         sbatch
         --parsable
-        --array="0-4%${MAX_CONCURRENT}"
+        --array="0-3%${MAX_CONCURRENT}"
     )
     if [[ -n "$dependency" ]]; then
         command+=(--dependency="afterok:${dependency}")
@@ -66,7 +68,7 @@ case "$MODE" in
     full)
         full_job_id="$(submit_full)"
         echo "Submitted full array: $full_job_id"
-        echo "Profiles: 0=full, 1=no_gcn_gru, 2=no_bilstm, 3=no_decoder, 4=remove_median"
+        echo "Profiles: 0=full, 1=remove_median, 2=no_gcn_gru, 3=no_bilstm"
         ;;
     full-after-smoke)
         smoke_job_id="$(submit_smoke)"
@@ -74,6 +76,7 @@ case "$MODE" in
         echo "Submitted smoke array: $smoke_job_id"
         echo "Submitted dependent full array: $full_job_id"
         echo "The full array will start only if every smoke task succeeds."
+        echo "Full profiles: 0=full, 1=remove_median, 2=no_gcn_gru, 3=no_bilstm"
         ;;
     *)
         echo "Usage: $0 {smoke|full|full-after-smoke} [MAX_CONCURRENT]"

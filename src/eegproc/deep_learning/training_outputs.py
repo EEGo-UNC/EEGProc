@@ -5,6 +5,7 @@ import numpy as np
 import tensorflow as tf
 
 from .cross_val import (
+    _CLASSIFICATION_METRICS,
     _as_numpy_1d,
     _extract_classifier_output,
     _prediction_diagnostic_summary,
@@ -109,7 +110,8 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
     Only a fixed, approximately class-balanced subset is evaluated, so the
     callback remains inexpensive relative to a full validation pass. It records
     exact probability spread and, when the model exposes ``predict_diagnostics``,
-    latent and logit spread as well.
+    latent and logit spread as well. ``reported_metric`` selects the one
+    classification score highlighted in every saved diagnostic row.
     """
 
     def __init__(
@@ -123,6 +125,9 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         every_n_epochs: int = 1,
         max_samples: int = 256,
         threshold_tolerance: float = 0.01,
+        reported_metric: str = "accuracy",
+        decision_threshold: float = 0.5,
+        ece_bins: int = 15,
         seed: int | None = 42,
     ) -> None:
         super().__init__()
@@ -132,6 +137,16 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
             raise ValueError("max_samples must be at least 1.")
         if threshold_tolerance < 0.0:
             raise ValueError("threshold_tolerance must be non-negative.")
+        reported_metric = str(reported_metric).strip().lower()
+        if reported_metric not in _CLASSIFICATION_METRICS:
+            raise ValueError(
+                f"Unsupported prediction diagnostic metric {reported_metric!r}. "
+                f"Supported metrics: {sorted(_CLASSIFICATION_METRICS)}"
+            )
+        if not 0.0 < float(decision_threshold) < 1.0:
+            raise ValueError("decision_threshold must lie strictly between 0 and 1.")
+        if int(ece_bins) < 2:
+            raise ValueError("ece_bins must be at least 2.")
 
         train_indices = _stratified_diagnostic_indices(
             y_train,
@@ -157,6 +172,9 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         self.batch_size = batch_size
         self.every_n_epochs = int(every_n_epochs)
         self.threshold_tolerance = float(threshold_tolerance)
+        self.reported_metric = reported_metric
+        self.decision_threshold = float(decision_threshold)
+        self.ece_bins = int(ece_bins)
         self.history: list[dict] = []
 
     def _report_split(
@@ -177,6 +195,9 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
             y_true=y,
             threshold_tolerance=self.threshold_tolerance,
             internal_outputs=internal_outputs,
+            reported_metric=self.reported_metric,
+            decision_threshold=self.decision_threshold,
+            ece_bins=self.ece_bins,
         )
         row = {
             "fold": None if self.fold_number is None else int(self.fold_number),

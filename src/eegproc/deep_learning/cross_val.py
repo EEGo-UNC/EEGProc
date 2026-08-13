@@ -504,11 +504,13 @@ def _predict_mc_probability_samples(
     batch_size: int | None = None,
     seed: int | None = None,
 ) -> np.ndarray:
-    """Return posterior-sampled probabilities shaped ``(S, N, C)``.
+    """Return repeated or posterior-sampled probabilities shaped ``(S, N, C)``.
 
     Joint VAE models can expose ``predict_mc_probabilities`` to encode each
     input batch once and vectorize the recurrent/classifier work across latent
-    samples. A slower generic fallback is retained for compatible custom models.
+    samples. Deterministic models declare ``supports_latent_sampling=False``;
+    their single prediction is repeated so shared reporting code remains valid
+    and correctly produces zero latent-sampling dispersion.
     """
     if n_samples < 1:
         raise ValueError("n_samples must be at least 1.")
@@ -523,7 +525,21 @@ def _predict_mc_probability_samples(
         X_batch = X[start : start + effective_batch_size]
         batch_seed = None if seed is None else (int(seed), int(batch_index))
 
-        if hasattr(model, "predict_mc_probabilities"):
+        if getattr(model, "supports_latent_sampling", True) is False:
+            raw_output = model(
+                tf.convert_to_tensor(X_batch, dtype=tf.float32),
+                training=False,
+            )
+            raw_output = _extract_classifier_output(raw_output)
+            if hasattr(raw_output, "numpy"):
+                raw_output = raw_output.numpy()
+            deterministic_probabilities = _to_probabilities(raw_output)
+            probability_samples = np.repeat(
+                deterministic_probabilities[np.newaxis, ...],
+                int(n_samples),
+                axis=0,
+            )
+        elif hasattr(model, "predict_mc_probabilities"):
             mc_output = model.predict_mc_probabilities(
                 X_batch,
                 n_samples=n_samples,
@@ -575,11 +591,11 @@ def _predict_probabilities(
     n_prediction_latent_samples: int = 0,
     latent_sampling_seed: int | None = None,
 ):
-    """Return class probabilities using posterior means or MC latent draws.
+    """Return deterministic probabilities or averaged MC latent draws.
 
-    ``n_prediction_latent_samples=0`` preserves deterministic posterior-mean
-    inference. Positive values average that many samples from ``q(z|x)``;
-    ``1`` therefore means one random latent draw and one classifier pass.
+    For variational models, positive ``n_prediction_latent_samples`` values
+    average that many samples from ``q(z|x)``. Deterministic models ignore the
+    sampling count and return their single deterministic prediction.
     """
     if n_prediction_latent_samples < 0:
         raise ValueError("n_prediction_latent_samples must be >= 0.")
@@ -752,7 +768,10 @@ def _prediction_diagnostic_summary(
     y_true: np.ndarray,
     threshold_tolerance: float = 0.01,
     internal_outputs: Mapping[str, np.ndarray] | None = None,
-) -> dict[str, float | int]:
+    reported_metric: str = "accuracy",
+    decision_threshold: float = 0.5,
+    ece_bins: int = _DEFAULT_ECE_BINS,
+) -> dict[str, float | int | str]:
     """Summarize confidence, threshold collapse, and internal feature spread."""
     probabilities = np.asarray(probabilities, dtype=np.float64)
     y_ids = _as_numpy_1d(y_true).astype(np.int64)
@@ -763,16 +782,36 @@ def _prediction_diagnostic_summary(
         )
     if threshold_tolerance < 0.0:
         raise ValueError("threshold_tolerance must be non-negative.")
+    reported_metric = str(reported_metric).strip().lower()
+    if reported_metric not in _CLASSIFICATION_METRICS:
+        raise ValueError(
+            f"Unsupported prediction diagnostic metric {reported_metric!r}. "
+            f"Supported metrics: {sorted(_CLASSIFICATION_METRICS)}"
+        )
 
-    y_pred = _predict_labels(probabilities)
+    y_pred = _predict_labels(
+        probabilities,
+        decision_threshold=decision_threshold,
+    )
     confidence = np.max(probabilities, axis=1)
+    reported_value = _classification_metrics(
+        y_true=y_ids,
+        y_pred=y_pred,
+        probabilities=probabilities,
+        metrics=(reported_metric,),
+        n_classes=int(probabilities.shape[1]),
+        ece_bins=int(ece_bins),
+    )[reported_metric]
 
-    summary: dict[str, float | int] = {
+    summary: dict[str, float | int | str] = {
         "n_samples": int(len(y_ids)),
         "accuracy": float(np.mean(y_pred == y_ids)),
+        "reported_metric": reported_metric,
+        "reported_metric_value": float(reported_value),
         "confidence_mean": float(np.mean(confidence)),
         "confidence_std": float(np.std(confidence)),
     }
+    summary[reported_metric] = float(reported_value)
 
     for class_index in range(probabilities.shape[1]):
         class_probabilities = probabilities[:, class_index]
@@ -790,7 +829,7 @@ def _print_probability_diagnostics(
     probabilities: np.ndarray,
     y_true: np.ndarray,
     threshold_tolerance: float = 0.01,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str]:
     """Print a compact probability-distribution diagnostic line."""
     summary = _prediction_diagnostic_summary(
         probabilities=probabilities,
@@ -4542,6 +4581,43 @@ def _final_history_values(history) -> dict[str, float]:
     return output
 
 
+def _safe_model_filename_token(value) -> str:
+    """Return a stable filesystem-safe token for a LOSO target identifier."""
+    raw = str(_python_scalar(value))
+    token = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in raw
+    ).strip("_")
+    return token or "subject"
+
+
+def _save_zero_shot_source_model(
+    model: tf.keras.Model,
+    *,
+    output_dir: str | os.PathLike[str],
+    subject_number: int,
+    target_subject,
+) -> dict:
+    """Persist the untouched source-trained model for one LOSO target."""
+    resolved_dir = os.path.abspath(os.fspath(output_dir))
+    os.makedirs(resolved_dir, exist_ok=True)
+    target_token = _safe_model_filename_token(target_subject)
+    filename = (
+        f"loso_fold_{int(subject_number):04d}_target_{target_token}_zero_shot.keras"
+    )
+    model_path = os.path.join(resolved_dir, filename)
+    model.save(model_path, overwrite=True)
+    return {
+        "stage": "zero_shot_source_model",
+        "format": "keras",
+        "path": model_path,
+        "filename": filename,
+        "target_subject": _python_scalar(target_subject),
+        "loso_fold": int(subject_number),
+        "load_with_compile": False,
+    }
+
+
 def _run_subject_calibration_subject(
     subject_number: int,
     target_subject,
@@ -4577,6 +4653,12 @@ def _run_subject_calibration_subject(
     metrics: tuple[str, ...],
     ece_bins: int,
     decision_threshold: float,
+    prediction_diagnostics: bool,
+    prediction_diagnostics_metric: str,
+    prediction_diagnostics_every_n_epochs: int,
+    prediction_diagnostics_max_samples: int,
+    prediction_diagnostics_threshold_tolerance: float,
+    prediction_diagnostics_seed: int | None,
     n_prediction_latent_samples: int,
     latent_sampling_seed: int | None,
     log_predictions: bool,
@@ -4587,6 +4669,7 @@ def _run_subject_calibration_subject(
     calibration_use_class_weight: bool,
     source_fit_kwargs: dict,
     calibration_fit_kwargs: dict,
+    source_model_output_dir: str | os.PathLike[str] | None,
     verbose: int,
 ) -> dict:
     """Train one source model and run all target-subject calibration folds."""
@@ -4712,6 +4795,32 @@ def _run_subject_calibration_subject(
         )
         source_kwargs = dict(source_fit_kwargs)
         source_callbacks = list(source_kwargs.pop("callbacks", []))
+        prediction_diagnostics_callback = None
+        if prediction_diagnostics:
+            from .training_outputs import PredictionDiagnostics
+
+            prediction_diagnostics_callback = PredictionDiagnostics(
+                X_train=X_source,
+                y_train=y_source,
+                X_val=(X_source_validation if len(source_validation_indices) else None),
+                y_val=(y_source_validation if len(source_validation_indices) else None),
+                fold_number=int(subject_number),
+                batch_size=int(source_batch_size),
+                every_n_epochs=int(prediction_diagnostics_every_n_epochs),
+                max_samples=int(prediction_diagnostics_max_samples),
+                threshold_tolerance=float(
+                    prediction_diagnostics_threshold_tolerance
+                ),
+                reported_metric=str(prediction_diagnostics_metric),
+                decision_threshold=float(decision_threshold),
+                ece_bins=int(ece_bins),
+                seed=(
+                    None
+                    if prediction_diagnostics_seed is None
+                    else int(prediction_diagnostics_seed) + int(subject_number)
+                ),
+            )
+            source_callbacks.append(prediction_diagnostics_callback)
         source_class_weight = (
             _class_weight_from_labels(y_source) if source_use_class_weight else None
         )
@@ -4793,6 +4902,25 @@ def _run_subject_calibration_subject(
                 )
         if source_best_epoch is None and source_epochs_ran:
             source_best_epoch = source_epochs_ran
+
+        # Persist the exact population/source model used for zero-shot LOSO
+        # evaluation. This happens before calibration changes trainability or
+        # compiles a subject-specific optimizer.
+        prepare_zero_shot = getattr(
+            model, "prepare_for_zero_shot_evaluation", None
+        )
+        if prepare_zero_shot is not None:
+            prepare_zero_shot()
+        zero_shot_model_artifact = (
+            None
+            if source_model_output_dir is None
+            else _save_zero_shot_source_model(
+                model,
+                output_dir=source_model_output_dir,
+                subject_number=subject_number,
+                target_subject=target_subject,
+            )
+        )
 
         # get_weights() captures only model state, not optimizer state. That is
         # intentional: every calibration fold gets a newly compiled calibration
@@ -5092,7 +5220,18 @@ def _run_subject_calibration_subject(
                 "restore_best_weights": bool(restore_best_weights),
                 "final_history": _final_history_values(source_history),
                 "class_weight": source_class_weight,
+                "prediction_diagnostics_metric": (
+                    str(prediction_diagnostics_metric)
+                    if prediction_diagnostics
+                    else None
+                ),
             },
+            "prediction_diagnostics_log": (
+                []
+                if prediction_diagnostics_callback is None
+                else list(prediction_diagnostics_callback.history)
+            ),
+            "zero_shot_model": zero_shot_model_artifact,
             "zero_shot_all_trials": all_target_evaluation,
             "calibration_levels": calibration_level_outputs,
             "subject_summary": subject_summary,
@@ -5189,6 +5328,12 @@ def subject_calibration_cv(
     ),
     ece_bins: int = _DEFAULT_ECE_BINS,
     decision_threshold: float = 0.5,
+    prediction_diagnostics: bool = False,
+    prediction_diagnostics_metric: str = "accuracy",
+    prediction_diagnostics_every_n_epochs: int = 1,
+    prediction_diagnostics_max_samples: int = 256,
+    prediction_diagnostics_threshold_tolerance: float = 0.01,
+    prediction_diagnostics_seed: int | None = 42,
     n_prediction_latent_samples: int = 0,
     latent_sampling_seed: int | None = None,
     log_predictions: bool = True,
@@ -5204,6 +5349,7 @@ def subject_calibration_cv(
     gpu_ids: list[int] | tuple[int, ...] | None = None,
     cpus_per_worker: int | None = None,
     max_subjects: int | None = None,
+    source_model_output_dir: str | os.PathLike[str] | None = None,
 ) -> dict:
     """Strict LOSO pretraining followed by one or more calibration levels.
 
@@ -5231,6 +5377,12 @@ def subject_calibration_cv(
       4. fine-tune only the model-defined calibration parameters;
       5. evaluate the calibrated model on the same held-out target trials.
 
+    When ``source_model_output_dir`` is provided, the exact source-trained
+    0-shot model for every LOSO target is saved there in native ``.keras``
+    format before calibration begins. Calibrated fold continuations are not
+    saved. Load these source models with ``compile=False`` before calling the
+    model's calibration preparation hook, which installs a fresh optimizer.
+
     Thus the default DREAMER protocol remains 6 calibration trials + 12
     evaluation trials repeated three times, while arbitrary valid shot/fold
     pairs can be evaluated in the same LOSO run.
@@ -5253,9 +5405,9 @@ def subject_calibration_cv(
         )
 
     The method owns the architecture-specific freezing policy and must compile
-    a *fresh optimizer*. For v6 it should freeze the MTL GCN, spectral GRU,
-    temporal encoder, VAE/decoder, and subject-invariance machinery, leaving
-    only the intended variational emotion-classification head trainable.
+    a *fresh optimizer*. For deterministic SIC it should freeze the MTL GCN,
+    spectral GRU, temporal encoder, and subject-invariance machinery, leaving
+    only the intended emotion-classification head suffix trainable.
 
     Aggregation
     -----------
@@ -5327,6 +5479,23 @@ def subject_calibration_cv(
         raise ValueError("calibration_optimizer must be 'adam' or 'adamw'.")
     if not 0.0 < float(decision_threshold) < 1.0:
         raise ValueError("decision_threshold must lie strictly between 0 and 1.")
+    prediction_diagnostics_metric = str(
+        prediction_diagnostics_metric
+    ).strip().lower()
+    if prediction_diagnostics_metric not in _CLASSIFICATION_METRICS:
+        raise ValueError(
+            "prediction_diagnostics_metric must be one of "
+            f"{sorted(_CLASSIFICATION_METRICS)}; got "
+            f"{prediction_diagnostics_metric!r}."
+        )
+    if int(prediction_diagnostics_every_n_epochs) < 1:
+        raise ValueError("prediction_diagnostics_every_n_epochs must be >= 1.")
+    if int(prediction_diagnostics_max_samples) < 1:
+        raise ValueError("prediction_diagnostics_max_samples must be >= 1.")
+    if float(prediction_diagnostics_threshold_tolerance) < 0.0:
+        raise ValueError(
+            "prediction_diagnostics_threshold_tolerance must be non-negative."
+        )
     if n_prediction_latent_samples < 0:
         raise ValueError("n_prediction_latent_samples must be >= 0.")
     if int(ece_bins) < 2:
@@ -5339,6 +5508,11 @@ def subject_calibration_cv(
         raise ValueError("cpus_per_worker must be >= 1 when provided.")
     if max_subjects is not None and int(max_subjects) < 1:
         raise ValueError("max_subjects must be >= 1 when provided.")
+    if source_model_output_dir is not None:
+        source_model_output_dir = os.path.abspath(
+            os.fspath(source_model_output_dir)
+        )
+        os.makedirs(source_model_output_dir, exist_ok=True)
     if feature_array.ndim == 4 and evaluation_level != "trial":
         raise ValueError(
             "Rank-4 grouped-trial inputs require evaluation_level='trial'."
@@ -5468,6 +5642,18 @@ def subject_calibration_cv(
         "metrics": metrics,
         "ece_bins": int(ece_bins),
         "decision_threshold": float(decision_threshold),
+        "prediction_diagnostics": bool(prediction_diagnostics),
+        "prediction_diagnostics_metric": prediction_diagnostics_metric,
+        "prediction_diagnostics_every_n_epochs": int(
+            prediction_diagnostics_every_n_epochs
+        ),
+        "prediction_diagnostics_max_samples": int(
+            prediction_diagnostics_max_samples
+        ),
+        "prediction_diagnostics_threshold_tolerance": float(
+            prediction_diagnostics_threshold_tolerance
+        ),
+        "prediction_diagnostics_seed": prediction_diagnostics_seed,
         "n_prediction_latent_samples": int(n_prediction_latent_samples),
         "latent_sampling_seed": latent_sampling_seed,
         "log_predictions": bool(log_predictions),
@@ -5478,6 +5664,7 @@ def subject_calibration_cv(
         "calibration_use_class_weight": bool(calibration_use_class_weight),
         "source_fit_kwargs": source_fit_kwargs,
         "calibration_fit_kwargs": calibration_fit_kwargs,
+        "source_model_output_dir": source_model_output_dir,
         "verbose": int(verbose),
     }
 
@@ -5547,13 +5734,36 @@ def subject_calibration_cv(
         "calibration_optimizer": str(calibration_optimizer),
         "calibration_weight_decay": float(calibration_weight_decay),
         "decision_threshold": float(decision_threshold),
+        "prediction_diagnostics": {
+            "enabled": bool(prediction_diagnostics),
+            "reported_metric": prediction_diagnostics_metric,
+            "every_n_epochs": int(prediction_diagnostics_every_n_epochs),
+            "max_samples": int(prediction_diagnostics_max_samples),
+            "threshold_tolerance": float(
+                prediction_diagnostics_threshold_tolerance
+            ),
+            "seed": prediction_diagnostics_seed,
+        },
         "evaluation_level": evaluation_level,
         "metrics": list(metrics),
         "ece_bins": int(ece_bins),
         "fixed_config": fixed_config,
+        "zero_shot_source_models": {
+            "saved": source_model_output_dir is not None,
+            "directory": source_model_output_dir,
+            "format": "keras",
+            "load_with_compile": False,
+            "models": [
+                subject_output["zero_shot_model"]
+                for subject_output in subject_outputs
+                if subject_output.get("zero_shot_model") is not None
+            ],
+        },
         "subject_results": subject_outputs,
         "subject_summary_rows": subject_summary_rows,
     }
+    if prediction_diagnostics:
+        results["prediction_diagnostics_log"] = []
     if log_predictions:
         if feature_array.ndim == 3:
             results["window_prediction_log"] = []
@@ -5564,11 +5774,21 @@ def subject_calibration_cv(
         results["trial_variational_interval_log"] = []
 
     for subject_output in subject_outputs:
+        if prediction_diagnostics:
+            results["prediction_diagnostics_log"].extend(
+                subject_output.get("prediction_diagnostics_log", [])
+            )
         summary = subject_output["subject_summary"]
         zero_all = dict(summary["zero_shot_all_trials_scores"])
         zero_all_subject_rows.append(zero_all)
 
         flat_summary = {"target_subject": subject_output["target_subject"]}
+        zero_shot_model = subject_output.get("zero_shot_model")
+        if zero_shot_model is not None:
+            flat_summary["zero_shot_model_path"] = zero_shot_model["path"]
+            flat_summary["zero_shot_model_filename"] = zero_shot_model[
+                "filename"
+            ]
         flat_summary.update({f"zero_shot_all_{k}": v for k, v in zero_all.items()})
         for level in subject_output["calibration_levels"]:
             shots_key = str(level["calibration_shots"])

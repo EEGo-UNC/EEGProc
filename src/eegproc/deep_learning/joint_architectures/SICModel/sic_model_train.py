@@ -28,10 +28,11 @@ subject-episodic meta-learning.  MLDG defaults to four rotating virtual-unseen
 subjects and every remaining source subject in meta-train.  Each episode samples
 complete trials and applies one persistent outer update.
 
-SIC uses independent parallel variational branches.  The GCN-GRU and raw-EEG
-BiLSTM branches each produce their own mean/log-variance posterior, and their
-sampled latent vectors are concatenated directly for the classifier. ``z_dim``
-is the width of each active branch, not the width of the joint representation.
+SIC uses independent parallel deterministic branches. The complete GCN-GRU and
+raw-EEG BiLSTM feature vectors are concatenated without an encoder projection or
+bottleneck. Pooling changes only the temporal/window axes; fusion occurs in the
+final classifier and subject-adversarial heads. There is no VAE, KL loss,
+reconstruction loss, or decoder.
 
 CLI construction, JSON/grid decoding, validation, and conversion to the runtime
 configuration live in ``sic_model_args.py`` so this module stays focused on
@@ -110,6 +111,28 @@ except ImportError:
         build_joint_v2_dataset,
         get_dataset_config,
     )
+
+
+SIC_REMOVED_VAE_HYPERPARAMETERS = frozenset(
+    {
+        "use_decoder",
+        "z_dim",
+        "z_log_var_clip_min",
+        "z_log_var_clip_max",
+        "vae_loss_weight",
+        "vae_beta",
+        "decoder_dropout",
+    }
+)
+
+
+def _deterministic_model_config(model_config: dict) -> tuple[dict, list[str]]:
+    """Remove obsolete encoder-VAE axes before Cartesian expansion."""
+    cleaned = dict(model_config)
+    removed = sorted(SIC_REMOVED_VAE_HYPERPARAMETERS.intersection(cleaned))
+    for key in removed:
+        cleaned.pop(key)
+    return cleaned, removed
 
 
 def _json_fingerprint(value) -> str:
@@ -595,6 +618,10 @@ def _save_calibration_artifacts(
         configuration_dir / "sic_overall_metrics.json",
         results.get("overall", {}),
     )
+    _write_json(
+        configuration_dir / "loso_zero_shot_models.json",
+        results.get("zero_shot_source_models", {}),
+    )
     _write_csv(
         configuration_dir / "sic_subject_summary.csv",
         _subject_summary_rows(results),
@@ -603,6 +630,12 @@ def _save_calibration_artifacts(
         configuration_dir / "sic_calibration_folds.csv",
         _calibration_fold_rows(results),
     )
+    diagnostic_rows = list(results.get("prediction_diagnostics_log", []))
+    if diagnostic_rows:
+        _write_csv(
+            configuration_dir / "sic_prediction_diagnostics.csv",
+            diagnostic_rows,
+        )
     for filename, result_key in (
         ("sic_window_predictions.csv", "window_prediction_log"),
         ("sic_trial_predictions.csv", "trial_prediction_log"),
@@ -661,6 +694,7 @@ def _run_subject_calibration_configuration(
     trials,
     model_config: dict,
     config: SICTrainingConfig,
+    results_dir: Path,
 ) -> dict:
     """Run the common LOSO + three-fold calibration evaluator once."""
     source_monitor, source_monitor_mode = _source_checkpoint_settings(config)
@@ -695,10 +729,22 @@ def _run_subject_calibration_configuration(
         metrics=SIC_CLASSIFICATION_METRICS,
         ece_bins=config.ece_bins,
         decision_threshold=config.decision_threshold,
-        n_prediction_latent_samples=config.prediction_latent_samples,
+        prediction_diagnostics=config.prediction_diagnostics,
+        prediction_diagnostics_metric=config.prediction_diagnostics_metric,
+        prediction_diagnostics_every_n_epochs=(
+            config.prediction_diagnostics_every_n_epochs
+        ),
+        prediction_diagnostics_max_samples=(
+            config.prediction_diagnostics_max_samples
+        ),
+        prediction_diagnostics_threshold_tolerance=(
+            config.prediction_diagnostics_threshold_tolerance
+        ),
+        prediction_diagnostics_seed=config.prediction_diagnostics_seed,
+        n_prediction_latent_samples=0,
         latent_sampling_seed=config.latent_sampling_seed,
         log_predictions=True,
-        log_variational_intervals=config.log_variational_intervals,
+        log_variational_intervals=False,
         n_uncertainty_samples=config.uncertainty_samples,
         source_use_class_weight=config.source_use_class_weight,
         calibration_use_class_weight=config.calibration_use_class_weight,
@@ -711,6 +757,7 @@ def _run_subject_calibration_configuration(
         gpu_ids=config.gpu_ids,
         cpus_per_worker=config.cpus_per_worker,
         max_subjects=config.max_subjects,
+        source_model_output_dir=results_dir / "loso_zero_shot_models",
     )
 
 
@@ -760,7 +807,9 @@ def train_sic_loso_validation(
             f"{config.n_channels * config.n_bands}."
         )
 
-    model_config = dict(config.model_config)
+    model_config, removed_vae_parameters = _deterministic_model_config(
+        config.model_config
+    )
     model_config.setdefault("classification_level", config.classification_level)
     model_config.setdefault("n_classes", _n_classes(y))
     model_config.setdefault("n_channels", config.n_channels)
@@ -810,6 +859,11 @@ def train_sic_loso_validation(
     )
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
+    if removed_vae_parameters:
+        logger.info(
+            "Removed obsolete deterministic-SIC VAE parameters: %s",
+            removed_vae_parameters,
+        )
     logger.info(
         "Training protocol: configuration -> LOSO subject -> calibration plan %s",
         _calibration_plan(config),
@@ -908,6 +962,7 @@ def train_sic_loso_validation(
                 trials=candidate_trials,
                 model_config=builder_config,
                 config=config,
+                results_dir=configuration_dir,
             )
             _save_calibration_artifacts(
                 configuration_dir,
@@ -1103,7 +1158,9 @@ def train_sic(
             f"{config.n_channels * config.n_bands}."
         )
 
-    hyperparameters = dict(config.model_config)
+    hyperparameters, removed_vae_parameters = _deterministic_model_config(
+        config.model_config
+    )
     hyperparameters.setdefault("classification_level", config.classification_level)
     hyperparameters.setdefault("n_classes", _n_classes(y))
     hyperparameters.setdefault("n_channels", config.n_channels)
@@ -1139,6 +1196,11 @@ def train_sic(
     _write_json(run_dir / "dataset_ablation.json", data_summary)
 
     logger.info("Model: SIC (Subject Invariant Calibrator)")
+    if removed_vae_parameters:
+        logger.info(
+            "Removed obsolete deterministic-SIC VAE parameters: %s",
+            removed_vae_parameters,
+        )
     logger.info("SIC builder API version: %s", SIC_BUILDER_API_VERSION)
     logger.info("Input shape: %s", X.shape)
     logger.info(
@@ -1182,6 +1244,7 @@ def train_sic(
         trials=trials,
         model_config=model_config,
         config=config,
+        results_dir=run_dir,
     )
 
     _save_calibration_artifacts(
@@ -1207,6 +1270,7 @@ def train_sic(
 
 def main(argv=None):
     args, model_config = parse_cli(argv)
+    model_config, _ = _deterministic_model_config(model_config)
     calibration_levels = calibration_levels_from_args(args)
     calibration_selection_shots = (
         max(shots for shots, _ in calibration_levels)
