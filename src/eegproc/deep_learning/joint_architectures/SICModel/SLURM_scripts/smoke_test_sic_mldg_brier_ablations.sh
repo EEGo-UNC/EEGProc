@@ -45,17 +45,17 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-3}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-3}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-15}"
 MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-2}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-10}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
 VREX_PENALTY_WEIGHT="${VREX_PENALTY_WEIGHT:-1.0}"
 PREDICTION_DIAGNOSTICS_METRIC="${PREDICTION_DIAGNOSTICS_METRIC:-brier_score}"
 PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-1}"
-PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-128}"
+PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-500}"
 EXPECTED_SIC_API_VERSION=10
 
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_eeg.npy}"
@@ -249,24 +249,24 @@ print(json.dumps({
     # a complete 126-wide deterministic BiLSTM representation.
     "bilstm_units": 63,
     "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.30,
+    "bilstm_dropout": 0.20,
 
     # Emotion classifier and VariationalClassifier-head regularizers. These do
     # not reduce the encoder feature widths.
     "focal_gamma": 1.5,
     "focal_alpha": {"fixed": None},
-    "classification_hidden_units": {"fixed": [128, 64]},
-    "classification_dropout": 0.20,
+    "classification_hidden_units": {"grid": [256, 128, 64], [128, 64]},
+    "classification_dropout": 0.4,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": {"grid": [0.5, 1.5, 2.5]},
+    "vc_beta": {"grid": [1.0]},
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on pooled concatenated encoder features.
     "use_subject_adversarial": True,
-    "subject_adversarial_weight": 0.60,
+    "subject_adversarial_weight": {"grid": [0.0, 0.6]},
     "subject_loss_weight": 1.0,
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
@@ -323,7 +323,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train
     --validation-subjects 0 \
     --no-early-stopping \
     --calibration-epochs "$CALIBRATION_EPOCHS" \
-    --calibration-batch-size 32 \
+    --calibration-batch-size 128 \
     "${CALIBRATION_LEVEL_ARGS[@]}" \
     --calibration-selection-shots "$CALIBRATION_SELECTION_SHOTS" \
     --calibration-learning-rate 0.0001 \
