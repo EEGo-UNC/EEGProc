@@ -58,8 +58,8 @@ PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-500}"
 EXPECTED_SIC_API_VERSION=10
 
-EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_eeg.npy}"
-LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_labels.npy}"
+EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
+LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 
 if [[ "$TARGET_DIMENSION" != "valence" && "$TARGET_DIMENSION" != "arousal" ]]; then
     echo "ERROR: TARGET_DIMENSION must be valence or arousal."
