@@ -349,7 +349,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train
     --label-threshold-mode global \
     --median-label 3 \
     --window-sec 1.0 \
-    --fs 1.0 \
+    --fs 128 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --hyperparameters-json "$MODEL_CONFIG"
