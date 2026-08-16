@@ -27,6 +27,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 __all__ = [
     "PredictionDiagnostics",
     "CompactEpochLogger",
+    "HeldOutUserOracleMetrics",
     "MetaLearningSubjectSequence",
     "AlternatingSubjectSetSequence",
     "subject_calibration_cv",
@@ -1470,6 +1471,130 @@ class EvaluationLevelValidationMetrics(tf.keras.callbacks.Callback):
         )
 
 
+class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
+    """Print reporting-only metrics on the outer held-out user each epoch.
+
+    This callback deliberately keeps its values out of the Keras ``logs``
+    dictionary. Consequently, the oracle metrics cannot be consumed by
+    EarlyStopping, checkpoint selection, or any other training callback. The
+    target data are used only for inference after an epoch has finished; they
+    never enter a gradient calculation.
+    """
+
+    _METRICS = ("accuracy", "balanced_accuracy", "brier_score")
+
+    def __init__(
+        self,
+        X_target: np.ndarray,
+        y_target: np.ndarray,
+        subject_ids_target: np.ndarray,
+        trial_ids_target: np.ndarray,
+        target_subject,
+        evaluation_level: Literal["window", "trial"],
+        batch_size: int | None = None,
+        decision_threshold: float = 0.5,
+        ece_bins: int = _DEFAULT_ECE_BINS,
+    ) -> None:
+        super().__init__()
+        self.X_target = np.asarray(X_target)
+        self.y_target = np.asarray(y_target)
+        self.subject_ids_target = np.asarray(subject_ids_target)
+        self.trial_ids_target = np.asarray(trial_ids_target)
+        self.target_subject = _python_scalar(target_subject)
+        self.evaluation_level = evaluation_level
+        self.batch_size = batch_size
+        self.decision_threshold = float(decision_threshold)
+        self.ece_bins = int(ece_bins)
+        self.history: list[dict] = []
+
+    def on_train_begin(self, logs: dict | None = None) -> None:
+        print(
+            "[ORACLE] Held-out-user metrics are reporting only and are not "
+            "used for gradients, early stopping, threshold selection, or "
+            "checkpoint selection.",
+            flush=True,
+        )
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        probabilities = _predict_probabilities(
+            model=self.model,
+            X=self.X_target,
+            batch_size=self.batch_size,
+            n_prediction_latent_samples=0,
+            latent_sampling_seed=None,
+        )
+
+        if self.evaluation_level == "trial":
+            if _is_trial_tensor(self.X_target):
+                aggregation = _direct_trial_aggregation(
+                    probabilities=probabilities,
+                    y_true=self.y_target,
+                    subject_ids=self.subject_ids_target,
+                    trial_ids=self.trial_ids_target,
+                    n_windows_per_trial=self.X_target.shape[1],
+                    decision_threshold=self.decision_threshold,
+                )
+            else:
+                aggregation = _aggregate_window_probabilities_by_trial(
+                    probabilities=probabilities,
+                    y_true=self.y_target,
+                    subject_ids=self.subject_ids_target,
+                    trial_ids=self.trial_ids_target,
+                    decision_threshold=self.decision_threshold,
+                )
+            probabilities = aggregation["probabilities"]
+            y_true = aggregation["y_true"]
+            y_pred = aggregation["y_pred"]
+        else:
+            y_true = _as_numpy_1d(self.y_target).astype(np.int64)
+            y_pred = _predict_labels(
+                probabilities,
+                decision_threshold=self.decision_threshold,
+            )
+
+        scores = _classification_metrics(
+            y_true=y_true,
+            y_pred=y_pred,
+            probabilities=probabilities,
+            metrics=self._METRICS,
+            n_classes=probabilities.shape[1],
+            ece_bins=self.ece_bins,
+        )
+        row = {
+            "target_subject": self.target_subject,
+            "epoch": int(epoch) + 1,
+            "evaluation_level": self.evaluation_level,
+            "decision_threshold": self.decision_threshold,
+            **{name: float(value) for name, value in scores.items()},
+        }
+        if probabilities.shape[1] == 2:
+            row["predicted_class_1_fraction"] = float(np.mean(y_pred == 1))
+            row["true_class_1_fraction"] = float(np.mean(y_true == 1))
+        self.history.append(row)
+
+        parts = [
+            f"{self.evaluation_level}_accuracy={row['accuracy']:.4f}",
+            (
+                f"{self.evaluation_level}_balanced_accuracy="
+                f"{row['balanced_accuracy']:.4f}"
+            ),
+            f"{self.evaluation_level}_brier_score={row['brier_score']:.4f}",
+        ]
+        if probabilities.shape[1] == 2:
+            parts.extend(
+                [
+                    f"pred1={row['predicted_class_1_fraction']:.4f}",
+                    f"true1={row['true_class_1_fraction']:.4f}",
+                ]
+            )
+        print(
+            f"[ORACLE held-out user={self.target_subject!r} "
+            f"epoch={int(epoch) + 1}] "
+            + "  ".join(parts),
+            flush=True,
+        )
+
+
 def _level_scores(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -2833,6 +2958,23 @@ def _run_loso_fold(
         )
         callbacks.append(prediction_diagnostics_callback)
 
+    oracle_reporting_threshold = (
+        float(decision_thresholds[0])
+        if len(decision_thresholds) == 1
+        else 0.5
+    )
+    oracle_metrics_callback = HeldOutUserOracleMetrics(
+        X_target=X_test,
+        y_target=y_test,
+        subject_ids_target=subject_ids_test,
+        trial_ids_target=trial_ids_test,
+        target_subject=test_subject,
+        evaluation_level=evaluation_level,
+        batch_size=current_batch_size,
+        decision_threshold=oracle_reporting_threshold,
+    )
+    callbacks.append(oracle_metrics_callback)
+
     if validation_subjects_per_fold > 0:
         if early_stopping_monitor in {
             "val_trial_f1",
@@ -3162,6 +3304,7 @@ def _run_loso_fold(
         "outer_fold_number": int(fold_number),
         "fold_record": fold_record,
         "prediction_diagnostics_log": prediction_diagnostics_log,
+        "oracle_epoch_log": list(oracle_metrics_callback.history),
         **evaluation,
     }
 
@@ -3284,6 +3427,11 @@ def _aggregate_loso_config_result(
         "trial_std_scores": trial_std_scores,
         "fold_metrics": fold_metrics,
         "fold_training": [_compact_loso_training_result(row) for row in fold_outputs],
+        "oracle_epoch_log": [
+            oracle_row
+            for fold_output in fold_outputs
+            for oracle_row in fold_output.get("oracle_epoch_log", [])
+        ],
     }
 
 
@@ -4821,6 +4969,20 @@ def _run_subject_calibration_subject(
                 ),
             )
             source_callbacks.append(prediction_diagnostics_callback)
+
+        oracle_metrics_callback = HeldOutUserOracleMetrics(
+            X_target=X_target,
+            y_target=y_target,
+            subject_ids_target=target_subject_ids,
+            trial_ids_target=target_trial_ids,
+            target_subject=target_subject,
+            evaluation_level=evaluation_level,
+            batch_size=int(source_batch_size),
+            decision_threshold=float(decision_threshold),
+            ece_bins=int(ece_bins),
+        )
+        source_callbacks.append(oracle_metrics_callback)
+
         source_class_weight = (
             _class_weight_from_labels(y_source) if source_use_class_weight else None
         )
@@ -5231,6 +5393,7 @@ def _run_subject_calibration_subject(
                 if prediction_diagnostics_callback is None
                 else list(prediction_diagnostics_callback.history)
             ),
+            "oracle_epoch_log": list(oracle_metrics_callback.history),
             "zero_shot_model": zero_shot_model_artifact,
             "zero_shot_all_trials": all_target_evaluation,
             "calibration_levels": calibration_level_outputs,
@@ -5761,6 +5924,7 @@ def subject_calibration_cv(
         },
         "subject_results": subject_outputs,
         "subject_summary_rows": subject_summary_rows,
+        "oracle_epoch_log": [],
     }
     if prediction_diagnostics:
         results["prediction_diagnostics_log"] = []
@@ -5774,6 +5938,9 @@ def subject_calibration_cv(
         results["trial_variational_interval_log"] = []
 
     for subject_output in subject_outputs:
+        results["oracle_epoch_log"].extend(
+            subject_output.get("oracle_epoch_log", [])
+        )
         if prediction_diagnostics:
             results["prediction_diagnostics_log"].extend(
                 subject_output.get("prediction_diagnostics_log", [])

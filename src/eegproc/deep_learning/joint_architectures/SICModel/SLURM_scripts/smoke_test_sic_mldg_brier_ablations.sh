@@ -319,7 +319,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train
     --run-name "dreamer_${TARGET_DIMENSION}_sic_direct_concat_v10_${TRAINING_METHOD}_${ABLATION_PROFILE}_smoke" \
     --training-method "$TRAINING_METHOD" \
     --source-epochs "$SOURCE_EPOCHS" \
-    --source-batch-size None \
+    --source-batch-size 512 \
     --validation-subjects 0 \
     --no-early-stopping \
     --calibration-epochs "$CALIBRATION_EPOCHS" \
