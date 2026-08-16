@@ -179,7 +179,7 @@ PY
 # ---------------------------------------------------------------------------
 use_gcn_gru=true
 use_bilstm=true
-remove_median=false
+remove_median=true
 
 case "$ABLATION_PROFILE" in
     full)
@@ -319,7 +319,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train
     --run-name "dreamer_${TARGET_DIMENSION}_sic_direct_concat_v10_${TRAINING_METHOD}_${ABLATION_PROFILE}_smoke" \
     --training-method "$TRAINING_METHOD" \
     --source-epochs "$SOURCE_EPOCHS" \
-    --source-batch-size 512 \
+    --source-batch-size None \
     --validation-subjects 0 \
     --no-early-stopping \
     --calibration-epochs "$CALIBRATION_EPOCHS" \
@@ -349,6 +349,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModel.sic_model_train
     --label-threshold-mode global \
     --median-label 3 \
     --window-sec 1.0 \
+    --fs 1.0 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --hyperparameters-json "$MODEL_CONFIG"
