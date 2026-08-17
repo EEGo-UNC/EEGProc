@@ -1,0 +1,7 @@
+{
+  "remove_median_label": true,
+  "median_label": 3.0,
+  "removed_samples": 5400,
+  "removed_trials": 90,
+  "retained_samples": 19440
+}

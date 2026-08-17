@@ -1,0 +1,26 @@
+{
+  "saved": true,
+  "directory": "/nas/longleaf/home/inserra/EEGProc/runs/smoke/sic_direct_concat_v10_mldg_brier/DREAMER/valence/suite_64089516/full/dreamer_valence_sic_direct_concat_v10_mldg_full_smoke_20260816_182407/configuration_0002/loso_zero_shot_models",
+  "format": "keras",
+  "load_with_compile": false,
+  "models": [
+    {
+      "stage": "zero_shot_source_model",
+      "format": "keras",
+      "path": "/nas/longleaf/home/inserra/EEGProc/runs/smoke/sic_direct_concat_v10_mldg_brier/DREAMER/valence/suite_64089516/full/dreamer_valence_sic_direct_concat_v10_mldg_full_smoke_20260816_182407/configuration_0002/loso_zero_shot_models/loso_fold_0001_target_0_zero_shot.keras",
+      "filename": "loso_fold_0001_target_0_zero_shot.keras",
+      "target_subject": 0,
+      "loso_fold": 1,
+      "load_with_compile": false
+    },
+    {
+      "stage": "zero_shot_source_model",
+      "format": "keras",
+      "path": "/nas/longleaf/home/inserra/EEGProc/runs/smoke/sic_direct_concat_v10_mldg_brier/DREAMER/valence/suite_64089516/full/dreamer_valence_sic_direct_concat_v10_mldg_full_smoke_20260816_182407/configuration_0002/loso_zero_shot_models/loso_fold_0002_target_1_zero_shot.keras",
+      "filename": "loso_fold_0002_target_1_zero_shot.keras",
+      "target_subject": 1,
+      "loso_fold": 2,
+      "load_with_compile": false
+    }
+  ]
+}
