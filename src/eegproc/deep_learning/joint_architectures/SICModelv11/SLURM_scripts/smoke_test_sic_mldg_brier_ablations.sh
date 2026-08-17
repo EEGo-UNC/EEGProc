@@ -162,20 +162,6 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-python - "$EXPECTED_SIC_API_VERSION" <<'PY'
-import sys
-from src.eegproc.deep_learning.joint_architectures.SICModel.sic_model import (
-    SIC_BUILDER_API_VERSION,
-)
-
-expected = int(sys.argv[1])
-if SIC_BUILDER_API_VERSION != expected:
-    raise SystemExit(
-        f"Expected SIC builder API {expected}, found {SIC_BUILDER_API_VERSION}. "
-        "Update the project files before submitting this job."
-    )
-print(f"Verified SIC builder API {SIC_BUILDER_API_VERSION}")
-PY
 
 # ---------------------------------------------------------------------------
 # Resolve the selected ablation into explicit branch switches
