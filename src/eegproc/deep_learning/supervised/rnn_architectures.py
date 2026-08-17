@@ -5,6 +5,9 @@ The builders in this module can be used in two ways:
 1. ``build()`` creates a complete, compiled standalone classifier.
 2. ``build_feature_extractor()`` creates only the recurrent temporal encoder
    and pooling pathway, returning one sequence-level embedding per sample.
+3. ``build_sequence_summarizer()`` returns the final recurrent state without
+   temporal pooling. This is useful when every ordered element in a sequence
+   must contribute to a trial-level representation.
 
 The feature-extractor form is intended for joint architectures where another
 model, such as a variational classifier, owns the final classification head
@@ -14,7 +17,7 @@ and loss.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import tensorflow as tf
 from tensorflow.keras import Model, layers
@@ -31,14 +34,16 @@ class RNNClassifier(ABC):
 
     Parameters
     ----------
-    timesteps : int
-        Number of temporal samples in each input sequence.
+    timesteps : int | None
+        Number of temporal samples in each input sequence. ``None`` allows a
+        variable-length sequence.
     n_features : int
         Number of features at each timestep.
     n_classes : int
         Number of target classes used by the standalone classifier.
-    rnn_units : int, default=128
-        Number of hidden units in each recurrent direction/layer.
+    rnn_units : int or sequence[int], default=128
+        A scalar repeats one hidden width across ``n_rnn_layers``. A sequence
+        gives the width of each recurrent layer, for example ``(128, 64)``.
     n_rnn_layers : int, default=2
         Number of recurrent layers in the stack.
     dropout : float, default=0.10
@@ -59,10 +64,10 @@ class RNNClassifier(ABC):
 
     def __init__(
         self,
-        timesteps: int,
+        timesteps: int | None,
         n_features: int,
         n_classes: int,
-        rnn_units: int = 128,
+        rnn_units: int | Sequence[int] = 128,
         n_rnn_layers: int = 2,
         dropout: float = 0.10,
         loss: LossLike = "softmax_crossentropy",
@@ -74,23 +79,43 @@ class RNNClassifier(ABC):
         gamma: float = 0.0,
         lambda_: float = 0.0,
     ) -> None:
-        if timesteps < 1:
-            raise ValueError("timesteps must be at least 1.")
+        if timesteps is not None and timesteps < 1:
+            raise ValueError("timesteps must be at least 1 or None.")
         if n_features < 1:
             raise ValueError("n_features must be at least 1.")
         if n_classes < 2:
             raise ValueError("n_classes must be at least 2.")
-        if rnn_units < 1:
-            raise ValueError("rnn_units must be at least 1.")
         if n_rnn_layers < 1:
             raise ValueError("n_rnn_layers must be at least 1.")
+        if isinstance(rnn_units, Sequence) and not isinstance(
+            rnn_units,
+            (str, bytes),
+        ):
+            units_by_layer = tuple(int(units) for units in rnn_units)
+            if not units_by_layer or any(units < 1 for units in units_by_layer):
+                raise ValueError(
+                    "rnn_units sequences must contain positive integers."
+                )
+            if len(units_by_layer) != int(n_rnn_layers):
+                raise ValueError(
+                    "The rnn_units sequence length must match n_rnn_layers; "
+                    f"got {units_by_layer} and {n_rnn_layers}."
+                )
+        else:
+            scalar_units = int(rnn_units)
+            if scalar_units < 1:
+                raise ValueError("rnn_units must be at least 1.")
+            units_by_layer = (scalar_units,) * int(n_rnn_layers)
         if not 0.0 <= dropout < 1.0:
             raise ValueError("dropout must be in [0, 1).")
 
-        self.timesteps = int(timesteps)
+        self.timesteps = None if timesteps is None else int(timesteps)
         self.n_features = int(n_features)
         self.n_classes = int(n_classes)
-        self.rnn_units = int(rnn_units)
+        self.rnn_units_by_layer = units_by_layer
+        # Preserve a scalar final-width attribute for compatibility with code
+        # that inspected this builder before per-layer widths were supported.
+        self.rnn_units = self.rnn_units_by_layer[-1]
         self.n_rnn_layers = int(n_rnn_layers)
         self.dropout = float(dropout)
         self.loss = loss
@@ -116,14 +141,29 @@ class RNNClassifier(ABC):
         return isinstance(self.loss, str) and self.loss == "variational"
 
     @abstractmethod
-    def recurrent_layer(self, layer_index: int) -> tf.keras.layers.Layer:
+    def recurrent_layer(
+        self,
+        layer_index: int,
+        *,
+        return_sequences: bool,
+    ) -> tf.keras.layers.Layer:
         """Create one recurrent layer/block for this architecture."""
         raise NotImplementedError
 
-    def recurrent_stack(self, x: tf.Tensor) -> tf.Tensor:
-        """Apply the recurrent stack while retaining the temporal axis."""
+    def recurrent_stack(
+        self,
+        x: tf.Tensor,
+        *,
+        return_sequences: bool = True,
+    ) -> tf.Tensor:
+        """Apply the recurrent stack with an optional final temporal axis."""
         for layer_index in range(self.n_rnn_layers):
-            x = self.recurrent_layer(layer_index)(x)
+            is_final_layer = layer_index == self.n_rnn_layers - 1
+            layer_returns_sequence = not is_final_layer or return_sequences
+            x = self.recurrent_layer(
+                layer_index,
+                return_sequences=layer_returns_sequence,
+            )(x)
             # Layer normalization is sample-local and does not carry running
             # statistics learned from the training subjects into a held-out
             # subject, making it safer for LOSO EEG generalization.
@@ -136,6 +176,26 @@ class RNNClassifier(ABC):
                 name=f"{self.name}_dropout_{layer_index}",
             )(x)
         return x
+
+    def build_sequence_summarizer(self) -> tf.keras.Model:
+        """Build a recurrent sequence-to-vector model without temporal pooling.
+
+        Every element is processed in order by the recurrent stack. All
+        intermediate recurrent layers retain the sequence; only the final
+        layer returns its state. For bidirectional architectures, Keras
+        concatenates the forward and backward final states.
+        """
+        x_in = layers.Input(
+            shape=(self.timesteps, self.n_features),
+            name=f"{self.name}_sequence_input",
+        )
+        embedding = self.recurrent_stack(x_in, return_sequences=False)
+
+        return Model(
+            inputs=x_in,
+            outputs=embedding,
+            name=f"{self.name}_sequence_summarizer",
+        )
 
     def temporal_embedding(self, x: tf.Tensor) -> tf.Tensor:
         """Collapse an RNN output sequence into one embedding per sample.
@@ -178,7 +238,7 @@ class RNNClassifier(ABC):
             shape=(self.timesteps, self.n_features),
             name=f"{self.name}_feature_input",
         )
-        x = self.recurrent_stack(x_in)
+        x = self.recurrent_stack(x_in, return_sequences=True)
         embedding = self.temporal_embedding(x)
 
         return Model(
@@ -218,7 +278,7 @@ class RNNClassifier(ABC):
             shape=(self.timesteps, self.n_features),
             name=f"{self.name}_input",
         )
-        x = self.recurrent_stack(x_in)
+        x = self.recurrent_stack(x_in, return_sequences=True)
         embedding = self.temporal_embedding(x)
         output, vc_head = self.classifier_head(embedding)
 
@@ -258,10 +318,10 @@ class LSTMClassifier(RNNClassifier):
 
     def __init__(
         self,
-        timesteps: int,
+        timesteps: int | None,
         n_features: int,
         n_classes: int,
-        lstm_units: int = 128,
+        lstm_units: int | Sequence[int] = 128,
         n_lstm_layers: int = 2,
         dropout: float = 0.10,
         loss: LossLike = "softmax_crossentropy",
@@ -289,13 +349,18 @@ class LSTMClassifier(RNNClassifier):
             gamma=gamma,
             lambda_=lambda_,
         )
-        self.lstm_units = int(lstm_units)
+        self.lstm_units = self.rnn_units_by_layer
         self.n_lstm_layers = int(n_lstm_layers)
 
-    def recurrent_layer(self, layer_index: int) -> tf.keras.layers.Layer:
+    def recurrent_layer(
+        self,
+        layer_index: int,
+        *,
+        return_sequences: bool,
+    ) -> tf.keras.layers.Layer:
         return layers.LSTM(
-            self.rnn_units,
-            return_sequences=True,
+            self.rnn_units_by_layer[layer_index],
+            return_sequences=return_sequences,
             name=f"{self.name}_lstm_{layer_index}",
         )
 
@@ -305,10 +370,10 @@ class BiLSTMClassifier(RNNClassifier):
 
     def __init__(
         self,
-        timesteps: int,
+        timesteps: int | None,
         n_features: int,
         n_classes: int,
-        lstm_units: int = 128,
+        lstm_units: int | Sequence[int] = 128,
         n_bilstm_layers: int = 2,
         dropout: float = 0.10,
         loss: LossLike = "softmax_crossentropy",
@@ -336,16 +401,129 @@ class BiLSTMClassifier(RNNClassifier):
             gamma=gamma,
             lambda_=lambda_,
         )
-        self.lstm_units = int(lstm_units)
+        self.lstm_units = self.rnn_units_by_layer
         self.n_bilstm_layers = int(n_bilstm_layers)
 
-    def recurrent_layer(self, layer_index: int) -> tf.keras.layers.Layer:
+    def recurrent_layer(
+        self,
+        layer_index: int,
+        *,
+        return_sequences: bool,
+    ) -> tf.keras.layers.Layer:
         return layers.Bidirectional(
             layers.LSTM(
-                self.rnn_units,
-                return_sequences=True,
+                self.rnn_units_by_layer[layer_index],
+                return_sequences=return_sequences,
                 name=f"{self.name}_lstm_{layer_index}",
             ),
             merge_mode="concat",
             name=f"{self.name}_bilstm_{layer_index}",
+        )
+
+
+class GRUClassifier(RNNClassifier):
+    """Unidirectional GRU classifier for EEG sequence data."""
+
+    def __init__(
+        self,
+        timesteps: int | None,
+        n_features: int,
+        n_classes: int,
+        gru_units: int | Sequence[int] = 128,
+        n_gru_layers: int = 2,
+        dropout: float = 0.10,
+        loss: LossLike = "softmax_crossentropy",
+        optimizer: OptimizerLike = "adam",
+        metrics: list[str] | None = None,
+        name: str = "gru_classifier",
+        alpha: float = 1.0,
+        beta: float = 1.0,
+        gamma: float = 0.0,
+        lambda_: float = 0.0,
+    ) -> None:
+        super().__init__(
+            timesteps=timesteps,
+            n_features=n_features,
+            n_classes=n_classes,
+            rnn_units=gru_units,
+            n_rnn_layers=n_gru_layers,
+            dropout=dropout,
+            loss=loss,
+            optimizer=optimizer,
+            metrics=metrics,
+            name=name,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            lambda_=lambda_,
+        )
+        self.gru_units = self.rnn_units_by_layer
+        self.n_gru_layers = int(n_gru_layers)
+
+    def recurrent_layer(
+        self,
+        layer_index: int,
+        *,
+        return_sequences: bool,
+    ) -> tf.keras.layers.Layer:
+        return layers.GRU(
+            self.rnn_units_by_layer[layer_index],
+            return_sequences=return_sequences,
+            name=f"{self.name}_gru_{layer_index}",
+        )
+
+
+class BiGRUClassifier(RNNClassifier):
+    """Bidirectional GRU classifier for EEG sequence data."""
+
+    def __init__(
+        self,
+        timesteps: int | None,
+        n_features: int,
+        n_classes: int,
+        gru_units: int | Sequence[int] = 128,
+        n_bigru_layers: int = 2,
+        dropout: float = 0.10,
+        loss: LossLike = "softmax_crossentropy",
+        optimizer: OptimizerLike = "adam",
+        metrics: list[str] | None = None,
+        name: str = "bigru_classifier",
+        alpha: float = 1.0,
+        beta: float = 1.0,
+        gamma: float = 0.0,
+        lambda_: float = 0.0,
+    ) -> None:
+        super().__init__(
+            timesteps=timesteps,
+            n_features=n_features,
+            n_classes=n_classes,
+            rnn_units=gru_units,
+            n_rnn_layers=n_bigru_layers,
+            dropout=dropout,
+            loss=loss,
+            optimizer=optimizer,
+            metrics=metrics,
+            name=name,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            lambda_=lambda_,
+        )
+        self.gru_units = self.rnn_units_by_layer
+        self.n_bigru_layers = int(n_bigru_layers)
+
+    def recurrent_layer(
+        self,
+        layer_index: int,
+        *,
+        return_sequences: bool,
+    ) -> tf.keras.layers.Layer:
+        return layers.Bidirectional(
+            layers.GRU(
+                self.rnn_units_by_layer[layer_index],
+                return_sequences=return_sequences,
+                name=f"{self.name}_gru_{layer_index}",
+            ),
+            merge_mode="concat",
+            name=f"{self.name}_bigru_{layer_index}",
         )
