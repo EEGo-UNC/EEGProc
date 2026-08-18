@@ -247,7 +247,7 @@ print(json.dumps({
     # There is no arithmetic mean across the trial's window axis.
     "classifier_rnn_type": "bigru",
     "classifier_rnn_units": {"fixed": [128, 64]},
-    "n_classifier_rnn_layers": 1,
+    "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.30,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
