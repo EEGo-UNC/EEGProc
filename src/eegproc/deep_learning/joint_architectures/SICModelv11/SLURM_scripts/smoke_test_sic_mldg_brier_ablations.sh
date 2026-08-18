@@ -171,6 +171,8 @@ use_bilstm=true
 remove_median=false
 
 case "$ABLATION_PROFILE" in
+    full)
+        ;;
     no_bilstm)
         use_bilstm=false
         ;;
