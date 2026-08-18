@@ -21,7 +21,6 @@ set -euo pipefail
 # allows two profiles (four GPUs total) to run concurrently by default.
 ABLATION_PROFILES=(
     full
-    remove_median
     no_gcn_gru
     no_bilstm
 )
@@ -43,18 +42,18 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-100}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-30}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-20}"
-SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-16}"
-CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-8}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-150}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-50}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-30}"
+SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-32}"
+CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-16}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
 VREX_PENALTY_WEIGHT="${VREX_PENALTY_WEIGHT:-1.0}"
 PREDICTION_DIAGNOSTICS_METRIC="${PREDICTION_DIAGNOSTICS_METRIC:-brier_score}"
-PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-1}"
-PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-256}"
+PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-10}"
+PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
 EXPECTED_SIC_API_VERSION=11
 SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 
@@ -223,9 +222,9 @@ print(json.dumps({
 
     # First-order MLDG. Meta-train uses the VC/classification and subject-
     # adversarial objectives; meta-test measures focal generalization.
-    "mldg_meta_train_subjects": 18,
-    "mldg_meta_test_subjects": 4,
-    "mldg_trials_per_subject": 1,
+    "mldg_meta_train_subjects": 10,
+    "mldg_meta_test_subjects": 5,
+    "mldg_trials_per_subject": 2,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
@@ -258,14 +257,14 @@ print(json.dumps({
     "classifier_rnn_type": "bigru",
     "classifier_rnn_units": {"fixed": [128, 64]},
     "n_classifier_rnn_layers": 2,
-    "classifier_rnn_dropout": 0.20,
+    "classifier_rnn_dropout": 0.4,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": {"grid": [0.0, 1.0, 2.0]},
+    "focal_gamma": {"fixed": [1.0]},
     "focal_alpha": {"fixed": None},
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": {"grid": [0.5, 1.5, 2.5]},
+    "vc_beta": {"fixed": [1.0]},
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,
