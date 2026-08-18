@@ -298,12 +298,6 @@ echo "Training method: $TRAINING_METHOD"
 echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
 echo "Remove median trials: $remove_median"
 echo "Trial classifier: BiGRU [128,64] units/direction, final width 128, no cross-window averaging"
-if [[ "$search_bilstm_width" == "true" ]]; then
-    echo "Direct feature grid: GCN-GRU=384; BiLSTM=84,126,192; concatenated widths=468,510,576 when both branches are active"
-else
-    echo "BiLSTM branch disabled; no duplicate BiLSTM-width grid"
-fi
-echo "MLDG: A=18 B=4 steps/epoch=$MLDG_STEPS_PER_EPOCH"
 echo "Prediction diagnostics: metric=$PREDICTION_DIAGNOSTICS_METRIC every=$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS epoch(s) max_samples=$PREDICTION_DIAGNOSTICS_MAX_SAMPLES"
 echo "Selection: minimize 12-shot calibrated Brier score"
 echo "Calibration: 3-shot/6-fold, 6-shot/3-fold, 9-shot/2-fold, 12-shot/3-fold"
