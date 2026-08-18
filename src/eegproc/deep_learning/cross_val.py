@@ -4977,7 +4977,7 @@ def _run_subject_calibration_subject(
             trial_ids_target=target_trial_ids,
             target_subject=target_subject,
             evaluation_level=evaluation_level,
-            batch_size=int(source_batch_size),
+            batch_size=int(1),
             decision_threshold=float(decision_threshold),
             ece_bins=int(ece_bins),
         )

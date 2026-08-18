@@ -169,9 +169,7 @@ class SICMLDGEpisodeSequence(tf.keras.utils.Sequence):
                         trial_queues,
                     )
                     episode_indices.append(indices)
-                    episode_roles.append(
-                        np.full(len(indices), role, dtype=np.int32)
-                    )
+                    episode_roles.append(np.full(len(indices), role, dtype=np.int32))
             indices = np.concatenate(episode_indices)
             roles = np.concatenate(episode_roles)
             order = rng.permutation(len(indices))
@@ -272,7 +270,8 @@ def fit_sic_mldg(
         steps_per_epoch=episode_steps,
         seed=model.mldg_seed,
     )
-    # One item is already one complete episode; Keras must not rebatch it.
+    # One item is already one complete episode; Keras must not rebatch it
+    #
     return tf.keras.Model.fit(
         model,
         x=episodes,
@@ -317,7 +316,9 @@ def _combine_first_order_gradients(meta_train, meta_test, beta):
         elif test_gradient is None:
             gradient = train_gradient
         else:
-            gradient = train_gradient + tf.cast(beta, test_gradient.dtype) * test_gradient
+            gradient = (
+                train_gradient + tf.cast(beta, test_gradient.dtype) * test_gradient
+            )
         combined.append(gradient)
     return combined
 
@@ -517,9 +518,7 @@ class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
         self.y_ids = _as_numpy_1d(self.y).astype(np.int64)
         self.subject_ids = np.asarray(subject_ids).reshape(-1)
         if not (len(self.X) == len(self.y) == len(self.subject_ids)):
-            raise ValueError(
-                "MLDG X, y, and subject_ids must have matching lengths."
-            )
+            raise ValueError("MLDG X, y, and subject_ids must have matching lengths.")
 
         self.meta_train_subjects = int(meta_train_subjects)
         self.meta_test_subjects = int(meta_test_subjects)
