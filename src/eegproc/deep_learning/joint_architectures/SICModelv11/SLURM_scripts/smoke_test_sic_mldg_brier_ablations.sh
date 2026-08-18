@@ -26,7 +26,7 @@ set -euo pipefail
 
 SMOKE_PROFILES=(
     full
-    no_bilstm
+    remove_median
 )
 
 PROFILE_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
@@ -215,7 +215,7 @@ print(json.dumps({
     # meta-train subjects; focal emotion loss on adapted meta-test subjects.
     "mldg_meta_train_subjects": 6,
     "mldg_meta_test_subjects": 3,
-    "mldg_trials_per_subject": 1,
+    "mldg_trials_per_subject": 2,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,

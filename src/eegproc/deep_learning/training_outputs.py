@@ -67,41 +67,102 @@ def _diagnostic_model_outputs(
     X: np.ndarray,
     batch_size: int | None,
 ) -> dict[str, np.ndarray]:
-    """Return probabilities and any available internal classifier tensors."""
-    if hasattr(model, "predict_diagnostics"):
-        raw_outputs = model.predict_diagnostics(X, batch_size=batch_size)
-    else:
-        inputs = tf.convert_to_tensor(X, dtype=tf.float32)
-        try:
-            raw_outputs = model(
-                inputs,
-                training=False,
-                sample_latent=False,
-                include_reconstruction=False,
-            )
-        except TypeError:
-            raw_outputs = model(inputs, training=False)
+    """Return diagnostic tensors using memory-bounded inference batches.
 
-    if isinstance(raw_outputs, Mapping):
-        outputs = {
-            str(key): _numpy_value(value)
-            for key, value in raw_outputs.items()
-            if value is not None
+    A grouped trial has shape ``(windows, timesteps, features)``. Consequently,
+    a rank-4 diagnostic array can expand from a seemingly small outer batch to
+    thousands of EEG windows inside the SIC encoder. Process those arrays one
+    complete trial at a time. This still evaluates every selected trial and
+    preserves its full ordered window sequence; only the device scheduling is
+    changed.
+    """
+    X_array = np.asarray(X)
+    if len(X_array) == 0:
+        raise ValueError("Diagnostic inputs must contain at least one sample.")
+    if batch_size is not None and int(batch_size) < 1:
+        raise ValueError("Diagnostic batch_size must be at least 1 or None.")
+
+    requested_batch_size = (
+        len(X_array) if batch_size is None else int(batch_size)
+    )
+    # Rank-4 SIC inputs are grouped trials, not ordinary independent windows.
+    # One trial can already contain enough flattened windows to occupy most of
+    # the GPU, so never combine multiple trials in a diagnostic forward pass.
+    effective_batch_size = 1 if X_array.ndim == 4 else requested_batch_size
+
+    def normalize(raw_outputs) -> dict[str, np.ndarray]:
+        if isinstance(raw_outputs, Mapping):
+            outputs = {
+                str(key): _numpy_value(value)
+                for key, value in raw_outputs.items()
+                if value is not None
+            }
+            if "probabilities" in outputs:
+                probabilities = _to_probabilities(outputs["probabilities"])
+            elif "logits" in outputs:
+                probabilities = _to_probabilities(outputs["logits"])
+            else:
+                classifier_output = _extract_classifier_output(raw_outputs)
+                probabilities = _to_probabilities(
+                    _numpy_value(classifier_output)
+                )
+            outputs["probabilities"] = probabilities
+            return outputs
+
+        classifier_output = _extract_classifier_output(raw_outputs)
+        return {
+            "probabilities": _to_probabilities(
+                _numpy_value(classifier_output)
+            ),
         }
-        if "probabilities" in outputs:
-            probabilities = _to_probabilities(outputs["probabilities"])
-        elif "logits" in outputs:
-            probabilities = _to_probabilities(outputs["logits"])
-        else:
-            classifier_output = _extract_classifier_output(raw_outputs)
-            probabilities = _to_probabilities(_numpy_value(classifier_output))
-        outputs["probabilities"] = probabilities
-        return outputs
 
-    classifier_output = _extract_classifier_output(raw_outputs)
-    return {
-        "probabilities": _to_probabilities(_numpy_value(classifier_output)),
-    }
+    output_batches: list[dict[str, np.ndarray]] = []
+    for start in range(0, len(X_array), effective_batch_size):
+        stop = min(start + effective_batch_size, len(X_array))
+        X_batch = X_array[start:stop]
+        if hasattr(model, "predict_diagnostics"):
+            raw_outputs = model.predict_diagnostics(
+                X_batch,
+                batch_size=effective_batch_size,
+            )
+        else:
+            inputs = tf.convert_to_tensor(X_batch, dtype=tf.float32)
+            try:
+                raw_outputs = model(
+                    inputs,
+                    training=False,
+                    sample_latent=False,
+                    include_reconstruction=False,
+                )
+            except TypeError:
+                raw_outputs = model(inputs, training=False)
+        output_batches.append(normalize(raw_outputs))
+
+    expected_keys = set(output_batches[0])
+    for index, outputs in enumerate(output_batches[1:], start=1):
+        if set(outputs) != expected_keys:
+            raise ValueError(
+                "Diagnostic model output keys changed between batches: "
+                f"first={sorted(expected_keys)}, batch_{index}="
+                f"{sorted(outputs)}."
+            )
+
+    combined: dict[str, np.ndarray] = {}
+    for key in output_batches[0]:
+        values = [outputs[key] for outputs in output_batches]
+        combined[key] = (
+            np.stack(values, axis=0)
+            if values[0].ndim == 0
+            else np.concatenate(values, axis=0)
+        )
+
+    if len(combined["probabilities"]) != len(X_array):
+        raise ValueError(
+            "Diagnostic probabilities do not align with the selected inputs: "
+            f"probabilities={len(combined['probabilities'])}, "
+            f"inputs={len(X_array)}."
+        )
+    return combined
 
 
 class PredictionDiagnostics(tf.keras.callbacks.Callback):
