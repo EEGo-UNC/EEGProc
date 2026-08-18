@@ -49,8 +49,8 @@ SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-30}"
 MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
 MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-10}"
-SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-8}"
-CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-6}"
+SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-32}"
+CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-16}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
@@ -211,8 +211,8 @@ print(json.dumps({
 
     # First-order MLDG: VC/classification and subject-adversarial loss on
     # meta-train subjects; focal emotion loss on adapted meta-test subjects.
-    "mldg_meta_train_subjects": 6,
-    "mldg_meta_test_subjects": 3,
+    "mldg_meta_train_subjects": 8,
+    "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 2,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
     "mldg_inner_learning_rate": 1e-4,
