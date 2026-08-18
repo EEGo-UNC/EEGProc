@@ -25,7 +25,6 @@ set -euo pipefail
 # errors without running every full ablation.
 
 SMOKE_PROFILES=(
-    full
     remove_median
 )
 
@@ -168,15 +167,14 @@ fi
 # ---------------------------------------------------------------------------
 use_gcn_gru=true
 use_bilstm=true
-remove_median=true
+remove_median=false
 
 case "$ABLATION_PROFILE" in
-    full)
-        remove_median=false
-        ;;
     no_bilstm)
-        remove_median=false
         use_bilstm=false
+        ;;
+    remove_median)
+        remove_median=true
         ;;
     *)
         echo "ERROR: unknown smoke profile: $ABLATION_PROFILE"
