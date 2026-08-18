@@ -4,11 +4,11 @@
 #SBATCH --error=sic_v11_abl_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:2
-#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=48:00:00
-#SBATCH --array=0-3%2
+#SBATCH --time=47:00:00
+#SBATCH --array=0-2%1
 
 set -euo pipefail
 
@@ -21,8 +21,6 @@ set -euo pipefail
 # allows two profiles (four GPUs total) to run concurrently by default.
 ABLATION_PROFILES=(
     full
-    no_gcn_gru
-    no_bilstm
 )
 
 PROFILE_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
@@ -42,9 +40,9 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-150}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-50}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-30}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-100}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-40}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-25}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-32}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-16}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
@@ -211,8 +209,6 @@ mldg_steps_per_epoch = int(sys.argv[4])
 search_bilstm_width = sys.argv[5].lower() == "true"
 vrex_penalty_weight = float(sys.argv[6])
 
-bilstm_units = {"grid": [42, 63, 96]} if search_bilstm_width else 63
-
 print(json.dumps({
     # Source optimizer. The method itself is selected by --training-method.
     "optimizer_name": "adamw",
@@ -234,11 +230,11 @@ print(json.dumps({
     "t_down": 2,
     "temporal_pool_sizes": {"fixed": [2]},
     "gcn_units": {"fixed": [128, 64]},
-    "gcn_dropout": 0.2,
+    "gcn_dropout": 0.3,
     "gcn_activation": "relu",
     "gcn_use_batch_norm": False,
     "spectral_gru_units": 384,
-    "spectral_gru_dropout": 0.2,
+    "spectral_gru_dropout": 0.3,
     "mi_n_neighbors": 3,
     "mi_random_state": 42,
     "mi_zero_diagonal": False,
@@ -247,7 +243,7 @@ print(json.dumps({
 
     # Independent temporal branch. Width is searched per direction; therefore
     # candidates 42/63/96 produce complete outputs of 84/126/192 features.
-    "bilstm_units": bilstm_units,
+    "bilstm_units": 63,
     "n_bilstm_layers": 1,
     "bilstm_dropout": 0.3,
 
@@ -260,7 +256,7 @@ print(json.dumps({
     "classifier_rnn_dropout": 0.4,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": {"fixed": [1.0]},
+    "focal_gamma": {"fixed": [1.5]},
     "focal_alpha": {"fixed": None},
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
@@ -270,10 +266,10 @@ print(json.dumps({
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on the learned trial representation.
-    "use_subject_adversarial": True,
-    "subject_adversarial_weight": 0.60,
-    "subject_loss_weight": 1.0,
-    "subject_hidden_units": 64,
+    "use_subject_adversarial": False,
+    "subject_adversarial_weight": 0.0,
+    "subject_loss_weight": 0.0,
+    "subject_hidden_units": 2,
     "subject_dropout": 0.0,
 
     # One-factor-at-a-time architecture/data ablation.
@@ -352,8 +348,8 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --prediction-diagnostics-threshold-tolerance 0.01 \
     --prediction-diagnostics-seed 42 \
     --ece-bins 15 \
-    --n-jobs 2 \
-    --gpu-ids 0 1 \
+    --n-jobs 4 \
+    --gpu-ids 0 1 2 3 \
     --cpus-per-worker 2 \
     --verbose 2 \
     --seed 42 \
