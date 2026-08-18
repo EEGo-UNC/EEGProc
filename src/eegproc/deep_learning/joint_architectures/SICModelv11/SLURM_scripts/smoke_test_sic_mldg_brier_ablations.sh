@@ -262,7 +262,7 @@ print(json.dumps({
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on the learned trial representation.
-    "use_subject_adversarial": false,
+    "use_subject_adversarial": False,
     "subject_adversarial_weight": 0.0,
     "subject_loss_weight": 0.0,
     "subject_hidden_units": 64,
