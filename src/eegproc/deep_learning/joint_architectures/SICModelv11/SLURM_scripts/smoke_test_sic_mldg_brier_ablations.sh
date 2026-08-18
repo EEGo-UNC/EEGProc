@@ -246,7 +246,7 @@ print(json.dumps({
     # by the BiGRU; only its final bidirectional state enters the VC head.
     # There is no arithmetic mean across the trial's window axis.
     "classifier_rnn_type": "bigru",
-    "classifier_rnn_units": {"fixed": [128, 64], [128]},
+    "classifier_rnn_units": {"grid": [128, 64], [128]},
     "n_classifier_rnn_layers": 1,
     "classifier_rnn_dropout": 0.30,
 
