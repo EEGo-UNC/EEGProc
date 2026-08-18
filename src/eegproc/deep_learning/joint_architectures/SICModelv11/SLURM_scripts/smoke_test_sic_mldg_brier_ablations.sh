@@ -26,7 +26,7 @@ set -euo pipefail
 
 SMOKE_PROFILES=(
     full
-    remove_bilstm
+    no_bilstm
 )
 
 PROFILE_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
