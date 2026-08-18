@@ -25,7 +25,8 @@ set -euo pipefail
 # errors without running every full ablation.
 
 SMOKE_PROFILES=(
-    remove_median
+    full
+    remove_bilstm
 )
 
 PROFILE_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
