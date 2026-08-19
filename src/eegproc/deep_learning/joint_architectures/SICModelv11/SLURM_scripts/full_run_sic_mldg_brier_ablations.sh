@@ -4,10 +4,10 @@
 #SBATCH --error=sic_v11_abl_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=128G
-#SBATCH --time=47:00:00
+#SBATCH --time=1:00:00
 #SBATCH --array=0-2%1
 
 set -euo pipefail
@@ -55,8 +55,8 @@ PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}
 EXPECTED_SIC_API_VERSION=11
 SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 
-EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_eeg.npy}"
-LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/remove_gamma/dreamer_labels.npy}"
+EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
+LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 
 if [[ "$TARGET_DIMENSION" != "valence" && "$TARGET_DIMENSION" != "arousal" ]]; then
     echo "ERROR: TARGET_DIMENSION must be valence or arousal."
