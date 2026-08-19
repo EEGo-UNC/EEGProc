@@ -4,10 +4,10 @@
 #SBATCH --error=sic_v11_abl_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=2
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=1:00:00
+#SBATCH --time=47:00:00
 #SBATCH --array=0-2%1
 
 set -euo pipefail
