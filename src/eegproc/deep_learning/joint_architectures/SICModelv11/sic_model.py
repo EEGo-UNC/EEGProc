@@ -10,12 +10,14 @@ sequences::
     channel-band EEG -> fixed-MI GCN -> spectral GRU -> h_g
     channel-band EEG -> temporal BiLSTM              -> h_b
 
-After matching their temporal lengths, the complete encoder feature vectors
-are concatenated directly. There is no learned projection, bottleneck, or
-fusion network between the encoders and the prediction heads::
+The complete encoder feature vectors are concatenated directly at every
+original EEG timestep. There is no learned projection, bottleneck, temporal
+downsampling, or fusion network between the encoders and the recurrent
+classifier::
 
-    h_joint = concat([h_g, h_b]) -> one embedding per EEG window
-    ordered window embeddings -> BiGRU/GRU final state -> VC logits
+    h_joint = concat([h_g, h_b])       # (window, 128, 640 by default)
+    ordered windows -> reshape         # (trial, windows * 128, 640)
+    full-trial sequence -> BiGRU/GRU final state -> VC logits
 
 With the default widths, h_g has 384 features and h_b has 2 * 128 = 256
 features, so both active branches give the final heads all 640 features. Fusion
@@ -45,19 +47,19 @@ update.  The temporary assignment is detached, so no Hessian or
 gradient-through-gradient path is constructed.
 
 For trial-level classification, the recurrent classifier consumes every
-window embedding in its original order. There is no mean, max, or attention
-pooling across the trial's window axis. Window-level classification bypasses
-the trial recurrent classifier and sends each window embedding directly to
-the VC head.
+encoded timestep from every window in its original chronological order. There
+is no mean, max, attention, or downsampling operation on either the within-
+window or cross-window temporal axes. Window-level classification uses the
+same recurrent classifier on the complete encoded window sequence.
 
 Subject calibration
 -------------------
 ``prepare_for_subject_calibration`` freezes the complete representation and
 subject adversary. It keeps the VC classification head trainable and can also
-unfreeze the recurrent trial classifier:
+unfreeze the full-sequence recurrent classifier:
 
     1 -> VC logits head only
-    2 -> trial GRU/BiGRU + VC logits head
+    2 -> full-sequence GRU/BiGRU + VC logits head
 
 The calibration train step uses focal loss and, when enabled, the VC
 regularizers computed jointly with the same VC logits. The VC head therefore
@@ -117,7 +119,7 @@ except ImportError:
     )
 
 
-SIC_BUILDER_API_VERSION = 11
+SIC_BUILDER_API_VERSION = 12
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
 
 
@@ -211,27 +213,6 @@ def _resolve_recurrent_widths(
     if resolved_layers < 1:
         raise ValueError("n_classifier_rnn_layers must be positive.")
     return (width,) * resolved_layers
-
-
-def _resolve_temporal_pool_sizes(
-    temporal_pool_sizes: Sequence[int] | None,
-    t_down: int,
-) -> tuple[int, ...]:
-    t_down = int(t_down)
-    if t_down < 1:
-        raise ValueError("t_down must be >= 1.")
-    if temporal_pool_sizes is None:
-        pools = () if t_down == 1 else (t_down,)
-    else:
-        pools = tuple(int(value) for value in temporal_pool_sizes)
-    if any(value < 1 for value in pools):
-        raise ValueError("temporal_pool_sizes values must be >= 1.")
-    effective = int(np.prod(pools, dtype=np.int64)) if pools else 1
-    if effective != t_down:
-        raise ValueError(
-            f"t_down={t_down}, but temporal_pool_sizes={pools} gives {effective}."
-        )
-    return pools
 
 
 def _deduplicate_variables(variables):
@@ -405,7 +386,6 @@ class SICModel(tf.keras.Model):
         bilstm_dropout: float = 0.30,
         use_gcn_gru_branch: bool = True,
         use_bilstm_branch: bool = True,
-        temporal_downsample_factor: int = 1,
         classifier_rnn_type: str = "bigru",
         classifier_rnn_units: int | Sequence[int] = 128,
         n_classifier_rnn_layers: int | None = None,
@@ -466,8 +446,6 @@ class SICModel(tf.keras.Model):
             raise ValueError("gcn_gru_feature_dim must be positive.")
         if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1:
             raise ValueError("BiLSTM dimensions must be positive.")
-        if int(temporal_downsample_factor) < 1:
-            raise ValueError("temporal_downsample_factor must be >= 1.")
         if float(focal_gamma) < 0.0:
             raise ValueError("focal_gamma must be non-negative.")
         if focal_alpha is not None and not 0.0 <= float(focal_alpha) <= 1.0:
@@ -555,7 +533,7 @@ class SICModel(tf.keras.Model):
         if float(mldg_meta_test_weight) < 0.0:
             raise ValueError("mldg_meta_test_weight must be non-negative.")
         calibration_unfreeze_layers = int(calibration_unfreeze_layers)
-        max_calibration_layers = 2 if classification_level == "trial" else 1
+        max_calibration_layers = 2
         if not 1 <= calibration_unfreeze_layers <= max_calibration_layers:
             raise ValueError(
                 "calibration_unfreeze_layers must be between 1 and "
@@ -572,7 +550,6 @@ class SICModel(tf.keras.Model):
         self.bilstm_dropout_rate = float(bilstm_dropout)
         self.use_gcn_gru_branch = use_gcn_gru_branch
         self.use_bilstm_branch = use_bilstm_branch
-        self.temporal_downsample_factor = int(temporal_downsample_factor)
         self.combined_feature_dim = (
             self.gcn_gru_feature_dim * int(self.use_gcn_gru_branch)
             + self.bilstm_feature_dim * int(self.use_bilstm_branch)
@@ -654,8 +631,8 @@ class SICModel(tf.keras.Model):
         self._source_subject_ids = None
         self._source_trial_ids = None
 
-        # MTL encoder already performs GCN + spectral GRU.  This recurrent
-        # stack is exclusively temporal, preserving the reduced time axis.
+        # MTL encoder already performs GCN + spectral GRU. This recurrent
+        # stack is exclusively temporal and preserves all original timesteps.
         self.temporal_bilstms: list[tf.keras.layers.Layer] = []
         self.temporal_norms: list[tf.keras.layers.Layer] = []
         self.temporal_dropouts: list[tf.keras.layers.Layer] = []
@@ -684,53 +661,34 @@ class SICModel(tf.keras.Model):
                 )
             )
 
-        # The BiLSTM is an independent raw-EEG branch. Pool only its temporal
-        # axis so it can be concatenated position-for-position with the
-        # reduced-time GCN-GRU output. Feature widths are left untouched.
-        self.parallel_temporal_pool = tf.keras.layers.AveragePooling1D(
-            pool_size=self.temporal_downsample_factor,
-            strides=self.temporal_downsample_factor,
-            padding="same",
-            name="v6_parallel_bilstm_pool",
-        )
-        self.feature_pool = tf.keras.layers.GlobalAveragePooling1D(
-            name="v6_feature_pool"
-        )
-
-        # Trial mode uses the reusable GRU/BiGRU implementation from
-        # rnn_architectures. Its sequence summarizer returns the final state,
-        # so no averaging is performed across EEG-window embeddings.
-        self.trial_recurrent_classifier = None
-        if self.classification_level == "trial":
-            if self.classifier_rnn_type == "bigru":
-                rnn_builder = BiGRUClassifier(
-                    timesteps=None,
-                    n_features=self.combined_feature_dim,
-                    n_classes=self.n_classes,
-                    gru_units=self.classifier_rnn_units,
-                    n_bigru_layers=self.n_classifier_rnn_layers,
-                    dropout=self.classifier_rnn_dropout_rate,
-                    name="v6_trial_bigru",
-                )
-                self.classification_embedding_dim = (
-                    2 * self.classifier_rnn_units[-1]
-                )
-            else:
-                rnn_builder = GRUClassifier(
-                    timesteps=None,
-                    n_features=self.combined_feature_dim,
-                    n_classes=self.n_classes,
-                    gru_units=self.classifier_rnn_units,
-                    n_gru_layers=self.n_classifier_rnn_layers,
-                    dropout=self.classifier_rnn_dropout_rate,
-                    name="v6_trial_gru",
-                )
-                self.classification_embedding_dim = self.classifier_rnn_units[-1]
-            self.trial_recurrent_classifier = (
-                rnn_builder.build_sequence_summarizer()
+        # The reusable GRU/BiGRU consumes the entire encoded temporal sequence.
+        # Trial inputs are reshaped from (windows, timesteps, features) to
+        # (windows * timesteps, features) before reaching this summarizer.
+        if self.classifier_rnn_type == "bigru":
+            rnn_builder = BiGRUClassifier(
+                timesteps=None,
+                n_features=self.combined_feature_dim,
+                n_classes=self.n_classes,
+                gru_units=self.classifier_rnn_units,
+                n_bigru_layers=self.n_classifier_rnn_layers,
+                dropout=self.classifier_rnn_dropout_rate,
+                name="v6_full_sequence_bigru",
+            )
+            self.classification_embedding_dim = (
+                2 * self.classifier_rnn_units[-1]
             )
         else:
-            self.classification_embedding_dim = self.combined_feature_dim
+            rnn_builder = GRUClassifier(
+                timesteps=None,
+                n_features=self.combined_feature_dim,
+                n_classes=self.n_classes,
+                gru_units=self.classifier_rnn_units,
+                n_gru_layers=self.n_classifier_rnn_layers,
+                dropout=self.classifier_rnn_dropout_rate,
+                name="v6_full_sequence_gru",
+            )
+            self.classification_embedding_dim = self.classifier_rnn_units[-1]
+        self.trial_recurrent_classifier = rnn_builder.build_sequence_summarizer()
 
         vc_dim = self.classification_embedding_dim
         vc_focal_alpha = (
@@ -1075,23 +1033,18 @@ class SICModel(tf.keras.Model):
             if self.use_bilstm_branch
             else None
         )
-        pooled_bilstm = (
-            self.parallel_temporal_pool(bilstm_sequence)
-            if bilstm_sequence is not None
-            else None
-        )
 
-        if graph_sequence is not None and pooled_bilstm is not None:
+        if graph_sequence is not None and bilstm_sequence is not None:
             tf.debugging.assert_equal(
                 tf.shape(graph_sequence)[1],
-                tf.shape(pooled_bilstm)[1],
+                tf.shape(bilstm_sequence)[1],
                 message=(
                     "GCN-GRU and BiLSTM feature sequence lengths do not match."
                 ),
             )
         feature_parts = [
             value
-            for value in (graph_sequence, pooled_bilstm)
+            for value in (graph_sequence, bilstm_sequence)
             if value is not None
         ]
         combined_sequence = (
@@ -1107,39 +1060,57 @@ class SICModel(tf.keras.Model):
         return {
             "graph_sequence": graph_sequence,
             "bilstm_sequence": bilstm_sequence,
-            "pooled_bilstm_sequence": pooled_bilstm,
             "combined_feature_sequence": combined_sequence,
         }
 
-    def _pool_features_for_prediction(
+    def _sequence_features_for_prediction(
         self,
         flat_features,
         batch_size=None,
         n_windows=None,
         training: bool = False,
     ):
-        # This pooling is confined to the reduced temporal axis *within one
-        # EEG window*. It produces one embedding per window and never combines
-        # different windows from the same trial.
-        window_features = self.feature_pool(flat_features)
+        # Keep every encoded timestep. In trial mode, restore the window axis
+        # and then merge only the adjacent window/time axes, which preserves
+        # chronological order exactly:
+        #   (batch * windows, time, features)
+        #       -> (batch, windows, time, features)
+        #       -> (batch, windows * time, features)
         if self.classification_level == "window":
-            return window_features, window_features
-        window_features = tf.reshape(
-            window_features,
-            [batch_size, n_windows, self.combined_feature_dim],
-        )
+            window_feature_sequences = flat_features
+            classifier_sequence = flat_features
+        else:
+            steps_per_window = tf.shape(flat_features)[1]
+            window_feature_sequences = tf.reshape(
+                flat_features,
+                [
+                    batch_size,
+                    n_windows,
+                    steps_per_window,
+                    self.combined_feature_dim,
+                ],
+            )
+            classifier_sequence = tf.reshape(
+                window_feature_sequences,
+                [batch_size, -1, self.combined_feature_dim],
+            )
+
         recurrent_training = bool(training) and bool(
             self.trial_recurrent_classifier.trainable
         )
-        trial_features = self.trial_recurrent_classifier(
-            window_features,
+        sequence_features = self.trial_recurrent_classifier(
+            classifier_sequence,
             training=recurrent_training,
         )
-        return trial_features, window_features
+        return (
+            sequence_features,
+            window_feature_sequences,
+            classifier_sequence,
+        )
 
     def _classifier_forward(self, pooled_features, training: bool):
-        # The recurrent trial state (or the per-window embedding in window
-        # mode) goes directly to the sole logits-producing VC head.
+        # The recurrent full-sequence state goes directly to the sole
+        # logits-producing VC head.
         classification_embedding = pooled_features
         logits = self.vc_target(
             classification_embedding,
@@ -1174,7 +1145,11 @@ class SICModel(tf.keras.Model):
             flat_windows,
             training=training,
         )
-        pooled_features, window_features = self._pool_features_for_prediction(
+        (
+            pooled_features,
+            window_features,
+            classifier_sequence,
+        ) = self._sequence_features_for_prediction(
             encoder_outputs["combined_feature_sequence"],
             batch_size=batch_size,
             n_windows=n_windows,
@@ -1189,6 +1164,7 @@ class SICModel(tf.keras.Model):
                 "flat_windows": flat_windows,
                 "pooled_features": pooled_features,
                 "window_features": window_features,
+                "classifier_sequence": classifier_sequence,
                 "classification_embedding": classification_embedding,
                 "logits": logits,
                 "probabilities": tf.nn.softmax(logits, axis=-1),
@@ -1702,8 +1678,8 @@ class SICModel(tf.keras.Model):
         """Freeze the backbone and adapt the final k classification layers.
 
         ``unfreeze_layers`` counts prediction layers backward from the output:
-        1 means the VC logits head only; in trial mode, 2 means the recurrent
-        trial classifier plus the VC head. The VC parameters always remain
+        1 means the VC logits head only; 2 means the full-sequence recurrent
+        classifier plus the VC head. The VC parameters always remain
         trainable because this module is the classifier rather than a frozen
         target.
         """
@@ -1728,8 +1704,6 @@ class SICModel(tf.keras.Model):
             layer.trainable = False
         for layer in self.temporal_dropouts:
             layer.trainable = False
-        self.parallel_temporal_pool.trainable = False
-        self.feature_pool.trainable = False
         if self.subject_gradient_reversal is not None:
             self.subject_gradient_reversal.trainable = False
         if self.subject_hidden is not None:
@@ -1777,10 +1751,11 @@ class SICModel(tf.keras.Model):
         )
         return {
             "gcn_gru_features": outputs["graph_sequence"],
-            "bilstm_features": outputs["pooled_bilstm_sequence"],
+            "bilstm_features": outputs["bilstm_sequence"],
             "combined_feature_sequence": outputs[
                 "combined_feature_sequence"
             ],
+            "classifier_sequence": outputs["classifier_sequence"],
             "pooled_features": outputs["pooled_features"],
             "window_features": outputs["window_features"],
             "classification_embedding": outputs["classification_embedding"],
@@ -1812,7 +1787,6 @@ class SICModel(tf.keras.Model):
                 "bilstm_dropout": self.bilstm_dropout_rate,
                 "use_gcn_gru_branch": self.use_gcn_gru_branch,
                 "use_bilstm_branch": self.use_bilstm_branch,
-                "temporal_downsample_factor": self.temporal_downsample_factor,
                 "classifier_rnn_type": self.classifier_rnn_type,
                 "classifier_rnn_units": self.classifier_rnn_units,
                 "n_classifier_rnn_layers": self.n_classifier_rnn_layers,
@@ -1877,8 +1851,6 @@ def build_sic_model(
     n_classes: int = 2,
     n_channels: int = 14,
     n_bands: int = 3,
-    t_down: int = 2,
-    temporal_pool_sizes: Sequence[int] | None = (2,),
     gcn_units: Sequence[int] = (64, 32),
     gcn_dropout: float = 0.10,
     gcn_activation: str = "relu",
@@ -1980,7 +1952,6 @@ def build_sic_model(
             f"Input features={n_features}, expected {n_channels}*{n_bands}="
             f"{expected_features}."
         )
-    pools = _resolve_temporal_pool_sizes(temporal_pool_sizes, t_down)
     gcn_units = _as_positive_tuple("gcn_units", gcn_units)
 
     use_gcn_gru_branch = bool(use_gcn_gru_branch)
@@ -1989,11 +1960,6 @@ def build_sic_model(
         raise ValueError(
             "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
         )
-    combined_feature_dim = (
-        int(spectral_gru_units) * int(use_gcn_gru_branch)
-        + 2 * int(bilstm_units) * int(use_bilstm_branch)
-    )
-
     needs_graph = use_gcn_gru_branch
     if adjacency is None and needs_graph:
         if training_features is None:
@@ -2021,12 +1987,15 @@ def build_sic_model(
     if use_gcn_gru_branch:
         graph_encoder = GCNMTLEncoder(
             timesteps=int(timesteps),
-            t_down=int(t_down),
+            # GCNMTLEncoder retains these historical constructor arguments.
+            # A fixed factor of one and no pools disable all downsampling;
+            # neither value is exposed as a SIC hyperparameter.
+            t_down=1,
             adjacency=adjacency,
             n_channels=int(n_channels),
             n_bands=int(n_bands),
             gcn_units=gcn_units,
-            temporal_pool_sizes=pools,
+            temporal_pool_sizes=(),
             emb_dim=None,
             dropout=float(gcn_dropout),
             activation=str(gcn_activation),
@@ -2050,7 +2019,6 @@ def build_sic_model(
         bilstm_dropout=float(bilstm_dropout),
         use_gcn_gru_branch=use_gcn_gru_branch,
         use_bilstm_branch=use_bilstm_branch,
-        temporal_downsample_factor=int(t_down),
         classifier_rnn_type=str(classifier_rnn_type),
         classifier_rnn_units=(
             tuple(int(value) for value in classifier_rnn_units)
