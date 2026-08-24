@@ -964,6 +964,7 @@ def _run_subject_calibration_configuration(
         gpu_ids=config.gpu_ids,
         cpus_per_worker=config.cpus_per_worker,
         max_subjects=config.max_subjects,
+        target_subjects=config.target_subjects,
         source_model_output_dir=results_dir / "loso_zero_shot_models",
     )
 

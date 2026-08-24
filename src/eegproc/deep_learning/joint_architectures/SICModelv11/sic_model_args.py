@@ -64,6 +64,7 @@ class SICTrainingConfig:
     gpu_ids: tuple[int, ...] | None = None
     cpus_per_worker: int | None = None
     max_subjects: int | None = None
+    target_subjects: tuple[int, ...] | None = None
     verbose: int = 1
     seed: int | None = 42
 
@@ -377,6 +378,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-ids", type=int, nargs="+", default=None)
     parser.add_argument("--cpus-per-worker", type=_positive_int, default=None)
     parser.add_argument("--max-subjects", type=_positive_int, default=None)
+    parser.add_argument(
+        "--target-subjects",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Specific subject IDs to use as outer LOSO targets.",
+    )
     parser.add_argument("--verbose", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -621,6 +629,11 @@ def training_config_from_args(
         gpu_ids=None if args.gpu_ids is None else tuple(args.gpu_ids),
         cpus_per_worker=args.cpus_per_worker,
         max_subjects=args.max_subjects,
+        target_subjects=(
+            None
+            if args.target_subjects is None
+            else tuple(args.target_subjects)
+        ),
         verbose=args.verbose,
         seed=args.seed,
         label_threshold_mode=args.label_threshold_mode,

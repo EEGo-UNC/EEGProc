@@ -5512,6 +5512,7 @@ def subject_calibration_cv(
     gpu_ids: list[int] | tuple[int, ...] | None = None,
     cpus_per_worker: int | None = None,
     max_subjects: int | None = None,
+    target_subjects: list[int] | tuple[int, ...] | None = None,
     source_model_output_dir: str | os.PathLike[str] | None = None,
 ) -> dict:
     """Strict LOSO pretraining followed by one or more calibration levels.
@@ -5726,9 +5727,20 @@ def subject_calibration_cv(
             f"{validation_subjects_per_fold} validation subjects with "
             f"{len(unique_subjects)} total subjects."
         )
-    target_subjects = unique_subjects
-    if max_subjects is not None:
-        target_subjects = target_subjects[: int(max_subjects)]
+    if target_subjects is None:
+        target_subjects = unique_subjects
+        if max_subjects is not None:
+            target_subjects = target_subjects[: int(max_subjects)]
+    else:
+        target_subjects = np.asarray(target_subjects)
+        missing_subjects = target_subjects[
+            ~np.isin(target_subjects, unique_subjects)
+        ]
+        if len(missing_subjects):
+            raise ValueError(
+                f"Unknown target subject IDs: {missing_subjects.tolist()}. "
+                f"Available subjects: {unique_subjects.tolist()}."
+            )
     total_subjects = int(len(target_subjects))
 
     # Fail early if a usable calibration/evaluation split cannot be formed for
