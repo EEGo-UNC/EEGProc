@@ -252,7 +252,7 @@ print(json.dumps({
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
     "focal_gamma": 1.5,
-    "focal_alpha": {"fixed": None},
+    "focal_alpha": 0.39,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
     "vc_beta": 1.0,
