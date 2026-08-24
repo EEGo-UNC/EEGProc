@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
 #SBATCH --time=2:00:00
-#SBATCH --array=0-1%2
+#SBATCH --array=0
 
 set -euo pipefail
 
@@ -250,7 +250,7 @@ print(json.dumps({
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
     "focal_gamma": 1.5,
-    "focal_alpha": None,
+    "focal_alpha": 0.39,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
     "vc_beta": 0.2,
