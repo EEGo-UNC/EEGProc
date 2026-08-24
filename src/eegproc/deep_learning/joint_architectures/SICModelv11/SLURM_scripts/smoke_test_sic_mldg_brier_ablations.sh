@@ -222,8 +222,6 @@ print(json.dumps({
     "mldg_seed": 42,
 
     # GCN-GRU spatial/spectral branch.
-    "t_down": 2,
-    "temporal_pool_sizes": {"fixed": [2]},
     "gcn_units": {"fixed": [128, 64]},
     "gcn_dropout": 0.20,
     "gcn_activation": "relu",
