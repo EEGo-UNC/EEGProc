@@ -256,11 +256,11 @@ print(json.dumps({
     "classifier_rnn_dropout": 0.4,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": {"fixed": [1.5]},
-    "focal_alpha": {"fixed": None},
+    "focal_gamma": 1.5,
+    "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": {"fixed": [1.0]},
+    "vc_beta": 1.0,
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,
