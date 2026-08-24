@@ -45,12 +45,12 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-30}"
-MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-10}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-100}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-40}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-25}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-32}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-16}"
+MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
@@ -250,8 +250,8 @@ print(json.dumps({
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
     "focal_gamma": 1.5,
-    "focal_alpha": 0.39,
-    "vc_loss_weight": 1.0,
+    "focal_alpha": None,
+    "vc_loss_weight": 10.0,
     "vc_alpha": 1.0,
     "vc_beta": 1.0,
     "vc_gamma": 0.0,
