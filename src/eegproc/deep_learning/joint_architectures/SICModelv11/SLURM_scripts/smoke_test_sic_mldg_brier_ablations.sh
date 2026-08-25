@@ -47,7 +47,7 @@ PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-50}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-35}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-20}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
@@ -240,7 +240,7 @@ print(json.dumps({
     # a complete 126-wide deterministic BiLSTM representation.
     "bilstm_units": 63,
     "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.30,
+    "bilstm_dropout": 0.20,
 
     # Trial classifier. Every ordered one-second window embedding is processed
     # by the BiGRU; only its final bidirectional state enters the VC head.
@@ -252,7 +252,7 @@ print(json.dumps({
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
     "focal_gamma": 2.5,
-    "focal_alpha": 0.39,
+    "focal_alpha": 0.61,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
     "vc_beta": 0.1,
