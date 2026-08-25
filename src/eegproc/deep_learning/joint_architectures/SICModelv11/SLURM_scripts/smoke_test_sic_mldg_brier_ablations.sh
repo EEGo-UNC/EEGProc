@@ -296,7 +296,6 @@ echo "Training method: $TRAINING_METHOD"
 echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
 echo "Feature widths: GCN-GRU=384; BiLSTM=126 when active; full concatenation=510"
 echo "Trial classifier: BiGRU [128,64] units/direction, final width 128, no cross-window averaging"
-echo "MLDG: A=18 B=4 steps/epoch=$MLDG_STEPS_PER_EPOCH"
 echo "Prediction diagnostics: metric=$PREDICTION_DIAGNOSTICS_METRIC every=$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS epoch(s) max_samples=$PREDICTION_DIAGNOSTICS_MAX_SAMPLES"
 echo "Selection: minimize 6-shot calibrated Brier score"
 echo "Scope: $MAX_SUBJECTS targets, $SOURCE_EPOCHS source epochs, $CALIBRATION_EPOCHS calibration epochs"
@@ -332,7 +331,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --calibration-seed 42 \
     --selection-metric "$SELECTION_METRIC" \
     --hyperparameter-selection-level "$HYPERPARAMETER_SELECTION_LEVEL" \
-    --decision-threshold 0.4 0.45 0.5 0.55 0.6 \
+    --decision-threshold 0.5 \
     --prediction-diagnostics \
     --prediction-diagnostics-metric "$PREDICTION_DIAGNOSTICS_METRIC" \
     --prediction-diagnostics-every-n-epochs "$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS" \

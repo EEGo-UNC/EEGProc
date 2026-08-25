@@ -1,0 +1,106 @@
+{
+  "search_type": "full_cartesian_product",
+  "hyperparameter_selection_level": "calibration",
+  "evaluation_level": "trial",
+  "selection_metric": "brier_score",
+  "maximize_metric": false,
+  "selection_score_source": "overall.calibration_levels.6.calibrated_mean_scores",
+  "calibration_always_runs": true,
+  "calibration_plan": [
+    {
+      "shots": 3,
+      "folds": 6
+    },
+    {
+      "shots": 6,
+      "folds": 3
+    },
+    {
+      "shots": 9,
+      "folds": 2
+    },
+    {
+      "shots": 12,
+      "folds": 3
+    }
+  ],
+  "calibration_selection_shots": 6,
+  "data_hyperparameters": [
+    "remove_median_label"
+  ],
+  "calibration_aggregation": {
+    "within_subject": "mean of each shot level's calibration-fold metrics",
+    "across_subjects": "mean of subject-level aggregates"
+  },
+  "dimensions": {},
+  "n_configurations": 1,
+  "configurations": [
+    {
+      "configuration_id": 1,
+      "hyperparameters": {
+        "optimizer_name": "adamw",
+        "learning_rate": 0.0001,
+        "weight_decay": 5e-05,
+        "vrex_penalty_weight": 1.0,
+        "mldg_meta_train_subjects": 10,
+        "mldg_meta_test_subjects": 5,
+        "mldg_trials_per_subject": 2,
+        "mldg_steps_per_epoch": 5,
+        "mldg_inner_learning_rate": 0.0001,
+        "mldg_meta_test_weight": 1.0,
+        "mldg_seed": 42,
+        "gcn_units": [
+          128,
+          64
+        ],
+        "gcn_dropout": 0.1,
+        "gcn_activation": "relu",
+        "gcn_use_batch_norm": false,
+        "spectral_gru_units": 384,
+        "spectral_gru_dropout": 0.2,
+        "mi_n_neighbors": 3,
+        "mi_random_state": 42,
+        "mi_zero_diagonal": false,
+        "mi_band_reduction": "mean",
+        "mi_max_observations": 15000,
+        "bilstm_units": 63,
+        "n_bilstm_layers": 1,
+        "bilstm_dropout": 0.2,
+        "classifier_rnn_type": "bigru",
+        "classifier_rnn_units": [
+          128,
+          64
+        ],
+        "n_classifier_rnn_layers": 2,
+        "classifier_rnn_dropout": 0.4,
+        "focal_gamma": 0.5,
+        "focal_alpha": null,
+        "vc_loss_weight": 1.0,
+        "vc_alpha": 1.0,
+        "vc_beta": 0.1,
+        "vc_gamma": 0.0,
+        "vc_lambda": 0.01,
+        "update_vc_discriminator": false,
+        "use_subject_adversarial": false,
+        "subject_adversarial_weight": 0.0,
+        "subject_loss_weight": 0.0,
+        "subject_hidden_units": 64,
+        "subject_dropout": 0.0,
+        "use_gcn_gru_branch": true,
+        "use_bilstm_branch": true,
+        "remove_median_label": false,
+        "calibration_unfreeze_layers": 2,
+        "calibration_use_vc_target": true,
+        "calibration_vc_alpha": 1.0,
+        "calibration_vc_beta": 0.1,
+        "calibration_vc_gamma": 0.0,
+        "calibration_vc_lambda": 0.01,
+        "training_method": "mldg",
+        "classification_level": "trial",
+        "n_classes": 2,
+        "n_channels": 14,
+        "n_bands": 3
+      }
+    }
+  ]
+}
