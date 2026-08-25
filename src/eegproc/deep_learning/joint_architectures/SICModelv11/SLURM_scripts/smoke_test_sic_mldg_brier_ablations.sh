@@ -227,7 +227,7 @@ print(json.dumps({
     "gcn_activation": "relu",
     "gcn_use_batch_norm": False,
     "spectral_gru_units": 384,
-    "spectral_gru_dropout": 0.20,
+    "spectral_gru_dropout": 0.30,
     "mi_n_neighbors": 3,
     "mi_random_state": 42,
     "mi_zero_diagonal": False,
@@ -238,18 +238,18 @@ print(json.dumps({
     # a complete 126-wide deterministic BiLSTM representation.
     "bilstm_units": 63,
     "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.20,
+    "bilstm_dropout": 0.30,
 
     # Trial classifier. Every ordered one-second window embedding is processed
     # by the BiGRU; only its final bidirectional state enters the VC head.
     # There is no arithmetic mean across the trial's window axis.
     "classifier_rnn_type": "bigru",
-    "classifier_rnn_units": {"fixed": [128, 64]},
-    "n_classifier_rnn_layers": 2,
-    "classifier_rnn_dropout": 0.30,
+    "classifier_rnn_units": {"fixed": [256, 128, 64]},
+    "n_classifier_rnn_layers": 3,
+    "classifier_rnn_dropout": 0.40,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": 1.5,
+    "focal_gamma": 2.5,
     "focal_alpha": 0.39,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
