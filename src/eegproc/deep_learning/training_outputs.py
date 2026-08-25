@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import numpy as np
 import tensorflow as tf
@@ -8,6 +8,7 @@ from .cross_val import (
     _CLASSIFICATION_METRICS,
     _as_numpy_1d,
     _extract_classifier_output,
+    _normalize_decision_thresholds,
     _prediction_diagnostic_summary,
     _to_probabilities,
 )
@@ -188,6 +189,7 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         threshold_tolerance: float = 0.01,
         reported_metric: str = "accuracy",
         decision_threshold: float = 0.5,
+        decision_thresholds: Sequence[float] | None = None,
         ece_bins: int = 15,
         seed: int | None = 42,
     ) -> None:
@@ -204,8 +206,15 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
                 f"Unsupported prediction diagnostic metric {reported_metric!r}. "
                 f"Supported metrics: {sorted(_CLASSIFICATION_METRICS)}"
             )
-        if not 0.0 < float(decision_threshold) < 1.0:
+        official_threshold = float(decision_threshold)
+        if not 0.0 < official_threshold < 1.0:
             raise ValueError("decision_threshold must lie strictly between 0 and 1.")
+        raw_thresholds = (
+            (official_threshold,)
+            if decision_thresholds is None
+            else (*decision_thresholds, official_threshold)
+        )
+        normalized_thresholds = _normalize_decision_thresholds(raw_thresholds)
         if int(ece_bins) < 2:
             raise ValueError("ece_bins must be at least 2.")
 
@@ -234,9 +243,25 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         self.every_n_epochs = int(every_n_epochs)
         self.threshold_tolerance = float(threshold_tolerance)
         self.reported_metric = reported_metric
-        self.decision_threshold = float(decision_threshold)
+        self.decision_threshold = official_threshold
+        self.decision_thresholds = (
+            official_threshold,
+            *(
+                threshold
+                for threshold in normalized_thresholds
+                if threshold != official_threshold
+            ),
+        )
         self.ece_bins = int(ece_bins)
         self.history: list[dict] = []
+
+    def on_train_begin(self, logs: dict | None = None) -> None:
+        print(
+            "[DIAGNOSTICS] Official evaluation threshold="
+            f"{self.decision_threshold:.4f}; reporting-only thresholds="
+            f"{list(self.decision_thresholds)}.",
+            flush=True,
+        )
 
     def _report_split(
         self,
@@ -251,25 +276,58 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
             X=X,
             batch_size=self.batch_size,
         )
-        summary = _prediction_diagnostic_summary(
-            probabilities=internal_outputs["probabilities"],
-            y_true=y,
-            threshold_tolerance=self.threshold_tolerance,
-            internal_outputs=internal_outputs,
-            reported_metric=self.reported_metric,
-            decision_threshold=self.decision_threshold,
-            ece_bins=self.ece_bins,
-        )
-        row = {
-            "fold": None if self.fold_number is None else int(self.fold_number),
-            "epoch": int(epoch_number),
-            "split": split,
-            **summary,
-        }
-        # Keep diagnostics in the dedicated callback history only. They are
-        # intentionally not inserted into Keras logs and not printed separately;
-        # CompactEpochLogger owns the human-readable epoch output.
-        self.history.append(row)
+        for threshold in self.decision_thresholds:
+            summary = _prediction_diagnostic_summary(
+                probabilities=internal_outputs["probabilities"],
+                y_true=y,
+                threshold_tolerance=self.threshold_tolerance,
+                internal_outputs=internal_outputs,
+                reported_metric=self.reported_metric,
+                decision_threshold=threshold,
+                ece_bins=self.ece_bins,
+            )
+            row = {
+                "fold": (
+                    None if self.fold_number is None else int(self.fold_number)
+                ),
+                "epoch": int(epoch_number),
+                "split": split,
+                "decision_threshold": float(threshold),
+                "official_decision_threshold": self.decision_threshold,
+                "is_official_decision_threshold": bool(
+                    threshold == self.decision_threshold
+                ),
+                **summary,
+            }
+            # Keep diagnostics in the dedicated callback history only. They are
+            # intentionally not inserted into Keras logs, so they cannot affect
+            # training callbacks or checkpoint selection.
+            self.history.append(row)
+
+            parts = [f"accuracy={row['accuracy']:.4f}"]
+            if self.reported_metric != "accuracy":
+                parts.append(
+                    f"{self.reported_metric}="
+                    f"{row['reported_metric_value']:.4f}"
+                )
+            if self.reported_metric != "roc_auc":
+                parts.append(f"roc_auc={row['roc_auc']:.4f}")
+            if "predicted_class_1_fraction" in row:
+                parts.extend(
+                    [
+                        f"pred1={row['predicted_class_1_fraction']:.4f}",
+                        f"true1={row['true_class_1_fraction']:.4f}",
+                    ]
+                )
+            print(
+                "[DIAGNOSTICS "
+                f"fold={self.fold_number!r} epoch={int(epoch_number)} "
+                f"split={split} threshold={threshold:.4f} "
+                "official="
+                f"{str(threshold == self.decision_threshold).lower()}] "
+                + "  ".join(parts),
+                flush=True,
+            )
 
     def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
         epoch_number = int(epoch) + 1

@@ -60,4 +60,8 @@
     - Focus on v6, an sts subject invariant calibration (SIC) model. Builds subject invariant vae and identification adversarial, then fine tunes classifier head for accuracy. This will be great for counterfactuals as the accuracy should be enhanced.
 - 8/10/2026
     - Joint v4 performed below baseline on valence (58% acc).
-    - 
+
+
+- 8/25/2026
+    - Added SIC v11, BiLSTM + GCN-GRU encoders to full-trial BiGRU classifier head.
+    - Oracle diagnostics show subject-independent learning in early epochs (72% BAcc for user 0, and 58% BAcc for user 1), with later class collapse.

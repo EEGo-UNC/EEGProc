@@ -795,18 +795,23 @@ def _prediction_diagnostic_summary(
         decision_threshold=decision_threshold,
     )
     confidence = np.max(probabilities, axis=1)
-    reported_value = _classification_metrics(
+    diagnostic_metric_names = tuple(
+        dict.fromkeys((reported_metric, "roc_auc"))
+    )
+    diagnostic_scores = _classification_metrics(
         y_true=y_ids,
         y_pred=y_pred,
         probabilities=probabilities,
-        metrics=(reported_metric,),
+        metrics=diagnostic_metric_names,
         n_classes=int(probabilities.shape[1]),
         ece_bins=int(ece_bins),
-    )[reported_metric]
+    )
+    reported_value = diagnostic_scores[reported_metric]
 
     summary: dict[str, float | int | str] = {
         "n_samples": int(len(y_ids)),
         "accuracy": float(np.mean(y_pred == y_ids)),
+        "roc_auc": float(diagnostic_scores["roc_auc"]),
         "reported_metric": reported_metric,
         "reported_metric_value": float(reported_value),
         "confidence_mean": float(np.mean(confidence)),
@@ -840,6 +845,7 @@ def _print_probability_diagnostics(
     parts = [
         f"n={summary['n_samples']}",
         f"accuracy={summary['accuracy']:.4f}",
+        f"roc_auc={summary['roc_auc']:.4f}",
         f"confidence={summary['confidence_mean']:.4f}",
     ]
     if probabilities.shape[1] == 2:
@@ -1481,7 +1487,12 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
     never enter a gradient calculation.
     """
 
-    _METRICS = ("accuracy", "balanced_accuracy", "brier_score")
+    _METRICS = (
+        "accuracy",
+        "balanced_accuracy",
+        "roc_auc",
+        "brier_score",
+    )
 
     def __init__(
         self,
@@ -1493,6 +1504,7 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
         evaluation_level: Literal["window", "trial"],
         batch_size: int | None = None,
         decision_threshold: float = 0.5,
+        diagnostic_thresholds: list[float] | tuple[float, ...] | None = None,
         ece_bins: int = _DEFAULT_ECE_BINS,
     ) -> None:
         super().__init__()
@@ -1504,6 +1516,20 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
         self.evaluation_level = evaluation_level
         self.batch_size = batch_size
         self.decision_threshold = float(decision_threshold)
+        raw_thresholds = (
+            (self.decision_threshold,)
+            if diagnostic_thresholds is None
+            else (*diagnostic_thresholds, self.decision_threshold)
+        )
+        normalized_thresholds = _normalize_decision_thresholds(raw_thresholds)
+        self.diagnostic_thresholds = (
+            self.decision_threshold,
+            *(
+                threshold
+                for threshold in normalized_thresholds
+                if threshold != self.decision_threshold
+            ),
+        )
         self.ece_bins = int(ece_bins)
         self.history: list[dict] = []
 
@@ -1511,7 +1537,9 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
         print(
             "[ORACLE] Held-out-user metrics are reporting only and are not "
             "used for gradients, early stopping, threshold selection, or "
-            "checkpoint selection.",
+            "checkpoint selection. Official evaluation threshold="
+            f"{self.decision_threshold:.4f}; reporting-only thresholds="
+            f"{list(self.diagnostic_thresholds)}.",
             flush=True,
         )
 
@@ -1544,55 +1572,60 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
                 )
             probabilities = aggregation["probabilities"]
             y_true = aggregation["y_true"]
-            y_pred = aggregation["y_pred"]
         else:
             y_true = _as_numpy_1d(self.y_target).astype(np.int64)
+
+        for threshold in self.diagnostic_thresholds:
             y_pred = _predict_labels(
                 probabilities,
-                decision_threshold=self.decision_threshold,
+                decision_threshold=threshold,
             )
-
-        scores = _classification_metrics(
-            y_true=y_true,
-            y_pred=y_pred,
-            probabilities=probabilities,
-            metrics=self._METRICS,
-            n_classes=probabilities.shape[1],
-            ece_bins=self.ece_bins,
-        )
-        row = {
-            "target_subject": self.target_subject,
-            "epoch": int(epoch) + 1,
-            "evaluation_level": self.evaluation_level,
-            "decision_threshold": self.decision_threshold,
-            **{name: float(value) for name, value in scores.items()},
-        }
-        if probabilities.shape[1] == 2:
-            row["predicted_class_1_fraction"] = float(np.mean(y_pred == 1))
-            row["true_class_1_fraction"] = float(np.mean(y_true == 1))
-        self.history.append(row)
-
-        parts = [
-            f"{self.evaluation_level}_accuracy={row['accuracy']:.4f}",
-            (
-                f"{self.evaluation_level}_balanced_accuracy="
-                f"{row['balanced_accuracy']:.4f}"
-            ),
-            f"{self.evaluation_level}_brier_score={row['brier_score']:.4f}",
-        ]
-        if probabilities.shape[1] == 2:
-            parts.extend(
-                [
-                    f"pred1={row['predicted_class_1_fraction']:.4f}",
-                    f"true1={row['true_class_1_fraction']:.4f}",
-                ]
+            scores = _classification_metrics(
+                y_true=y_true,
+                y_pred=y_pred,
+                probabilities=probabilities,
+                metrics=self._METRICS,
+                n_classes=probabilities.shape[1],
+                ece_bins=self.ece_bins,
             )
-        print(
-            f"[ORACLE held-out user={self.target_subject!r} "
-            f"epoch={int(epoch) + 1}] "
-            + "  ".join(parts),
-            flush=True,
-        )
+            is_official = bool(threshold == self.decision_threshold)
+            row = {
+                "target_subject": self.target_subject,
+                "epoch": int(epoch) + 1,
+                "evaluation_level": self.evaluation_level,
+                "decision_threshold": float(threshold),
+                "official_decision_threshold": self.decision_threshold,
+                "is_official_decision_threshold": is_official,
+                **{name: float(value) for name, value in scores.items()},
+            }
+            if probabilities.shape[1] == 2:
+                row["predicted_class_1_fraction"] = float(np.mean(y_pred == 1))
+                row["true_class_1_fraction"] = float(np.mean(y_true == 1))
+            self.history.append(row)
+
+            parts = [
+                f"{self.evaluation_level}_accuracy={row['accuracy']:.4f}",
+                (
+                    f"{self.evaluation_level}_balanced_accuracy="
+                    f"{row['balanced_accuracy']:.4f}"
+                ),
+                f"{self.evaluation_level}_roc_auc={row['roc_auc']:.4f}",
+                f"{self.evaluation_level}_brier_score={row['brier_score']:.4f}",
+            ]
+            if probabilities.shape[1] == 2:
+                parts.extend(
+                    [
+                        f"pred1={row['predicted_class_1_fraction']:.4f}",
+                        f"true1={row['true_class_1_fraction']:.4f}",
+                    ]
+                )
+            print(
+                f"[ORACLE held-out user={self.target_subject!r} "
+                f"epoch={int(epoch) + 1} threshold={threshold:.4f} "
+                f"official={str(is_official).lower()}] "
+                + "  ".join(parts),
+                flush=True,
+            )
 
 
 def _level_scores(
@@ -4801,6 +4834,7 @@ def _run_subject_calibration_subject(
     metrics: tuple[str, ...],
     ece_bins: int,
     decision_threshold: float,
+    prediction_diagnostics_thresholds: tuple[float, ...],
     prediction_diagnostics: bool,
     prediction_diagnostics_metric: str,
     prediction_diagnostics_every_n_epochs: int,
@@ -4961,6 +4995,7 @@ def _run_subject_calibration_subject(
                 ),
                 reported_metric=str(prediction_diagnostics_metric),
                 decision_threshold=float(decision_threshold),
+                decision_thresholds=prediction_diagnostics_thresholds,
                 ece_bins=int(ece_bins),
                 seed=(
                     None
@@ -4979,6 +5014,7 @@ def _run_subject_calibration_subject(
             evaluation_level=evaluation_level,
             batch_size=int(1),
             decision_threshold=float(decision_threshold),
+            diagnostic_thresholds=prediction_diagnostics_thresholds,
             ece_bins=int(ece_bins),
         )
         source_callbacks.append(oracle_metrics_callback)
@@ -5491,6 +5527,9 @@ def subject_calibration_cv(
     ),
     ece_bins: int = _DEFAULT_ECE_BINS,
     decision_threshold: float = 0.5,
+    prediction_diagnostics_thresholds: (
+        list[float] | tuple[float, ...] | None
+    ) = None,
     prediction_diagnostics: bool = False,
     prediction_diagnostics_metric: str = "accuracy",
     prediction_diagnostics_every_n_epochs: int = 1,
@@ -5641,8 +5680,25 @@ def subject_calibration_cv(
         raise ValueError("calibration_weight_decay must be non-negative.")
     if calibration_optimizer not in {"adam", "adamw"}:
         raise ValueError("calibration_optimizer must be 'adam' or 'adamw'.")
-    if not 0.0 < float(decision_threshold) < 1.0:
+    decision_threshold = float(decision_threshold)
+    if not 0.0 < decision_threshold < 1.0:
         raise ValueError("decision_threshold must lie strictly between 0 and 1.")
+    raw_diagnostic_thresholds = (
+        (decision_threshold,)
+        if prediction_diagnostics_thresholds is None
+        else (*prediction_diagnostics_thresholds, decision_threshold)
+    )
+    normalized_diagnostic_thresholds = _normalize_decision_thresholds(
+        raw_diagnostic_thresholds
+    )
+    prediction_diagnostics_thresholds = (
+        decision_threshold,
+        *(
+            threshold
+            for threshold in normalized_diagnostic_thresholds
+            if threshold != decision_threshold
+        ),
+    )
     prediction_diagnostics_metric = str(
         prediction_diagnostics_metric
     ).strip().lower()
@@ -5816,7 +5872,10 @@ def subject_calibration_cv(
         "evaluation_level": evaluation_level,
         "metrics": metrics,
         "ece_bins": int(ece_bins),
-        "decision_threshold": float(decision_threshold),
+        "decision_threshold": decision_threshold,
+        "prediction_diagnostics_thresholds": (
+            prediction_diagnostics_thresholds
+        ),
         "prediction_diagnostics": bool(prediction_diagnostics),
         "prediction_diagnostics_metric": prediction_diagnostics_metric,
         "prediction_diagnostics_every_n_epochs": int(
@@ -5908,9 +5967,11 @@ def subject_calibration_cv(
         "calibration_learning_rate": float(calibration_learning_rate),
         "calibration_optimizer": str(calibration_optimizer),
         "calibration_weight_decay": float(calibration_weight_decay),
-        "decision_threshold": float(decision_threshold),
+        "decision_threshold": decision_threshold,
         "prediction_diagnostics": {
             "enabled": bool(prediction_diagnostics),
+            "official_decision_threshold": decision_threshold,
+            "decision_thresholds": list(prediction_diagnostics_thresholds),
             "reported_metric": prediction_diagnostics_metric,
             "every_n_epochs": int(prediction_diagnostics_every_n_epochs),
             "max_samples": int(prediction_diagnostics_max_samples),
