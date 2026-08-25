@@ -65,3 +65,4 @@
 - 8/25/2026
     - Added SIC v11, BiLSTM + GCN-GRU encoders to full-trial BiGRU classifier head.
     - Oracle diagnostics show subject-independent learning in early epochs (72% BAcc for user 0, and 58% BAcc for user 1), with later class collapse.
+    - Preliminary evidence of generalization on early epochs — now we must fix learning rate, class weights and epoch selection

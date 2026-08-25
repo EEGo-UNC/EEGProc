@@ -325,9 +325,9 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --calibration-batch-size "$CALIBRATION_BATCH_SIZE" \
     "${CALIBRATION_LEVEL_ARGS[@]}" \
     --calibration-selection-shots "$CALIBRATION_SELECTION_SHOTS" \
-    --calibration-learning-rate 0.0003 \
+    --calibration-learning-rate 0.0001 \
     --calibration-optimizer adamw \
-    --calibration-weight-decay 0.00005 \
+    --calibration-weight-decay 0 \
     --calibration-seed 42 \
     --selection-metric "$SELECTION_METRIC" \
     --hyperparameter-selection-level "$HYPERPARAMETER_SELECTION_LEVEL" \
