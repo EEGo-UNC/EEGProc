@@ -215,9 +215,9 @@ print(json.dumps({
 
     # First-order MLDG: VC/classification and subject-adversarial loss on
     # meta-train subjects; focal emotion loss on adapted meta-test subjects.
-    "mldg_meta_train_subjects": 10,
-    "mldg_meta_test_subjects": 5,
-    "mldg_trials_per_subject": 2,
+    "mldg_meta_train_subjects": 12,
+    "mldg_meta_test_subjects": 6,
+    "mldg_trials_per_subject": 4,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
@@ -340,7 +340,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --prediction-diagnostics-seed 42 \
     --ece-bins 5 \
     --max-subjects "$MAX_SUBJECTS" \
-    --target-subjects 1 2 \
+    --target-subjects 0 1 \
     --n-jobs 2 \
     --gpu-ids 0 1 \
     --cpus-per-worker 2 \
@@ -353,4 +353,3 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --window-overlap 0.0 \
     --window-normalization global_rms \
     --hyperparameters-json "$MODEL_CONFIG"
-    
