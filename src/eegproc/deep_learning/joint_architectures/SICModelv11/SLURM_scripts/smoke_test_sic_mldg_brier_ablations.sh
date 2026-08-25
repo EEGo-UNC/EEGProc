@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
-#SBATCH --time=4:00:00
+#SBATCH --time=00:30:00
 #SBATCH --array=0
 
 set -euo pipefail
@@ -45,9 +45,9 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-50}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-20}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-5}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
@@ -251,8 +251,8 @@ print(json.dumps({
     "classifier_rnn_dropout": 0.40,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": 2.5,
-    "focal_alpha": 0.61,
+    "focal_gamma": 0.5,
+    "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
     "vc_beta": 0.1,
@@ -273,7 +273,7 @@ print(json.dumps({
     "remove_median_label": remove_median,
 
     # Two layers means BiGRU + VC during target-subject calibration.
-    "calibration_unfreeze_layers": 1,
+    "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
     "calibration_vc_alpha": 1.0,
     "calibration_vc_beta": 0.1,
@@ -332,7 +332,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --calibration-seed 42 \
     --selection-metric "$SELECTION_METRIC" \
     --hyperparameter-selection-level "$HYPERPARAMETER_SELECTION_LEVEL" \
-    --decision-threshold 0.5 \
+    --decision-threshold 0.4 0.45 0.5 0.55 0.6 \
     --prediction-diagnostics \
     --prediction-diagnostics-metric "$PREDICTION_DIAGNOSTICS_METRIC" \
     --prediction-diagnostics-every-n-epochs "$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS" \
