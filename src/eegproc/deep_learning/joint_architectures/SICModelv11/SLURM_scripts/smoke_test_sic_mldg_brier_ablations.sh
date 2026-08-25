@@ -209,7 +209,7 @@ vrex_penalty_weight = float(sys.argv[5])
 print(json.dumps({
     # Source optimizer. The method itself is selected by --training-method.
     "optimizer_name": "adamw",
-    "learning_rate": 1e-4,
+    "learning_rate": 3e-4,
     "weight_decay": 5e-5,
     "vrex_penalty_weight": vrex_penalty_weight,
 
@@ -219,7 +219,7 @@ print(json.dumps({
     "mldg_meta_test_subjects": 6,
     "mldg_trials_per_subject": 4,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
-    "mldg_inner_learning_rate": 1e-4,
+    "mldg_inner_learning_rate": 5e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
 
