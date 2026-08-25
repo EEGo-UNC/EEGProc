@@ -420,8 +420,8 @@ def run_sic_mldg_train_step(model, x, y_flat, sample_weight) -> None:
             calibration=False,
         )
         meta_test_loss = (
-            tf.cast(model.vc_loss_weight, meta_test_vc["weighted_focal_loss"].dtype)
-            * meta_test_vc["weighted_focal_loss"]
+            tf.cast(model.vc_loss_weight, meta_test_vc["total_loss"].dtype)
+            * meta_test_vc["total_loss"]
         )
     meta_test_gradients = meta_test_tape.gradient(meta_test_loss, variables)
 

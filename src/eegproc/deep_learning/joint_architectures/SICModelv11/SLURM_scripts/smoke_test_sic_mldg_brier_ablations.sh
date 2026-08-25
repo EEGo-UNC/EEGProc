@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
-#SBATCH --time=2:00:00
+#SBATCH --time=4:00:00
 #SBATCH --array=0
 
 set -euo pipefail
@@ -45,11 +45,11 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-100}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-40}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-25}"
-SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-32}"
-CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-16}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-50}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-35}"
+SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
+CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
@@ -83,6 +83,8 @@ CALIBRATION_SELECTION_SHOTS=6
 CALIBRATION_LEVEL_ARGS=(
     --calibration-level 3 6
     --calibration-level 6 3
+    --calibration-level 9 2
+    --calibration-level 12 3
 )
 
 cd "$PROJECT_DIR"
@@ -223,11 +225,11 @@ print(json.dumps({
 
     # GCN-GRU spatial/spectral branch.
     "gcn_units": {"fixed": [128, 64]},
-    "gcn_dropout": 0.20,
+    "gcn_dropout": 0.10,
     "gcn_activation": "relu",
     "gcn_use_batch_norm": False,
     "spectral_gru_units": 384,
-    "spectral_gru_dropout": 0.30,
+    "spectral_gru_dropout": 0.20,
     "mi_n_neighbors": 3,
     "mi_random_state": 42,
     "mi_zero_diagonal": False,
@@ -244,18 +246,18 @@ print(json.dumps({
     # by the BiGRU; only its final bidirectional state enters the VC head.
     # There is no arithmetic mean across the trial's window axis.
     "classifier_rnn_type": "bigru",
-    "classifier_rnn_units": {"fixed": [256, 128, 64]},
-    "n_classifier_rnn_layers": 3,
+    "classifier_rnn_units": {"fixed": [128, 64]},
+    "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.40,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": 2.5,
+    "focal_gamma": 1.0,
     "focal_alpha": 0.39,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": 0.2,
+    "vc_beta": 0.1,
     "vc_gamma": 0.0,
-    "vc_lambda": 0.05,
+    "vc_lambda": 0.01,
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on the learned trial representation.
@@ -273,7 +275,10 @@ print(json.dumps({
     # Two layers means BiGRU + VC during target-subject calibration.
     "calibration_unfreeze_layers": 1,
     "calibration_use_vc_target": True,
-    "use_class_weight": False,
+    "calibration_vc_alpha": 1.0,
+    "calibration_vc_beta": 0.1,
+    "calibration_vc_gamma": 0.0,
+    "calibration_vc_lambda": 0.01,
 }))
 PY
 )"
@@ -321,7 +326,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --calibration-batch-size "$CALIBRATION_BATCH_SIZE" \
     "${CALIBRATION_LEVEL_ARGS[@]}" \
     --calibration-selection-shots "$CALIBRATION_SELECTION_SHOTS" \
-    --calibration-learning-rate 0.0001 \
+    --calibration-learning-rate 0.0003 \
     --calibration-optimizer adamw \
     --calibration-weight-decay 0.00005 \
     --calibration-seed 42 \
@@ -334,7 +339,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --prediction-diagnostics-max-samples "$PREDICTION_DIAGNOSTICS_MAX_SAMPLES" \
     --prediction-diagnostics-threshold-tolerance 0.01 \
     --prediction-diagnostics-seed 42 \
-    --ece-bins 15 \
+    --ece-bins 5 \
     --max-subjects "$MAX_SUBJECTS" \
     --n-jobs 2 \
     --gpu-ids 0 1 \
