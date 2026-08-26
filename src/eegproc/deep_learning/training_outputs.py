@@ -368,10 +368,6 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         "val_window_balanced_accuracy",
         "decoder_r2",
         "val_decoder_r2",
-        "gcn_gru_decoder_r2",
-        "val_gcn_gru_decoder_r2",
-        "bilstm_decoder_r2",
-        "val_bilstm_decoder_r2",
         "accuracy",
         "val_accuracy",
         "trial_f1",
@@ -401,8 +397,6 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
             "regularization_loss",
             "autoencoder_loss",
             "reconstruction_loss",
-            "gcn_gru_reconstruction_loss",
-            "bilstm_reconstruction_loss",
             "kl_loss",
             "weighted_kl_loss",
             "vc_loss",
@@ -583,8 +577,6 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         )
         handled.add(f"{prefix}autoencoder_loss")
         reconstruction = read("reconstruction_loss")
-        gcn_gru_reconstruction = read("gcn_gru_reconstruction_loss")
-        bilstm_reconstruction = read("bilstm_reconstruction_loss")
         raw_kl = read("kl_loss")
         weighted_kl = read("weighted_kl_loss")
         if ae_raw is not None:
@@ -602,29 +594,6 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
                 ae_details.append(f"wKL={self._format_value(weighted_kl)}")
             parts.append(
                 f"AE={self._format_value(ae_head)}[" + ",".join(ae_details) + "]"
-            )
-
-        decoder_weight = self._model_weight("reconstruction_loss_weight")
-        if reconstruction is not None and decoder_weight is not None:
-            decoder_contribution = reconstruction * decoder_weight
-            decoder_details = [
-                f"raw={self._format_value(reconstruction)}",
-                f"w={self._format_value(decoder_weight)}",
-            ]
-            if gcn_gru_reconstruction is not None:
-                decoder_details.append(
-                    "gcn_gru="
-                    f"{self._format_value(gcn_gru_reconstruction)}"
-                )
-            if bilstm_reconstruction is not None:
-                decoder_details.append(
-                    "bilstm="
-                    f"{self._format_value(bilstm_reconstruction)}"
-                )
-            parts.append(
-                f"DECODER={self._format_value(decoder_contribution)}["
-                + ",".join(decoder_details)
-                + "]"
             )
 
         vc_contribution, vc_raw, vc_weight = self._weighted_contribution(

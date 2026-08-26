@@ -15,9 +15,8 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Smoke-test purpose
 # ---------------------------------------------------------------------------
-# This worker targets SIC builder API v14: deterministic window encoders,
-# independent branch decoders, and a trial-level BiGRU classifier with no
-# averaging across EEG windows.
+# This worker targets SIC builder API v11: deterministic window encoders plus
+# a trial-level BiGRU classifier with no averaging across EEG windows.
 # Each array task validates one deterministic feature layout:
 #   task 0: full encoder,       concat(GCN-GRU[384], BiLSTM[126]) -> 510
 #   task 1: no BiLSTM branch,   GCN-GRU[384]                       -> 384
@@ -59,9 +58,7 @@ VREX_PENALTY_WEIGHT="${VREX_PENALTY_WEIGHT:-1.0}"
 PREDICTION_DIAGNOSTICS_METRIC="${PREDICTION_DIAGNOSTICS_METRIC:-brier_score}"
 PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-1}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-500}"
-RECONSTRUCTION_LOSS_WEIGHT="${RECONSTRUCTION_LOSS_WEIGHT:-0.10}"
-DECODER_DROPOUT="${DECODER_DROPOUT:-0.10}"
-EXPECTED_SIC_API_VERSION=14
+EXPECTED_SIC_API_VERSION=11
 
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
@@ -193,16 +190,13 @@ esac
 # Build the small smoke grid as valid JSON
 # ---------------------------------------------------------------------------
 # The encoders retain their complete deterministic feature widths. There is no
-# posterior, z projection, reparameterization, or fusion projection. Each
-# active encoder branch is decoded independently back to the EEG window.
+# posterior, z projection, reparameterization, decoder, or fusion projection.
 MODEL_CONFIG="$(python - \
     "$use_gcn_gru" \
     "$use_bilstm" \
     "$remove_median" \
     "$MLDG_STEPS_PER_EPOCH" \
-    "$VREX_PENALTY_WEIGHT" \
-    "$RECONSTRUCTION_LOSS_WEIGHT" \
-    "$DECODER_DROPOUT" <<'PY'
+    "$VREX_PENALTY_WEIGHT" <<'PY'
 import json
 import sys
 
@@ -211,8 +205,6 @@ use_gcn_gru, use_bilstm, remove_median = (
 )
 mldg_steps_per_epoch = int(sys.argv[4])
 vrex_penalty_weight = float(sys.argv[5])
-reconstruction_loss_weight = float(sys.argv[6])
-decoder_dropout = float(sys.argv[7])
 
 print(json.dumps({
     # Source optimizer. The method itself is selected by --training-method.
@@ -221,8 +213,8 @@ print(json.dumps({
     "weight_decay": 5e-5,
     "vrex_penalty_weight": vrex_penalty_weight,
 
-    # First-order MLDG: complete VC, branch reconstruction, and optional
-    # subject-adversarial loss on A; complete VC emotion loss on adapted B.
+    # First-order MLDG: VC/classification and subject-adversarial loss on
+    # meta-train subjects; focal emotion loss on adapted meta-test subjects.
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 4,
@@ -278,9 +270,6 @@ print(json.dumps({
     # Selected architecture/data ablation.
     "use_gcn_gru_branch": use_gcn_gru,
     "use_bilstm_branch": use_bilstm,
-    "use_decoder": True,
-    "reconstruction_loss_weight": reconstruction_loss_weight,
-    "decoder_dropout": decoder_dropout,
     "remove_median_label": remove_median,
 
     # Two layers means BiGRU + VC during target-subject calibration.
@@ -305,7 +294,6 @@ echo "Smoke profile: $ABLATION_PROFILE"
 echo "Target: $TARGET_DIMENSION"
 echo "Training method: $TRAINING_METHOD"
 echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
-echo "Decoder: independent branches, reconstruction_weight=$RECONSTRUCTION_LOSS_WEIGHT dropout=$DECODER_DROPOUT"
 echo "Feature widths: GCN-GRU=384; BiLSTM=126 when active; full concatenation=510"
 echo "Trial classifier: BiGRU [128,64] units/direction, final width 128, no cross-window averaging"
 echo "Prediction diagnostics: metric=$PREDICTION_DIAGNOSTICS_METRIC every=$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS epoch(s) max_samples=$PREDICTION_DIAGNOSTICS_MAX_SAMPLES"
