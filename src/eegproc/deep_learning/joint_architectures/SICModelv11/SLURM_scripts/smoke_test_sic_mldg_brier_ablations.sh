@@ -215,8 +215,8 @@ print(json.dumps({
 
     # First-order MLDG: VC/classification and subject-adversarial loss on
     # meta-train subjects; focal emotion loss on adapted meta-test subjects.
-    "mldg_meta_train_subjects": 10,
-    "mldg_meta_test_subjects": 5,
+    "mldg_meta_train_subjects": 8,
+    "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 4,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
     "mldg_inner_learning_rate": 1e-4,
