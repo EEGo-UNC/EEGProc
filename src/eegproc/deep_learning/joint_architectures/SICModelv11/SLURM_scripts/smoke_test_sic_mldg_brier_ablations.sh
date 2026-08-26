@@ -217,7 +217,7 @@ print(json.dumps({
     # meta-train subjects; focal emotion loss on adapted meta-test subjects.
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
-    "mldg_trials_per_subject": 4,
+    "mldg_trials_per_subject": 3,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
