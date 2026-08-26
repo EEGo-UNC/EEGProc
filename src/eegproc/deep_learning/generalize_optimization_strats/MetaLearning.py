@@ -374,7 +374,10 @@ def run_sic_mldg_train_step(model, x, y_flat, sample_weight) -> None:
     meta_test_subject_ids = masked(subject_ids, meta_test_mask)
     meta_test_weight = masked(sample_weight, meta_test_mask)
 
-    # A keeps SIC's complete source objective. B measures emotion transfer only.
+    # A keeps SIC's complete source objective, including independent GCN-GRU
+    # and BiLSTM reconstruction. B keeps the complete VC emotion objective but
+    # deliberately excludes reconstruction, so virtual-unseen performance
+    # cannot improve merely by reproducing that subject's EEG.
     with tf.GradientTape() as meta_train_tape:
         meta_train_outputs = model._encode(meta_train_eeg, training=True)
         meta_train_vc = model._vc_components(
@@ -383,6 +386,10 @@ def run_sic_mldg_train_step(model, x, y_flat, sample_weight) -> None:
             meta_train_y,
             meta_train_weight,
             calibration=False,
+        )
+        meta_train_reconstruction = model._reconstruction_components(
+            meta_train_outputs,
+            training=True,
         )
         meta_train_subject = model._subject_components(
             meta_train_outputs["pooled_features"],
@@ -393,6 +400,11 @@ def run_sic_mldg_train_step(model, x, y_flat, sample_weight) -> None:
         dtype = meta_train_vc["total_loss"].dtype
         meta_train_loss = (
             tf.cast(model.vc_loss_weight, dtype) * meta_train_vc["total_loss"]
+            + tf.cast(model.reconstruction_loss_weight, dtype)
+            * tf.cast(
+                meta_train_reconstruction["reconstruction_loss"],
+                dtype,
+            )
             + tf.cast(model.subject_loss_weight, dtype)
             * tf.cast(meta_train_subject["subject_loss"], dtype)
             + model._regularization_loss(dtype)
@@ -465,6 +477,7 @@ def run_sic_mldg_train_step(model, x, y_flat, sample_weight) -> None:
         outputs=meta_train_outputs,
         y_flat=meta_train_y,
         sample_weight=meta_train_weight,
+        reconstruction_components=meta_train_reconstruction,
         subject_components=meta_train_subject,
         vrex_components=None,
     )
@@ -488,10 +501,11 @@ class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
     gradient-training subjects:
 
     ``meta_train`` (A)
-        Supplies the inner classification/adversarial/SupCon gradient.
+        Supplies the inner VC/classification, branch-reconstruction, and
+        optional adversarial gradient.
     ``meta_test`` (B)
-        Supplies an emotion-only gradient after the model has been moved to
-        temporary fast weights computed from A.
+        Supplies the complete VC emotion gradient, without reconstruction,
+        after the model has been moved to temporary fast weights from A.
 
     Subject IDs are remapped once over the complete fold-local training pool so
     A and B use one consistent subject-class vocabulary. The true LOSO test

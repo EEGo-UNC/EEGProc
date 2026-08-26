@@ -398,13 +398,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
+        "--use-decoder",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Enable or ablate independent GCN-GRU and BiLSTM EEG "
+            "reconstruction heads. The model default is enabled."
+        ),
+    )
+    parser.add_argument(
         "--hyperparameters-json",
         default=None,
         help=(
             "Fixed SIC configuration or Cartesian search grid as JSON. The "
             "complete GCN-GRU and BiLSTM encoder features are concatenated "
             "per window and recurrently summarized at trial level; there is "
-            "no cross-window averaging, z projection, or decoder. "
+            "no cross-window averaging or z projection. Each active encoder "
+            "branch is reconstructed separately when the decoder is enabled. "
             "Use {\"grid\":[...]} and {\"fixed\":...} for unambiguous values."
         ),
     )
@@ -440,6 +450,7 @@ def model_config_from_args(args) -> dict:
     for key in (
         "use_gcn_gru_branch",
         "use_bilstm_branch",
+        "use_decoder",
         "remove_median_label",
     ):
         cli_value = getattr(args, key)
@@ -524,6 +535,14 @@ def validate_args(args, model_config: dict) -> None:
                 raise ValueError("classifier_rnn_units must be positive.")
             if int(builder_config.get("n_classifier_rnn_layers", 1)) < 1:
                 raise ValueError("n_classifier_rnn_layers must be positive.")
+        reconstruction_weight = float(
+            builder_config.get("reconstruction_loss_weight", 0.10)
+        )
+        decoder_dropout = float(builder_config.get("decoder_dropout", 0.10))
+        if reconstruction_weight < 0.0:
+            raise ValueError("reconstruction_loss_weight must be non-negative.")
+        if not 0.0 <= decoder_dropout < 1.0:
+            raise ValueError("decoder_dropout must be in [0, 1).")
         if training_method == "mldg":
             meta_train_subjects = builder_config.get("mldg_meta_train_subjects")
             meta_test_subjects = int(builder_config.get("mldg_meta_test_subjects", 4))
