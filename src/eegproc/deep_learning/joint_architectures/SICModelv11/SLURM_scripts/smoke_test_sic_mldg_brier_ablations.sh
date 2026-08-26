@@ -26,7 +26,7 @@ set -euo pipefail
 # errors without running every full ablation.
 
 SMOKE_PROFILES=(
-    remove_median
+    full
 )
 
 PROFILE_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
@@ -46,7 +46,7 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-4}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
 MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-5}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
@@ -217,7 +217,7 @@ decoder_dropout = float(sys.argv[7])
 print(json.dumps({
     # Source optimizer. The method itself is selected by --training-method.
     "optimizer_name": "adamw",
-    "learning_rate": 5e-5,
+    "learning_rate": 1e-4,
     "weight_decay": 5e-5,
     "vrex_penalty_weight": vrex_penalty_weight,
 
@@ -259,11 +259,11 @@ print(json.dumps({
     "classifier_rnn_dropout": 0.40,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": 0.5,
-    "focal_alpha": 0.45,
+    "focal_gamma": {"grid": [0.5, 0.0]},
+    "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": 0.1,
+    "vc_beta": 0.2,
     "vc_gamma": 0.0,
     "vc_lambda": 0.01,
     "update_vc_discriminator": False,
@@ -287,7 +287,7 @@ print(json.dumps({
     "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
     "calibration_vc_alpha": 1.0,
-    "calibration_vc_beta": 0.1,
+    "calibration_vc_beta": 0.2,
     "calibration_vc_gamma": 0.0,
     "calibration_vc_lambda": 0.01,
 }))
