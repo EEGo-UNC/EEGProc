@@ -1,4 +1,5 @@
 from __future__ import annotations
+import sys
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -6,12 +7,66 @@ import tensorflow as tf
 
 from .cross_val import (
     _CLASSIFICATION_METRICS,
+    HeldOutUserOracleMetrics as _CrossValHeldOutUserOracleMetrics,
+    _aggregate_window_probabilities_by_trial,
     _as_numpy_1d,
+    _classification_metrics,
+    _decoder_reconstruction_scores,
+    _direct_trial_aggregation,
     _extract_classifier_output,
+    _is_trial_tensor,
     _normalize_decision_thresholds,
+    _predict_labels,
+    _predict_probabilities,
+    _probability_log_loss,
     _prediction_diagnostic_summary,
     _to_probabilities,
 )
+
+
+_DIAGNOSTIC_CLASSIFICATION_METRICS = (
+    "accuracy",
+    "f1",
+    "precision",
+    "recall",
+    "macro_f1",
+    "macro_precision",
+    "macro_recall",
+    "balanced_accuracy",
+    "roc_auc",
+    "brier_score",
+    "ece",
+)
+
+_DECODER_METRIC_NAMES = (
+    "decoder_r2",
+    "gcn_gru_decoder_r2",
+    "bilstm_decoder_r2",
+    "reconstruction_loss",
+    "gcn_gru_reconstruction_loss",
+    "bilstm_reconstruction_loss",
+)
+
+
+def _finite_scalar(value) -> float | None:
+    """Return one finite scalar metric value, or ``None`` otherwise."""
+    if value is None:
+        return None
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    array = np.asarray(value)
+    if array.ndim != 0:
+        return None
+    result = float(array)
+    return result if np.isfinite(result) else None
+
+
+def _format_metric_value(value: float) -> str:
+    """Format one scalar consistently across every epoch-output callback."""
+    absolute = abs(value)
+    if absolute != 0.0 and (absolute < 1e-4 or absolute >= 1e4):
+        return f"{value:.3e}"
+    return f"{value:.4f}"
 
 def _numpy_value(value):
     """Convert tensors and array-like values to numpy arrays."""
@@ -166,14 +221,160 @@ def _diagnostic_model_outputs(
     return combined
 
 
+class HeldOutUserOracleMetrics(_CrossValHeldOutUserOracleMetrics):
+    """Emit one complete reporting-only oracle-prediction row per epoch.
+
+    The parent callback previously printed decoder and classification values on
+    separate rows. This replacement preserves its initialization contract and
+    reporting-only history while computing the complete classification suite,
+    probability log loss, and both branch-specific reconstruction suites in one
+    memory-bounded pass per output type.
+    """
+
+    _METRICS = _DIAGNOSTIC_CLASSIFICATION_METRICS
+    _training_outputs_consolidated = True
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        epoch_number = int(epoch) + 1
+        probabilities = _predict_probabilities(
+            model=self.model,
+            X=self.X_target,
+            batch_size=self.batch_size,
+            n_prediction_latent_samples=0,
+            latent_sampling_seed=None,
+        )
+        decoder_scores = _decoder_reconstruction_scores(
+            model=self.model,
+            X=self.X_target,
+            batch_size=self.batch_size,
+        )
+
+        if self.evaluation_level == "trial":
+            if _is_trial_tensor(self.X_target):
+                aggregation = _direct_trial_aggregation(
+                    probabilities=probabilities,
+                    y_true=self.y_target,
+                    subject_ids=self.subject_ids_target,
+                    trial_ids=self.trial_ids_target,
+                    n_windows_per_trial=self.X_target.shape[1],
+                    decision_threshold=self.decision_threshold,
+                )
+            else:
+                aggregation = _aggregate_window_probabilities_by_trial(
+                    probabilities=probabilities,
+                    y_true=self.y_target,
+                    subject_ids=self.subject_ids_target,
+                    trial_ids=self.trial_ids_target,
+                    decision_threshold=self.decision_threshold,
+                )
+            probabilities = aggregation["probabilities"]
+            y_true = aggregation["y_true"]
+        else:
+            y_true = _as_numpy_1d(self.y_target).astype(np.int64)
+
+        probability_loss = _probability_log_loss(
+            y_true=y_true,
+            probabilities=probabilities,
+        )
+        official_row: dict | None = None
+
+        # Preserve reporting-only diagnostic-threshold history, but print only
+        # the official threshold so every epoch has exactly one oracle row.
+        for threshold in self.diagnostic_thresholds:
+            y_pred = _predict_labels(
+                probabilities,
+                decision_threshold=threshold,
+            )
+            scores = _classification_metrics(
+                y_true=y_true,
+                y_pred=y_pred,
+                probabilities=probabilities,
+                metrics=self._METRICS,
+                n_classes=probabilities.shape[1],
+                ece_bins=self.ece_bins,
+            )
+            is_official = bool(threshold == self.decision_threshold)
+            row = {
+                "target_subject": self.target_subject,
+                "epoch": epoch_number,
+                "evaluation_level": self.evaluation_level,
+                "decision_threshold": float(threshold),
+                "official_decision_threshold": self.decision_threshold,
+                "is_official_decision_threshold": is_official,
+                "loss": float(probability_loss),
+                **{name: float(value) for name, value in scores.items()},
+                **decoder_scores,
+            }
+            if probabilities.shape[1] == 2:
+                row["predicted_class_1_fraction"] = float(np.mean(y_pred == 1))
+                row["true_class_1_fraction"] = float(np.mean(y_true == 1))
+            self.history.append(row)
+            if is_official:
+                official_row = row
+
+        if official_row is None:
+            raise RuntimeError("The official oracle decision threshold was not evaluated.")
+
+        level = self.evaluation_level
+        parts = [
+            f"{level}_loss={_format_metric_value(official_row['loss'])}",
+            f"{level}_accuracy={_format_metric_value(official_row['accuracy'])}",
+            (
+                f"{level}_balanced_accuracy="
+                f"{_format_metric_value(official_row['balanced_accuracy'])}"
+            ),
+            f"{level}_roc_auc={_format_metric_value(official_row['roc_auc'])}",
+            f"{level}_macro_f1={_format_metric_value(official_row['macro_f1'])}",
+            f"{level}_f1={_format_metric_value(official_row['f1'])}",
+            f"{level}_precision={_format_metric_value(official_row['precision'])}",
+            f"{level}_recall={_format_metric_value(official_row['recall'])}",
+            (
+                f"{level}_macro_precision="
+                f"{_format_metric_value(official_row['macro_precision'])}"
+            ),
+            (
+                f"{level}_macro_recall="
+                f"{_format_metric_value(official_row['macro_recall'])}"
+            ),
+            (
+                f"{level}_brier_score="
+                f"{_format_metric_value(official_row['brier_score'])}"
+            ),
+            f"{level}_ece={_format_metric_value(official_row['ece'])}",
+        ]
+        if probabilities.shape[1] == 2:
+            parts.extend(
+                [
+                    "pred1="
+                    f"{_format_metric_value(official_row['predicted_class_1_fraction'])}",
+                    "true1="
+                    f"{_format_metric_value(official_row['true_class_1_fraction'])}",
+                ]
+            )
+        parts.extend(
+            f"{name}={_format_metric_value(official_row[name])}"
+            for name in _DECODER_METRIC_NAMES
+            if name in official_row
+        )
+        print(
+            f"[ORACLE PREDICTION held-out user={self.target_subject!r} "
+            f"epoch={epoch_number} level={level} "
+            f"threshold={self.decision_threshold:.4f}] "
+            + " | ".join(parts),
+            flush=True,
+        )
+
+
 class PredictionDiagnostics(tf.keras.callbacks.Callback):
-    """Inspect deterministic train/validation predictions during training.
+    """Print one complete deterministic training-diagnostics row per epoch.
 
     Only a fixed, approximately class-balanced subset is evaluated, so the
-    callback remains inexpensive relative to a full validation pass. It records
-    exact probability spread and, when the model exposes ``predict_diagnostics``,
-    latent and logit spread as well. ``reported_metric`` selects the one
-    classification score highlighted in every saved diagnostic row.
+    callback remains inexpensive relative to a full validation pass. The row
+    combines the existing Keras epoch metrics/losses with exact probability
+    metrics on that fixed subset, including ROC-AUC and macro F1. Decoder values
+    come from the epoch-wide Keras logs when available; a memory-bounded
+    inference fallback is used only for models that expose a decoder without
+    tracking its metrics.
     """
 
     def __init__(
@@ -256,11 +457,48 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         self.history: list[dict] = []
 
     def on_train_begin(self, logs: dict | None = None) -> None:
+        # CompactEpochLogger checks this marker so the two callbacks never emit
+        # duplicate training-diagnostics rows for the same fit.
+        self._diagnostic_owner_id = id(self)
+        setattr(
+            self.model,
+            "_consolidated_prediction_diagnostics_owner",
+            self._diagnostic_owner_id,
+        )
         print(
             "[DIAGNOSTICS] Official evaluation threshold="
             f"{self.decision_threshold:.4f}; reporting-only thresholds="
             f"{list(self.decision_thresholds)}.",
             flush=True,
+        )
+
+    def on_train_end(self, logs: dict | None = None) -> None:
+        if getattr(
+            self.model,
+            "_consolidated_prediction_diagnostics_owner",
+            None,
+        ) == getattr(self, "_diagnostic_owner_id", None):
+            delattr(self.model, "_consolidated_prediction_diagnostics_owner")
+
+    def _decoder_scores_for_split(
+        self,
+        split: str,
+        X: np.ndarray,
+        logs: Mapping[str, object],
+    ) -> dict[str, float]:
+        log_prefix = "val_" if split == "validation" else ""
+        scores: dict[str, float] = {}
+        for name in _DECODER_METRIC_NAMES:
+            value = _finite_scalar(logs.get(f"{log_prefix}{name}"))
+            if value is not None:
+                scores[name] = value
+
+        if scores or not bool(getattr(self.model, "use_decoder", False)):
+            return scores
+        return _decoder_reconstruction_scores(
+            model=self.model,
+            X=X,
+            batch_size=self.batch_size,
         )
 
     def _report_split(
@@ -270,16 +508,41 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         y: np.ndarray,
         epoch_number: int,
         logs: dict,
-    ) -> None:
+    ) -> dict:
         internal_outputs = _diagnostic_model_outputs(
             model=self.model,
             X=X,
             batch_size=self.batch_size,
         )
+        probabilities = internal_outputs["probabilities"]
+        y_ids = _as_numpy_1d(y).astype(np.int64)
+        probability_loss = _probability_log_loss(
+            y_true=y_ids,
+            probabilities=probabilities,
+        )
+        decoder_scores = self._decoder_scores_for_split(
+            split=split,
+            X=X,
+            logs=logs,
+        )
+        official_row: dict | None = None
+
         for threshold in self.decision_thresholds:
+            y_pred = _predict_labels(
+                probabilities,
+                decision_threshold=threshold,
+            )
+            scores = _classification_metrics(
+                y_true=y_ids,
+                y_pred=y_pred,
+                probabilities=probabilities,
+                metrics=_DIAGNOSTIC_CLASSIFICATION_METRICS,
+                n_classes=probabilities.shape[1],
+                ece_bins=self.ece_bins,
+            )
             summary = _prediction_diagnostic_summary(
-                probabilities=internal_outputs["probabilities"],
-                y_true=y,
+                probabilities=probabilities,
+                y_true=y_ids,
                 threshold_tolerance=self.threshold_tolerance,
                 internal_outputs=internal_outputs,
                 reported_metric=self.reported_metric,
@@ -297,68 +560,129 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
                 "is_official_decision_threshold": bool(
                     threshold == self.decision_threshold
                 ),
+                "loss": float(probability_loss),
+                **{name: float(value) for name, value in scores.items()},
                 **summary,
+                **decoder_scores,
             }
             # Keep diagnostics in the dedicated callback history only. They are
             # intentionally not inserted into Keras logs, so they cannot affect
             # training callbacks or checkpoint selection.
             self.history.append(row)
+            if threshold == self.decision_threshold:
+                official_row = row
 
-            parts = [f"accuracy={row['accuracy']:.4f}"]
-            if self.reported_metric != "accuracy":
-                parts.append(
-                    f"{self.reported_metric}="
-                    f"{row['reported_metric_value']:.4f}"
-                )
-            if self.reported_metric != "roc_auc":
-                parts.append(f"roc_auc={row['roc_auc']:.4f}")
-            if "predicted_class_1_fraction" in row:
-                parts.extend(
-                    [
-                        f"pred1={row['predicted_class_1_fraction']:.4f}",
-                        f"true1={row['true_class_1_fraction']:.4f}",
-                    ]
-                )
-            print(
-                "[DIAGNOSTICS "
-                f"fold={self.fold_number!r} epoch={int(epoch_number)} "
-                f"split={split} threshold={threshold:.4f} "
-                "official="
-                f"{str(threshold == self.decision_threshold).lower()}] "
-                + "  ".join(parts),
-                flush=True,
+        if official_row is None:
+            raise RuntimeError(
+                "The official training-diagnostic decision threshold was not "
+                "evaluated."
             )
+        return official_row
+
+    def _format_prediction_row(self, row: Mapping[str, object]) -> str:
+        split = "val" if row["split"] == "validation" else "train"
+        level = str(getattr(self.model, "classification_level", "sample"))
+        prefix = f"{split}_{level}"
+        parts = [
+            f"{prefix}_n={int(row['n_samples'])}",
+            f"{prefix}_loss={_format_metric_value(float(row['loss']))}",
+            f"{prefix}_accuracy={_format_metric_value(float(row['accuracy']))}",
+            (
+                f"{prefix}_balanced_accuracy="
+                f"{_format_metric_value(float(row['balanced_accuracy']))}"
+            ),
+            f"{prefix}_roc_auc={_format_metric_value(float(row['roc_auc']))}",
+            f"{prefix}_macro_f1={_format_metric_value(float(row['macro_f1']))}",
+            f"{prefix}_f1={_format_metric_value(float(row['f1']))}",
+            f"{prefix}_precision={_format_metric_value(float(row['precision']))}",
+            f"{prefix}_recall={_format_metric_value(float(row['recall']))}",
+            (
+                f"{prefix}_macro_precision="
+                f"{_format_metric_value(float(row['macro_precision']))}"
+            ),
+            (
+                f"{prefix}_macro_recall="
+                f"{_format_metric_value(float(row['macro_recall']))}"
+            ),
+            (
+                f"{prefix}_brier_score="
+                f"{_format_metric_value(float(row['brier_score']))}"
+            ),
+            f"{prefix}_ece={_format_metric_value(float(row['ece']))}",
+            (
+                f"{prefix}_confidence_mean="
+                f"{_format_metric_value(float(row['confidence_mean']))}"
+            ),
+            (
+                f"{prefix}_confidence_std="
+                f"{_format_metric_value(float(row['confidence_std']))}"
+            ),
+        ]
+        if "predicted_class_1_fraction" in row:
+            parts.extend(
+                [
+                    f"{split}_pred1="
+                    f"{_format_metric_value(float(row['predicted_class_1_fraction']))}",
+                    f"{split}_true1="
+                    f"{_format_metric_value(float(row['true_class_1_fraction']))}",
+                ]
+            )
+        parts.extend(
+            f"{split}_{name}={_format_metric_value(float(row[name]))}"
+            for name in _DECODER_METRIC_NAMES
+            if name in row
+        )
+        return " ".join(parts)
 
     def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
         epoch_number = int(epoch) + 1
-        if epoch_number % self.every_n_epochs != 0:
-            return
         if logs is None:
             logs = {}
 
-        self._report_split(
+        # The requested output contract is one row every epoch. Keep accepting
+        # every_n_epochs for API compatibility, but intentionally do not skip
+        # epochs here.
+        rows = [self._report_split(
             split="train",
             X=self.X_train,
             y=self.y_train,
             epoch_number=epoch_number,
             logs=logs,
-        )
+        )]
         if self.X_val is not None and self.y_val is not None:
-            self._report_split(
+            rows.append(self._report_split(
                 split="validation",
                 X=self.X_val,
                 y=self.y_val,
                 epoch_number=epoch_number,
                 logs=logs,
-            )
+            ))
+
+        formatter = CompactEpochLogger(fold_number=self.fold_number)
+        formatter.set_model(self.model)
+        formatter.set_params(self.params)
+        sections = []
+        epoch_summary = formatter._format_epoch_summary(logs)
+        if epoch_summary:
+            sections.append(epoch_summary)
+        sections.append(
+            "PREDICTIONS[" + " | ".join(
+                self._format_prediction_row(row) for row in rows
+            ) + "]"
+        )
+        print(
+            f"{formatter._prefix(epoch_number)} TRAINING DIAGNOSTICS | "
+            + " | ".join(sections),
+            flush=True,
+        )
 
 
 class CompactEpochLogger(tf.keras.callbacks.Callback):
-    """Print each epoch as compact metric, class-balance, and loss rows.
+    """Print one consolidated training-diagnostics row per epoch.
 
     Keras' built-in ``verbose=2`` logger places every metric on one very long
-    line. This callback groups the same epoch logs into readable categories and
-    leaves ``history.history`` unchanged.
+    line. This callback retains the readable metric/class/loss groupings without
+    emitting several separate rows and leaves ``history.history`` unchanged.
     """
 
     _PREFERRED_METRIC_ORDER = (
@@ -368,6 +692,10 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         "val_window_balanced_accuracy",
         "decoder_r2",
         "val_decoder_r2",
+        "gcn_gru_decoder_r2",
+        "val_gcn_gru_decoder_r2",
+        "bilstm_decoder_r2",
+        "val_bilstm_decoder_r2",
         "accuracy",
         "val_accuracy",
         "trial_f1",
@@ -397,6 +725,8 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
             "regularization_loss",
             "autoencoder_loss",
             "reconstruction_loss",
+            "gcn_gru_reconstruction_loss",
+            "bilstm_reconstruction_loss",
             "kl_loss",
             "weighted_kl_loss",
             "vc_loss",
@@ -438,10 +768,7 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
 
     @staticmethod
     def _format_value(value: float) -> str:
-        absolute = abs(value)
-        if absolute != 0.0 and (absolute < 1e-4 or absolute >= 1e4):
-            return f"{value:.3e}"
-        return f"{value:.4f}"
+        return _format_metric_value(value)
 
     @staticmethod
     def _base_name(name: str) -> str:
@@ -577,6 +904,8 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         )
         handled.add(f"{prefix}autoencoder_loss")
         reconstruction = read("reconstruction_loss")
+        gcn_gru_reconstruction = read("gcn_gru_reconstruction_loss")
+        bilstm_reconstruction = read("bilstm_reconstruction_loss")
         raw_kl = read("kl_loss")
         weighted_kl = read("weighted_kl_loss")
         if ae_raw is not None:
@@ -594,6 +923,29 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
                 ae_details.append(f"wKL={self._format_value(weighted_kl)}")
             parts.append(
                 f"AE={self._format_value(ae_head)}[" + ",".join(ae_details) + "]"
+            )
+
+        decoder_weight = self._model_weight("reconstruction_loss_weight")
+        if reconstruction is not None and decoder_weight is not None:
+            decoder_contribution = reconstruction * decoder_weight
+            decoder_details = [
+                f"raw={self._format_value(reconstruction)}",
+                f"w={self._format_value(decoder_weight)}",
+            ]
+            if gcn_gru_reconstruction is not None:
+                decoder_details.append(
+                    "gcn_gru="
+                    f"{self._format_value(gcn_gru_reconstruction)}"
+                )
+            if bilstm_reconstruction is not None:
+                decoder_details.append(
+                    "bilstm="
+                    f"{self._format_value(bilstm_reconstruction)}"
+                )
+            parts.append(
+                f"DECODER={self._format_value(decoder_contribution)}["
+                + ",".join(decoder_details)
+                + "]"
             )
 
         vc_contribution, vc_raw, vc_weight = self._weighted_contribution(
@@ -672,18 +1024,15 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
 
         return f"{split} " + " | ".join(parts) if parts else None
 
-    def on_epoch_end(
+    def _format_epoch_summary(
         self,
-        epoch: int,
-        logs: dict | None = None,
-    ) -> None:
-        logs = logs or {}
-        epoch_number = int(epoch) + 1
-        prefix = self._prefix(epoch_number)
+        logs: Mapping[str, object],
+    ) -> str | None:
+        sections: list[str] = []
 
         performance = self._format_performance(logs)
         if performance:
-            print(f"{prefix} METRICS | {performance}", flush=True)
+            sections.append(f"METRICS[{performance}]")
 
         distributions = [
             value
@@ -694,14 +1043,46 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
             if value is not None
         ]
         if distributions:
+            sections.append("CLASSES[" + " | ".join(distributions) + "]")
+
+        losses = [
+            value
+            for value in (
+                self._format_loss_split(logs, validation=False),
+                self._format_loss_split(logs, validation=True),
+            )
+            if value is not None
+        ]
+        if losses:
+            sections.append("LOSSES[" + " | ".join(losses) + "]")
+        return " | ".join(sections) if sections else None
+
+    def on_epoch_end(
+        self,
+        epoch: int,
+        logs: dict | None = None,
+    ) -> None:
+        logs = logs or {}
+        epoch_number = int(epoch) + 1
+        if getattr(
+            self.model,
+            "_consolidated_prediction_diagnostics_owner",
+            None,
+        ) is not None:
+            return
+
+        summary = self._format_epoch_summary(logs)
+        if summary:
             print(
-                f"{prefix} CLASSES | " + " | ".join(distributions),
+                f"{self._prefix(epoch_number)} TRAINING DIAGNOSTICS | {summary}",
                 flush=True,
             )
 
-        train_loss = self._format_loss_split(logs, validation=False)
-        if train_loss:
-            print(f"{prefix} LOSS | {train_loss}", flush=True)
-        validation_loss = self._format_loss_split(logs, validation=True)
-        if validation_loss:
-            print(f"{prefix} LOSS | {validation_loss}", flush=True)
+
+# cross_val imports this module lazily immediately before it creates its oracle
+# callback. Register the consolidated implementation there without requiring a
+# source change to cross_val.py, which keeps the existing public construction
+# path and callback ordering intact.
+_cross_val_module = sys.modules.get(_CrossValHeldOutUserOracleMetrics.__module__)
+if _cross_val_module is not None:
+    _cross_val_module.HeldOutUserOracleMetrics = HeldOutUserOracleMetrics

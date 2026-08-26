@@ -15,8 +15,9 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Full experiment organization
 # ---------------------------------------------------------------------------
-# This worker targets SIC builder API v11: deterministic window encoders plus
-# a trial-level BiGRU classifier with no averaging across EEG windows.
+# This worker targets SIC builder API v14: deterministic window encoders,
+# independent branch decoders, and a trial-level BiGRU classifier with no
+# averaging across EEG windows.
 # One Slurm array task runs one one-factor-at-a-time ablation. The %2 limit
 # allows two profiles (four GPUs total) to run concurrently by default.
 ABLATION_PROFILES=(
@@ -50,9 +51,11 @@ TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
 VREX_PENALTY_WEIGHT="${VREX_PENALTY_WEIGHT:-1.0}"
 PREDICTION_DIAGNOSTICS_METRIC="${PREDICTION_DIAGNOSTICS_METRIC:-brier_score}"
-PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-10}"
+PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-1}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
-EXPECTED_SIC_API_VERSION=11
+RECONSTRUCTION_LOSS_WEIGHT="${RECONSTRUCTION_LOSS_WEIGHT:-0.10}"
+DECODER_DROPOUT="${DECODER_DROPOUT:-0.10}"
+EXPECTED_SIC_API_VERSION=14
 SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
@@ -188,17 +191,18 @@ search_bilstm_width="$use_bilstm"
 # ---------------------------------------------------------------------------
 # Build the profile-specific Cartesian grid as valid JSON
 # ---------------------------------------------------------------------------
-# The full run searches BiLSTM width (42/63/96 per direction), focal gamma,
-# and VC beta. GCN-GRU keeps all 384 output features and the BiLSTM keeps
+# GCN-GRU keeps all 384 output features and the BiLSTM keeps
 # 2*bilstm_units features. Their per-window concatenations form the ordered
-# sequence consumed by the trial BiGRU. Focal gamma and VC beta are searched.
+# sequence consumed by the trial BiGRU. Each active branch has its own decoder.
 MODEL_GRID="$(python - \
     "$use_gcn_gru" \
     "$use_bilstm" \
     "$remove_median" \
     "$MLDG_STEPS_PER_EPOCH" \
     "$search_bilstm_width" \
-    "$VREX_PENALTY_WEIGHT" <<'PY'
+    "$VREX_PENALTY_WEIGHT" \
+    "$RECONSTRUCTION_LOSS_WEIGHT" \
+    "$DECODER_DROPOUT" <<'PY'
 import json
 import sys
 
@@ -208,6 +212,8 @@ use_gcn_gru, use_bilstm, remove_median = (
 mldg_steps_per_epoch = int(sys.argv[4])
 search_bilstm_width = sys.argv[5].lower() == "true"
 vrex_penalty_weight = float(sys.argv[6])
+reconstruction_loss_weight = float(sys.argv[7])
+decoder_dropout = float(sys.argv[8])
 
 print(json.dumps({
     # Source optimizer. The method itself is selected by --training-method.
@@ -216,8 +222,9 @@ print(json.dumps({
     "weight_decay": 5e-5,
     "vrex_penalty_weight": vrex_penalty_weight,
 
-    # First-order MLDG. Meta-train uses the VC/classification and subject-
-    # adversarial objectives; meta-test measures focal generalization.
+    # First-order MLDG. A uses the complete VC, independent branch
+    # reconstruction, and optional subject-adversarial objectives. B uses the
+    # complete VC emotion objective without reconstruction.
     "mldg_meta_train_subjects": 10,
     "mldg_meta_test_subjects": 5,
     "mldg_trials_per_subject": 2,
@@ -226,9 +233,8 @@ print(json.dumps({
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
 
-    # GCN-GRU spatial/spectral branch.
-    "t_down": 2,
-    "temporal_pool_sizes": {"fixed": [2]},
+    # GCN-GRU spatial/spectral branch. API v14 preserves every timestep;
+    # temporal downsampling is intentionally not configurable.
     "gcn_units": {"fixed": [128, 64]},
     "gcn_dropout": 0.3,
     "gcn_activation": "relu",
@@ -275,6 +281,9 @@ print(json.dumps({
     # One-factor-at-a-time architecture/data ablation.
     "use_gcn_gru_branch": use_gcn_gru,
     "use_bilstm_branch": use_bilstm,
+    "use_decoder": True,
+    "reconstruction_loss_weight": reconstruction_loss_weight,
+    "decoder_dropout": decoder_dropout,
     "remove_median_label": remove_median,
 
     # Two layers means BiGRU + VC during target-subject calibration.
@@ -296,6 +305,7 @@ echo "Ablation profile: $ABLATION_PROFILE"
 echo "Target: $TARGET_DIMENSION"
 echo "Training method: $TRAINING_METHOD"
 echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
+echo "Decoder: independent branches, reconstruction_weight=$RECONSTRUCTION_LOSS_WEIGHT dropout=$DECODER_DROPOUT"
 echo "Remove median trials: $remove_median"
 echo "Trial classifier: BiGRU [128,64] units/direction, final width 128, no cross-window averaging"
 echo "Prediction diagnostics: metric=$PREDICTION_DIAGNOSTICS_METRIC every=$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS epoch(s) max_samples=$PREDICTION_DIAGNOSTICS_MAX_SAMPLES"
