@@ -31,12 +31,12 @@ complete trials and applies one persistent outer update.
 
 SIC uses independent parallel deterministic branches. The complete GCN-GRU and
 raw-EEG BiLSTM feature vectors are concatenated without an encoder projection or
-bottleneck. In trial mode, within-window temporal pooling creates one embedding
-per EEG window, and an ordered GRU/BiGRU sequence summarizer learns the trial
-representation. No mean is taken across window embeddings. That recurrent state
-goes directly to the sole VariationalClassifier logits head and to the subject
-adversary. There is no dense classifier stack, encoder VAE, KL loss,
-reconstruction loss, or decoder.
+bottleneck. In trial mode, every encoded timestep from every ordered window is
+passed to a GRU/BiGRU sequence summarizer; no temporal or cross-window mean is
+taken. That recurrent state goes directly to the sole VariationalClassifier
+logits head and to the subject adversary. Optional deterministic decoders
+reconstruct the original EEG independently from the GCN-GRU and BiLSTM feature
+sequences. There is no dense classifier stack, encoder VAE, or encoder KL loss.
 
 CLI construction, JSON/grid decoding, validation, and conversion to the runtime
 configuration live in ``sic_model_args.py`` so this module stays focused on
@@ -1081,6 +1081,13 @@ def train_sic_loso_validation(
             model_config.get("classifier_rnn_dropout", 0.20),
         )
     logger.info(
+        "Decoder grid: enabled=%s independent_branches=true "
+        "reconstruction_loss_weight=%s dropout=%s; frozen during calibration",
+        model_config.get("use_decoder", True),
+        model_config.get("reconstruction_loss_weight", 0.10),
+        model_config.get("decoder_dropout", 0.10),
+    )
+    logger.info(
         "Each target: one source fit + independent fine-tunes for %s",
         _calibration_plan(config),
     )
@@ -1423,6 +1430,13 @@ def train_sic(
             model_config.get("n_classifier_rnn_layers", "inferred"),
             model_config.get("classifier_rnn_dropout", 0.20),
         )
+    logger.info(
+        "Decoder: enabled=%s independent GCN-GRU/BiLSTM reconstructions; "
+        "reconstruction_loss_weight=%s dropout=%s; frozen during calibration",
+        model_config.get("use_decoder", True),
+        model_config.get("reconstruction_loss_weight", 0.10),
+        model_config.get("decoder_dropout", 0.10),
+    )
     logger.info(
         "Dataset: remove_median_label=%s median_label=%s removed_trials=%d "
         "removed_samples=%d retained_trials=%d retained_samples=%d",

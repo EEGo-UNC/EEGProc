@@ -79,6 +79,17 @@ _CLASSIFICATION_METRICS = frozenset(
 
 _DEFAULT_ECE_BINS = 15
 
+_DECODER_SCORE_NAMES = (
+    "reconstruction_loss",
+    "decoder_r2",
+    "gcn_gru_reconstruction_loss",
+    "gcn_gru_decoder_r2",
+    "bilstm_reconstruction_loss",
+    "bilstm_decoder_r2",
+    # Retained for older joint models that used this R2 alias.
+    "decoder_accuracy",
+)
+
 # Sequence-valued encoder settings need architecture-aware nesting rules.
 # The integer is the nesting depth of one architecture value:
 #   depth 1: [16, 32] or [2, 2]
@@ -1477,6 +1488,95 @@ class EvaluationLevelValidationMetrics(tf.keras.callbacks.Callback):
         )
 
 
+def _decoder_reconstruction_scores(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    batch_size: int | None,
+) -> dict[str, float]:
+    """Compute memory-bounded branch and aggregate reconstruction diagnostics."""
+    if not bool(getattr(model, "use_decoder", False)):
+        return {}
+    reconstruct_branches = getattr(model, "reconstruct_branches", None)
+    if reconstruct_branches is None:
+        return {}
+
+    X_array = np.asarray(X)
+    if len(X_array) == 0:
+        return {}
+    requested_batch_size = len(X_array) if batch_size is None else int(batch_size)
+    if requested_batch_size < 1:
+        raise ValueError("Decoder diagnostic batch_size must be at least 1.")
+    # A single rank-4 trial expands to all of its flattened windows inside SIC.
+    effective_batch_size = 1 if X_array.ndim == 4 else requested_batch_size
+
+    accumulators: dict[str, dict[str, float]] = {}
+    for start in range(0, len(X_array), effective_batch_size):
+        stop = min(start + effective_batch_size, len(X_array))
+        target = np.asarray(X_array[start:stop], dtype=np.float64)
+        raw_reconstructions = reconstruct_branches(
+            tf.convert_to_tensor(X_array[start:stop], dtype=tf.float32)
+        )
+        if not isinstance(raw_reconstructions, Mapping):
+            raise TypeError("reconstruct_branches() must return a branch mapping.")
+
+        branch_names = set(str(name) for name in raw_reconstructions)
+        if accumulators and branch_names != set(accumulators):
+            raise ValueError(
+                "Decoder branches changed between oracle batches: "
+                f"expected={sorted(accumulators)}, got={sorted(branch_names)}."
+            )
+        for raw_name, raw_reconstruction in raw_reconstructions.items():
+            branch = str(raw_name)
+            reconstruction = raw_reconstruction
+            if hasattr(reconstruction, "numpy"):
+                reconstruction = reconstruction.numpy()
+            reconstruction = np.asarray(reconstruction, dtype=np.float64)
+            if reconstruction.shape != target.shape:
+                raise ValueError(
+                    f"{branch} reconstruction shape {reconstruction.shape} does "
+                    f"not match target shape {target.shape}."
+                )
+            values = accumulators.setdefault(
+                branch,
+                {"sse": 0.0, "target_sum": 0.0, "target_sq_sum": 0.0, "count": 0.0},
+            )
+            residual = target - reconstruction
+            values["sse"] += float(np.sum(np.square(residual), dtype=np.float64))
+            values["target_sum"] += float(np.sum(target, dtype=np.float64))
+            values["target_sq_sum"] += float(
+                np.sum(np.square(target), dtype=np.float64)
+            )
+            values["count"] += float(target.size)
+
+    if not accumulators:
+        return {}
+
+    def finish(values: Mapping[str, float]) -> tuple[float, float]:
+        count = float(values["count"])
+        mse = float(values["sse"]) / count
+        ss_total = float(values["target_sq_sum"]) - (
+            float(values["target_sum"]) ** 2 / count
+        )
+        epsilon = np.finfo(np.float64).eps
+        if ss_total > epsilon:
+            r2 = 1.0 - float(values["sse"]) / ss_total
+        else:
+            r2 = 1.0 if float(values["sse"]) <= epsilon else 0.0
+        return float(mse), float(r2)
+
+    scores: dict[str, float] = {}
+    aggregate = {"sse": 0.0, "target_sum": 0.0, "target_sq_sum": 0.0, "count": 0.0}
+    for branch, values in accumulators.items():
+        mse, r2 = finish(values)
+        scores[f"{branch}_reconstruction_loss"] = mse
+        scores[f"{branch}_decoder_r2"] = r2
+        for key in aggregate:
+            aggregate[key] += float(values[key])
+
+    scores["reconstruction_loss"], scores["decoder_r2"] = finish(aggregate)
+    return scores
+
+
 class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
     """Print reporting-only metrics on the outer held-out user each epoch.
 
@@ -1551,6 +1651,30 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
             n_prediction_latent_samples=0,
             latent_sampling_seed=None,
         )
+        decoder_scores = _decoder_reconstruction_scores(
+            model=self.model,
+            X=self.X_target,
+            batch_size=self.batch_size,
+        )
+        if decoder_scores:
+            decoder_parts = [
+                f"{name}={decoder_scores[name]:.4f}"
+                for name in (
+                    "decoder_r2",
+                    "gcn_gru_decoder_r2",
+                    "bilstm_decoder_r2",
+                    "reconstruction_loss",
+                    "gcn_gru_reconstruction_loss",
+                    "bilstm_reconstruction_loss",
+                )
+                if name in decoder_scores
+            ]
+            print(
+                f"[ORACLE DECODER held-out user={self.target_subject!r} "
+                f"epoch={int(epoch) + 1}] "
+                + "  ".join(decoder_parts),
+                flush=True,
+            )
 
         if self.evaluation_level == "trial":
             if _is_trial_tensor(self.X_target):
@@ -1597,6 +1721,7 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
                 "official_decision_threshold": self.decision_threshold,
                 "is_official_decision_threshold": is_official,
                 **{name: float(value) for name, value in scores.items()},
+                **decoder_scores,
             }
             if probabilities.shape[1] == 2:
                 row["predicted_class_1_fraction"] = float(np.mean(y_pred == 1))
@@ -1714,6 +1839,15 @@ def _keras_evaluation_results(
         scalar_results[str(metric_name)] = float(value_array)
 
     return scalar_results
+
+
+def _keras_decoder_scores(keras_evaluation: Mapping[str, float]) -> dict[str, float]:
+    """Extract every aggregate or branch-specific decoder metric present."""
+    return {
+        name: float(keras_evaluation[name])
+        for name in _DECODER_SCORE_NAMES
+        if name in keras_evaluation
+    }
 
 
 
@@ -2056,8 +2190,7 @@ def _evaluate_trial_tensor_fold(
         batch_size=batch_size,
     )
     keras_model_loss = float(keras_evaluation["loss"])
-    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
-    decoder_r2 = keras_evaluation.get("decoder_r2")
+    decoder_scores = _keras_decoder_scores(keras_evaluation)
 
     trial_scores = _level_scores(
         y_true=y_true_trial,
@@ -2067,10 +2200,7 @@ def _evaluate_trial_tensor_fold(
         ece_bins=ece_bins,
     )
     trial_scores["joint_loss"] = keras_model_loss
-    if decoder_accuracy is not None:
-        trial_scores["decoder_accuracy"] = float(decoder_accuracy)
-    if decoder_r2 is not None:
-        trial_scores["decoder_r2"] = float(decoder_r2)
+    trial_scores.update(decoder_scores)
 
     n_trials = int(len(y_true_trial))
     n_windows_per_trial = int(X_test.shape[1])
@@ -2085,11 +2215,6 @@ def _evaluate_trial_tensor_fold(
         "windows_per_trial": n_windows_per_trial,
         "keras_model_loss": keras_model_loss,
         "joint_loss": keras_model_loss,
-        **(
-            {"decoder_accuracy": float(decoder_accuracy)}
-            if decoder_accuracy is not None
-            else {}
-        ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
         "decision_threshold": float(decision_threshold),
         **trial_scores,
@@ -2101,11 +2226,7 @@ def _evaluate_trial_tensor_fold(
         "n_windows": n_windows,
         "classification_available": False,
         "joint_loss": keras_model_loss,
-        **(
-            {"decoder_accuracy": float(decoder_accuracy)}
-            if decoder_accuracy is not None
-            else {}
-        ),
+        **decoder_scores,
     }
     trial_fold_metrics = {
         "fold": int(fold_index),
@@ -2255,7 +2376,7 @@ def _evaluate_classification_fold(
 
     # model.evaluate() is retained as a diagnostic because joint Keras models
     # may include reconstruction/regularization terms beyond classification.
-    # It also exposes decoder_accuracy for continuous reconstruction quality.
+    # It also exposes aggregate and branch-specific reconstruction quality.
     keras_evaluation = _keras_evaluation_results(
         model=model,
         X=X_test,
@@ -2263,8 +2384,7 @@ def _evaluate_classification_fold(
         batch_size=batch_size,
     )
     keras_model_loss = keras_evaluation["loss"]
-    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
-    decoder_r2 = keras_evaluation.get("decoder_r2")
+    decoder_scores = _keras_decoder_scores(keras_evaluation)
 
     window_scores = _level_scores(
         y_true=y_true_window,
@@ -2276,10 +2396,7 @@ def _evaluate_classification_fold(
     # ``loss`` above is classifier probability log loss. ``joint_loss`` is
     # the model's complete weighted VAE + VC objective returned by Keras.
     window_scores["joint_loss"] = float(keras_model_loss)
-    if decoder_accuracy is not None:
-        window_scores["decoder_accuracy"] = float(decoder_accuracy)
-    if decoder_r2 is not None:
-        window_scores["decoder_r2"] = float(decoder_r2)
+    window_scores.update(decoder_scores)
 
     trial_aggregation = _aggregate_window_probabilities_by_trial(
         probabilities=probabilities_window,
@@ -2301,10 +2418,7 @@ def _evaluate_classification_fold(
         metrics=metrics,
         ece_bins=ece_bins,
     )
-    if decoder_accuracy is not None:
-        trial_scores["decoder_accuracy"] = float(decoder_accuracy)
-    if decoder_r2 is not None:
-        trial_scores["decoder_r2"] = float(decoder_r2)
+    trial_scores.update(decoder_scores)
 
     primary_scores = trial_scores if evaluation_level == "trial" else window_scores
     fold_scores = {
@@ -2318,11 +2432,6 @@ def _evaluate_classification_fold(
         "n_trials": int(len(trial_aggregation["y_true"])),
         "keras_model_loss": float(keras_model_loss),
         "joint_loss": float(keras_model_loss),
-        **(
-            {"decoder_accuracy": float(decoder_accuracy)}
-            if decoder_accuracy is not None
-            else {}
-        ),
         "prediction_latent_samples": int(n_prediction_latent_samples),
         "decision_threshold": float(decision_threshold),
         **primary_scores,
@@ -3424,15 +3533,15 @@ def _aggregate_loso_config_result(
 
     mean_scores, std_scores = _mean_std_rows(
         fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, *_DECODER_SCORE_NAMES],
     )
     window_mean_scores, window_std_scores = _mean_std_rows(
         window_fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, *_DECODER_SCORE_NAMES],
     )
     trial_mean_scores, trial_std_scores = _mean_std_rows(
         trial_fold_metrics,
-        ["loss", "joint_loss", "keras_model_loss", *metrics, "decoder_accuracy"],
+        ["loss", "joint_loss", "keras_model_loss", *metrics, *_DECODER_SCORE_NAMES],
     )
 
     selection_means = (
@@ -5166,7 +5275,7 @@ def _run_subject_calibration_subject(
                 "trainable, and compile a fresh calibration optimizer."
             )
 
-        metric_names = ("loss", *metrics, "joint_loss", "decoder_r2")
+        metric_names = ("loss", *metrics, "joint_loss", *_DECODER_SCORE_NAMES)
         calibration_level_outputs: list[dict] = []
         evaluation_offset = (int(subject_number) - 1) * sum(
             level_folds for _, level_folds in calibration_levels
@@ -5924,7 +6033,7 @@ def subject_calibration_cv(
         )
     subject_outputs.sort(key=lambda row: int(row["subject_number"]))
 
-    metric_names = ("loss", *metrics, "joint_loss", "decoder_r2")
+    metric_names = ("loss", *metrics, "joint_loss", *_DECODER_SCORE_NAMES)
     subject_summary_rows: list[dict] = []
     zero_all_subject_rows: list[dict] = []
     level_subject_rows = {
