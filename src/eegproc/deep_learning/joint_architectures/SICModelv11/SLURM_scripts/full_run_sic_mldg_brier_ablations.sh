@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=47:00:00
+#SBATCH --time=24:00:00
 #SBATCH --array=0
 
 set -euo pipefail
@@ -41,8 +41,8 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-40}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-3}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-20}"
 MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-25}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
@@ -264,13 +264,13 @@ print(json.dumps({
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": 0.2,
+    "vc_beta": 0.3,
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on the learned trial representation.
-    "use_subject_adversarial": {"grid": [False, True]},
+    "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
     "subject_loss_weight": 1.0,
     "subject_hidden_units": 64,
@@ -288,7 +288,7 @@ print(json.dumps({
     "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
     "calibration_vc_alpha": 1.0,
-    "calibration_vc_beta": 0.4,
+    "calibration_vc_beta": 0.3,
     "calibration_vc_gamma": 0.0,
     "calibration_vc_lambda": 0.05,
 }))
