@@ -46,9 +46,9 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-4}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
-MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-5}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-3}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-30}"
+MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-15}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
@@ -60,7 +60,7 @@ PREDICTION_DIAGNOSTICS_METRIC="${PREDICTION_DIAGNOSTICS_METRIC:-brier_score}"
 PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-1}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-500}"
 RECONSTRUCTION_LOSS_WEIGHT="${RECONSTRUCTION_LOSS_WEIGHT:-0.10}"
-DECODER_DROPOUT="${DECODER_DROPOUT:-0.10}"
+DECODER_DROPOUT="${DECODER_DROPOUT:-0.20}"
 EXPECTED_SIC_API_VERSION=14
 
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
@@ -259,19 +259,19 @@ print(json.dumps({
     "classifier_rnn_dropout": 0.40,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": {"grid": [0.5, 0.0]},
+    "focal_gamma": 0.5,
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
     "vc_beta": 0.2,
     "vc_gamma": 0.0,
-    "vc_lambda": 0.01,
+    "vc_lambda": 0.05,
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on the learned trial representation.
-    "use_subject_adversarial": False,
-    "subject_adversarial_weight": 0.0,
-    "subject_loss_weight": 0.0,
+    "use_subject_adversarial": {"grid": [False, True]},
+    "subject_adversarial_weight": 0.6,
+    "subject_loss_weight": 1.0,
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
@@ -287,9 +287,9 @@ print(json.dumps({
     "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
     "calibration_vc_alpha": 1.0,
-    "calibration_vc_beta": 0.2,
+    "calibration_vc_beta": 0.4,
     "calibration_vc_gamma": 0.0,
-    "calibration_vc_lambda": 0.01,
+    "calibration_vc_lambda": 0.05,
 }))
 PY
 )"

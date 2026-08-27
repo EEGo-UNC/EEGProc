@@ -8,11 +8,18 @@ from ..cross_val import _as_numpy_1d, _prepare_fit_inputs_with_subject_ids
 
 
 class SICMLDGEpisodeSequence(tf.keras.utils.Sequence):
-    """Build balanced, complete-trial MLDG episodes for SIC.
+    """Build class-balanced, complete-trial MLDG episodes for SIC.
 
     One sequence item is one MLDG update. Meta-train and meta-test subjects are
-    disjoint, subject roles are balanced across an epoch, and selected trials
-    are kept intact so window-level inputs never split a trial.
+    disjoint, subject roles are balanced across an epoch, and each role receives
+    as close to a 50/50 class split as its number of selected trials permits.
+    Selected trials are kept intact so window-level inputs never split a trial.
+
+    For an even ``trials_per_subject``, every subject contributes exactly half
+    class-0 and half class-1 trials. For an odd value, every subject contributes
+    a one-trial class difference, and the extra class alternates across subjects
+    so the complete meta-train and meta-test groups remain balanced whenever
+    their total number of trials is even.
     """
 
     def __init__(
@@ -50,6 +57,18 @@ class SICMLDGEpisodeSequence(tf.keras.utils.Sequence):
         if self.sample_weight is not None and len(self.sample_weight) != n_samples:
             raise ValueError("MLDG sample weights must align with EEG inputs.")
 
+        if self.labels.ndim == 2 and self.labels.shape[-1] > 1:
+            self.class_ids = np.argmax(self.labels, axis=-1).reshape(-1)
+        else:
+            self.class_ids = self.labels.reshape(-1)
+        self.class_ids = self.class_ids.astype(np.int64)
+        self.classes = np.sort(np.unique(self.class_ids))
+        if len(self.classes) != 2:
+            raise ValueError(
+                "Class-balanced MLDG currently requires exactly two classes; "
+                f"found {self.classes.tolist()}."
+            )
+
         self.subjects = np.sort(np.unique(self.subject_ids))
         self.meta_test_subjects = int(meta_test_subjects)
         if self.meta_test_subjects < 1:
@@ -76,21 +95,38 @@ class SICMLDGEpisodeSequence(tf.keras.utils.Sequence):
         self.trials_per_subject = int(trials_per_subject)
         if self.trials_per_subject < 1:
             raise ValueError("mldg_trials_per_subject must be >= 1.")
-        self._trial_groups: dict[Any, list[np.ndarray]] = {}
+        self._trial_groups_by_class: dict[Any, dict[int, list[np.ndarray]]] = {}
         total_trial_groups = 0
         for subject_id in self.subjects.tolist():
             subject_mask = self.subject_ids == subject_id
-            groups = []
+            groups_by_class = {
+                int(class_id): [] for class_id in self.classes.tolist()
+            }
             for trial_id in np.unique(self.trial_ids[subject_mask]).tolist():
                 indices = np.flatnonzero(
                     subject_mask & (self.trial_ids == trial_id)
                 ).astype(np.int64)
                 if len(indices):
-                    groups.append(indices)
-            if not groups:
-                raise ValueError(f"Subject {subject_id!r} has no MLDG trials.")
-            self._trial_groups[subject_id] = groups
-            total_trial_groups += len(groups)
+                    trial_classes = np.unique(self.class_ids[indices])
+                    if len(trial_classes) != 1:
+                        raise ValueError(
+                            f"Subject {subject_id!r} trial {trial_id!r} has "
+                            f"inconsistent labels {trial_classes.tolist()}."
+                        )
+                    groups_by_class[int(trial_classes[0])].append(indices)
+            missing_classes = [
+                class_id
+                for class_id, groups in groups_by_class.items()
+                if not groups
+            ]
+            if missing_classes:
+                raise ValueError(
+                    f"Subject {subject_id!r} has no trials for classes "
+                    f"{missing_classes}; per-subject class-balanced MLDG "
+                    "requires at least one trial from every class."
+                )
+            self._trial_groups_by_class[subject_id] = groups_by_class
+            total_trial_groups += sum(len(groups) for groups in groups_by_class.values())
 
         subjects_per_episode = self.meta_train_subjects + self.meta_test_subjects
         default_steps = int(
@@ -122,14 +158,66 @@ class SICMLDGEpisodeSequence(tf.keras.utils.Sequence):
             counts[subject_id] += 1
         return chosen
 
-    def _sample_complete_trials(self, subject_id, rng, trial_queues):
-        groups = self._trial_groups[subject_id]
+    def _balanced_class_counts(self, selected_subjects, role, step_index, rng):
+        """Return per-subject class counts balanced across one MLDG role."""
+        n_subjects = len(selected_subjects)
+        low_class, high_class = [int(value) for value in self.classes.tolist()]
+        base = self.trials_per_subject // 2
+        allocations = {
+            subject_id: {low_class: base, high_class: base}
+            for subject_id in selected_subjects
+        }
+        if self.trials_per_subject % 2 == 0:
+            return allocations
+
+        # There is one extra trial per subject. Split those extras evenly across
+        # the role. If the role total is odd, alternate its one-trial majority
+        # across epochs, steps, and roles rather than always favoring one class.
+        high_extras = n_subjects // 2
+        if n_subjects % 2:
+            high_extras += (self._epoch + step_index + role) % 2
+        extra_classes = np.asarray(
+            [high_class] * high_extras
+            + [low_class] * (n_subjects - high_extras),
+            dtype=np.int64,
+        )
+        rng.shuffle(extra_classes)
+        for subject_id, extra_class in zip(selected_subjects, extra_classes.tolist()):
+            allocations[subject_id][int(extra_class)] += 1
+        return allocations
+
+    @staticmethod
+    def _take_unique_group_indices(groups, n_select, rng, queue):
+        """Use a shuffled coverage queue without duplicating a trial in a batch."""
+        if n_select > len(groups):
+            raise ValueError(
+                f"Balanced MLDG requested {n_select} distinct trials from a "
+                f"subject/class pool containing only {len(groups)}. Reduce "
+                "mldg_trials_per_subject or provide more trials."
+            )
         chosen = []
-        for _ in range(self.trials_per_subject):
-            if not trial_queues[subject_id]:
-                trial_queues[subject_id].extend(rng.permutation(len(groups)).tolist())
-            chosen.append(trial_queues[subject_id].pop())
-        return np.concatenate([groups[int(index)] for index in chosen])
+        chosen_set = set()
+        while len(chosen) < n_select:
+            if not queue:
+                queue.extend(rng.permutation(len(groups)).tolist())
+            candidate = int(queue.pop())
+            if candidate in chosen_set:
+                # A queue may refill at a class-pool boundary. Defer duplicates
+                # so a complete episode still contains distinct trials.
+                queue.insert(0, candidate)
+                continue
+            chosen.append(candidate)
+            chosen_set.add(candidate)
+        return chosen
+
+    def _sample_complete_trials(self, subject_id, class_counts, rng, trial_queues):
+        chosen_groups = []
+        for class_id, n_select in class_counts.items():
+            groups = self._trial_groups_by_class[subject_id][int(class_id)]
+            queue = trial_queues[(subject_id, int(class_id))]
+            chosen = self._take_unique_group_indices(groups, n_select, rng, queue)
+            chosen_groups.extend(groups[index] for index in chosen)
+        return np.concatenate(chosen_groups)
 
     def _build_epoch(self) -> None:
         epoch_seed = None if self.seed is None else self.seed + self._epoch
@@ -138,8 +226,12 @@ class SICMLDGEpisodeSequence(tf.keras.utils.Sequence):
         meta_train_counts = {subject_id: 0 for subject_id in self.subjects.tolist()}
         episodes = []
         all_subjects = self.subjects.tolist()
-        trial_queues = {subject_id: [] for subject_id in all_subjects}
-        for _ in range(self.steps_per_epoch):
+        trial_queues = {
+            (subject_id, int(class_id)): []
+            for subject_id in all_subjects
+            for class_id in self.classes.tolist()
+        }
+        for step_index in range(self.steps_per_epoch):
             meta_test = self._balanced_subject_choice(
                 all_subjects,
                 meta_test_counts,
@@ -162,9 +254,16 @@ class SICMLDGEpisodeSequence(tf.keras.utils.Sequence):
             episode_indices = []
             episode_roles = []
             for role, selected_subjects in ((0, meta_train), (1, meta_test)):
+                class_allocations = self._balanced_class_counts(
+                    selected_subjects,
+                    role,
+                    step_index,
+                    rng,
+                )
                 for subject_id in selected_subjects:
                     indices = self._sample_complete_trials(
                         subject_id,
+                        class_allocations[subject_id],
                         rng,
                         trial_queues,
                     )
@@ -495,7 +594,7 @@ def run_sic_mldg_train_step(model, x, y_flat, sample_weight) -> None:
 
 
 class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
-    """Yield subject-stratified first-order MLDG episodes with natural labels.
+    """Yield subject-stratified, class-balanced first-order MLDG episodes.
 
     Every item contains two disjoint groups sampled from the current fold's
     gradient-training subjects:
@@ -543,6 +642,23 @@ class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
             raise ValueError("samples_per_subject must be at least 1.")
 
         self.unique_subjects = np.sort(np.unique(self.subject_ids))
+        self.classes = np.sort(np.unique(self.y_ids))
+        if len(self.classes) != 2:
+            raise ValueError(
+                "Class-balanced MLDG currently requires exactly two classes; "
+                f"found {self.classes.tolist()}."
+            )
+        for subject in self.unique_subjects.tolist():
+            subject_classes = np.unique(
+                self.y_ids[self.subject_ids == subject]
+            )
+            missing_classes = np.setdiff1d(self.classes, subject_classes)
+            if missing_classes.size:
+                raise ValueError(
+                    f"Subject {subject!r} has no samples for classes "
+                    f"{missing_classes.tolist()}; per-subject class-balanced "
+                    "MLDG requires both classes."
+                )
         required_subjects = self.meta_train_subjects + self.meta_test_subjects
         if required_subjects > len(self.unique_subjects):
             raise ValueError(
@@ -597,33 +713,86 @@ class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
     def _sample_subject_windows(
         self,
         subject,
+        class_counts: Mapping[int, int],
         rng: np.random.Generator,
     ) -> np.ndarray:
-        """Sample uniformly from all windows belonging to one subject.
-
-        No class is selected explicitly. Consequently, both meta-train A and
-        meta-test B preserve each selected subject's empirical class
-        distribution in expectation while every selected subject still
-        contributes exactly ``samples_per_subject`` windows.
-        """
-        subject_indices = np.flatnonzero(self.subject_ids == subject)
-        if subject_indices.size == 0:
-            raise RuntimeError(
-                f"MLDG selected subject {subject!r} without any windows."
+        """Sample the requested number of windows from each subject/class."""
+        chosen = []
+        for class_id, n_select in class_counts.items():
+            if n_select == 0:
+                continue
+            candidates = np.flatnonzero(
+                (self.subject_ids == subject) & (self.y_ids == int(class_id))
             )
-        return rng.choice(
-            subject_indices,
-            size=self.samples_per_subject,
-            replace=subject_indices.size < self.samples_per_subject,
-        ).astype(np.int64)
+            if candidates.size == 0:
+                raise RuntimeError(
+                    f"MLDG selected subject {subject!r} without class "
+                    f"{class_id!r} windows."
+                )
+            chosen.append(
+                rng.choice(
+                    candidates,
+                    size=n_select,
+                    replace=candidates.size < n_select,
+                ).astype(np.int64)
+            )
+        return np.concatenate(chosen)
+
+    def _balanced_sample_counts(
+        self,
+        subjects: np.ndarray,
+        group_index: int,
+        item_index: int,
+        rng: np.random.Generator,
+    ) -> dict[Any, dict[int, int]]:
+        """Balance an A or B group, including odd samples-per-subject values."""
+        low_class, high_class = [int(value) for value in self.classes.tolist()]
+        base = self.samples_per_subject // 2
+        allocations = {
+            subject: {low_class: base, high_class: base}
+            for subject in subjects.tolist()
+        }
+        if self.samples_per_subject % 2 == 0:
+            return allocations
+
+        n_subjects = len(subjects)
+        high_extras = n_subjects // 2
+        if n_subjects % 2:
+            high_extras += (
+                self.epoch_index + item_index + group_index
+            ) % 2
+        extra_classes = np.asarray(
+            [high_class] * high_extras
+            + [low_class] * (n_subjects - high_extras),
+            dtype=np.int64,
+        )
+        rng.shuffle(extra_classes)
+        for subject, extra_class in zip(subjects.tolist(), extra_classes.tolist()):
+            allocations[subject][int(extra_class)] += 1
+        return allocations
 
     def _sample_group_indices(
         self,
         subjects: np.ndarray,
         rng: np.random.Generator,
+        group_index: int,
+        item_index: int,
     ) -> np.ndarray:
+        allocations = self._balanced_sample_counts(
+            subjects,
+            group_index,
+            item_index,
+            rng,
+        )
         indices = np.concatenate(
-            [self._sample_subject_windows(subject, rng) for subject in subjects],
+            [
+                self._sample_subject_windows(
+                    subject,
+                    allocations[subject],
+                    rng,
+                )
+                for subject in subjects.tolist()
+            ],
             axis=0,
         )
         rng.shuffle(indices)
@@ -649,8 +818,8 @@ class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
         )
         subjects_a = np.asarray(selected[: self.meta_train_subjects])
         subjects_b = np.asarray(selected[self.meta_train_subjects :])
-        indices_a = self._sample_group_indices(subjects_a, rng)
-        indices_b = self._sample_group_indices(subjects_b, rng)
+        indices_a = self._sample_group_indices(subjects_a, rng, 0, int(index))
+        indices_b = self._sample_group_indices(subjects_b, rng, 1, int(index))
 
         x_batch = {
             "meta_train": {

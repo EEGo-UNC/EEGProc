@@ -68,6 +68,92 @@ def _format_metric_value(value: float) -> str:
         return f"{value:.3e}"
     return f"{value:.4f}"
 
+
+_EPOCH_OUTPUT_BLOCKS_ATTRIBUTE = "_training_oracle_epoch_output_blocks"
+
+
+def _format_epoch_output_block(block: Mapping[str, object]) -> str:
+    """Put one fold's training and oracle rows inside one visible boundary."""
+    labels: list[str] = []
+    fold_number = block.get("fold_number")
+    target_subject = block.get("target_subject")
+    epoch_number = int(block["epoch_number"])
+    total_epochs = block.get("total_epochs")
+
+    if fold_number is not None:
+        labels.append(f"FOLD {int(fold_number)}")
+    if target_subject is not None:
+        labels.append(f"HELD-OUT USER={target_subject}")
+    epoch_label = f"EPOCH {epoch_number}"
+    if total_epochs is not None:
+        epoch_label += f"/{int(total_epochs)}"
+    labels.append(epoch_label)
+
+    title = " | ".join(labels)
+    opening = f"{'-' * 24} {title} {'-' * 24}"
+    training_line = block.get("training")
+    oracle_line = block.get("oracle")
+    if training_line is not None and oracle_line is not None:
+        # Three newline characters create exactly two visually blank lines.
+        body = f"{training_line}\n\n\n{oracle_line}"
+    else:
+        body = str(training_line if training_line is not None else oracle_line)
+    return f"{opening}\n{body}\n{'-' * len(opening)}"
+
+
+def _stage_epoch_output(
+    model: tf.keras.Model,
+    *,
+    role: str,
+    line: str,
+    epoch_number: int,
+    fold_number: int | None = None,
+    target_subject=None,
+    total_epochs: int | None = None,
+    wait_for_counterpart: bool = True,
+) -> None:
+    """Buffer callback rows until training and oracle output can print together."""
+    if role not in {"training", "oracle"}:
+        raise ValueError(f"Unsupported epoch-output role {role!r}.")
+
+    blocks = getattr(model, _EPOCH_OUTPUT_BLOCKS_ATTRIBUTE, None)
+    if blocks is None:
+        blocks = {}
+        setattr(model, _EPOCH_OUTPUT_BLOCKS_ATTRIBUTE, blocks)
+    block = blocks.setdefault(
+        int(epoch_number),
+        {
+            "epoch_number": int(epoch_number),
+            "fold_number": fold_number,
+            "target_subject": target_subject,
+            "total_epochs": total_epochs,
+        },
+    )
+    for key, value in (
+        ("fold_number", fold_number),
+        ("target_subject", target_subject),
+        ("total_epochs", total_epochs),
+    ):
+        if value is not None:
+            block[key] = value
+    block[role] = line
+
+    complete = "training" in block and "oracle" in block
+    if complete or not wait_for_counterpart:
+        print(_format_epoch_output_block(block), flush=True)
+        del blocks[int(epoch_number)]
+
+
+def _flush_pending_epoch_outputs(model: tf.keras.Model) -> None:
+    """Print any unpaired rows when a fit ends without its counterpart."""
+    blocks = getattr(model, _EPOCH_OUTPUT_BLOCKS_ATTRIBUTE, None)
+    if not blocks:
+        return
+    for epoch_number in sorted(blocks):
+        print(_format_epoch_output_block(blocks[epoch_number]), flush=True)
+    blocks.clear()
+
+
 def _numpy_value(value):
     """Convert tensors and array-like values to numpy arrays."""
     if hasattr(value, "numpy"):
@@ -234,6 +320,25 @@ class HeldOutUserOracleMetrics(_CrossValHeldOutUserOracleMetrics):
     _METRICS = _DIAGNOSTIC_CLASSIFICATION_METRICS
     _training_outputs_consolidated = True
 
+    def on_train_begin(self, logs: dict | None = None) -> None:
+        super().on_train_begin(logs)
+        self._oracle_owner_id = id(self)
+        setattr(
+            self.model,
+            "_consolidated_oracle_metrics_owner",
+            self._oracle_owner_id,
+        )
+
+    def on_train_end(self, logs: dict | None = None) -> None:
+        _flush_pending_epoch_outputs(self.model)
+        if getattr(
+            self.model,
+            "_consolidated_oracle_metrics_owner",
+            None,
+        ) == getattr(self, "_oracle_owner_id", None):
+            delattr(self.model, "_consolidated_oracle_metrics_owner")
+        super().on_train_end(logs)
+
     def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
         epoch_number = int(epoch) + 1
         probabilities = _predict_probabilities(
@@ -356,12 +461,33 @@ class HeldOutUserOracleMetrics(_CrossValHeldOutUserOracleMetrics):
             for name in _DECODER_METRIC_NAMES
             if name in official_row
         )
-        print(
+        oracle_line = (
             f"[ORACLE PREDICTION held-out user={self.target_subject!r} "
             f"epoch={epoch_number} level={level} "
             f"threshold={self.decision_threshold:.4f}] "
-            + " | ".join(parts),
-            flush=True,
+            + " | ".join(parts)
+        )
+        _stage_epoch_output(
+            self.model,
+            role="oracle",
+            line=oracle_line,
+            epoch_number=epoch_number,
+            target_subject=self.target_subject,
+            total_epochs=int(self.params.get("epochs", epoch_number)),
+            wait_for_counterpart=(
+                getattr(
+                    self.model,
+                    "_consolidated_prediction_diagnostics_owner",
+                    None,
+                )
+                is not None
+                or getattr(
+                    self.model,
+                    "_consolidated_epoch_logger_owner",
+                    None,
+                )
+                is not None
+            ),
         )
 
 
@@ -473,6 +599,7 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
         )
 
     def on_train_end(self, logs: dict | None = None) -> None:
+        _flush_pending_epoch_outputs(self.model)
         if getattr(
             self.model,
             "_consolidated_prediction_diagnostics_owner",
@@ -670,10 +797,25 @@ class PredictionDiagnostics(tf.keras.callbacks.Callback):
                 self._format_prediction_row(row) for row in rows
             ) + "]"
         )
-        print(
+        training_line = (
             f"{formatter._prefix(epoch_number)} TRAINING DIAGNOSTICS | "
-            + " | ".join(sections),
-            flush=True,
+            + " | ".join(sections)
+        )
+        _stage_epoch_output(
+            self.model,
+            role="training",
+            line=training_line,
+            epoch_number=epoch_number,
+            fold_number=self.fold_number,
+            total_epochs=int(self.params.get("epochs", epoch_number)),
+            wait_for_counterpart=(
+                getattr(
+                    self.model,
+                    "_consolidated_oracle_metrics_owner",
+                    None,
+                )
+                is not None
+            ),
         )
 
 
@@ -753,6 +895,23 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         super().__init__()
         self.fold_number = fold_number
         self.context = context
+
+    def on_train_begin(self, logs: dict | None = None) -> None:
+        self._epoch_logger_owner_id = id(self)
+        setattr(
+            self.model,
+            "_consolidated_epoch_logger_owner",
+            self._epoch_logger_owner_id,
+        )
+
+    def on_train_end(self, logs: dict | None = None) -> None:
+        _flush_pending_epoch_outputs(self.model)
+        if getattr(
+            self.model,
+            "_consolidated_epoch_logger_owner",
+            None,
+        ) == getattr(self, "_epoch_logger_owner_id", None):
+            delattr(self.model, "_consolidated_epoch_logger_owner")
 
     @staticmethod
     def _float_value(value) -> float | None:
@@ -1073,9 +1232,24 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
 
         summary = self._format_epoch_summary(logs)
         if summary:
-            print(
-                f"{self._prefix(epoch_number)} TRAINING DIAGNOSTICS | {summary}",
-                flush=True,
+            training_line = (
+                f"{self._prefix(epoch_number)} TRAINING DIAGNOSTICS | {summary}"
+            )
+            _stage_epoch_output(
+                self.model,
+                role="training",
+                line=training_line,
+                epoch_number=epoch_number,
+                fold_number=self.fold_number,
+                total_epochs=int(self.params.get("epochs", epoch_number)),
+                wait_for_counterpart=(
+                    getattr(
+                        self.model,
+                        "_consolidated_oracle_metrics_owner",
+                        None,
+                    )
+                    is not None
+                ),
             )
 
 
