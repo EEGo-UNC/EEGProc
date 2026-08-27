@@ -41,11 +41,11 @@ module load cudnn/9.11.0
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-100}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-40}"
 MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-25}"
-SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-32}"
-CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-16}"
+SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
+CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
@@ -225,9 +225,9 @@ print(json.dumps({
     # First-order MLDG. A uses the complete VC, independent branch
     # reconstruction, and optional subject-adversarial objectives. B uses the
     # complete VC emotion objective without reconstruction.
-    "mldg_meta_train_subjects": 10,
-    "mldg_meta_test_subjects": 5,
-    "mldg_trials_per_subject": 2,
+    "mldg_meta_train_subjects": 8,
+    "mldg_meta_test_subjects": 4,
+    "mldg_trials_per_subject": 3,
     "mldg_steps_per_epoch": mldg_steps_per_epoch,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,

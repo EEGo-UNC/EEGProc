@@ -4,10 +4,10 @@
 #SBATCH --error=smoke_sic_v11_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --gres=gpu:2
-#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=00:30:00
+#SBATCH --time=03s:30:00
 #SBATCH --array=0
 
 set -euo pipefail
@@ -51,7 +51,7 @@ CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-30}"
 MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-15}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
-MAX_SUBJECTS="${MAX_SUBJECTS:-2}"
+MAX_SUBJECTS="${MAX_SUBJECTS:-4}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 TARGET_DIMENSION="${TARGET_DIMENSION:-valence}"
 TRAINING_METHOD="${TRAINING_METHOD:-mldg}"
@@ -352,9 +352,9 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --prediction-diagnostics-seed 42 \
     --ece-bins 5 \
     --max-subjects "$MAX_SUBJECTS" \
-    --target-subjects 0 1 \
-    --n-jobs 2 \
-    --gpu-ids 0 1 \
+    --target-subjects 0 1 2 3 \
+    --n-jobs 4 \
+    --gpu-ids 0 1 2 3 \
     --cpus-per-worker 2 \
     --verbose 2 \
     --seed 42 \
