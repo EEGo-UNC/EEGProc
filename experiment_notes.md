@@ -66,3 +66,8 @@
     - Added SIC v11, BiLSTM + GCN-GRU encoders to full-trial BiGRU classifier head.
     - Oracle diagnostics show subject-independent learning in early epochs (72% BAcc for user 0, and 58% BAcc for user 1), with later class collapse.
     - Preliminary evidence of generalization on early epochs — now we must fix learning rate, class weights and epoch selection
+- 8/27/2026
+    - SIC v14 showed 57% 0-shot BAcc on 4 subjects using the subject adversarial. *Finally achieved a learning signal*
+    - Subject-specific calibration increases to 60% when using the subject adversarial head. *A good signal that the subadv head reduced subject-specific learning and increases the ability of the model to calibrate to a specific subject*.
+    - Balanced MLDG trials with low outer epoch count (3) and high MLDG episodic epoch count show best learning.
+    - Removing the subject adversarial head reduced BAcc to 52% on 0-shot and had subsequent decreasing accuracies on increasing calibration counts.
