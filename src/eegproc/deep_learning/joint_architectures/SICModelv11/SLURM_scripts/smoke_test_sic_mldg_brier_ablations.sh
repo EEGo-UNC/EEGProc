@@ -47,7 +47,7 @@ module load cudnn/9.11.0
 PROJECT_DIR="${PROJECT_DIR:-$HOME/EEGProc}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-3}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-30}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-20}"
 MLDG_STEPS_PER_EPOCH="${MLDG_STEPS_PER_EPOCH:-15}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
@@ -263,13 +263,13 @@ print(json.dumps({
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": 0.2,
+    "vc_beta": {"grid:" [0.2, 0.6]},
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on the learned trial representation.
-    "use_subject_adversarial": {"grid": [False, True]},
+    "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
     "subject_loss_weight": 1.0,
     "subject_hidden_units": 64,

@@ -222,9 +222,8 @@ print(json.dumps({
     "weight_decay": 5e-5,
     "vrex_penalty_weight": vrex_penalty_weight,
 
-    # First-order MLDG. A uses the complete VC, independent branch
-    # reconstruction, and optional subject-adversarial objectives. B uses the
-    # complete VC emotion objective without reconstruction.
+    # First-order MLDG: complete VC, branch reconstruction, and optional
+    # subject-adversarial loss on A; complete VC emotion loss on adapted B.
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 3,
@@ -233,25 +232,24 @@ print(json.dumps({
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
 
-    # GCN-GRU spatial/spectral branch. API v14 preserves every timestep;
-    # temporal downsampling is intentionally not configurable.
+    # GCN-GRU spatial/spectral branch.
     "gcn_units": {"fixed": [128, 64]},
-    "gcn_dropout": 0.3,
+    "gcn_dropout": 0.10,
     "gcn_activation": "relu",
     "gcn_use_batch_norm": False,
     "spectral_gru_units": 384,
-    "spectral_gru_dropout": 0.3,
+    "spectral_gru_dropout": 0.20,
     "mi_n_neighbors": 3,
     "mi_random_state": 42,
     "mi_zero_diagonal": False,
     "mi_band_reduction": "mean",
     "mi_max_observations": 15000,
 
-    # Independent temporal branch. Width is searched per direction; therefore
-    # candidates 42/63/96 produce complete outputs of 84/126/192 features.
+    # Independent temporal branch. Units are per direction, so 63 + 63 gives
+    # a complete 126-wide deterministic BiLSTM representation.
     "bilstm_units": 63,
     "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.3,
+    "bilstm_dropout": 0.20,
 
     # Trial classifier. Every ordered one-second window embedding is processed
     # by the BiGRU; only its final bidirectional state enters the VC head.
@@ -259,26 +257,26 @@ print(json.dumps({
     "classifier_rnn_type": "bigru",
     "classifier_rnn_units": {"fixed": [128, 64]},
     "n_classifier_rnn_layers": 2,
-    "classifier_rnn_dropout": 0.4,
+    "classifier_rnn_dropout": 0.40,
 
     # VariationalClassifier-head regularizers. The VC is the sole logits head.
-    "focal_gamma": 1.5,
+    "focal_gamma": 0.5,
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": 1.0,
+    "vc_beta": 0.2,
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,
 
     # Subject-invariance objective on the learned trial representation.
-    "use_subject_adversarial": False,
-    "subject_adversarial_weight": 0.0,
-    "subject_loss_weight": 0.0,
-    "subject_hidden_units": 2,
+    "use_subject_adversarial": {"grid": [False, True]},
+    "subject_adversarial_weight": 0.6,
+    "subject_loss_weight": 1.0,
+    "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
-    # One-factor-at-a-time architecture/data ablation.
+    # Selected architecture/data ablation.
     "use_gcn_gru_branch": use_gcn_gru,
     "use_bilstm_branch": use_bilstm,
     "use_decoder": True,
@@ -289,7 +287,10 @@ print(json.dumps({
     # Two layers means BiGRU + VC during target-subject calibration.
     "calibration_unfreeze_layers": 2,
     "calibration_use_vc_target": True,
-    "use_class_weight": False,
+    "calibration_vc_alpha": 1.0,
+    "calibration_vc_beta": 0.4,
+    "calibration_vc_gamma": 0.0,
+    "calibration_vc_lambda": 0.05,
 }))
 PY
 )"
