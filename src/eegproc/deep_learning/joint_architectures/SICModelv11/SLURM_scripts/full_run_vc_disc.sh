@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=9:00:00
+#SBATCH --time=00:30:00
 #SBATCH --array=0
 
 set -euo pipefail
@@ -264,10 +264,10 @@ print(json.dumps({
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": {"grid": [0.2, 0.6]},
-    "vc_gamma": 0.0,
+    "vc_beta": 0.0,
+    "vc_gamma": 0.5,
     "vc_lambda": 0.05,
-    "update_vc_discriminator": False,
+    "update_vc_discriminator": True,
 
     # Subject-invariance objective on the learned trial representation.
     "use_subject_adversarial": True,
@@ -358,6 +358,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --cpus-per-worker 2 \
     --verbose 2 \
     --seed 42 \
+    --target-subjects 0 1 2 3 \
     --label-threshold-mode global \
     --median-label 3 \
     --window-sec 1.0 \
