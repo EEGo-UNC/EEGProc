@@ -1,20 +1,26 @@
 """Assemble a minimal, high-information figure set + metrics table from a CV run.
 
 This is the deliverable entry point. Given a result JSON written by
-``nested_lnso_cv`` (single- or multi-model), it produces, per model:
+legacy CV or SIC calibration runs, it produces, per model:
 
 * **Fig 1 - Headline**: confusion matrix | outer-fold metric summary.
 * **Fig 2 - Subjects**: per-subject accuracy | per-subject/per-task heatmap
   (the heatmap is included only when ``task_id`` was logged).
 * **Fig 3 - Hyperparameters**: an inner-CV sweep over the hyperparameter(s) that
   actually varied (auto-detected, or chosen with ``--hyperparams``).
-* **Fig 4 - Reliability**: calibration | predictive-interval width (only when a
-  variational interval log is present).
+* **Fig 4 - Reliability**: confidence calibration whenever probabilities exist;
+  predictive-interval width is added only when an interval log is present.
 
 When the JSON holds more than one model, an extra **model_comparison** figure
 compares the models' accuracies (or ``--compare-metrics``) side by side.
 
 plus a paper-ready mean +/- std metrics table (CSV, LaTeX, Markdown).
+
+SIC defaults to strict zero-shot on all trials. Use ``--stage post_calibration
+--calibration-shots 6`` for a calibrated report or ``--stage zero_shot_paired
+--calibration-shots 6`` for its paired baseline. Each selection gets a separate
+subdirectory. SIC headlines use saved subject averages, while confusion and
+reliability panels explicitly show pooled prediction occurrences.
 
 CLI::
 
@@ -26,20 +32,25 @@ CLI::
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from .results_io import ResultsTables, load_results
+from .results_io import ResultsTables, SIC_STAGES, class_probability_columns, load_results
 from . import result_figures as rf
 
 # Columns in the inner-CV table that are not hyperparameters.
 _NON_HYPERPARAM_COLUMNS = frozenset(
     {"model", "outer_fold", "config_index", "loss", "accuracy", "f1", "precision", "recall"}
 )
-_SUMMARY_METRIC_ORDER = ["accuracy", "f1", "precision", "recall", "loss"]
+_SUMMARY_METRIC_ORDER = ["balanced_accuracy", "accuracy", "macro_f1", "roc_auc", "brier_score", "ece", "f1", "precision", "recall", "loss"]
+_NON_HYPERPARAM_COLUMNS |= frozenset(_SUMMARY_METRIC_ORDER) | {
+    "macro_precision", "macro_recall", "joint_loss", "reconstruction_loss", "decoder_r2",
+    "trial_mean_scores", "window_mean_scores", "fold_metrics", "mean_scores", "std_scores",
+}
 
 
 def _slug(name: str) -> str:
@@ -47,12 +58,16 @@ def _slug(name: str) -> str:
     return re.sub(r"[^0-9A-Za-z._-]+", "_", str(name)).strip("_") or "model"
 
 
-def _save(fig, out_dir: Path, name: str, formats: tuple[str, ...], dpi: int) -> None:
+def _save(fig, out_dir: Path, name: str, formats: tuple[str, ...], dpi: int) -> list[Path]:
     """Save a figure to every requested format, then close it."""
-    fig.tight_layout()
-    for fmt in formats:
-        fig.savefig(out_dir / f"{name}.{fmt}", dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
+    paths = [out_dir / f"{name}.{fmt}" for fmt in formats]
+    try:
+        fig.tight_layout()
+        for path in paths:
+            fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    finally:
+        plt.close(fig)
+    return paths
 
 
 def _varying_hyperparameters(inner_cv: pd.DataFrame) -> list[str]:
@@ -65,11 +80,36 @@ def _varying_hyperparameters(inner_cv: pd.DataFrame) -> list[str]:
 
 
 def _headline_figure(tables: ResultsTables, model: str, class_names, metric: str):
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    rf.plot_confusion_matrix(tables.predictions, model=model, class_names=class_names, ax=axes[0])
-    rf.plot_metric_summary(tables.fold_metrics, model=model, ax=axes[1])
-    fig.suptitle(f"{model} - headline performance", fontsize=13)
+    predictions = _model_frame(tables.predictions, model)
+    fold_metrics = _model_frame(tables.fold_metrics, model)
+    summary = _model_frame(tables.summary, model)
+    has_predictions = not predictions.empty
+    has_metrics = not fold_metrics.empty or not summary.empty
+    panels = int(has_predictions) + int(has_metrics)
+    fig, axes = plt.subplots(1, panels, figsize=(14 if panels == 2 else 8, 5), squeeze=False)
+    if has_predictions:
+        rf.plot_confusion_matrix(predictions, model=model, class_names=class_names, ax=axes[0, 0])
+        if tables.stage:
+            axes[0, 0].set_title("Pooled trial predictions\n(row-normalized; not subject-averaged)")
+    if has_metrics:
+        metrics = tuple(dict.fromkeys((metric, "accuracy", "balanced_accuracy", "macro_f1", "roc_auc", "brier_score")))
+        rf.plot_metric_summary(fold_metrics, model=model, metrics=metrics, ax=axes[0, -1],
+                               summary=summary, aggregation_unit=tables.aggregation_unit)
+    fig.suptitle(f"{model} - {_evaluation_label(tables)}", fontsize=13)
     return fig
+
+
+def _model_frame(frame: pd.DataFrame, model: str) -> pd.DataFrame:
+    return frame[frame["model"] == model] if not frame.empty and "model" in frame else frame
+
+
+def _evaluation_label(tables: ResultsTables) -> str:
+    labels = {"zero_shot_all_trials": "strict zero-shot (all trials)",
+              "zero_shot_paired": "paired zero-shot", "post_calibration": "post-calibration"}
+    label = labels.get(tables.stage, "headline performance")
+    if tables.calibration_shots is not None:
+        label += f" ({tables.calibration_shots} shots)"
+    return label
 
 
 def _subject_figure(tables: ResultsTables, model: str, metric: str):
@@ -95,7 +135,7 @@ def _subject_figure(tables: ResultsTables, model: str, metric: str):
     if include_tasks:
         rf.plot_subject_task_heatmap(tables.predictions, model=model, ax=axes[1])
 
-    fig.suptitle(f"{model} - subject breakdown", fontsize=13)
+    fig.suptitle(f"{model} - subject breakdown\n{_evaluation_label(tables)}", fontsize=13)
     return fig
 
 
@@ -116,10 +156,13 @@ def _hyperparameter_figure(tables: ResultsTables, model: str, params: list[str],
 
 
 def _reliability_figure(tables: ResultsTables, model: str):
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    rf.plot_reliability(tables.predictions, model=model, ax=axes[0])
-    rf.plot_uncertainty(tables.intervals, model=model, ax=axes[1])
-    fig.suptitle(f"{model} - reliability & uncertainty", fontsize=13)
+    intervals = _model_frame(tables.intervals, model)
+    has_intervals = not intervals.empty and {"p_pred_ci_low", "p_pred_ci_high"}.issubset(intervals.columns)
+    fig, axes = plt.subplots(1, 2 if has_intervals else 1, figsize=(13 if has_intervals else 7, 5), squeeze=False)
+    rf.plot_reliability(tables.predictions, model=model, ax=axes[0, 0])
+    if has_intervals:
+        rf.plot_uncertainty(intervals, model=model, ax=axes[0, 1])
+    fig.suptitle(f"{model} - pooled reliability\n{_evaluation_label(tables)}", fontsize=13)
     return fig
 
 
@@ -129,7 +172,8 @@ def _format_summary_table(summary: pd.DataFrame) -> pd.DataFrame:
     for model, group in summary.groupby("model"):
         row = {"model": model}
         for _, record in group.iterrows():
-            row[record["metric"]] = f"{record['mean']:.3f} ± {record['std']:.3f}"
+            mean, std = record["mean"], record["std"]
+            row[record["metric"]] = f"{mean:.4f}" + (f" ± {std:.4f}" if pd.notna(std) else "")
         rows.append(row)
 
     table = pd.DataFrame(rows).set_index("model")
@@ -200,7 +244,7 @@ def _to_latex(table: pd.DataFrame, caption: str, label: str) -> str:
     )
 
 
-def _write_summary_tables(summary: pd.DataFrame, out_dir: Path) -> None:
+def _write_summary_tables(summary: pd.DataFrame, out_dir: Path, aggregation_unit: str = "outer_fold") -> None:
     if summary.empty:
         return
 
@@ -210,7 +254,8 @@ def _write_summary_tables(summary: pd.DataFrame, out_dir: Path) -> None:
     (out_dir / "metrics_table.tex").write_text(
         _to_latex(
             formatted,
-            caption=r"Outer-fold performance (mean $\pm$ std across outer folds).",
+            caption=(r"Subject-averaged performance (mean $\pm$ std across subjects)."
+                     if aggregation_unit == "subject" else r"Outer-fold performance (mean $\pm$ std across outer folds)."),
             label="tab:cv",
         ),
         encoding="utf-8",
@@ -224,57 +269,105 @@ def build_report(
     class_names: list[str] | None = None,
     hyperparams: list[str] | None = None,
     metric: str = "accuracy",
-    compare_metrics: tuple[str, ...] = ("accuracy",),
+    compare_metrics: tuple[str, ...] | None = None,
     formats: tuple[str, ...] = ("png", "pdf"),
     dpi: int = 300,
+    stage: str = "zero_shot_all_trials",
+    calibration_shots: int | None = None,
 ) -> list[Path]:
     """Generate the figure set + metrics table for every model in a result JSON.
 
     When the JSON holds more than one model, an extra ``model_comparison`` figure
     is written that compares ``compare_metrics`` across models.
 
-    Returns the list of figure paths written.
+    SIC reports select strict zero-shot by default; calibration stages require
+    an explicit shot count. Each SIC evaluation gets its own output subfolder.
+    Headline means/stds use the saved summaries, never pooled predictions.
+    Returns every figure path written, including all requested formats.
     """
-    tables = load_results(results_path)
+    tables = load_results(results_path, stage=stage, calibration_shots=calibration_shots)
+    if not formats or dpi <= 0:
+        raise ValueError("At least one output format and a positive DPI are required.")
+    supported = plt.figure().canvas.get_supported_filetypes()
+    plt.close(plt.gcf())
+    unsupported = set(formats) - supported.keys()
+    if unsupported:
+        raise ValueError(f"Unsupported figure formats: {sorted(unsupported)}")
     out_dir = Path(out_dir)
+    if tables.stage:
+        folder = tables.stage
+        if tables.calibration_shots is not None:
+            folder += f"_{tables.calibration_shots}_shot"
+        out_dir /= folder
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[Path] = []
 
     for model in tables.models:
         prefix = _slug(model)
+        predictions = _model_frame(tables.predictions, model)
+        subjects = _model_frame(tables.user_metrics, model)
+        folds = _model_frame(tables.fold_metrics, model)
+        summary = _model_frame(tables.summary, model)
+        available = set(folds.columns) | set(subjects.columns)
+        if not summary.empty:
+            available.update(summary["metric"])
+        if available and metric not in available:
+            raise ValueError(f"[{model}] Metric {metric!r} is not available in the selected evaluation.")
+        print(f"[{model}] {_evaluation_label(tables)}: {len(predictions)} prediction rows, "
+              f"{subjects['subject_id'].nunique() if 'subject_id' in subjects else 0} subjects.")
+        if not summary.empty:
+            selected = summary[summary["metric"] == metric]
+            if not selected.empty:
+                print(f"[{model}] saved {tables.aggregation_unit}-mean {metric}={selected.iloc[0]['mean']:.8f}")
 
-        fig = _headline_figure(tables, model, class_names, metric)
-        _save(fig, out_dir, f"{prefix}_fig1_headline", formats, dpi)
-        written.append(out_dir / f"{prefix}_fig1_headline.{formats[0]}")
+        if not predictions.empty or not folds.empty or not summary.empty:
+            fig = _headline_figure(tables, model, class_names, metric)
+            written.extend(_save(fig, out_dir, f"{prefix}_fig1_headline", formats, dpi))
 
-        fig = _subject_figure(tables, model, metric)
-        _save(fig, out_dir, f"{prefix}_fig2_subjects", formats, dpi)
-        written.append(out_dir / f"{prefix}_fig2_subjects.{formats[0]}")
+        if not subjects.empty and {"subject_id", metric}.issubset(subjects.columns):
+            fig = _subject_figure(tables, model, metric)
+            written.extend(_save(fig, out_dir, f"{prefix}_fig2_subjects", formats, dpi))
+        else:
+            print(f"[{model}] no per-subject {metric} values; skipping Fig 2.")
 
         model_inner = tables.inner_cv[tables.inner_cv["model"] == model] if not tables.inner_cv.empty else tables.inner_cv
         params = hyperparams or _varying_hyperparameters(model_inner)
-        if params:
+        if params and metric in model_inner.columns:
             fig = _hyperparameter_figure(tables, model, params, metric)
-            _save(fig, out_dir, f"{prefix}_fig3_hyperparameters", formats, dpi)
-            written.append(out_dir / f"{prefix}_fig3_hyperparameters.{formats[0]}")
+            written.extend(_save(fig, out_dir, f"{prefix}_fig3_hyperparameters", formats, dpi))
         else:
             print(f"[{model}] no swept hyperparameters found; skipping Fig 3.")
 
-        model_intervals = tables.intervals[tables.intervals["model"] == model] if not tables.intervals.empty else tables.intervals
-        if not model_intervals.empty:
+        has_probabilities = any(c in predictions for c in ("p_pred", "confidence")) or bool(class_probability_columns(predictions))
+        if not predictions.empty and has_probabilities:
             fig = _reliability_figure(tables, model)
-            _save(fig, out_dir, f"{prefix}_fig4_reliability", formats, dpi)
-            written.append(out_dir / f"{prefix}_fig4_reliability.{formats[0]}")
+            written.extend(_save(fig, out_dir, f"{prefix}_fig4_reliability", formats, dpi))
 
     if len(tables.models) > 1 and not tables.fold_metrics.empty:
-        fig = rf.plot_model_comparison(tables.fold_metrics, metrics=compare_metrics)
-        _save(fig, out_dir, "model_comparison", formats, dpi)
-        written.append(out_dir / f"model_comparison.{formats[0]}")
+        fig = rf.plot_model_comparison(tables.fold_metrics, metrics=compare_metrics or (metric,))
+        written.extend(_save(fig, out_dir, "model_comparison", formats, dpi))
 
-    _write_summary_tables(tables.summary, out_dir)
+    _write_summary_tables(tables.summary, out_dir, tables.aggregation_unit)
+    if not tables.user_metrics.empty:
+        tables.user_metrics.to_csv(out_dir / "subject_metrics.csv", index=False)
+    metadata = {"results": str(Path(results_path).resolve()), "stage": tables.stage,
+                "calibration_shots": tables.calibration_shots, "metric": metric,
+                "aggregation_unit": tables.aggregation_unit,
+                "prediction_rows": len(tables.predictions),
+                "figure_files": [p.name for p in written]}
+    (out_dir / "report_metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    if tables.stage:
+        (out_dir / "report_notes.md").write_text(
+            f"# {_evaluation_label(tables)}\n\n"
+            "Headline metrics and the metrics table retain the saved mean and standard deviation across subjects. "
+            "For calibration, each subject's score is already averaged across its calibration folds.\n\n"
+            "Confusion matrices and reliability curves pool prediction occurrences within this stage and shot count. "
+            "A trial may occur in multiple calibration evaluation folds. These pooled views do not replace the "
+            "subject-averaged metrics, and the reliability curve is not the saved subject-averaged ECE.\n\n"
+            "No source training, oracle-epoch, or other calibration-stage predictions are included.\n", encoding="utf-8")
 
-    print(f"Wrote {len(written)} figures + metrics table to {out_dir}/")
+    print(f"Wrote {len(written)} figure files + available metrics tables to {out_dir}/")
     return written
 
 
@@ -299,10 +392,14 @@ def main() -> None:
         help="Comma-separated hyperparameter(s) for Fig 3 (1=line, 2=heatmap/surface). "
         "Default: auto-detect the swept ones.",
     )
-    parser.add_argument("--metric", default="accuracy", help="Metric for per-subject/sweep panels.")
+    parser.add_argument("--metric", default="accuracy", help="Primary metric for headline, per-subject, sweep and comparison panels.")
+    parser.add_argument("--stage", choices=SIC_STAGES, default="zero_shot_all_trials",
+                        help="SIC evaluation (default: strict zero-shot on all trials).")
+    parser.add_argument("--calibration-shots", type=int, default=None,
+                        help="Required positive shot count for paired zero-shot or post-calibration.")
     parser.add_argument(
         "--compare-metrics",
-        default="accuracy",
+        default=None,
         help="Comma-separated metric(s) for the multi-model comparison figure.",
     )
     parser.add_argument("--formats", default="png,pdf", help="Comma-separated output formats.")
@@ -315,9 +412,11 @@ def main() -> None:
         class_names=_split_csv(args.class_names),
         hyperparams=_split_csv(args.hyperparams),
         metric=args.metric,
-        compare_metrics=tuple(_split_csv(args.compare_metrics) or ("accuracy",)),
+        compare_metrics=tuple(_split_csv(args.compare_metrics) or (args.metric,)),
         formats=tuple(_split_csv(args.formats) or ("png", "pdf")),
         dpi=args.dpi,
+        stage=args.stage,
+        calibration_shots=args.calibration_shots,
     )
 
 

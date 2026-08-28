@@ -263,7 +263,7 @@ print(json.dumps({
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 1.0,
-    "vc_beta": {"grid:" [0.2, 0.6]},
+    "vc_beta": {"grid": [0.2, 0.6]},
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "update_vc_discriminator": False,

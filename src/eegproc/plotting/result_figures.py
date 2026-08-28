@@ -22,6 +22,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 
+from .results_io import class_probability_columns
+
 
 # ---------------------------------------------------------------------
 # Small shared helpers
@@ -42,20 +44,44 @@ def _resolve_ax(ax, projection: str | None = None):
 
 def _filter_model(df: pd.DataFrame, model: str | None) -> pd.DataFrame:
     """Restrict a frame to one model, defaulting to the only model present."""
-    if df.empty or "model" not in df.columns:
+    if df.empty:
         return df
+    if "model" in df.columns:
+        models = list(df["model"].unique())
+        if model is not None:
+            df = df[df["model"] == model]
+        elif len(models) > 1:
+            raise ValueError(f"Multiple models present {models}; pass model=... to select one.")
+    _require_single_evaluation(df)
+    return df
 
-    models = list(df["model"].unique())
 
-    if model is not None:
-        return df[df["model"] == model]
+def _require_single_evaluation(df: pd.DataFrame) -> None:
+    for column in ("stage", "calibration_shots"):
+        if column in df and df[column].nunique(dropna=False) > 1:
+            raise ValueError("Mixed SIC evaluations: select one stage and calibration shot count before plotting.")
 
-    if len(models) == 1:
-        return df
 
-    raise ValueError(
-        f"Multiple models present {models}; pass model=... to select one."
-    )
+def metric_lower_is_better(metric: str) -> bool:
+    return metric in {"brier_score", "brier", "ece", "mse", "mae", "rmse"} or metric.endswith("loss") or metric.endswith(("_brier_score", "_ece"))
+
+
+def _metric_label(metric: str) -> str:
+    labels = {"balanced_accuracy": "Balanced accuracy", "roc_auc": "ROC-AUC",
+              "macro_f1": "Macro F1", "brier_score": "Brier score", "ece": "ECE"}
+    return labels.get(metric, metric.replace("_", " ").capitalize()) + (" ↓" if metric_lower_is_better(metric) else "")
+
+
+def _score_limits(ax, values) -> None:
+    """Keep ordinary scores comparable, without clipping losses or negative R²."""
+    values = np.asarray(values, dtype=float).ravel()
+    values = values[np.isfinite(values)]
+    if not len(values) or (values.min() >= 0 and values.max() <= 1):
+        ax.set_ylim(0, 1.05)
+    else:
+        low, high = min(0.0, values.min()), max(0.0, values.max())
+        pad = max((high - low) * 0.08, 0.05)
+        ax.set_ylim(low - pad if low < 0 else 0, high + pad)
 
 
 def _class_names(labels: np.ndarray, class_names: list[str] | None) -> list[str]:
@@ -87,9 +113,9 @@ def plot_confusion_matrix(
 ):
     """Confusion matrix over all pooled test predictions.
 
-    Pools ``y_true``/``y_pred`` across every outer fold (each test window appears
-    once), which is the standard way LOSO emotion papers report a single
-    confusion matrix.
+    Select one stage and shot count first. Calibration trials can appear in
+    multiple evaluation folds; this is a pooled prediction-occurrence view,
+    not the subject-averaged headline balanced accuracy.
     """
     predictions = _filter_model(predictions, model)
 
@@ -146,6 +172,8 @@ def plot_metric_summary(
     model: str | None = None,
     metrics: tuple[str, ...] = ("accuracy", "f1", "precision", "recall"),
     ax=None,
+    summary: pd.DataFrame | None = None,
+    aggregation_unit: str = "outer_fold",
 ):
     """Mean +/- std bars per metric, with individual outer-fold points overlaid.
 
@@ -155,20 +183,22 @@ def plot_metric_summary(
     """
     fold_metrics = _filter_model(fold_metrics, model)
 
-    if fold_metrics.empty:
-        raise ValueError("No fold metrics to summarize.")
-
-    metrics = tuple(m for m in metrics if m in fold_metrics.columns)
-    means = [fold_metrics[m].mean() for m in metrics]
-    stds = [fold_metrics[m].std(ddof=0) for m in metrics]
+    summary = _filter_model(summary, model) if summary is not None else pd.DataFrame()
+    saved = summary.set_index("metric") if not summary.empty else pd.DataFrame()
+    metrics = tuple(m for m in metrics if m in fold_metrics.columns or m in saved.index)
+    if not metrics:
+        raise ValueError("No requested metrics to summarize.")
+    means = [float(saved.loc[m, "mean"]) if m in saved.index else fold_metrics[m].mean() for m in metrics]
+    stds = [float(saved.loc[m, "std"]) if m in saved.index else fold_metrics[m].std(ddof=0) for m in metrics]
 
     fig, ax = _resolve_ax(ax)
     x = np.arange(len(metrics))
 
-    ax.bar(x, means, yerr=stds, capsize=4, color="#4C72B0", alpha=0.85)
+    errors = np.nan_to_num(stds, nan=0.0)
+    ax.bar(x, means, yerr=errors, capsize=4, color="#4C72B0", alpha=0.85)
 
     for i, metric in enumerate(metrics):
-        values = fold_metrics[metric].to_numpy()
+        values = fold_metrics[metric].to_numpy() if metric in fold_metrics else np.array([])
         jitter = (np.random.RandomState(0).rand(len(values)) - 0.5) * 0.25
         ax.scatter(
             np.full(len(values), i) + jitter,
@@ -178,13 +208,17 @@ def plot_metric_summary(
             alpha=0.6,
             zorder=3,
         )
-        ax.text(i, means[i] + 0.02, f"{means[i]:.2f}", ha="center", fontsize=9)
+        finite_values = values[np.isfinite(values)]
+        top = max(means[i] + errors[i], finite_values.max()) if len(finite_values) else means[i] + errors[i]
+        ax.text(i, top + 0.025, f"{means[i]:.4f}", ha="center", fontsize=8)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(metrics)
-    ax.set_ylim(0, 1.05)
-    ax.set_ylabel("Score (mean across outer folds)")
-    ax.set_title("Outer-fold performance")
+    ax.set_xticklabels([_metric_label(m) for m in metrics], rotation=25, ha="right")
+    raw_values = [v for m in metrics if m in fold_metrics for v in fold_metrics[m]]
+    _score_limits(ax, [*(np.asarray(raw_values) + 0.05), *(np.asarray(means) - errors), *(np.asarray(means) + errors + 0.05)])
+    unit = "subjects" if aggregation_unit == "subject" else "outer folds"
+    ax.set_ylabel(f"Score (mean ± std across {unit})")
+    ax.set_title("Subject-averaged performance" if aggregation_unit == "subject" else "Outer-fold performance")
     ax.grid(axis="y", linewidth=0.5, alpha=0.4)
     return fig
 
@@ -227,15 +261,15 @@ def plot_per_subject_accuracy(
         color="#C44E52",
         linestyle="--",
         linewidth=1.5,
-        label=f"mean = {mean_value:.2f}",
+        label=f"mean = {mean_value:.4f}",
     )
 
     ax.set_xticks(x)
     ax.set_xticklabels(index, rotation=45, ha="right")
-    ax.set_ylim(0, 1.05)
+    _score_limits(ax, per_subject.to_numpy())
     ax.set_xlabel("Subject")
-    ax.set_ylabel(metric.capitalize())
-    ax.set_title(f"Per-subject {metric}")
+    ax.set_ylabel(_metric_label(metric))
+    ax.set_title(f"Per-subject {metric.replace('_', ' ')}")
     ax.legend(loc="lower left", fontsize=9)
     ax.grid(True, linewidth=0.5, alpha=0.4)
     return fig
@@ -415,11 +449,27 @@ def plot_reliability(
     """
     predictions = _filter_model(predictions, model)
 
-    if predictions.empty or "p_pred" not in predictions.columns:
-        raise ValueError("predictions lack 'p_pred'; cannot build a reliability plot.")
-
-    confidence = predictions["p_pred"].to_numpy()
+    if predictions.empty:
+        raise ValueError("No predictions for a reliability plot.")
+    if n_bins <= 0:
+        raise ValueError("n_bins must be positive.")
+    if "p_pred" in predictions:
+        confidence = predictions["p_pred"].to_numpy(dtype=float)
+    elif "confidence" in predictions:
+        confidence = predictions["confidence"].to_numpy(dtype=float)
+    else:
+        columns = class_probability_columns(predictions)
+        if not columns:
+            raise ValueError("Predictions lack confidence or class probabilities.")
+        # Use the probability of the logged predicted class, preserving its
+        # saved decision threshold instead of assuming argmax/threshold 0.5.
+        confidence = np.array([row.get(f"p_class_{int(row['y_pred'])}", np.nan)
+                               for row in predictions.to_dict("records")], dtype=float)
     correct = (predictions["y_true"] == predictions["y_pred"]).to_numpy().astype(float)
+    valid = np.isfinite(confidence) & (confidence >= 0) & (confidence <= 1)
+    confidence, correct = confidence[valid], correct[valid]
+    if not len(confidence):
+        raise ValueError("No finite probabilities in [0, 1] for a reliability plot.")
 
     edges = np.linspace(0.0, 1.0, n_bins + 1)
     bin_index = np.clip(np.digitize(confidence, edges) - 1, 0, n_bins - 1)
@@ -495,6 +545,7 @@ def plot_model_comparison(
     """
     if fold_metrics.empty or "model" not in fold_metrics.columns:
         raise ValueError("fold_metrics must be non-empty and have a 'model' column.")
+    _require_single_evaluation(fold_metrics)
 
     metrics = (metrics,) if isinstance(metrics, str) else tuple(metrics)
     metrics = tuple(m for m in metrics if m in fold_metrics.columns)
@@ -505,7 +556,7 @@ def plot_model_comparison(
     stds = fold_metrics.groupby("model")[list(metrics)].std(ddof=0).fillna(0.0)
 
     # Order models best-first by the primary (first) metric.
-    order = means[metrics[0]].sort_values(ascending=False).index
+    order = means[metrics[0]].sort_values(ascending=metric_lower_is_better(metrics[0])).index
     means = means.loc[order]
     stds = stds.loc[order]
     models = list(means.index)
@@ -530,8 +581,9 @@ def plot_model_comparison(
 
     ax.set_xticks(x)
     ax.set_xticklabels(models, rotation=45, ha="right")
-    ax.set_ylim(0, 1.05)
-    ax.set_ylabel("Score (mean +/- std across outer folds)")
+    _score_limits(ax, np.concatenate([(means - stds).to_numpy().ravel(), (means + stds).to_numpy().ravel()]))
+    unit = "subjects" if "aggregation_unit" in fold_metrics and (fold_metrics["aggregation_unit"] == "subject").all() else "outer folds"
+    ax.set_ylabel(f"Score (mean +/- std across {unit})")
     ax.set_title("Model comparison")
     ax.grid(axis="y", linewidth=0.5, alpha=0.4)
 

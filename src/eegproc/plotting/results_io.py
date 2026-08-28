@@ -1,4 +1,4 @@
-"""Load ``nested_lnso_cv`` result JSON into tidy DataFrames for reporting.
+"""Load legacy CV and SIC calibration JSON into tidy reporting DataFrames.
 
 ``nested_lnso_cv`` (see :mod:`eegproc.deep_learning.cross_val`) returns a nested
 dict of per-fold metrics, per-subject metrics and per-window prediction logs.
@@ -13,6 +13,12 @@ The result is saved to JSON in one of two shapes:
 set of tidy pandas DataFrames (one ``model`` column identifies the source), so
 the plotting functions in :mod:`eegproc.plotting.result_figures` only ever deal
 with DataFrames.
+
+SIC's ``subject_results``, ``subject_summary_rows`` and ``overall`` are adapted
+to the same tables. Only one stage/shot selection is loaded. ``fold_metrics``
+then contains one outer LOSO subject per row, using within-subject calibration
+means when appropriate; saved overall means and standard deviations are kept.
+Standalone ``sic_overall_metrics.json`` is supported without predictions.
 """
 
 from __future__ import annotations
@@ -42,6 +48,11 @@ _RESULT_KEYS = frozenset(
     }
 )
 
+_SIC_KEYS = frozenset({"subject_results", "subject_summary_rows", "overall",
+                       "zero_shot_all_trials_mean_scores"})
+SIC_STAGES = ("zero_shot_all_trials", "zero_shot_paired", "post_calibration")
+_SCORE_PREFIX = dict(zip(SIC_STAGES, ("zero_shot_all_trials", "paired_zero_shot", "calibrated")))
+
 
 @dataclass(frozen=True)
 class ResultsTables:
@@ -61,6 +72,9 @@ class ResultsTables:
     intervals: pd.DataFrame
     summary: pd.DataFrame
     subject_id_mapping: dict[str, dict]
+    stage: str | None = None
+    calibration_shots: int | None = None
+    aggregation_unit: str = "outer_fold"
 
     @property
     def has_tasks(self) -> bool:
@@ -79,7 +93,7 @@ def _normalize_models(raw: dict) -> dict[str, dict]:
     if not isinstance(raw, dict):
         return {}
 
-    if _RESULT_KEYS & raw.keys():
+    if (_RESULT_KEYS | _SIC_KEYS) & raw.keys():
         return {"model": raw}
 
     if "loso_cv" in raw and isinstance(raw.get("loso_cv"), dict):
@@ -97,6 +111,136 @@ def _normalize_models(raw: dict) -> dict[str, dict]:
         return {"model": loso_cv}
 
     return {name: result for name, result in raw.items() if isinstance(result, dict)}
+
+
+def _sic_evaluations(result: dict, stage: str, shots: int | None):
+    """Yield the requested nested evaluation blocks, without top-level duplicates."""
+    for subject in result.get("subject_results", []) or []:
+        subject_id = subject.get("target_subject")
+        outer_fold = subject.get("subject_number")
+        if stage == "zero_shot_all_trials":
+            block = subject.get("zero_shot_all_trials") or {}
+            if block:
+                yield subject_id, outer_fold, block
+        else:
+            for level in subject.get("calibration_levels", []) or []:
+                if str(level.get("calibration_shots")) != str(shots):
+                    continue
+                key = "zero_shot" if stage == "zero_shot_paired" else "calibrated"
+                for output in level.get("fold_outputs", []) or []:
+                    block = output.get(key) or {}
+                    if block:
+                        yield subject_id, outer_fold, block
+
+
+def _select_sic_rows(rows: list[dict], stage: str, shots: int | None) -> list[dict]:
+    """Select both stage and shot count; never pool distinct evaluations."""
+    return [row for row in rows if row.get("stage") == stage and
+            (stage == "zero_shot_all_trials" or
+             str(row.get("calibration_shots")) == str(shots))]
+
+
+def _sic_subject_rows(result: dict, stage: str, shots: int | None,
+                      evaluations: list) -> list[dict]:
+    """Use saved within-subject means before aggregating across subjects.
+
+    Calibration folds are repeated evaluations of the same subject, not
+    independent outer folds. Prefer the saved subject summaries; reconstruct
+    a mean across that subject's folds only if those summaries are absent.
+    """
+    scores_by_subject: dict = {}
+    folds: dict = {}
+    for subject in result.get("subject_results", []) or []:
+        sid = subject.get("target_subject")
+        folds[sid] = subject.get("subject_number")
+        summary = subject.get("subject_summary") or {}
+        if stage == "zero_shot_all_trials":
+            scores = summary.get("zero_shot_all_trials_scores") or {}
+        else:
+            level_summary = (summary.get("calibration_levels") or {}).get(str(shots)) or {}
+            if not level_summary:
+                level_summary = next((level.get("summary") or {} for level in
+                    subject.get("calibration_levels", []) or []
+                    if str(level.get("calibration_shots")) == str(shots)), {})
+            scores = level_summary.get(_SCORE_PREFIX[stage] + "_mean_scores") or {}
+        if scores:
+            scores_by_subject[sid] = dict(scores)
+
+    flat_prefix = ("zero_shot_all_" if stage == "zero_shot_all_trials" else
+                   f"{shots}_shot_{'paired_zero' if stage == 'zero_shot_paired' else 'calibrated'}_")
+    for record in result.get("subject_summary_rows", []) or []:
+        sid = record.get("target_subject")
+        scores = {key[len(flat_prefix):]: value for key, value in record.items()
+                  if key.startswith(flat_prefix)}
+        if scores:
+            scores_by_subject.setdefault(sid, scores)
+
+    fallback: dict = {}
+    for sid, fold, block in evaluations:
+        folds.setdefault(sid, fold)
+        metrics = block.get("trial_fold_metrics") or block.get("fold_metrics") or {}
+        if isinstance(metrics, list):
+            metrics = metrics[0] if metrics else {}
+        fallback.setdefault(sid, []).append(metrics)
+    metadata = {"fold", "subject_id", "target_subject", "calibration_fold", "calibration_shots",
+                "n_samples", "n_windows", "n_trials", "windows_per_trial", "prediction_latent_samples"}
+    for sid, records in fallback.items():
+        if sid in scores_by_subject:
+            continue
+        frame = pd.DataFrame(records).drop(columns=list(metadata), errors="ignore")
+        numeric = frame.select_dtypes(include="number")
+        if not numeric.empty:
+            scores_by_subject[sid] = numeric.mean().to_dict()
+
+    return [{**scores, "subject_id": sid, "target_subject": sid,
+             "fold": folds.get(sid, sid), "stage": stage,
+             "calibration_shots": shots, "aggregation_unit": "subject"}
+            for sid, scores in scores_by_subject.items()]
+
+
+def _adapt_sic(result: dict, stage: str, shots: int | None) -> dict:
+    """Convert exactly one SIC evaluation to the legacy table input shape."""
+    overall = result.get("overall") or result
+    if stage == "zero_shot_all_trials":
+        score_block = overall
+    else:
+        score_block = (overall.get("calibration_levels") or {}).get(str(shots)) or {}
+        # Older SIC summaries expose only the selected calibration level.
+        if not score_block and str(overall.get("calibration_selection_shots")) == str(shots):
+            score_block = overall
+    prefix = _SCORE_PREFIX[stage]
+    mean_scores = score_block.get(prefix + "_mean_scores") or {}
+    std_scores = score_block.get(prefix + "_std_scores") or {}
+    evaluations = list(_sic_evaluations(result, stage, shots))
+    subject_rows = _sic_subject_rows(result, stage, shots, evaluations)
+
+    # SIC reports are trial-level. In particular, don't prefer a window log
+    # when both logs exist, and don't concatenate nested and top-level copies.
+    predictions = _select_sic_rows(result.get("trial_prediction_log") or [], stage, shots)
+    intervals = _select_sic_rows(result.get("trial_variational_interval_log") or [], stage, shots)
+    if not predictions:
+        predictions = [{**row, "stage": stage, "calibration_shots": shots}
+                       for _, _, block in evaluations
+                       for row in block.get("trial_prediction_log", []) or []]
+    if not intervals:
+        intervals = [{**row, "stage": stage, "calibration_shots": shots}
+                     for _, _, block in evaluations
+                     for row in block.get("trial_variational_interval_log", []) or []]
+    if not (mean_scores or subject_rows or predictions):
+        description = stage + (f" ({shots} shots)" if shots is not None else "")
+        raise ValueError(f"No SIC results for {description}. Check --stage and --calibration-shots.")
+    if not mean_scores and subject_rows:
+        frame = pd.DataFrame(subject_rows)
+        metric_columns = [key for key in subject_rows[0] if key not in
+                          {"subject_id", "target_subject", "fold", "stage",
+                           "calibration_shots", "aggregation_unit"}]
+        numeric = frame[metric_columns].select_dtypes(include="number")
+        mean_scores = numeric.mean().to_dict()
+        std_scores = numeric.std(ddof=0).to_dict()
+    return {"trial_prediction_log": predictions, "variational_interval_log": intervals,
+            "user_metrics": subject_rows, "fold_metrics": subject_rows,
+            "mean_scores": mean_scores, "std_scores": std_scores,
+            "subject_id_mapping": result.get("subject_id_mapping") or {}}
 
 
 def _normalize_value(value):
@@ -292,13 +436,20 @@ def _attach_subject_labels(
     return predictions.drop(columns=["subject_id_str"])
 
 
-def load_results(path: str | Path) -> ResultsTables:
+def load_results(path: str | Path, *, stage: str = "zero_shot_all_trials",
+                 calibration_shots: int | None = None) -> ResultsTables:
     """Load a CV result JSON into tidy DataFrames.
 
     Parameters
     ----------
     path : str or pathlib.Path
         Path to a JSON file written by the smoke test / cross-validation run.
+    stage : str
+        SIC evaluation to select. Defaults to strict zero-shot on all trials.
+        Legacy CV results without stages retain their existing behavior.
+    calibration_shots : int, optional
+        Required for ``zero_shot_paired`` and ``post_calibration``. Metrics and
+        predictions are always selected using the same stage and shot count.
 
     Returns
     -------
@@ -313,6 +464,19 @@ def load_results(path: str | Path) -> ResultsTables:
         raw = json.load(handle)
 
     models = _normalize_models(raw)
+    if not models:
+        raise ValueError(f"No CV results found in {path}.")
+    if stage not in SIC_STAGES:
+        raise ValueError(f"Unknown stage {stage!r}; choose from {SIC_STAGES}.")
+    if stage == "zero_shot_all_trials" and calibration_shots is not None:
+        raise ValueError("--calibration-shots requires --stage post_calibration or zero_shot_paired.")
+    if stage != "zero_shot_all_trials" and (calibration_shots is None or calibration_shots <= 0):
+        raise ValueError(f"--stage {stage} requires a positive --calibration-shots.")
+    sic_models = [name for name, result in models.items() if _SIC_KEYS & result.keys()]
+    if sic_models and len(sic_models) != len(models):
+        raise ValueError("Report SIC and legacy CV results separately; their aggregation units differ.")
+    if stage != "zero_shot_all_trials" and not sic_models:
+        raise ValueError("This file contains no SIC calibration stages.")
 
     predictions_parts: list[pd.DataFrame] = []
     user_metrics_parts: list[pd.DataFrame] = []
@@ -324,6 +488,8 @@ def load_results(path: str | Path) -> ResultsTables:
     subject_id_mapping: dict[str, dict] = {}
 
     for model, result in models.items():
+        if model in sic_models:
+            result = _adapt_sic(result, stage, calibration_shots)
         subject_id_mapping[model] = result.get("subject_id_mapping", {}) or {}
 
         prediction_rows = _prediction_rows(result)
@@ -345,7 +511,11 @@ def load_results(path: str | Path) -> ResultsTables:
             )
 
         inner_cv_parts.append(_inner_cv_frame(result, model))
-        summary_parts.append(_summary_frame(result, model))
+        summary_frame = _summary_frame(result, model)
+        if model in sic_models and not summary_frame.empty:
+            summary_frame = summary_frame.assign(stage=stage, calibration_shots=calibration_shots,
+                                                  aggregation_unit="subject")
+        summary_parts.append(summary_frame)
 
     predictions = _concat(predictions_parts)
     predictions = _attach_subject_labels(predictions, subject_id_mapping)
@@ -360,6 +530,9 @@ def load_results(path: str | Path) -> ResultsTables:
         intervals=_concat(interval_parts),
         summary=_concat(summary_parts),
         subject_id_mapping=subject_id_mapping,
+        stage=stage if sic_models else None,
+        calibration_shots=calibration_shots if sic_models else None,
+        aggregation_unit="subject" if sic_models else "outer_fold",
     )
 
 
