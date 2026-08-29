@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=sic_v11_abl
-#SBATCH --output=sic_v11_abl_%A_%a.out
-#SBATCH --error=sic_v11_abl_%A_%a.err
+#SBATCH --output=sic_vc_disc_%A_%a.out
+#SBATCH --error=sic_vc_disc_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=00:30:00
+#SBATCH --time=08:00:00
 #SBATCH --array=0
 
 set -euo pipefail
@@ -328,8 +328,8 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --classification-level trial \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/full/sic_trial_bigru_v11_${TRAINING_METHOD}_brier_ablation/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
-    --run-name "dreamer_${TARGET_DIMENSION}_sic_trial_bigru_v11_${TRAINING_METHOD}_${ABLATION_PROFILE}_full" \
+    --out-dir "runs/sic_vc_disc_full_${TRAINING_METHOD}/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
+    --run-name "dreamer_${TARGET_DIMENSION}_sic_vc_disc_${TRAINING_METHOD}_${ABLATION_PROFILE}_full" \
     --training-method "$TRAINING_METHOD" \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \
@@ -358,7 +358,6 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --cpus-per-worker 2 \
     --verbose 2 \
     --seed 42 \
-    --target-subjects 0 1 2 3 \
     --label-threshold-mode global \
     --median-label 3 \
     --window-sec 1.0 \
