@@ -1,5 +1,5 @@
 {
-  "calibration_epochs": [5],
+  "calibration_epochs": [20, 50, 100],
   "calibration_batch_size": [64],
   "calibration_learning_rate": [0.0001],
   "calibration_optimizer": ["adamw"],
