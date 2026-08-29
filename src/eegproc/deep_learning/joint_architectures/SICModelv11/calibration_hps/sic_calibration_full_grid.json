@@ -1,0 +1,20 @@
+{
+  "calibration_epochs": [5],
+  "calibration_batch_size": [64],
+  "calibration_learning_rate": [0.0001],
+  "calibration_optimizer": ["adamw"],
+  "calibration_weight_decay": [0.0],
+  "calibration_use_class_weight": [false],
+  "calibration_shuffle": [true],
+  "calibration_unfreeze_layers": [1, 2],
+  "calibration_use_vc_target": [true],
+  "calibration_vc_loss_weight": [1.0],
+  "calibration_vc_alpha": [1.0],
+  "calibration_vc_beta": [0.4],
+  "calibration_vc_gamma": [0.0],
+  "calibration_vc_lambda": [0.1],
+  "calibration_loss": ["focal"],
+  "calibration_label_smoothing": [0.0],
+  "calibration_focal_gamma": [0.5],
+  "calibration_focal_alpha": [null]
+}

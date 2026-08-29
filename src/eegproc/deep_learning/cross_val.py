@@ -8,6 +8,7 @@ import os
 import queue
 import traceback
 import warnings
+from itertools import combinations
 from pprint import pformat
 from typing import Callable, Literal, Mapping
 
@@ -31,6 +32,7 @@ __all__ = [
     "MetaLearningSubjectSequence",
     "AlternatingSubjectSetSequence",
     "subject_calibration_cv",
+    "nested_lnso_cv",
 ]
 
 
@@ -4858,6 +4860,52 @@ def _calibration_score_dict(
     return output
 
 
+class _PeriodicCalibrationEpochLogger(tf.keras.callbacks.Callback):
+    """Print calibration progress with subject/shot/fold context."""
+
+    def __init__(
+        self,
+        *,
+        target_subject,
+        calibration_shots: int,
+        calibration_fold: int,
+        total_epochs: int,
+        every_n_epochs: int,
+    ):
+        super().__init__()
+        self.target_subject = _python_scalar(target_subject)
+        self.calibration_shots = int(calibration_shots)
+        self.calibration_fold = int(calibration_fold)
+        self.total_epochs = int(total_epochs)
+        self.every_n_epochs = int(every_n_epochs)
+
+    def on_epoch_end(self, epoch, logs=None):
+        completed_epoch = int(epoch) + 1
+        if (
+            completed_epoch % self.every_n_epochs != 0
+            and completed_epoch != self.total_epochs
+        ):
+            return
+        metric_parts = []
+        for name, value in sorted(dict(logs or {}).items()):
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(numeric_value):
+                metric_parts.append(f"{name}={numeric_value:.6g}")
+        metrics_text = " ".join(metric_parts) or "metrics=unavailable"
+        print(
+            "[calibration] "
+            f"user={self.target_subject} "
+            f"shots={self.calibration_shots} "
+            f"fold={self.calibration_fold} "
+            f"epoch={completed_epoch}/{self.total_epochs} "
+            f"{metrics_text}",
+            flush=True,
+        )
+
+
 def _final_history_values(history) -> dict[str, float]:
     """Return the final finite scalar recorded for every Keras history key."""
     output: dict[str, float] = {}
@@ -4913,7 +4961,8 @@ def _run_subject_calibration_subject(
     target_subject,
     total_subjects: int,
     *,
-    model_builder_function: Callable[..., tf.keras.Model],
+    model_builder_function: Callable[..., tf.keras.Model] | None,
+    pretrained_model: tf.keras.Model | None,
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
@@ -4960,10 +5009,16 @@ def _run_subject_calibration_subject(
     calibration_use_class_weight: bool,
     source_fit_kwargs: dict,
     calibration_fit_kwargs: dict,
+    calibration_verbose: bool,
+    calibration_print_every_n_epochs: int,
     source_model_output_dir: str | os.PathLike[str] | None,
     verbose: int,
 ) -> dict:
-    """Train one source model and run all target-subject calibration folds."""
+    """Prepare one source model and run all target-subject calibration folds.
+
+    ``pretrained_model`` is an already-loaded, target-specific LOSO checkpoint.
+    When it is provided, source construction and source fitting are skipped.
+    """
     target_mask = subject_id_array == target_subject
     target_indices = np.flatnonzero(target_mask)
     outer_source_indices = np.flatnonzero(~target_mask)
@@ -5060,24 +5115,28 @@ def _run_subject_calibration_subject(
             "batch-size arguments. Remove epochs/batch_size from fixed_config."
         )
 
-    tf.keras.backend.clear_session()
+    if pretrained_model is None:
+        tf.keras.backend.clear_session()
     try:
-        try:
-            model = model_builder_function(
-                training_features=X_source,
-                training_labels=y_source,
-                training_subject_ids=source_subject_ids,
-                training_trial_ids=source_trial_ids,
-                **model_hp,
-            )
-        except TypeError as exc:
-            raise TypeError(
-                "For subject_calibration_cv, model_builder_function must accept "
-                "training_features, training_labels, training_subject_ids, and "
-                "training_trial_ids (directly or through **kwargs). v6 uses "
-                "training_features to construct the MTLFuseNet MI adjacency "
-                "without target-subject leakage."
-            ) from exc
+        if pretrained_model is not None:
+            model = pretrained_model
+        else:
+            try:
+                model = model_builder_function(
+                    training_features=X_source,
+                    training_labels=y_source,
+                    training_subject_ids=source_subject_ids,
+                    training_trial_ids=source_trial_ids,
+                    **model_hp,
+                )
+            except TypeError as exc:
+                raise TypeError(
+                    "For subject_calibration_cv, model_builder_function must accept "
+                    "training_features, training_labels, training_subject_ids, and "
+                    "training_trial_ids (directly or through **kwargs). v6 uses "
+                    "training_features to construct the MTLFuseNet MI adjacency "
+                    "without target-subject leakage."
+                ) from exc
 
         X_source_for_fit = _prepare_fit_inputs_with_subject_ids(
             model,
@@ -5162,20 +5221,25 @@ def _run_subject_calibration_subject(
         if source_callbacks:
             source_kwargs["callbacks"] = source_callbacks
 
-        source_history = model.fit(
-            X_source_for_fit,
-            y_source,
-            validation_data=source_validation_data,
-            epochs=int(source_epochs),
-            batch_size=int(source_batch_size),
-            verbose=int(verbose),
-            **source_kwargs,
-        )
+        source_history = None
+        if pretrained_model is None:
+            source_history = model.fit(
+                X_source_for_fit,
+                y_source,
+                validation_data=source_validation_data,
+                epochs=int(source_epochs),
+                batch_size=int(source_batch_size),
+                verbose=int(verbose),
+                **source_kwargs,
+            )
 
-        source_epochs_ran = int(len(source_history.history.get("loss", [])))
+        source_history_values = (
+            {} if source_history is None else source_history.history
+        )
+        source_epochs_ran = int(len(source_history_values.get("loss", [])))
         source_best_epoch: int | None = None
         source_best_monitored_value: float | None = None
-        monitored_history = source_history.history.get(early_stopping_monitor)
+        monitored_history = source_history_values.get(early_stopping_monitor)
         if monitored_history:
             monitored_values = np.asarray(monitored_history, dtype=np.float64)
             finite_indices = np.flatnonzero(np.isfinite(monitored_values))
@@ -5377,13 +5441,30 @@ def _run_subject_calibration_subject(
                 if calibration_class_weight is not None:
                     calibration_kwargs["class_weight"] = calibration_class_weight
 
+                if calibration_verbose:
+                    callbacks = list(
+                        calibration_kwargs.get("callbacks") or []
+                    )
+                    callbacks.append(
+                        _PeriodicCalibrationEpochLogger(
+                            target_subject=target_subject,
+                            calibration_shots=calibration_shots,
+                            calibration_fold=calibration_fold,
+                            total_epochs=int(calibration_epochs),
+                            every_n_epochs=int(
+                                calibration_print_every_n_epochs
+                            ),
+                        )
+                    )
+                    calibration_kwargs["callbacks"] = callbacks
+
                 calibration_history = model.fit(
                     X_calibration_for_fit,
                     y_calibration,
                     epochs=int(calibration_epochs),
                     batch_size=int(calibration_batch_size),
                     # Calibration continuations are intentionally quiet; the
-                    # terminal reports only final mean accuracy per shot level.
+                    # optional periodic callback controls concise epoch output.
                     verbose=0,
                     **calibration_kwargs,
                 )
@@ -5519,13 +5600,26 @@ def _run_subject_calibration_subject(
             "n_target_samples": int(len(target_indices)),
             "n_target_trials": int(len(np.unique(target_trial_ids))),
             "source_training": {
+                "mode": (
+                    "loaded_pretrained_model"
+                    if pretrained_model is not None
+                    else "fit_source_model"
+                ),
+                "skipped": bool(pretrained_model is not None),
                 "epochs_ran": source_epochs_ran,
                 "best_epoch": source_best_epoch,
                 "best_monitored_value": source_best_monitored_value,
                 "early_stopping_monitor": early_stopping_monitor,
-                "stopped_early": bool(source_epochs_ran < int(source_epochs)),
+                "stopped_early": bool(
+                    pretrained_model is None
+                    and source_epochs_ran < int(source_epochs)
+                ),
                 "restore_best_weights": bool(restore_best_weights),
-                "final_history": _final_history_values(source_history),
+                "final_history": (
+                    {}
+                    if source_history is None
+                    else _final_history_values(source_history)
+                ),
                 "class_weight": source_class_weight,
                 "prediction_diagnostics_metric": (
                     str(prediction_diagnostics_metric)
@@ -5592,7 +5686,7 @@ def _subject_calibration_process_main(
 
 
 def subject_calibration_cv(
-    model_builder_function: Callable[..., tf.keras.Model],
+    model_builder_function: Callable[..., tf.keras.Model] | None,
     feature_array: np.ndarray,
     label_array: np.ndarray,
     subject_id_array: np.ndarray,
@@ -5603,6 +5697,7 @@ def subject_calibration_cv(
     calibration_epochs: int = 20,
     calibration_batch_size: int = 6,
     *,
+    pretrained_model: tf.keras.Model | None = None,
     calibration_trials: int = 6,
     calibration_folds: int = 3,
     calibration_levels: list[tuple[int, int]] | tuple[tuple[int, int], ...] | None = None,
@@ -5655,6 +5750,8 @@ def subject_calibration_cv(
     calibration_use_class_weight: bool = False,
     source_fit_kwargs: dict | None = None,
     calibration_fit_kwargs: dict | None = None,
+    calibration_verbose: bool = False,
+    calibration_print_every_n_epochs: int = 1,
     verbose: int = 0,
     n_jobs: int = 1,
     gpu_ids: list[int] | tuple[int, ...] | None = None,
@@ -5664,6 +5761,10 @@ def subject_calibration_cv(
     source_model_output_dir: str | os.PathLike[str] | None = None,
 ) -> dict:
     """Strict LOSO pretraining followed by one or more calibration levels.
+
+    Pass exactly one of ``model_builder_function`` and ``pretrained_model``.
+    The pretrained path accepts one already-loaded, target-specific LOSO model,
+    requires one explicit ``target_subjects`` entry, and skips source fitting.
 
     For each target subject, a fresh subject-independent source model is first
     trained using the other subjects. When ``validation_subjects_per_fold`` is
@@ -5767,8 +5868,21 @@ def subject_calibration_cv(
             "feature_array, label_array, subject_id_array, and trial_id_array "
             f"must align; got lengths {lengths}."
         )
-    if source_epochs < 1 or calibration_epochs < 1:
-        raise ValueError("source_epochs and calibration_epochs must be >= 1.")
+    if (model_builder_function is None) == (pretrained_model is None):
+        raise ValueError(
+            "Pass exactly one of model_builder_function or pretrained_model."
+        )
+    if pretrained_model is not None and fixed_config:
+        raise ValueError(
+            "fixed_config applies only when building a source model; configure "
+            "the loaded model before passing pretrained_model."
+        )
+    if pretrained_model is None and source_epochs < 1:
+        raise ValueError("source_epochs must be >= 1 when fitting a source model.")
+    if calibration_epochs < 1:
+        raise ValueError("calibration_epochs must be >= 1.")
+    if int(calibration_print_every_n_epochs) < 1:
+        raise ValueError("calibration_print_every_n_epochs must be >= 1.")
     if source_batch_size < 1 or calibration_batch_size < 1:
         raise ValueError(
             "source_batch_size and calibration_batch_size must be >= 1."
@@ -5885,7 +5999,10 @@ def subject_calibration_cv(
     unique_subjects = np.sort(np.unique(subject_id_array))
     if len(unique_subjects) < 2:
         raise ValueError("subject_calibration_cv requires at least two subjects.")
-    if validation_subjects_per_fold >= len(unique_subjects) - 1:
+    if (
+        pretrained_model is None
+        and validation_subjects_per_fold >= len(unique_subjects) - 1
+    ):
         raise ValueError(
             "validation_subjects_per_fold must leave at least one non-target "
             "subject for source fitting. Got "
@@ -5907,6 +6024,21 @@ def subject_calibration_cv(
                 f"Available subjects: {unique_subjects.tolist()}."
             )
     total_subjects = int(len(target_subjects))
+    if pretrained_model is not None:
+        if total_subjects != 1:
+            raise ValueError(
+                "A pretrained_model must be paired with exactly one explicit "
+                "target subject. Pass target_subjects=[USER_ID]."
+            )
+        if validation_subjects_per_fold != 0:
+            raise ValueError(
+                "validation_subjects_per_fold must be 0 when source fitting is skipped."
+            )
+        if n_jobs != 1:
+            raise ValueError(
+                "pretrained_model runs require n_jobs=1 because a live Keras "
+                "model is passed directly rather than serialized to workers."
+            )
 
     # Fail early if a usable calibration/evaluation split cannot be formed for
     # any selected subject, rather than discovering it after pretraining.
@@ -5951,6 +6083,7 @@ def subject_calibration_cv(
     worker_state = {
         "total_subjects": total_subjects,
         "model_builder_function": model_builder_function,
+        "pretrained_model": pretrained_model,
         "feature_array": feature_array,
         "label_array": label_array,
         "subject_id_array": subject_id_array,
@@ -6007,6 +6140,10 @@ def subject_calibration_cv(
         "calibration_use_class_weight": bool(calibration_use_class_weight),
         "source_fit_kwargs": source_fit_kwargs,
         "calibration_fit_kwargs": calibration_fit_kwargs,
+        "calibration_verbose": bool(calibration_verbose),
+        "calibration_print_every_n_epochs": int(
+            calibration_print_every_n_epochs
+        ),
         "source_model_output_dir": source_model_output_dir,
         "verbose": int(verbose),
     }
@@ -6047,10 +6184,25 @@ def subject_calibration_cv(
     total_calibration_folds = sum(folds for _, folds in calibration_levels)
 
     results = {
-        "cv_strategy": "subject_independent_pretraining_with_subject_calibration",
-        "protocol_name": "strict LOSO with multi-level calibration continuation",
+        "cv_strategy": (
+            "loaded_pretrained_model_with_subject_calibration"
+            if pretrained_model is not None
+            else "subject_independent_pretraining_with_subject_calibration"
+        ),
+        "protocol_name": (
+            "target-specific loaded LOSO model with multi-level calibration"
+            if pretrained_model is not None
+            else "strict LOSO with multi-level calibration continuation"
+        ),
         "n_subjects": total_subjects,
-        "n_source_model_fits": total_subjects,
+        "n_source_model_fits": (
+            0 if pretrained_model is not None else total_subjects
+        ),
+        "source_model_origin": (
+            "loaded_pretrained_model"
+            if pretrained_model is not None
+            else "fit_in_cross_validation"
+        ),
         "n_calibration_fits": total_subjects * int(total_calibration_folds),
         "calibration_plan": [
             {"shots": int(shots), "folds": int(folds)}
@@ -6076,6 +6228,10 @@ def subject_calibration_cv(
         "calibration_learning_rate": float(calibration_learning_rate),
         "calibration_optimizer": str(calibration_optimizer),
         "calibration_weight_decay": float(calibration_weight_decay),
+        "calibration_verbose": bool(calibration_verbose),
+        "calibration_print_every_n_epochs": int(
+            calibration_print_every_n_epochs
+        ),
         "decision_threshold": decision_threshold,
         "prediction_diagnostics": {
             "enabled": bool(prediction_diagnostics),
@@ -6412,3 +6568,919 @@ def fixed_loso_cv(
         }
     )
     return results
+
+
+# ---------------------------------------------------------------------
+# Backward-compatible nested LNSO API retained from the attached module.
+# ---------------------------------------------------------------------
+
+def _choose_best_config_index(
+    mean_scores: list[dict],
+    selection_metric: str,
+    maximize_metric: bool,
+) -> int:
+    """Choose the best hyperparameter config from inner-CV mean scores."""
+    metric_values = [scores[selection_metric] for scores in mean_scores]
+
+    if maximize_metric:
+        return int(np.argmax(metric_values))
+
+    return int(np.argmin(metric_values))
+
+def _keras_loss_value(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    y: np.ndarray,
+    batch_size: int | None = None,
+) -> float:
+    """Evaluate and return the Keras loss value."""
+    return _keras_evaluation_results(
+        model=model,
+        X=X,
+        y=y,
+        batch_size=batch_size,
+    )["loss"]
+
+def _evaluate_inner_config(
+    model: tf.keras.Model,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    subject_ids_val: np.ndarray,
+    trial_ids_val: np.ndarray,
+    metrics: list[str] | tuple[str, ...],
+    selection_level: Literal["window", "trial"] = "trial",
+    batch_size: int | None = None,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
+) -> dict:
+    """Evaluate an inner fold at both levels and expose selection-level scores."""
+    _validate_evaluation_level(selection_level, "selection_level")
+    y_true_window = _as_numpy_1d(y_val).astype(np.int64)
+    probabilities_window = _predict_probabilities(
+        model,
+        X_val,
+        batch_size=batch_size,
+        n_prediction_latent_samples=n_prediction_latent_samples,
+        latent_sampling_seed=latent_sampling_seed,
+    )
+    y_pred_window = _predict_labels(probabilities_window)
+
+    window_scores = _level_scores(
+        y_true=y_true_window,
+        y_pred=y_pred_window,
+        probabilities=probabilities_window,
+        metrics=metrics,
+    )
+    keras_evaluation = _keras_evaluation_results(
+        model, X_val, y_val, batch_size=batch_size
+    )
+    window_scores["keras_model_loss"] = keras_evaluation["loss"]
+    window_scores["joint_loss"] = keras_evaluation["loss"]
+    decoder_accuracy = keras_evaluation.get("decoder_accuracy")
+    if decoder_accuracy is not None:
+        window_scores["decoder_accuracy"] = float(decoder_accuracy)
+
+    trial_aggregation = _aggregate_window_probabilities_by_trial(
+        probabilities=probabilities_window,
+        y_true=y_true_window,
+        subject_ids=subject_ids_val,
+        trial_ids=trial_ids_val,
+    )
+    trial_scores = _level_scores(
+        y_true=trial_aggregation["y_true"],
+        y_pred=trial_aggregation["y_pred"],
+        probabilities=trial_aggregation["probabilities"],
+        metrics=metrics,
+    )
+
+    primary_scores = trial_scores if selection_level == "trial" else window_scores
+    primary_metric_keys = ["loss", *metrics]
+    if "joint_loss" in primary_scores:
+        primary_metric_keys.append("joint_loss")
+
+    return {
+        **{key: primary_scores[key] for key in primary_metric_keys},
+        **(
+            {"decoder_accuracy": float(decoder_accuracy)}
+            if decoder_accuracy is not None
+            else {}
+        ),
+        **_prefix_scores(window_scores, "window"),
+        **_prefix_scores(trial_scores, "trial"),
+        "selection_level": selection_level,
+        "n_val_windows": int(len(y_true_window)),
+        "n_val_trials": int(len(trial_aggregation["y_true"])),
+    }
+
+def _outer_fold_process_main(
+    worker_state_payload: bytes,
+    task_queue,
+    result_queue,
+    gpu_id: int | None,
+    cpus_per_worker: int | None,
+    assigned_device_label: str | None,
+) -> None:
+    """Run outer-fold tasks in one persistent spawned process."""
+    try:
+        _configure_tensorflow_worker(
+            gpu_id=gpu_id,
+            cpus_per_worker=cpus_per_worker,
+            assigned_device_label=assigned_device_label,
+        )
+        worker_state = cloudpickle.loads(worker_state_payload)
+
+        while True:
+            task = task_queue.get()
+
+            if task is None:
+                return
+
+            outer_fold_number, outer_test_subjects = task
+
+            try:
+                fold_output = _run_outer_fold(
+                    outer_fold_number=outer_fold_number,
+                    outer_test_subjects=np.asarray(outer_test_subjects),
+                    **worker_state,
+                )
+                result_queue.put(("ok", int(outer_fold_number), fold_output))
+            except BaseException:
+                result_queue.put(
+                    (
+                        "error",
+                        int(outer_fold_number),
+                        traceback.format_exc(),
+                    )
+                )
+                return
+
+    except BaseException:
+        result_queue.put(("error", -1, traceback.format_exc()))
+    finally:
+        tf.keras.backend.clear_session()
+        gc.collect()
+
+def _run_outer_fold(
+    outer_fold_number: int,
+    outer_test_subjects: np.ndarray,
+    total_outer_folds: int,
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray,
+    n_inner_subjects_to_leave_out: int,
+    grid_configs: list[dict],
+    batch_size: int,
+    preprocessing_strategy: Callable | None,
+    selection_metric: str,
+    selection_level: Literal["window", "trial"],
+    evaluation_level: Literal["window", "trial"],
+    maximize_metric: bool,
+    metrics: tuple[str, ...],
+    log_predictions: bool,
+    log_variational_intervals: bool,
+    n_prediction_latent_samples: int,
+    latent_sampling_seed: int | None,
+    n_uncertainty_samples: int,
+    ci_level: float,
+    verbose: int,
+    extra_fit_kwargs: dict,
+) -> dict:
+    """Run one complete outer fold, including its inner grid search."""
+    outer_test_mask = np.isin(subject_id_array, outer_test_subjects)
+    outer_train_mask = ~outer_test_mask
+
+    outer_train_indices = np.where(outer_train_mask)[0]
+    outer_test_indices = np.where(outer_test_mask)[0]
+
+    outer_train_subject_ids = subject_id_array[outer_train_indices]
+    unique_outer_train_subjects = np.sort(np.unique(outer_train_subject_ids))
+
+    inner_subject_splits = list(
+        combinations(unique_outer_train_subjects, n_inner_subjects_to_leave_out)
+    )
+
+    _print_fold_header(
+        outer_fold_number,
+        total_outer_folds,
+        f"outer test subjects={outer_test_subjects.tolist()} "
+        f"(outer_train={len(outer_train_indices)}, "
+        f"outer_test={len(outer_test_indices)} windows)",
+    )
+
+    inner_scores_by_config: list[list[dict]] = [[] for _ in grid_configs]
+    inner_fold_results: list[dict] = []
+
+    # -----------------------------------------------------------------
+    # Inner CV: choose hyperparameters.
+    # -----------------------------------------------------------------
+    for inner_fold_number, inner_val_subjects in enumerate(
+        inner_subject_splits,
+        start=1,
+    ):
+        inner_val_subjects = np.asarray(inner_val_subjects)
+
+        inner_val_mask_relative = np.isin(
+            outer_train_subject_ids,
+            inner_val_subjects,
+        )
+        inner_train_mask_relative = ~inner_val_mask_relative
+
+        inner_train_indices = outer_train_indices[inner_train_mask_relative]
+        inner_val_indices = outer_train_indices[inner_val_mask_relative]
+
+        X_inner_train = feature_array[inner_train_indices]
+        y_inner_train = label_array[inner_train_indices]
+        X_inner_val = feature_array[inner_val_indices]
+        y_inner_val = label_array[inner_val_indices]
+        subject_ids_inner_train = subject_id_array[inner_train_indices]
+        subject_ids_inner_val = subject_id_array[inner_val_indices]
+        trial_ids_inner_train = trial_id_array[inner_train_indices]
+        trial_ids_inner_val = trial_id_array[inner_val_indices]
+
+        (
+            X_inner_train,
+            y_inner_train,
+            X_inner_val,
+            y_inner_val,
+        ) = _apply_preprocessing_strategy(
+            preprocessing_strategy=preprocessing_strategy,
+            X_train=X_inner_train,
+            y_train=y_inner_train,
+            X_eval=X_inner_val,
+            y_eval=y_inner_val,
+            train_indices=inner_train_indices,
+            eval_indices=inner_val_indices,
+        )
+
+        _validate_processed_alignment(
+            X_inner_train, y_inner_train, subject_ids_inner_train,
+            trial_ids_inner_train, "inner-training"
+        )
+        _validate_processed_alignment(
+            X_inner_val, y_inner_val, subject_ids_inner_val,
+            trial_ids_inner_val, "inner-validation"
+        )
+
+        config_results_this_inner_fold: list[dict] = []
+
+        for config_index, config in enumerate(grid_configs):
+            model_hp, fit_hp = _split_config(config)
+            current_batch_size = fit_hp.get("batch_size", batch_size)
+
+            tf.keras.backend.clear_session()
+            model = model_builder_function(**model_hp)
+
+            try:
+                fit_kwargs = dict(fit_hp)
+                fit_kwargs["validation_data"] = (X_inner_val, y_inner_val)
+
+                y_inner_train_ids = _as_numpy_1d(y_inner_train)
+                classes, counts = np.unique(y_inner_train_ids, return_counts=True)
+
+                class_weight = {
+                    int(class_id): len(y_inner_train_ids) / (len(classes) * count)
+                    for class_id, count in zip(classes, counts)
+                }
+
+                model.fit(
+                    X_inner_train,
+                    y_inner_train,
+                    class_weight=class_weight,
+                    verbose=verbose,
+                    **fit_kwargs,
+                    **extra_fit_kwargs,
+                )
+
+                val_scores = _evaluate_inner_config(
+                    model=model,
+                    X_val=X_inner_val,
+                    y_val=y_inner_val,
+                    subject_ids_val=subject_ids_inner_val,
+                    trial_ids_val=trial_ids_inner_val,
+                    metrics=metrics,
+                    selection_level=selection_level,
+                    batch_size=current_batch_size,
+                    n_prediction_latent_samples=n_prediction_latent_samples,
+                    latent_sampling_seed=latent_sampling_seed,
+                )
+
+                config_result = {
+                    "outer_fold": int(outer_fold_number),
+                    "inner_fold": int(inner_fold_number),
+                    "left_out_subjects": inner_val_subjects.tolist(),
+                    "config_index": int(config_index),
+                    "config": dict(config),
+                    **val_scores,
+                }
+
+                config_results_this_inner_fold.append(config_result)
+                inner_scores_by_config[config_index].append(val_scores)
+
+            finally:
+                del model
+                gc.collect()
+                tf.keras.backend.clear_session()
+
+        inner_fold_results.append(
+            {
+                "outer_fold": int(outer_fold_number),
+                "inner_fold": int(inner_fold_number),
+                "left_out_subjects": inner_val_subjects.tolist(),
+                "n_train_windows": int(len(inner_train_indices)),
+                "n_val_windows": int(len(inner_val_indices)),
+                "n_train_trials": int(len(set(zip(
+                    subject_ids_inner_train.tolist(), trial_ids_inner_train.tolist()
+                )))),
+                "n_val_trials": int(len(set(zip(
+                    subject_ids_inner_val.tolist(), trial_ids_inner_val.tolist()
+                )))),
+                "configs": config_results_this_inner_fold,
+            }
+        )
+
+    # -----------------------------------------------------------------
+    # Aggregate inner-CV scores and choose the best configuration.
+    # -----------------------------------------------------------------
+    inner_mean_scores: list[dict] = []
+    inner_std_scores: list[dict] = []
+    score_metric_names = [
+        "loss", "joint_loss", *metrics, "decoder_accuracy",
+        "window_loss", "window_joint_loss", "window_keras_model_loss", "window_decoder_accuracy",
+        *[f"window_{metric}" for metric in metrics],
+        "trial_loss", *[f"trial_{metric}" for metric in metrics],
+    ]
+
+    for config_index, config in enumerate(grid_configs):
+        mean_scores_for_config, std_scores_for_config = _mean_std_rows(
+            inner_scores_by_config[config_index],
+            score_metric_names,
+        )
+
+        inner_mean_scores.append(
+            {
+                "config_index": int(config_index),
+                "config": dict(config),
+                **mean_scores_for_config,
+            }
+        )
+        inner_std_scores.append(
+            {
+                "config_index": int(config_index),
+                "config": dict(config),
+                **std_scores_for_config,
+            }
+        )
+
+    best_config_index = _choose_best_config_index(
+        mean_scores=inner_mean_scores,
+        selection_metric=selection_metric,
+        maximize_metric=maximize_metric,
+    )
+    best_config = grid_configs[best_config_index]
+
+    print(
+        f"\nBest config from inner CV for outer fold {outer_fold_number}: "
+        f"{selection_metric}="
+        f"{inner_mean_scores[best_config_index][selection_metric]:.6f}",
+        flush=True,
+    )
+    _print_config("Best config:", best_config)
+
+    best_config_result = {
+        "outer_fold": int(outer_fold_number),
+        "best_config_index": int(best_config_index),
+        "best_config": dict(best_config),
+        "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "selection_score": float(
+            inner_mean_scores[best_config_index][selection_metric]
+        ),
+    }
+
+    inner_cv_result = {
+        "outer_fold": int(outer_fold_number),
+        "inner_fold_results": inner_fold_results,
+        "inner_mean_scores": inner_mean_scores,
+        "inner_std_scores": inner_std_scores,
+    }
+
+    # -----------------------------------------------------------------
+    # Final outer training and testing.
+    # -----------------------------------------------------------------
+    X_outer_train = feature_array[outer_train_indices]
+    y_outer_train = label_array[outer_train_indices]
+    X_outer_test = feature_array[outer_test_indices]
+    y_outer_test = label_array[outer_test_indices]
+    subject_ids_outer_train = subject_id_array[outer_train_indices]
+    subject_ids_outer_test = subject_id_array[outer_test_indices]
+    trial_ids_outer_train = trial_id_array[outer_train_indices]
+    trial_ids_outer_test = trial_id_array[outer_test_indices]
+
+    (
+        X_outer_train,
+        y_outer_train,
+        X_outer_test,
+        y_outer_test,
+    ) = _apply_preprocessing_strategy(
+        preprocessing_strategy=preprocessing_strategy,
+        X_train=X_outer_train,
+        y_train=y_outer_train,
+        X_eval=X_outer_test,
+        y_eval=y_outer_test,
+        train_indices=outer_train_indices,
+        eval_indices=outer_test_indices,
+    )
+
+    _validate_processed_alignment(
+        X_outer_train, y_outer_train, subject_ids_outer_train,
+        trial_ids_outer_train, "outer-training"
+    )
+    _validate_processed_alignment(
+        X_outer_test, y_outer_test, subject_ids_outer_test,
+        trial_ids_outer_test, "outer-test"
+    )
+
+    model_hp, fit_hp = _split_config(best_config)
+    current_batch_size = fit_hp.get("batch_size", batch_size)
+
+    tf.keras.backend.clear_session()
+    final_model = model_builder_function(**model_hp)
+
+    try:
+        y_outer_train_ids = _as_numpy_1d(y_outer_train)
+        classes, counts = np.unique(y_outer_train_ids, return_counts=True)
+
+        class_weight = {
+            int(class_id): len(y_outer_train_ids) / (len(classes) * count)
+            for class_id, count in zip(classes, counts)
+        }
+
+        final_model.fit(
+            X_outer_train,
+            y_outer_train,
+            class_weight=class_weight,
+            verbose=verbose,
+            **fit_hp,
+            **extra_fit_kwargs,
+        )
+
+        fold_result = _evaluate_classification_fold(
+            model=final_model,
+            X_test=X_outer_test,
+            y_test=y_outer_test,
+            subject_ids_test=subject_ids_outer_test,
+            trial_ids_test=trial_ids_outer_test,
+            fold_index=outer_fold_number,
+            metrics=metrics,
+            evaluation_level=evaluation_level,
+            batch_size=current_batch_size,
+            n_prediction_latent_samples=n_prediction_latent_samples,
+            latent_sampling_seed=latent_sampling_seed,
+            log_predictions=log_predictions,
+            log_variational_intervals=log_variational_intervals,
+            n_uncertainty_samples=n_uncertainty_samples,
+            ci_level=ci_level,
+        )
+
+    finally:
+        del final_model
+        gc.collect()
+        tf.keras.backend.clear_session()
+
+    outer_fold_result = {
+        "outer_fold_number": int(outer_fold_number),
+        "left_out_subjects": outer_test_subjects.tolist(),
+        "n_outer_train_windows": int(len(outer_train_indices)),
+        "n_outer_test_windows": int(len(outer_test_indices)),
+        "n_outer_train_trials": int(len(set(zip(
+            subject_ids_outer_train.tolist(), trial_ids_outer_train.tolist()
+        )))),
+        "n_outer_test_trials": int(len(set(zip(
+            subject_ids_outer_test.tolist(), trial_ids_outer_test.tolist()
+        )))),
+        "selection_level": selection_level,
+        "evaluation_level": evaluation_level,
+        "best_config": dict(best_config),
+        "inner_fold_results": inner_fold_results,
+        "inner_mean_scores": inner_mean_scores,
+        "inner_std_scores": inner_std_scores,
+        "fold_metrics": fold_result["fold_metrics"],
+        "window_fold_metrics": fold_result["window_fold_metrics"],
+        "trial_fold_metrics": fold_result["trial_fold_metrics"],
+        "user_metrics": fold_result["user_metrics"],
+        "prediction_log": fold_result["prediction_log"],
+        "window_prediction_log": fold_result["window_prediction_log"],
+        "trial_prediction_log": fold_result["trial_prediction_log"],
+        "variational_interval_log": fold_result["variational_interval_log"],
+        "window_variational_interval_log": fold_result["window_variational_interval_log"],
+        "trial_variational_interval_log": fold_result["trial_variational_interval_log"],
+    }
+
+    return {
+        "outer_fold_number": int(outer_fold_number),
+        "best_config_result": best_config_result,
+        "inner_cv_result": inner_cv_result,
+        "outer_fold_result": outer_fold_result,
+        **fold_result,
+    }
+
+def nested_lnso_cv(
+    model_builder_function: Callable[..., tf.keras.Model],
+    feature_array: np.ndarray,
+    label_array: np.ndarray,
+    subject_id_array: np.ndarray,
+    trial_id_array: np.ndarray | None = None,
+    n_outer_subjects_to_leave_out: int = 1,
+    n_inner_subjects_to_leave_out: int = 1,
+    n_epochs: int = 50,
+    batch_size: int = 32,
+    hyperparameters: dict | None = None,
+    preprocessing_strategy: Callable | None = None,
+    selection_metric: str = "joint_loss",
+    selection_level: Literal["window", "trial"] = "window",
+    evaluation_level: Literal["window", "trial"] = "trial",
+    maximize_metric: bool | None = None,
+    metrics: list[str] | tuple[str, ...] = ("accuracy", "f1", "precision", "recall"),
+    log_predictions: bool = True,
+    log_variational_intervals: bool = False,
+    n_prediction_latent_samples: int = 0,
+    latent_sampling_seed: int | None = None,
+    n_uncertainty_samples: int = 30,
+    ci_level: float = 0.95,
+    verbose: int = 0,
+    extra_fit_kwargs: dict | None = None,
+    n_jobs: int = 1,
+    gpu_ids: list[int] | tuple[int, ...] | None = None,
+    cpus_per_worker: int | None = None,
+) -> dict:
+    """Run nested Leave-N-Subjects-Out CV.
+
+    Outer folds can be executed concurrently using multiprocessing with the
+    ``spawn`` start method. Inner folds and hyperparameter configurations remain
+    sequential inside each worker, preventing nested process oversubscription.
+
+    Trial-level evaluation
+    ----------------------
+    ``trial_id_array`` must contain one trial ID per input window. Predictions
+    are made per window, then probabilities are averaged within each
+    ``(subject_id, trial_id)`` group. ``selection_level`` controls inner-CV
+    hyperparameter selection and ``evaluation_level`` controls the unprefixed
+    primary metrics. Both window- and trial-level metrics/logs are always
+    returned.
+
+    Parameters added for concurrency
+    --------------------------------
+    n_jobs:
+        Number of persistent outer-fold worker processes. ``1`` preserves the
+        original sequential behavior unless ``gpu_ids`` is supplied.
+    gpu_ids:
+        Local GPU indices assigned one-per-worker. For example,
+        ``gpu_ids=(0, 1, 2, 3)`` with ``n_jobs=4``. When this is ``None`` and
+        multiple workers are requested, visible Slurm/TensorFlow GPUs are
+        assigned automatically, one per worker.
+    cpus_per_worker:
+        TensorFlow intra-op CPU threads available to each worker. Keep
+        ``n_jobs * cpus_per_worker`` within the CPUs allocated by Slurm.
+
+    Notes
+    -----
+    Worker state is serialized with cloudpickle, so locally defined model
+    builders and preprocessing callables are supported. The training entry
+    point must still be protected by ``if __name__ == "__main__":``.
+    """
+    extra_fit_kwargs = extra_fit_kwargs or {}
+
+    if "validation_data" in extra_fit_kwargs:
+        raise ValueError(
+            "Do not pass validation_data in extra_fit_kwargs. "
+            "nested_lnso_cv creates validation_data from the inner folds."
+        )
+
+    if subject_id_array is None:
+        raise ValueError("subject_id_array is required for nested LNSO CV.")
+    if trial_id_array is None:
+        raise ValueError(
+            "trial_id_array is required for trial-level prediction and metrics. "
+            "Pass one trial ID per window, aligned with feature_array."
+        )
+
+    _validate_evaluation_level(selection_level, "selection_level")
+    _validate_evaluation_level(evaluation_level, "evaluation_level")
+
+    feature_array = np.asarray(feature_array)
+    label_array = np.asarray(label_array)
+    subject_id_array = np.asarray(subject_id_array)
+    trial_id_array = np.asarray(trial_id_array)
+
+    input_lengths = (
+        len(feature_array), len(label_array), len(subject_id_array), len(trial_id_array)
+    )
+    if len(set(input_lengths)) != 1:
+        raise ValueError(
+            "feature_array, label_array, subject_id_array, and trial_id_array "
+            "must have the same first dimension. Got lengths "
+            f"{input_lengths}."
+        )
+
+    metrics = tuple(metrics)
+
+    for metric in metrics:
+        if metric not in _CLASSIFICATION_METRICS:
+            raise ValueError(
+                f"Unsupported metric: {metric}. Supported metrics: "
+                f"{sorted(_CLASSIFICATION_METRICS)}"
+            )
+
+    allowed_selection_metrics = {"loss", "joint_loss", *metrics}
+
+    if selection_metric not in allowed_selection_metrics:
+        raise ValueError(
+            f"selection_metric='{selection_metric}' is not available. "
+            f"Use 'loss', 'joint_loss', or one of metrics={list(metrics)}."
+        )
+
+    if selection_metric == "joint_loss" and selection_level != "window":
+        raise ValueError(
+            "selection_metric='joint_loss' requires selection_level='window' "
+            "because the complete Keras VAE+VC objective is evaluated over "
+            "validation/test windows, before trial aggregation."
+        )
+
+    if maximize_metric is None:
+        maximize_metric = selection_metric not in {"loss", "joint_loss"}
+
+    if n_prediction_latent_samples < 0:
+        raise ValueError("n_prediction_latent_samples must be >= 0.")
+
+    if not (0.0 < ci_level < 1.0):
+        raise ValueError("ci_level must be between 0 and 1.")
+
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be >= 1.")
+
+    if cpus_per_worker is not None and cpus_per_worker < 1:
+        raise ValueError("cpus_per_worker must be >= 1 when provided.")
+
+    unique_subjects = np.sort(np.unique(subject_id_array))
+
+    if n_outer_subjects_to_leave_out < 1:
+        raise ValueError("n_outer_subjects_to_leave_out must be >= 1.")
+
+    if n_inner_subjects_to_leave_out < 1:
+        raise ValueError("n_inner_subjects_to_leave_out must be >= 1.")
+
+    if n_outer_subjects_to_leave_out >= len(unique_subjects):
+        raise ValueError(
+            "n_outer_subjects_to_leave_out must be smaller than the number "
+            f"of unique subjects. Got {n_outer_subjects_to_leave_out} for "
+            f"{len(unique_subjects)} subjects."
+        )
+
+    n_outer_train_subjects = len(unique_subjects) - n_outer_subjects_to_leave_out
+
+    if n_inner_subjects_to_leave_out >= n_outer_train_subjects:
+        raise ValueError(
+            "n_inner_subjects_to_leave_out must be smaller than the number "
+            "of subjects available in each outer-training pool. Got "
+            f"{n_inner_subjects_to_leave_out} for {n_outer_train_subjects} "
+            "outer-training subjects."
+        )
+
+    if hyperparameters is None:
+        hyperparameters = {}
+
+    effective_hyperparameters = {
+        "epochs": n_epochs,
+        "batch_size": batch_size,
+        **hyperparameters,
+    }
+
+    grid_configs = _expand_hyperparameter_grid(effective_hyperparameters)
+    _warn_if_joint_loss_weights_vary(grid_configs, selection_metric)
+    outer_subject_splits = list(
+        combinations(unique_subjects, n_outer_subjects_to_leave_out)
+    )
+    total_outer_folds = len(outer_subject_splits)
+    effective_n_jobs = min(n_jobs, total_outer_folds)
+
+    normalized_gpu_ids: tuple[int, ...] | None = None
+
+    if gpu_ids is None and effective_n_jobs > 1:
+        normalized_gpu_ids = _auto_assign_gpu_ids(effective_n_jobs)
+        if normalized_gpu_ids is not None:
+            effective_n_jobs = len(normalized_gpu_ids)
+    elif gpu_ids is not None:
+        normalized_gpu_ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
+
+        if not normalized_gpu_ids:
+            raise ValueError("gpu_ids must contain at least one GPU index.")
+        if len(set(normalized_gpu_ids)) != len(normalized_gpu_ids):
+            raise ValueError("gpu_ids must not contain duplicate GPU indices.")
+        if effective_n_jobs > len(normalized_gpu_ids):
+            raise ValueError(
+                f"n_jobs={effective_n_jobs} requires at least that many GPU IDs, "
+                f"but gpu_ids={normalized_gpu_ids}. Use one GPU per worker."
+            )
+
+        normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
+
+    results = {
+        "fold_metrics": [],
+        "window_fold_metrics": [],
+        "trial_fold_metrics": [],
+        "user_metrics": [],
+        "prediction_log": [],
+        "window_prediction_log": [],
+        "trial_prediction_log": [],
+        "variational_interval_log": [],
+        "window_variational_interval_log": [],
+        "trial_variational_interval_log": [],
+        "best_configs": [],
+        "inner_cv_results": [],
+        "outer_fold_results": [],
+        "mean_scores": {},
+        "std_scores": {},
+        "window_mean_scores": {},
+        "window_std_scores": {},
+        "trial_mean_scores": {},
+        "trial_std_scores": {},
+    }
+
+    print(
+        f"\nNested LNSO CV — {total_outer_folds} outer folds, "
+        f"{len(grid_configs)} hyperparameter config"
+        f"{'s' if len(grid_configs) != 1 else ''}"
+    )
+    print(f"Requested metrics: {list(metrics)}")
+    print(
+        f"Selection metric: {selection_level}-level {selection_metric} "
+        f"({'maximize' if maximize_metric else 'minimize'})"
+    )
+    print(f"Primary reported metrics: {evaluation_level}-level")
+    print(f"Prediction logging: {log_predictions}")
+    print(f"Variational interval logging: {log_variational_intervals}")
+    prediction_mode = (
+        "posterior mean"
+        if n_prediction_latent_samples == 0
+        else f"MC average over {n_prediction_latent_samples} latent sample(s)"
+    )
+    print(f"Prediction latent mode: {prediction_mode}")
+    print(f"Outer-fold workers: {effective_n_jobs}")
+
+    if effective_n_jobs > 1 and normalized_gpu_ids is None:
+        print("Worker devices: CPU-only")
+    elif normalized_gpu_ids is not None:
+        print(f"Worker devices: GPUs {list(normalized_gpu_ids)}")
+    else:
+        print("Worker device: current TensorFlow default")
+
+    tasks = [
+        (fold_number, tuple(outer_test_subjects))
+        for fold_number, outer_test_subjects in enumerate(
+            outer_subject_splits,
+            start=1,
+        )
+    ]
+
+    worker_state = {
+        "total_outer_folds": total_outer_folds,
+        "model_builder_function": model_builder_function,
+        "feature_array": feature_array,
+        "label_array": label_array,
+        "subject_id_array": subject_id_array,
+        "trial_id_array": trial_id_array,
+        "n_inner_subjects_to_leave_out": n_inner_subjects_to_leave_out,
+        "grid_configs": grid_configs,
+        "batch_size": batch_size,
+        "preprocessing_strategy": preprocessing_strategy,
+        "selection_metric": selection_metric,
+        "selection_level": selection_level,
+        "evaluation_level": evaluation_level,
+        "maximize_metric": bool(maximize_metric),
+        "metrics": metrics,
+        "log_predictions": log_predictions,
+        "log_variational_intervals": log_variational_intervals,
+        "n_prediction_latent_samples": n_prediction_latent_samples,
+        "latent_sampling_seed": latent_sampling_seed,
+        "n_uncertainty_samples": n_uncertainty_samples,
+        "ci_level": ci_level,
+        "verbose": verbose,
+        "extra_fit_kwargs": extra_fit_kwargs,
+    }
+
+    # Preserve the old in-process behavior for n_jobs=1 with no explicit GPU
+    # assignment. This avoids spawn/pickling overhead for ordinary runs.
+    if effective_n_jobs == 1 and normalized_gpu_ids is None:
+        fold_outputs = [
+            _run_outer_fold(
+                outer_fold_number=fold_number,
+                outer_test_subjects=np.asarray(outer_test_subjects),
+                **worker_state,
+            )
+            for fold_number, outer_test_subjects in tasks
+        ]
+    else:
+        fold_outputs = _run_spawned_fold_pool(
+            worker_target=_outer_fold_process_main,
+            worker_state=worker_state,
+            tasks=tasks,
+            n_workers=effective_n_jobs,
+            gpu_ids=normalized_gpu_ids,
+            cpus_per_worker=cpus_per_worker,
+            worker_name_prefix="OuterFoldWorker",
+            worker_description="outer-fold",
+        )
+
+    # Results arrive in completion order, so restore deterministic fold order.
+    fold_outputs.sort(key=lambda row: row["outer_fold_number"])
+
+    for fold_output in fold_outputs:
+        results["fold_metrics"].append(fold_output["fold_metrics"])
+        results["window_fold_metrics"].append(fold_output["window_fold_metrics"])
+        results["trial_fold_metrics"].append(fold_output["trial_fold_metrics"])
+        results["user_metrics"].extend(fold_output["user_metrics"])
+        results["prediction_log"].extend(fold_output["prediction_log"])
+        results["window_prediction_log"].extend(fold_output["window_prediction_log"])
+        results["trial_prediction_log"].extend(fold_output["trial_prediction_log"])
+        results["variational_interval_log"].extend(
+            fold_output["variational_interval_log"]
+        )
+        results["window_variational_interval_log"].extend(
+            fold_output["window_variational_interval_log"]
+        )
+        results["trial_variational_interval_log"].extend(
+            fold_output["trial_variational_interval_log"]
+        )
+        results["best_configs"].append(fold_output["best_config_result"])
+        results["inner_cv_results"].append(fold_output["inner_cv_result"])
+        results["outer_fold_results"].append(fold_output["outer_fold_result"])
+
+    mean_scores, std_scores = _mean_std_rows(
+        results["fold_metrics"],
+        ["loss", *metrics, "decoder_accuracy"],
+    )
+
+    results["mean_scores"] = mean_scores
+    results["std_scores"] = std_scores
+
+    window_mean_scores, window_std_scores = _mean_std_rows(
+        results["window_fold_metrics"],
+        ["loss", *metrics, "decoder_accuracy"],
+    )
+    trial_mean_scores, trial_std_scores = _mean_std_rows(
+        results["trial_fold_metrics"], ["loss", *metrics]
+    )
+    results["window_mean_scores"] = window_mean_scores
+    results["window_std_scores"] = window_std_scores
+    results["trial_mean_scores"] = trial_mean_scores
+    results["trial_std_scores"] = trial_std_scores
+
+    print("\nNested LNSO CV complete")
+    print("=" * 80)
+    print("Mean outer scores:")
+    print(pformat(mean_scores, indent=4, width=120, sort_dicts=False))
+    print("Std outer scores:")
+    print(pformat(std_scores, indent=4, width=120, sort_dicts=False))
+    print("Window-level mean scores:")
+    print(pformat(window_mean_scores, indent=4, width=120, sort_dicts=False))
+    print("Trial-level mean scores:")
+    print(pformat(trial_mean_scores, indent=4, width=120, sort_dicts=False))
+
+    return results
+
+def _compact_loso_fold_result(fold_output: dict) -> dict:
+    """Return one LOSO fold record without large prediction logs."""
+    fold_record = fold_output["fold_record"]
+    return {
+        "fold_number": int(fold_record["fold_number"]),
+        "outer_fold_number": int(fold_record["outer_fold_number"]),
+        "left_out_subject": fold_record["left_out_subject"],
+        "left_out_subjects": list(fold_record["left_out_subjects"]),
+        "outer_test_subjects": list(fold_record["outer_test_subjects"]),
+        "validation_subjects": list(fold_record["validation_subjects"]),
+        "validation_seed": fold_record["validation_seed"],
+        "n_train_windows": int(fold_record["n_train_windows"]),
+        "n_fit_train_windows": int(fold_record["n_fit_train_windows"]),
+        "n_validation_windows": int(fold_record["n_validation_windows"]),
+        "n_test_windows": int(fold_record["n_test_windows"]),
+        "n_train_trials": int(fold_record["n_train_trials"]),
+        "n_fit_train_trials": int(fold_record["n_fit_train_trials"]),
+        "n_validation_trials": int(fold_record["n_validation_trials"]),
+        "n_test_trials": int(fold_record["n_test_trials"]),
+        "early_stopping_monitor": fold_record["early_stopping_monitor"],
+        "early_stopping_patience": fold_record["early_stopping_patience"],
+        "early_stopping_min_delta": fold_record["early_stopping_min_delta"],
+        "restore_best_weights": fold_record["restore_best_weights"],
+        "epochs_ran": int(fold_record["epochs_ran"]),
+        "best_epoch": fold_record["best_epoch"],
+        "best_monitored_value": fold_record["best_monitored_value"],
+        "stopped_early": bool(fold_record["stopped_early"]),
+        "evaluation_level": fold_record["evaluation_level"],
+        "fold_metrics": dict(fold_output["fold_metrics"]),
+        "window_fold_metrics": dict(fold_output["window_fold_metrics"]),
+        "trial_fold_metrics": dict(fold_output["trial_fold_metrics"]),
+        "user_metrics": [dict(row) for row in fold_output["user_metrics"]],
+    }
+

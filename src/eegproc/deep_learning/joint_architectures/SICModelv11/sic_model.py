@@ -71,8 +71,8 @@ classifier:
     1 -> VC logits head only
     2 -> full-sequence GRU/BiGRU + VC logits head
 
-The calibration train step uses focal loss and, when enabled, the VC
-regularizers computed jointly with the same VC logits. The VC head therefore
+The calibration train step supports focal or cross-entropy classification loss
+and, when enabled, VC regularizers computed from the same VC logits. The VC head therefore
 adapts in every calibration fold instead of acting as a frozen source target.
 For backward CLI compatibility, ``calibration_use_vc_target=false`` disables
 only the auxiliary VC regularizers; it does not replace or freeze the VC
@@ -148,6 +148,16 @@ _TRAINING_METHOD_ALIASES = {
     "first_order_mldg": "mldg",
 }
 
+_CALIBRATION_LOSS_ALIASES = {
+    "ce": "cross_entropy",
+    "crossentropy": "cross_entropy",
+    "cross-entropy": "cross_entropy",
+    "categorical_crossentropy": "cross_entropy",
+    "sparse_categorical_crossentropy": "cross_entropy",
+    "focal": "focal",
+    "focal_loss": "focal",
+}
+
 
 def _resolve_training_method(
     training_method: str | None,
@@ -168,6 +178,17 @@ def _resolve_training_method(
             "use_vrex=true conflicts with training_method="
             f"{training_method!r}. Use training_method='vrex' or remove the "
             "legacy use_vrex setting."
+        )
+    return normalized
+
+
+def _normalize_calibration_loss(value: str) -> str:
+    normalized = str(value).strip().lower().replace(" ", "_")
+    normalized = _CALIBRATION_LOSS_ALIASES.get(normalized, normalized)
+    if normalized not in {"focal", "cross_entropy"}:
+        raise ValueError(
+            "calibration_loss must be 'focal' or 'cross_entropy'; "
+            f"got {value!r}."
         )
     return normalized
 
@@ -496,6 +517,11 @@ class SICModel(tf.keras.Model):
         calibration_vc_beta: float | None = None,
         calibration_vc_gamma: float | None = None,
         calibration_vc_lambda: float | None = None,
+        calibration_vc_loss_weight: float | None = None,
+        calibration_loss: str = "focal",
+        calibration_label_smoothing: float | None = None,
+        calibration_focal_gamma: float | None = None,
+        calibration_focal_alpha: float | None = None,
         use_class_weight: bool = False,
         name: str = "sic_subject_invariant_calibrator",
         **kwargs,
@@ -531,6 +557,38 @@ class SICModel(tf.keras.Model):
             raise ValueError("focal_gamma must be non-negative.")
         if focal_alpha is not None and not 0.0 <= float(focal_alpha) <= 1.0:
             raise ValueError("focal_alpha must be in [0, 1] or None.")
+        calibration_loss = _normalize_calibration_loss(calibration_loss)
+        resolved_calibration_label_smoothing = (
+            float(label_smoothing)
+            if calibration_label_smoothing is None
+            else float(calibration_label_smoothing)
+        )
+        resolved_calibration_focal_gamma = (
+            float(focal_gamma)
+            if calibration_focal_gamma is None
+            else float(calibration_focal_gamma)
+        )
+        resolved_calibration_focal_alpha = (
+            focal_alpha
+            if calibration_focal_alpha is None
+            else float(calibration_focal_alpha)
+        )
+        resolved_calibration_vc_loss_weight = (
+            float(vc_loss_weight)
+            if calibration_vc_loss_weight is None
+            else float(calibration_vc_loss_weight)
+        )
+        if not 0.0 <= resolved_calibration_label_smoothing < 1.0:
+            raise ValueError("calibration_label_smoothing must be in [0, 1).")
+        if resolved_calibration_focal_gamma < 0.0:
+            raise ValueError("calibration_focal_gamma must be non-negative.")
+        if (
+            resolved_calibration_focal_alpha is not None
+            and not 0.0 <= float(resolved_calibration_focal_alpha) <= 1.0
+        ):
+            raise ValueError("calibration_focal_alpha must be in [0, 1] or None.")
+        if resolved_calibration_vc_loss_weight < 0.0:
+            raise ValueError("calibration_vc_loss_weight must be non-negative.")
         requested_classifier_widths = _resolve_recurrent_widths(
             "classifier_rnn_units",
             classifier_rnn_units,
@@ -703,6 +761,11 @@ class SICModel(tf.keras.Model):
             if calibration_vc_lambda is None
             else float(calibration_vc_lambda)
         )
+        self.calibration_vc_loss_weight = resolved_calibration_vc_loss_weight
+        self.calibration_loss = calibration_loss
+        self.calibration_label_smoothing = resolved_calibration_label_smoothing
+        self.calibration_focal_gamma = resolved_calibration_focal_gamma
+        self.calibration_focal_alpha = resolved_calibration_focal_alpha
         self.calibration_mode = False
 
         self.requires_subject_ids = (
@@ -809,6 +872,9 @@ class SICModel(tf.keras.Model):
         # paired zero-shot and post-calibration trial metrics.
         self.loss_tracker = tf.keras.metrics.Mean(name="loss")
         self.vc_loss_tracker = tf.keras.metrics.Mean(name="vc_loss")
+        self.classification_loss_tracker = tf.keras.metrics.Mean(
+            name="classification_loss"
+        )
         self.focal_loss_tracker = tf.keras.metrics.Mean(name="focal_loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
@@ -874,6 +940,7 @@ class SICModel(tf.keras.Model):
         output = [
             self.loss_tracker,
             self.vc_loss_tracker,
+            self.classification_loss_tracker,
             self.focal_loss_tracker,
             self.accuracy_tracker,
             self.balanced_accuracy_tracker,
@@ -961,7 +1028,10 @@ class SICModel(tf.keras.Model):
         validation_freq=1,
         **kwargs,
     ):
-        if not self.use_class_weight:
+        # Source training follows the serialized use_class_weight setting.
+        # Calibration class weighting is controlled independently by
+        # cross_val and is therefore accepted whenever calibration_mode is on.
+        if not self.use_class_weight and not self.calibration_mode:
             class_weight = None
         if not self.use_mldg or self.calibration_mode:
             return super().fit(
@@ -1305,44 +1375,67 @@ class SICModel(tf.keras.Model):
         )
         return outputs["logits"]
 
-    def _per_sample_focal_loss(self, logits, y_flat):
-        """Focal loss from the same sole VC logits used for prediction."""
+    def _per_sample_cross_entropy(
+        self,
+        logits,
+        y_flat,
+        *,
+        label_smoothing: float,
+    ):
         y_flat = tf.cast(tf.reshape(y_flat, [-1]), tf.int32)
         log_probs = tf.nn.log_softmax(logits, axis=-1)
-        probs = tf.exp(log_probs)
         row_ids = tf.range(tf.shape(y_flat)[0], dtype=tf.int32)
         gather_ids = tf.stack([row_ids, y_flat], axis=1)
-        p_t = tf.gather_nd(probs, gather_ids)
         log_p_t = tf.gather_nd(log_probs, gather_ids)
-        modulating = tf.pow(
-            tf.maximum(1.0 - p_t, tf.keras.backend.epsilon()),
-            tf.cast(self.focal_gamma, p_t.dtype),
-        )
-        if self.label_smoothing:
+        if label_smoothing:
             hard_targets = tf.one_hot(
                 y_flat,
                 depth=self.n_classes,
                 dtype=logits.dtype,
             )
-            smoothing = tf.cast(self.label_smoothing, logits.dtype)
+            smoothing = tf.cast(label_smoothing, logits.dtype)
             smoothed_targets = (
                 (1.0 - smoothing) * hard_targets
                 + smoothing / tf.cast(self.n_classes, logits.dtype)
             )
-            base_loss = tf.nn.softmax_cross_entropy_with_logits(
+            return tf.nn.softmax_cross_entropy_with_logits(
                 labels=smoothed_targets,
                 logits=logits,
             )
-        else:
-            base_loss = -log_p_t
+        return -log_p_t
+
+    def _per_sample_focal_loss(
+        self,
+        logits,
+        y_flat,
+        *,
+        gamma: float,
+        alpha: float | None,
+        label_smoothing: float,
+    ):
+        """Focal loss from the same sole VC logits used for prediction."""
+        y_flat = tf.cast(tf.reshape(y_flat, [-1]), tf.int32)
+        probs = tf.nn.softmax(logits, axis=-1)
+        row_ids = tf.range(tf.shape(y_flat)[0], dtype=tf.int32)
+        gather_ids = tf.stack([row_ids, y_flat], axis=1)
+        p_t = tf.gather_nd(probs, gather_ids)
+        base_loss = self._per_sample_cross_entropy(
+            logits,
+            y_flat,
+            label_smoothing=float(label_smoothing),
+        )
+        modulating = tf.pow(
+            tf.maximum(1.0 - p_t, tf.keras.backend.epsilon()),
+            tf.cast(gamma, p_t.dtype),
+        )
         loss = modulating * base_loss
 
-        if self.focal_alpha is not None:
+        if alpha is not None:
             if self.n_classes != 2:
                 raise ValueError(
                     "Scalar focal_alpha is currently defined only for binary SIC."
                 )
-            alpha = tf.cast(self.focal_alpha, loss.dtype)
+            alpha = tf.cast(alpha, loss.dtype)
             alpha_t = tf.where(
                 tf.equal(y_flat, 1),
                 alpha,
@@ -1350,6 +1443,21 @@ class SICModel(tf.keras.Model):
             )
             loss = alpha_t * loss
         return loss
+
+    def _per_sample_calibration_loss(self, logits, y_flat):
+        if self.calibration_loss == "cross_entropy":
+            return self._per_sample_cross_entropy(
+                logits,
+                y_flat,
+                label_smoothing=self.calibration_label_smoothing,
+            )
+        return self._per_sample_focal_loss(
+            logits,
+            y_flat,
+            gamma=self.calibration_focal_gamma,
+            alpha=self.calibration_focal_alpha,
+            label_smoothing=self.calibration_label_smoothing,
+        )
 
     @staticmethod
     def _weighted_mean(values, sample_weight):
@@ -1370,16 +1478,33 @@ class SICModel(tf.keras.Model):
         *,
         calibration: bool,
     ):
+        calibration_classification_loss = None
+        calibration_weighted_classification_loss = None
+        if calibration:
+            calibration_per_sample = self._per_sample_calibration_loss(
+                logits,
+                y_flat,
+            )
+            calibration_classification_loss = tf.reduce_mean(
+                calibration_per_sample
+            )
+            calibration_weighted_classification_loss = self._weighted_mean(
+                calibration_per_sample,
+                sample_weight,
+            )
+
         if calibration and not self.calibration_use_vc_target:
             # The VC head still produces and learns the logits. This switch
             # disables only its auxiliary variational regularizers.
-            focal_per_sample = self._per_sample_focal_loss(logits, y_flat)
-            focal_loss = self._weighted_mean(focal_per_sample, sample_weight)
-            zero = tf.zeros((), dtype=focal_loss.dtype)
+            selected_loss = calibration_weighted_classification_loss
+            zero = tf.zeros((), dtype=selected_loss.dtype)
+            focal_loss = (
+                selected_loss if self.calibration_loss == "focal" else zero
+            )
             return {
-                "total_loss": focal_loss,
-                "classification_loss": focal_loss,
-                "weighted_classification_loss": focal_loss,
+                "total_loss": selected_loss,
+                "classification_loss": calibration_classification_loss,
+                "weighted_classification_loss": selected_loss,
                 "focal_loss": focal_loss,
                 "weighted_focal_loss": focal_loss,
                 "latent_posterior_kl": zero,
@@ -1400,16 +1525,48 @@ class SICModel(tf.keras.Model):
             lambda_=(self.calibration_vc_lambda if calibration else self.vc_lambda),
             logits=logits,
             sample_weight=sample_weight,
-            include_classification=True,
+            # Calibration owns a selectable classification loss below while
+            # retaining the VC auxiliary terms from the same logits/embedding.
+            include_classification=not calibration,
         )
-        # Focal classification and every enabled VC term were calculated in
-        # one joint objective from the exact logits returned by vc_target.
+        # The selected classification loss and every enabled VC term are
+        # combined below from this exact logits/embedding pair.
         components = dict(components)
         # Do not expose the VariationalClassifier's legacy cross-entropy
         # aliases: older code used those names for the focal value, which made
         # logs incorrectly show identical cross_entropy and focal_loss fields.
         components.pop("cross_entropy", None)
         components.pop("weighted_cross_entropy", None)
+        if calibration:
+            classification_weight = tf.cast(
+                self.calibration_vc_alpha,
+                calibration_weighted_classification_loss.dtype,
+            )
+            replacement_weighted_classification = (
+                classification_weight
+                * calibration_weighted_classification_loss
+            )
+            components["total_loss"] = (
+                components["total_loss"]
+                + replacement_weighted_classification
+            )
+            components["classification_loss"] = (
+                calibration_classification_loss
+            )
+            components["weighted_classification_loss"] = (
+                replacement_weighted_classification
+            )
+            zero = tf.zeros_like(calibration_classification_loss)
+            components["focal_loss"] = (
+                calibration_classification_loss
+                if self.calibration_loss == "focal"
+                else zero
+            )
+            components["weighted_focal_loss"] = (
+                replacement_weighted_classification
+                if self.calibration_loss == "focal"
+                else zero
+            )
         return components
 
     def _reconstruction_components(self, outputs, training: bool):
@@ -1574,7 +1731,13 @@ class SICModel(tf.keras.Model):
             }
 
         targets = tf.cast(tf.reshape(subject_ids, [-1]), tf.int32)
-        per_sample = self._per_sample_focal_loss(logits, y_flat)
+        per_sample = self._per_sample_focal_loss(
+            logits,
+            y_flat,
+            gamma=self.focal_gamma,
+            alpha=self.focal_alpha,
+            label_smoothing=self.label_smoothing,
+        )
         weights = None
         if sample_weight is not None:
             weights = tf.cast(tf.reshape(sample_weight, [-1]), per_sample.dtype)
@@ -1623,6 +1786,9 @@ class SICModel(tf.keras.Model):
         zero = tf.zeros((), dtype=total_loss.dtype)
         self.loss_tracker.update_state(total_loss)
         self.vc_loss_tracker.update_state(vc_components["total_loss"])
+        self.classification_loss_tracker.update_state(
+            vc_components["classification_loss"]
+        )
         self.focal_loss_tracker.update_state(vc_components["focal_loss"])
         # Reporting metrics are deliberately unweighted. Class/sample weights
         # may shape the optimization loss, but "window_accuracy" and
@@ -1830,7 +1996,7 @@ class SICModel(tf.keras.Model):
                 calibration=True,
             )
             dtype = vc_components["total_loss"].dtype
-            total = tf.cast(self.vc_loss_weight, dtype) * vc_components[
+            total = tf.cast(self.calibration_vc_loss_weight, dtype) * vc_components[
                 "total_loss"
             ] + self._regularization_loss(dtype)
         variables = self.trainable_variables
@@ -1886,7 +2052,10 @@ class SICModel(tf.keras.Model):
         if self.calibration_mode:
             subject_components = None
             total = (
-                tf.cast(self.vc_loss_weight, vc_components["total_loss"].dtype)
+                tf.cast(
+                    self.calibration_vc_loss_weight,
+                    vc_components["total_loss"].dtype,
+                )
                 * vc_components["total_loss"]
             )
         else:
@@ -1929,9 +2098,22 @@ class SICModel(tf.keras.Model):
         ``subject_calibration_cv`` restores source weights between folds.  This
         hook resets the loss/inference mode as well, so paired zero-shot metrics
         are evaluated as the original population model rather than in the
-        calibration-only loss mode.
+        calibration-only loss mode. A model loaded with ``compile=False`` also
+        receives an evaluation-only optimizer so Keras ``evaluate`` can execute;
+        calibration replaces it with a fresh optimizer before any fitting.
         """
         self.calibration_mode = False
+        if self.main_optimizer is None:
+            self.compile(
+                main_optimizer=_build_optimizer(
+                    optimizer_name="adam",
+                    learning_rate=1e-4,
+                    weight_decay=0.0,
+                ),
+                vc_discriminator_optimizer=None,
+                run_eagerly=False,
+                jit_compile=False,
+            )
         return self
 
     def prepare_for_subject_calibration(
@@ -2011,6 +2193,11 @@ class SICModel(tf.keras.Model):
                 variable.name for variable in self.trainable_variables
             ],
             "calibration_use_vc_target": self.calibration_use_vc_target,
+            "calibration_loss": self.calibration_loss,
+            "calibration_label_smoothing": self.calibration_label_smoothing,
+            "calibration_focal_gamma": self.calibration_focal_gamma,
+            "calibration_focal_alpha": self.calibration_focal_alpha,
+            "calibration_vc_loss_weight": self.calibration_vc_loss_weight,
         }
 
     def get_encoder_features(self, inputs):
@@ -2172,6 +2359,13 @@ class SICModel(tf.keras.Model):
                 "calibration_vc_beta": self.calibration_vc_beta,
                 "calibration_vc_gamma": self.calibration_vc_gamma,
                 "calibration_vc_lambda": self.calibration_vc_lambda,
+                "calibration_vc_loss_weight": self.calibration_vc_loss_weight,
+                "calibration_loss": self.calibration_loss,
+                "calibration_label_smoothing": (
+                    self.calibration_label_smoothing
+                ),
+                "calibration_focal_gamma": self.calibration_focal_gamma,
+                "calibration_focal_alpha": self.calibration_focal_alpha,
                 "use_class_weight": self.use_class_weight,
             }
         )
@@ -2265,6 +2459,11 @@ def build_sic_model(
     calibration_vc_beta: float | None = None,
     calibration_vc_gamma: float | None = None,
     calibration_vc_lambda: float | None = None,
+    calibration_vc_loss_weight: float | None = None,
+    calibration_loss: str = "focal",
+    calibration_label_smoothing: float | None = None,
+    calibration_focal_gamma: float | None = None,
+    calibration_focal_alpha: float | None = None,
     decoder_dropout: float = 0.10,
     optimizer_name: str = "adamw",
     learning_rate: float = 1e-4,
@@ -2477,6 +2676,11 @@ def build_sic_model(
         calibration_vc_beta=calibration_vc_beta,
         calibration_vc_gamma=calibration_vc_gamma,
         calibration_vc_lambda=calibration_vc_lambda,
+        calibration_vc_loss_weight=calibration_vc_loss_weight,
+        calibration_loss=calibration_loss,
+        calibration_label_smoothing=calibration_label_smoothing,
+        calibration_focal_gamma=calibration_focal_gamma,
+        calibration_focal_alpha=calibration_focal_alpha,
         use_class_weight=bool(use_class_weight),
         name=model_name,
     )
