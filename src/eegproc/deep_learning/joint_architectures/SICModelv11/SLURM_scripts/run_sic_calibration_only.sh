@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
-#SBATCH --time=00:30:00
+#SBATCH --time=05:00:00
 #SBATCH --partition=a100-gpu,l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --output=sic-calibration_%j.out
