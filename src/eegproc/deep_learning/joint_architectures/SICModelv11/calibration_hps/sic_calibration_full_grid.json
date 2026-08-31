@@ -7,6 +7,8 @@
   "calibration_use_class_weight": [false],
   "calibration_shuffle": [true],
   "calibration_unfreeze_layers": [2],
+  "calibration_freeze_decoder": [true, false],
+  "calibration_decoder_loss_weight": [1.0],
   "calibration_use_vc_target": [true],
   "calibration_vc_loss_weight": [1.0],
   "calibration_vc_alpha": [1.0],

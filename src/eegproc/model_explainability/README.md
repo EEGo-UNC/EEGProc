@@ -1,4 +1,4 @@
-# Simplified SIC counterfactuals
+# SIC counterfactuals
 
 Four runtime files. No source training, subject calibration, VAE, KL term,
 window-level optimization, or new model construction.
@@ -21,6 +21,18 @@ the inspected SIC v11 interface.
 
 Use the existing EEGProc environment. Tests here used Python 3.12,
 TensorFlow CPU 2.20.0, Keras 3.15.1, and NumPy. `pytest` is needed only for tests.
+
+## Local smoke test
+
+From the EEGProc repository root with its virtual environment activated, run:
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.run_counterfactuals --help
+```
+
+This verifies that Python can import TensorFlow and the counterfactual modules
+and build the command-line interface. It does not load a checkpoint, process
+data, create output files, or run optimization.
 
 ## Run from existing raw-data files
 

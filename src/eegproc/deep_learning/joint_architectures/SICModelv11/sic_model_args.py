@@ -11,6 +11,7 @@ import argparse
 from dataclasses import dataclass, field
 from itertools import product
 import json
+import math
 from pathlib import Path
 
 
@@ -377,13 +378,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-jobs", type=_positive_int, default=1)
     parser.add_argument("--gpu-ids", type=int, nargs="+", default=None)
     parser.add_argument("--cpus-per-worker", type=_positive_int, default=None)
-    parser.add_argument("--max-subjects", type=_positive_int, default=None)
+    parser.add_argument(
+        "--max-subjects",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Limit execution to the first N selected target subjects. When "
+            "--target-subjects is also given, selection happens first."
+        ),
+    )
     parser.add_argument(
         "--target-subjects",
         type=int,
         nargs="+",
         default=None,
-        help="Specific subject IDs to use as outer LOSO targets.",
+        help=(
+            "Specific subject IDs to use as outer LOSO or calibration-only "
+            "targets, in the supplied order."
+        ),
     )
     parser.add_argument("--verbose", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
@@ -538,9 +550,34 @@ def validate_args(args, model_config: dict) -> None:
         reconstruction_weight = float(
             builder_config.get("reconstruction_loss_weight", 0.10)
         )
+        calibration_freeze_decoder = builder_config.get(
+            "calibration_freeze_decoder",
+            True,
+        )
+        calibration_decoder_weight = float(
+            builder_config.get("calibration_decoder_loss_weight", 1.0)
+        )
         decoder_dropout = float(builder_config.get("decoder_dropout", 0.10))
         if reconstruction_weight < 0.0:
             raise ValueError("reconstruction_loss_weight must be non-negative.")
+        if not isinstance(calibration_freeze_decoder, bool):
+            raise ValueError(
+                "calibration_freeze_decoder must be true or false."
+            )
+        if (
+            not math.isfinite(calibration_decoder_weight)
+            or calibration_decoder_weight < 0.0
+        ):
+            raise ValueError(
+                "calibration_decoder_loss_weight must be finite and non-negative."
+            )
+        if (
+            not calibration_freeze_decoder
+            and builder_config.get("use_decoder", True) is False
+        ):
+            raise ValueError(
+                "calibration_freeze_decoder=false requires use_decoder=true."
+            )
         if not 0.0 <= decoder_dropout < 1.0:
             raise ValueError("decoder_dropout must be in [0, 1).")
         if training_method == "mldg":

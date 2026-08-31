@@ -63,17 +63,23 @@ same recurrent classifier on the complete encoded window sequence.
 
 Subject calibration
 -------------------
-``prepare_for_subject_calibration`` freezes the complete representation,
-both reconstruction decoders, and the subject adversary. It keeps the VC
-classification head trainable and can also unfreeze the full-sequence recurrent
+``prepare_for_subject_calibration`` freezes the complete representation and
+subject adversary. By default it also freezes both reconstruction decoders,
+preserving the historical classifier-only calibration behavior. Set
+``calibration_freeze_decoder=false`` to continue training every active decoder
+with a weighted reconstruction term. The VC classification head remains
+trainable and calibration can also unfreeze the full-sequence recurrent
 classifier:
 
     1 -> VC logits head only
     2 -> full-sequence GRU/BiGRU + VC logits head
 
 The calibration train step supports focal or cross-entropy classification loss
-and, when enabled, VC regularizers computed from the same VC logits. The VC head therefore
-adapts in every calibration fold instead of acting as a frozen source target.
+and, when enabled, VC regularizers computed from the same VC logits. When the
+decoder is unfrozen, its objective is ``calibration_decoder_loss_weight`` times
+the mean reconstruction loss across active decoder branches. The VC head
+therefore adapts in every calibration fold instead of acting as a frozen source
+target.
 For backward CLI compatibility, ``calibration_use_vc_target=false`` disables
 only the auxiliary VC regularizers; it does not replace or freeze the VC
 classification head that produces the logits.
@@ -518,6 +524,8 @@ class SICModel(tf.keras.Model):
         calibration_vc_gamma: float | None = None,
         calibration_vc_lambda: float | None = None,
         calibration_vc_loss_weight: float | None = None,
+        calibration_freeze_decoder: bool = True,
+        calibration_decoder_loss_weight: float = 1.0,
         calibration_loss: str = "focal",
         calibration_label_smoothing: float | None = None,
         calibration_focal_gamma: float | None = None,
@@ -589,6 +597,13 @@ class SICModel(tf.keras.Model):
             raise ValueError("calibration_focal_alpha must be in [0, 1] or None.")
         if resolved_calibration_vc_loss_weight < 0.0:
             raise ValueError("calibration_vc_loss_weight must be non-negative.")
+        if (
+            not np.isfinite(float(calibration_decoder_loss_weight))
+            or float(calibration_decoder_loss_weight) < 0.0
+        ):
+            raise ValueError(
+                "calibration_decoder_loss_weight must be finite and non-negative."
+            )
         requested_classifier_widths = _resolve_recurrent_widths(
             "classifier_rnn_units",
             classifier_rnn_units,
@@ -762,6 +777,10 @@ class SICModel(tf.keras.Model):
             else float(calibration_vc_lambda)
         )
         self.calibration_vc_loss_weight = resolved_calibration_vc_loss_weight
+        self.calibration_freeze_decoder = bool(calibration_freeze_decoder)
+        self.calibration_decoder_loss_weight = float(
+            calibration_decoder_loss_weight
+        )
         self.calibration_loss = calibration_loss
         self.calibration_label_smoothing = resolved_calibration_label_smoothing
         self.calibration_focal_gamma = resolved_calibration_focal_gamma
@@ -1981,7 +2000,9 @@ class SICModel(tf.keras.Model):
     def _calibration_train_step(self, x, y_flat, sample_weight):
         eeg_inputs, _ = self._split_eeg_and_subject_inputs(x)
         # Backbone layers are frozen so calibration fits the selected
-        # recurrent classifier (when requested) and the sole VC logits head.
+        # recurrent classifier (when requested), the sole VC logits head, and
+        # optionally the active reconstruction decoders.
+        decoder_training = not self.calibration_freeze_decoder
         with tf.GradientTape() as tape:
             outputs = self._encode(
                 eeg_inputs,
@@ -1995,17 +2016,28 @@ class SICModel(tf.keras.Model):
                 sample_weight,
                 calibration=True,
             )
+            reconstruction_components = self._reconstruction_components(
+                outputs,
+                training=decoder_training,
+            )
             dtype = vc_components["total_loss"].dtype
-            total = tf.cast(self.calibration_vc_loss_weight, dtype) * vc_components[
-                "total_loss"
-            ] + self._regularization_loss(dtype)
+            total = (
+                tf.cast(self.calibration_vc_loss_weight, dtype)
+                * vc_components["total_loss"]
+            )
+            if decoder_training:
+                total = (
+                    total
+                    + tf.cast(self.calibration_decoder_loss_weight, dtype)
+                    * tf.cast(
+                        reconstruction_components["reconstruction_loss"],
+                        dtype,
+                    )
+                )
+            total = total + self._regularization_loss(dtype)
         variables = self.trainable_variables
         gradients = tape.gradient(total, variables)
         self._apply_gradients(self.main_optimizer, gradients, variables)
-        reconstruction_components = self._reconstruction_components(
-            outputs,
-            training=False,
-        )
         self._update_metrics(
             total_loss=total,
             vc_components=vc_components,
@@ -2051,13 +2083,23 @@ class SICModel(tf.keras.Model):
         )
         if self.calibration_mode:
             subject_components = None
+            dtype = vc_components["total_loss"].dtype
             total = (
                 tf.cast(
                     self.calibration_vc_loss_weight,
-                    vc_components["total_loss"].dtype,
+                    dtype,
                 )
                 * vc_components["total_loss"]
             )
+            if not self.calibration_freeze_decoder:
+                total = (
+                    total
+                    + tf.cast(self.calibration_decoder_loss_weight, dtype)
+                    * tf.cast(
+                        reconstruction_components["reconstruction_loss"],
+                        dtype,
+                    )
+                )
         else:
             subject_components = self._subject_components(
                 outputs["pooled_features"],
@@ -2123,14 +2165,18 @@ class SICModel(tf.keras.Model):
         optimizer_name: str = "adamw",
         weight_decay: float = 0.0,
         unfreeze_layers: int | None = None,
+        freeze_decoder: bool | None = None,
+        decoder_loss_weight: float | None = None,
     ):
-        """Freeze the backbone and adapt the final k classification layers.
+        """Freeze the backbone and adapt classification plus optional decoders.
 
         ``unfreeze_layers`` counts prediction layers backward from the output:
         1 means the VC logits head only; 2 means the full-sequence recurrent
         classifier plus the VC head. The VC parameters always remain
         trainable because this module is the classifier rather than a frozen
-        target.
+        target. ``freeze_decoder`` defaults to the serialized calibration
+        setting. When false, every active decoder is trainable and its mean
+        reconstruction loss is added with ``decoder_loss_weight``.
         """
         if unfreeze_layers is None:
             unfreeze_layers = self.calibration_unfreeze_layers
@@ -2141,16 +2187,41 @@ class SICModel(tf.keras.Model):
                 f"unfreeze_layers must be in [1, {max_layers}], got "
                 f"{unfreeze_layers}."
             )
+        if freeze_decoder is None:
+            freeze_decoder = self.calibration_freeze_decoder
+        freeze_decoder = bool(freeze_decoder)
+        if decoder_loss_weight is None:
+            decoder_loss_weight = self.calibration_decoder_loss_weight
+        decoder_loss_weight = float(decoder_loss_weight)
+        if not np.isfinite(decoder_loss_weight) or decoder_loss_weight < 0.0:
+            raise ValueError(
+                "decoder_loss_weight must be finite and non-negative."
+            )
+        if not freeze_decoder and not self.use_decoder:
+            raise ValueError(
+                "calibration_freeze_decoder=false requires a checkpoint with "
+                "use_decoder=true."
+            )
+        if not freeze_decoder and not any(
+            decoder is not None
+            for decoder in (self.gcn_gru_decoder, self.bilstm_decoder)
+        ):
+            raise ValueError(
+                "calibration_freeze_decoder=false requires at least one "
+                "active decoder."
+            )
 
         self.calibration_mode = True
+        self.calibration_freeze_decoder = freeze_decoder
+        self.calibration_decoder_loss_weight = decoder_loss_weight
 
         # Freeze every major source-trained subsystem first.
         if self.graph_encoder is not None:
             self.graph_encoder.trainable = False
         if self.gcn_gru_decoder is not None:
-            self.gcn_gru_decoder.trainable = False
+            self.gcn_gru_decoder.trainable = not freeze_decoder
         if self.bilstm_decoder is not None:
-            self.bilstm_decoder.trainable = False
+            self.bilstm_decoder.trainable = not freeze_decoder
         for layer in self.temporal_bilstms:
             layer.trainable = False
         for layer in self.temporal_norms:
@@ -2198,6 +2269,10 @@ class SICModel(tf.keras.Model):
             "calibration_focal_gamma": self.calibration_focal_gamma,
             "calibration_focal_alpha": self.calibration_focal_alpha,
             "calibration_vc_loss_weight": self.calibration_vc_loss_weight,
+            "calibration_freeze_decoder": self.calibration_freeze_decoder,
+            "calibration_decoder_loss_weight": (
+                self.calibration_decoder_loss_weight
+            ),
         }
 
     def get_encoder_features(self, inputs):
@@ -2360,6 +2435,10 @@ class SICModel(tf.keras.Model):
                 "calibration_vc_gamma": self.calibration_vc_gamma,
                 "calibration_vc_lambda": self.calibration_vc_lambda,
                 "calibration_vc_loss_weight": self.calibration_vc_loss_weight,
+                "calibration_freeze_decoder": self.calibration_freeze_decoder,
+                "calibration_decoder_loss_weight": (
+                    self.calibration_decoder_loss_weight
+                ),
                 "calibration_loss": self.calibration_loss,
                 "calibration_label_smoothing": (
                     self.calibration_label_smoothing
@@ -2460,6 +2539,8 @@ def build_sic_model(
     calibration_vc_gamma: float | None = None,
     calibration_vc_lambda: float | None = None,
     calibration_vc_loss_weight: float | None = None,
+    calibration_freeze_decoder: bool = True,
+    calibration_decoder_loss_weight: float = 1.0,
     calibration_loss: str = "focal",
     calibration_label_smoothing: float | None = None,
     calibration_focal_gamma: float | None = None,
@@ -2677,6 +2758,10 @@ def build_sic_model(
         calibration_vc_gamma=calibration_vc_gamma,
         calibration_vc_lambda=calibration_vc_lambda,
         calibration_vc_loss_weight=calibration_vc_loss_weight,
+        calibration_freeze_decoder=bool(calibration_freeze_decoder),
+        calibration_decoder_loss_weight=float(
+            calibration_decoder_loss_weight
+        ),
         calibration_loss=calibration_loss,
         calibration_label_smoothing=calibration_label_smoothing,
         calibration_focal_gamma=calibration_focal_gamma,

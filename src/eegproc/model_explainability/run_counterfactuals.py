@@ -13,11 +13,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import tensorflow as tf
 
 if __package__:
     from .counterfactual_args import parse_args
+    from .counterfactual_loss import CounterfactualLoss
+    from .counterfactual_optimizer import CounterfactualOptimizer
 else:
     from counterfactual_args import parse_args
+    from counterfactual_loss import CounterfactualLoss
+    from counterfactual_optimizer import CounterfactualOptimizer
 
 
 def load_model(path, module):
@@ -28,8 +33,6 @@ def load_model(path, module):
     function is called. A decoder's presence does not prove it was trained:
     the caller must select a checkpoint trained with reconstruction enabled.
     """
-    import tensorflow as tf
-
     path = Path(path)
     if not path.is_file() or path.suffix != ".keras":
         raise ValueError(f"Expected an existing full .keras model: {path}")
@@ -124,15 +127,6 @@ def run(args):
     metrics are optimization diagnostics, not estimates of classifier accuracy.
     The aggregate separates latent and decoded-trial success rates.
     """
-    import tensorflow as tf
-
-    if __package__:
-        from .counterfactual_loss import CounterfactualLoss
-        from .counterfactual_optimizer import CounterfactualOptimizer
-    else:
-        from counterfactual_loss import CounterfactualLoss
-        from counterfactual_optimizer import CounterfactualOptimizer
-
     out = Path(args.out_dir)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise FileExistsError(f"Output must be new or empty: {out}")

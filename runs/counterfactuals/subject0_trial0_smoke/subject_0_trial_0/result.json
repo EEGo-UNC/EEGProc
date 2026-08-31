@@ -1,0 +1,93 @@
+{
+  "subject_id": 0,
+  "trial_id": 0,
+  "target_class": 0,
+  "required_target_probability": 0.8,
+  "prediction_rule": "argmax",
+  "original": {
+    "probabilities": [
+      0.495576947927475,
+      0.5044230222702026
+    ],
+    "predicted_class": 1,
+    "target_probability": 0.495576947927475,
+    "success": false
+  },
+  "latent_counterfactual": {
+    "probabilities": [
+      0.5400856137275696,
+      0.45991435647010803
+    ],
+    "predicted_class": 0,
+    "target_probability": 0.5400856137275696,
+    "success": false
+  },
+  "decoded_trials": {
+    "gcn_gru": {
+      "original_reconstruction": {
+        "probabilities": [
+          0.49798277020454407,
+          0.5020172595977783
+        ],
+        "predicted_class": 1,
+        "target_probability": 0.49798277020454407,
+        "success": false
+      },
+      "counterfactual": {
+        "probabilities": [
+          0.5016336441040039,
+          0.4983663558959961
+        ],
+        "predicted_class": 0,
+        "target_probability": 0.5016336441040039,
+        "success": false
+      },
+      "original_reconstruction_mse": 0.922655463218689,
+      "counterfactual_to_original_mse": 0.6775500178337097,
+      "decoded_change_mse": 0.12250890582799911
+    },
+    "bilstm": {
+      "original_reconstruction": {
+        "probabilities": [
+          0.5000553727149963,
+          0.49994462728500366
+        ],
+        "predicted_class": 0,
+        "target_probability": 0.5000553727149963,
+        "success": false
+      },
+      "counterfactual": {
+        "probabilities": [
+          0.4994315505027771,
+          0.5005685091018677
+        ],
+        "predicted_class": 1,
+        "target_probability": 0.4994315505027771,
+        "success": false
+      },
+      "original_reconstruction_mse": 0.6212949156761169,
+      "counterfactual_to_original_mse": 0.4954346716403961,
+      "decoded_change_mse": 0.01591789536178112
+    }
+  },
+  "selected_losses": {
+    "total": 0.45255476236343384,
+    "target": 0.3928840160369873,
+    "latent": 0.01021500676870346,
+    "decoded": 0.5864923596382141,
+    "physiological": 0.0,
+    "weighted_target": 0.3928840160369873,
+    "weighted_latent": 0.001021500676870346,
+    "weighted_decoded": 0.05864923819899559,
+    "weighted_physiological": 0.0,
+    "decoded_gcn_gru": 0.6775500178337097,
+    "decoded_bilstm": 0.4954346716403961
+  },
+  "selected_step": 20,
+  "steps_completed": 20,
+  "stop_reason": "max_steps",
+  "elapsed_seconds": 1937.386052832997,
+  "physiological_validity": 0.0,
+  "physiological_constraint_enforced": false,
+  "true_class": 1
+}

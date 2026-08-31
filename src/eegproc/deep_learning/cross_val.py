@@ -5365,8 +5365,8 @@ def _run_subject_calibration_subject(
                 "The model must implement prepare_for_subject_calibration(" 
                 "learning_rate=..., optimizer_name=..., weight_decay=...). "
                 "That method should freeze the subject-independent/generative "
-                "representation, leave only the intended classification head "
-                "trainable, and compile a fresh calibration optimizer."
+                "representation, leave only the configured calibration "
+                "submodules trainable, and compile a fresh calibration optimizer."
             )
 
         metric_names = ("loss", *metrics, "joint_loss", *_DECODER_SCORE_NAMES)
@@ -5861,6 +5861,8 @@ def subject_calibration_cv(
     format before calibration begins. Calibrated fold continuations are not
     saved. Load these source models with ``compile=False`` before calling the
     model's calibration preparation hook, which installs a fresh optimizer.
+    Model-specific calibration settings may optionally keep reconstruction
+    decoders trainable and add their weighted loss to the calibration objective.
 
     Thus the default DREAMER protocol remains 6 calibration trials + 12
     evaluation trials repeated three times, while arbitrary valid shot/fold
@@ -5884,9 +5886,11 @@ def subject_calibration_cv(
         )
 
     The method owns the architecture-specific freezing policy and must compile
-    a *fresh optimizer*. For deterministic SIC it should freeze the MTL GCN,
-    spectral GRU, temporal encoder, and subject-invariance machinery, leaving
-    only the intended emotion-classification head suffix trainable.
+    a *fresh optimizer*. For deterministic SIC it freezes the MTL GCN,
+    spectral GRU, temporal encoder, and subject-invariance machinery. The
+    configured emotion-classification suffix remains trainable; active
+    reconstruction decoders may also remain trainable when requested by the
+    model's calibration settings.
 
     Aggregation
     -----------

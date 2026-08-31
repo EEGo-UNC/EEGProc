@@ -5,10 +5,12 @@ identifies one serialized Keras checkpoint per target user. A fresh copy of
 every checkpoint is loaded for every Cartesian-grid candidate and passed as an
 in-memory model to ``cross_val.subject_calibration_cv``.
 
-Only calibration behavior may be searched.  The saved encoders, graph,
-recurrent architecture, decoder, subject adversary, and source-training state
-remain fixed.  Every calibration fold restores the original checkpoint weights
-and creates a fresh optimizer through ``prepare_for_subject_calibration``.
+Only calibration behavior may be searched. The saved encoders, graph,
+recurrent architecture, subject adversary, and source-training state remain
+fixed. Decoder weights also remain fixed by default, but calibration may
+optionally continue training them with a separately weighted reconstruction
+loss. Every calibration fold restores the original checkpoint weights and
+creates a fresh optimizer through ``prepare_for_subject_calibration``.
 Configurations are ranked by a subject-macro average: folds are averaged within
 each user first, then all users receive equal weight.
 """
@@ -122,6 +124,8 @@ _MODEL_CALIBRATION_KEYS = frozenset(
         "calibration_vc_gamma",
         "calibration_vc_lambda",
         "calibration_vc_loss_weight",
+        "calibration_freeze_decoder",
+        "calibration_decoder_loss_weight",
         "calibration_loss",
         "calibration_label_smoothing",
         "calibration_focal_gamma",
@@ -283,6 +287,13 @@ def _validate_calibration_configuration(configuration: dict, *, index: int) -> N
         raise ValueError(
             f"{prefix}: calibration_use_vc_target must be true or false."
         )
+    if (
+        "calibration_freeze_decoder" in configuration
+        and not isinstance(configuration["calibration_freeze_decoder"], bool)
+    ):
+        raise ValueError(
+            f"{prefix}: calibration_freeze_decoder must be true or false."
+        )
     for name in (
         "calibration_vc_loss_weight",
         "calibration_vc_alpha",
@@ -296,6 +307,13 @@ def _validate_calibration_configuration(configuration: dict, *, index: int) -> N
                 raise ValueError(
                     f"{prefix}: {name} must be null or a finite non-negative value."
                 )
+    if "calibration_decoder_loss_weight" in configuration:
+        value = configuration["calibration_decoder_loss_weight"]
+        if value is None or not np.isfinite(float(value)) or float(value) < 0.0:
+            raise ValueError(
+                f"{prefix}: calibration_decoder_loss_weight must be a finite "
+                "non-negative value."
+            )
     if "calibration_loss" in configuration:
         loss_name = str(configuration["calibration_loss"]).lower().replace("-", "_")
         if loss_name not in {"focal", "cross_entropy"}:
@@ -448,12 +466,6 @@ def _read_models_config(config_path: Path) -> tuple[Path, list[dict], dict]:
 
 
 def _validate_args(args, calibration_levels) -> None:
-    if args.target_subjects is not None:
-        raise ValueError(
-            "Target users come from --models-config; omit --target-subjects."
-        )
-    if args.max_subjects is not None:
-        raise ValueError("Every configured model is evaluated; omit --max-subjects.")
     if int(args.n_jobs) < 1:
         raise ValueError("--n-jobs must be >= 1.")
     if args.gpu_ids is not None:
@@ -464,11 +476,6 @@ def _validate_args(args, calibration_levels) -> None:
             raise ValueError("--gpu-ids values must be non-negative.")
         if len(set(gpu_ids)) != len(gpu_ids):
             raise ValueError("--gpu-ids must not contain duplicates.")
-        if len(gpu_ids) < int(args.n_jobs):
-            raise ValueError(
-                f"--n-jobs {args.n_jobs} requires at least that many GPU IDs; "
-                f"got {list(gpu_ids)}."
-            )
     if args.hyperparameters_json is not None:
         raise ValueError(
             "Use a calibration hyperparameter option. Architecture/source "
@@ -521,7 +528,10 @@ def _apply_model_calibration_configuration(model, configuration: dict) -> None:
             continue
         if name == "calibration_unfreeze_layers":
             value = int(value)
-        elif name == "calibration_use_vc_target":
+        elif name in {
+            "calibration_use_vc_target",
+            "calibration_freeze_decoder",
+        }:
             value = bool(value)
         elif name == "calibration_loss":
             value = str(value).lower().replace("-", "_")
@@ -597,6 +607,39 @@ def _validate_model_coverage(model_specs, subjects, *, allow_partial: bool) -> N
             f"users: {missing}. Use --allow-partial-model-set only for an "
             "intentional subset run."
         )
+
+
+def _select_model_specs(
+    model_specs: list[dict],
+    *,
+    target_subjects,
+    max_subjects: int | None,
+) -> list[dict]:
+    """Select configured target checkpoints using the calibration CLI flags."""
+    selected = list(model_specs)
+    if target_subjects is not None:
+        requested = [int(subject) for subject in target_subjects]
+        if len(set(requested)) != len(requested):
+            raise ValueError("--target-subjects must not contain duplicates.")
+        by_subject = {
+            int(spec["target_subject"]): spec
+            for spec in model_specs
+        }
+        missing = [subject for subject in requested if subject not in by_subject]
+        if missing:
+            raise ValueError(
+                "Requested --target-subjects have no checkpoint in "
+                f"--models-config: {missing}. Available targets are "
+                f"{sorted(by_subject)}."
+            )
+        # Preserve the explicit command-line order for predictable targeted runs.
+        selected = [by_subject[subject] for subject in requested]
+
+    if max_subjects is not None:
+        selected = selected[: int(max_subjects)]
+    if not selected:
+        raise ValueError("Subject selection left no target checkpoints to evaluate.")
+    return selected
 
 
 def _mean_std_metric_rows(rows: list[dict]) -> tuple[dict, dict, dict]:
@@ -883,6 +926,12 @@ def _resolve_outer_workers(args, n_models: int):
     effective_n_jobs = min(int(args.n_jobs), int(n_models))
     normalized_gpu_ids = None
     if args.gpu_ids is not None:
+        if len(args.gpu_ids) < effective_n_jobs:
+            raise ValueError(
+                f"The selected {n_models} target subject(s) and --n-jobs "
+                f"{args.n_jobs} require {effective_n_jobs} GPU ID(s), but "
+                f"--gpu-ids supplied {list(args.gpu_ids)}."
+            )
         normalized_gpu_ids = tuple(
             int(gpu_id) for gpu_id in args.gpu_ids[:effective_n_jobs]
         )
@@ -894,7 +943,7 @@ def _resolve_outer_workers(args, n_models: int):
 
 
 def run_calibration_only_search(args) -> dict:
-    """Evaluate every configured user model for every calibration candidate."""
+    """Evaluate the selected configured models for every calibration candidate."""
     calibration_levels = calibration_levels_from_args(args)
     _validate_args(args, calibration_levels)
     models_config_path, model_specs, models_config = _read_models_config(
@@ -912,6 +961,12 @@ def run_calibration_only_search(args) -> dict:
         model_specs,
         subjects,
         allow_partial=bool(args.allow_partial_model_set),
+    )
+    available_model_specs = list(model_specs)
+    model_specs = _select_model_specs(
+        available_model_specs,
+        target_subjects=args.target_subjects,
+        max_subjects=args.max_subjects,
     )
     effective_n_jobs, normalized_gpu_ids = _resolve_outer_workers(
         args,
@@ -943,10 +998,24 @@ def run_calibration_only_search(args) -> dict:
     logger = _configure_logger(run_dir)
 
     run_config = {
-        "protocol": "calibration_only_all_target_models",
+        "protocol": "calibration_only_selected_target_models",
         "models_config_path": str(models_config_path),
-        "models": models_config["resolved_models"],
+        "available_models": models_config["resolved_models"],
+        "models": [
+            {
+                "target_subject": int(spec["target_subject"]),
+                "path": str(spec["path"]),
+            }
+            for spec in model_specs
+        ],
         "n_models": len(model_specs),
+        "n_available_models": len(available_model_specs),
+        "requested_target_subjects": (
+            None
+            if args.target_subjects is None
+            else [int(subject) for subject in args.target_subjects]
+        ),
+        "max_subjects": args.max_subjects,
         "require_full_subject_coverage": not bool(args.allow_partial_model_set),
         "dataset": args.dataset,
         "label_dimension": args.label_dimension,
@@ -996,7 +1065,7 @@ def run_calibration_only_search(args) -> dict:
         },
     )
 
-    logger.info("Protocol: calibration-only search across every target model")
+    logger.info("Protocol: calibration-only search across selected target models")
     logger.info("Models configuration: %s", models_config_path)
     logger.info(
         "Target users (%d): %s",
@@ -1207,7 +1276,7 @@ def run_calibration_only_search(args) -> dict:
         summary["rank"] = rank
     best = ranked[0]
     search_results = {
-        "search_type": "all_users_calibration_full_cartesian_product",
+        "search_type": "selected_users_calibration_full_cartesian_product",
         "models_config_path": str(models_config_path),
         "n_models": len(model_specs),
         "target_subjects": [spec["target_subject"] for spec in model_specs],
