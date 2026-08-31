@@ -2,10 +2,10 @@
 #SBATCH --job-name=sic-calibration
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:2
-#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=64G
-#SBATCH --time=05:00:00
+#SBATCH --time=00:10:00
 #SBATCH --partition=a100-gpu,l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --output=sic-calibration_%j.out
@@ -80,14 +80,11 @@ srun python -u -m \
   --raw-eeg-npy "datasets/dreamer_eeg.npy" \
   --raw-labels-npy "datasets/dreamer_labels.npy" \
   --classification-level trial \
-  --calibration-level 3 6 \
   --calibration-level 6 3 \
-  --calibration-level 9 2 \
-  --calibration-level 12 3 \
-  --calibration-selection-shots 9 \
+  --calibration-selection-shots 6 \
   --selection-metric balanced_accuracy \
   --calibration-verbose \
   --calibration-print-every-n-epochs 1 \
-  --n-jobs 2 \
-  --gpu-ids 0 1 \
+  --n-jobs 1 \
+  --gpu-ids 0 \
   --cpus-per-worker 2

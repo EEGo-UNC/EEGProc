@@ -1,0 +1,199 @@
+{
+  "protocol": "calibration_only_all_target_models",
+  "models_config_path": "/Users/tolas/Documents/coding/EEGProc/src/eegproc/deep_learning/joint_architectures/SICModelv11/calibration_hps/sic_calibration_model.json",
+  "models": [
+    {
+      "target_subject": 0,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0001_target_0_zero_shot.keras"
+    },
+    {
+      "target_subject": 1,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0002_target_1_zero_shot.keras"
+    },
+    {
+      "target_subject": 2,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0003_target_2_zero_shot.keras"
+    },
+    {
+      "target_subject": 3,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0004_target_3_zero_shot.keras"
+    },
+    {
+      "target_subject": 4,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0005_target_4_zero_shot.keras"
+    },
+    {
+      "target_subject": 5,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0006_target_5_zero_shot.keras"
+    },
+    {
+      "target_subject": 6,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0007_target_6_zero_shot.keras"
+    },
+    {
+      "target_subject": 7,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0008_target_7_zero_shot.keras"
+    },
+    {
+      "target_subject": 8,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0009_target_8_zero_shot.keras"
+    },
+    {
+      "target_subject": 9,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0010_target_9_zero_shot.keras"
+    },
+    {
+      "target_subject": 10,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0011_target_10_zero_shot.keras"
+    },
+    {
+      "target_subject": 11,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0012_target_11_zero_shot.keras"
+    },
+    {
+      "target_subject": 12,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0013_target_12_zero_shot.keras"
+    },
+    {
+      "target_subject": 13,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0014_target_13_zero_shot.keras"
+    },
+    {
+      "target_subject": 14,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0015_target_14_zero_shot.keras"
+    },
+    {
+      "target_subject": 15,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0016_target_15_zero_shot.keras"
+    },
+    {
+      "target_subject": 16,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0017_target_16_zero_shot.keras"
+    },
+    {
+      "target_subject": 17,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0018_target_17_zero_shot.keras"
+    },
+    {
+      "target_subject": 18,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0019_target_18_zero_shot.keras"
+    },
+    {
+      "target_subject": 19,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0020_target_19_zero_shot.keras"
+    },
+    {
+      "target_subject": 20,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0021_target_20_zero_shot.keras"
+    },
+    {
+      "target_subject": 21,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0022_target_21_zero_shot.keras"
+    },
+    {
+      "target_subject": 22,
+      "path": "/Users/tolas/Documents/coding/EEGProc/runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0023_target_22_zero_shot.keras"
+    }
+  ],
+  "n_models": 23,
+  "require_full_subject_coverage": true,
+  "dataset": "dreamer",
+  "label_dimension": "valence",
+  "classification_level": "trial",
+  "window_sec": 1.0,
+  "window_overlap": 0.0,
+  "fs": 128.0,
+  "window_normalization": "global_rms",
+  "label_threshold_mode": "global",
+  "remove_median_label": false,
+  "median_label": 3.0,
+  "calibration_plan": [
+    {
+      "shots": 3,
+      "folds": 6
+    },
+    {
+      "shots": 6,
+      "folds": 3
+    },
+    {
+      "shots": 9,
+      "folds": 2
+    },
+    {
+      "shots": 12,
+      "folds": 3
+    }
+  ],
+  "calibration_selection_shots": 9,
+  "selection_metric": "balanced_accuracy",
+  "decision_threshold": 0.5,
+  "calibration_verbose": true,
+  "calibration_print_every_n_epochs": 1,
+  "requested_user_workers": 2,
+  "effective_user_workers": 2,
+  "worker_gpu_ids": [
+    0,
+    1
+  ],
+  "cpus_per_worker": 2,
+  "calibration_grid": {
+    "calibration_epochs": [
+      20,
+      80
+    ],
+    "calibration_batch_size": [
+      64
+    ],
+    "calibration_learning_rate": [
+      0.0001,
+      5e-05
+    ],
+    "calibration_optimizer": [
+      "adamw"
+    ],
+    "calibration_weight_decay": [
+      5e-05
+    ],
+    "calibration_use_class_weight": [
+      false
+    ],
+    "calibration_shuffle": [
+      true
+    ],
+    "calibration_unfreeze_layers": [
+      2
+    ],
+    "calibration_use_vc_target": [
+      true
+    ],
+    "calibration_vc_loss_weight": [
+      1.0
+    ],
+    "calibration_vc_alpha": [
+      1.0
+    ],
+    "calibration_vc_beta": [
+      0.3
+    ],
+    "calibration_vc_gamma": [
+      0.0
+    ],
+    "calibration_vc_lambda": [
+      0.05
+    ],
+    "calibration_loss": [
+      "focal"
+    ],
+    "calibration_label_smoothing": [
+      0.0
+    ],
+    "calibration_focal_gamma": [
+      0.5
+    ],
+    "calibration_focal_alpha": [
+      null
+    ]
+  },
+  "seed": 42
+}
