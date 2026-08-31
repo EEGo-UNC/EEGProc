@@ -1608,6 +1608,8 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
         decision_threshold: float = 0.5,
         diagnostic_thresholds: list[float] | tuple[float, ...] | None = None,
         ece_bins: int = _DEFAULT_ECE_BINS,
+        calibration_shots: int | None = None,
+        calibration_fold: int | None = None,
     ) -> None:
         super().__init__()
         self.X_target = np.asarray(X_target)
@@ -1633,7 +1635,23 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
             ),
         )
         self.ece_bins = int(ece_bins)
+        self.calibration_shots = (
+            None if calibration_shots is None else int(calibration_shots)
+        )
+        self.calibration_fold = (
+            None if calibration_fold is None else int(calibration_fold)
+        )
+        self.n_target_trials = int(len(np.unique(self.trial_ids_target)))
         self.history: list[dict] = []
+
+    def _calibration_context(self) -> str:
+        """Return shot/fold context when reporting a calibration continuation."""
+        if self.calibration_shots is None or self.calibration_fold is None:
+            return ""
+        return (
+            f" shots={self.calibration_shots}"
+            f" calibration_fold={self.calibration_fold}"
+        )
 
     def on_train_begin(self, logs: dict | None = None) -> None:
         print(
@@ -1641,7 +1659,9 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
             "used for gradients, early stopping, threshold selection, or "
             "checkpoint selection. Official evaluation threshold="
             f"{self.decision_threshold:.4f}; reporting-only thresholds="
-            f"{list(self.diagnostic_thresholds)}.",
+            f"{list(self.diagnostic_thresholds)}; "
+            f"held-out trials={self.n_target_trials}"
+            f"{self._calibration_context()}.",
             flush=True,
         )
 
@@ -1722,9 +1742,14 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
                 "decision_threshold": float(threshold),
                 "official_decision_threshold": self.decision_threshold,
                 "is_official_decision_threshold": is_official,
+                "n_target_trials": self.n_target_trials,
                 **{name: float(value) for name, value in scores.items()},
                 **decoder_scores,
             }
+            if self.calibration_shots is not None:
+                row["calibration_shots"] = self.calibration_shots
+            if self.calibration_fold is not None:
+                row["calibration_fold"] = self.calibration_fold
             if probabilities.shape[1] == 2:
                 row["predicted_class_1_fraction"] = float(np.mean(y_pred == 1))
                 row["true_class_1_fraction"] = float(np.mean(y_true == 1))
@@ -1748,7 +1773,8 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
                 )
             print(
                 f"[ORACLE held-out user={self.target_subject!r} "
-                f"epoch={int(epoch) + 1} threshold={threshold:.4f} "
+                f"epoch={int(epoch) + 1}{self._calibration_context()} "
+                f"trials={self.n_target_trials} threshold={threshold:.4f} "
                 f"official={str(is_official).lower()}] "
                 + "  ".join(parts),
                 flush=True,
@@ -5143,6 +5169,10 @@ def _run_subject_calibration_subject(
             X_source,
             source_subject_ids,
         )
+        from .training_outputs import (
+            HeldOutUserOracleMetrics as ReportingHeldOutUserOracleMetrics,
+        )
+
         source_kwargs = dict(source_fit_kwargs)
         source_callbacks = list(source_kwargs.pop("callbacks", []))
         prediction_diagnostics_callback = None
@@ -5173,7 +5203,7 @@ def _run_subject_calibration_subject(
             )
             source_callbacks.append(prediction_diagnostics_callback)
 
-        oracle_metrics_callback = HeldOutUserOracleMetrics(
+        oracle_metrics_callback = ReportingHeldOutUserOracleMetrics(
             X_target=X_target,
             y_target=y_target,
             subject_ids_target=target_subject_ids,
@@ -5341,6 +5371,7 @@ def _run_subject_calibration_subject(
 
         metric_names = ("loss", *metrics, "joint_loss", *_DECODER_SCORE_NAMES)
         calibration_level_outputs: list[dict] = []
+        calibration_oracle_epoch_log: list[dict] = []
         evaluation_offset = (int(subject_number) - 1) * sum(
             level_folds for _, level_folds in calibration_levels
         )
@@ -5441,10 +5472,8 @@ def _run_subject_calibration_subject(
                 if calibration_class_weight is not None:
                     calibration_kwargs["class_weight"] = calibration_class_weight
 
+                callbacks = list(calibration_kwargs.get("callbacks") or [])
                 if calibration_verbose:
-                    callbacks = list(
-                        calibration_kwargs.get("callbacks") or []
-                    )
                     callbacks.append(
                         _PeriodicCalibrationEpochLogger(
                             target_subject=target_subject,
@@ -5456,7 +5485,27 @@ def _run_subject_calibration_subject(
                             ),
                         )
                     )
-                    calibration_kwargs["callbacks"] = callbacks
+
+                # Reporting-only oracle inference runs after every calibration
+                # epoch on the complete evaluation partition for this fold.
+                # These held-out trials never enter model.fit or its logs, so
+                # they cannot affect gradients or model selection.
+                calibration_oracle_callback = ReportingHeldOutUserOracleMetrics(
+                    X_target=X_evaluation,
+                    y_target=y_evaluation,
+                    subject_ids_target=evaluation_subject_ids,
+                    trial_ids_target=evaluation_trial_ids,
+                    target_subject=target_subject,
+                    evaluation_level=evaluation_level,
+                    batch_size=1,
+                    decision_threshold=float(decision_threshold),
+                    diagnostic_thresholds=prediction_diagnostics_thresholds,
+                    ece_bins=int(ece_bins),
+                    calibration_shots=int(calibration_shots),
+                    calibration_fold=calibration_fold,
+                )
+                callbacks.append(calibration_oracle_callback)
+                calibration_kwargs["callbacks"] = callbacks
 
                 calibration_history = model.fit(
                     X_calibration_for_fit,
@@ -5468,6 +5517,17 @@ def _run_subject_calibration_subject(
                     verbose=0,
                     **calibration_kwargs,
                 )
+                fold_oracle_epoch_log = [
+                    {
+                        **dict(row),
+                        "stage": "calibration_epoch_oracle",
+                        "evaluation_trial_ids": list(
+                            split["evaluation_trial_ids"]
+                        ),
+                    }
+                    for row in calibration_oracle_callback.history
+                ]
+                calibration_oracle_epoch_log.extend(fold_oracle_epoch_log)
 
                 calibrated = _evaluate_classification_fold(
                     model=model,
@@ -5525,6 +5585,7 @@ def _run_subject_calibration_subject(
                         calibration_history
                     ),
                     "calibration_trainable_variables": trainable_names,
+                    "oracle_epoch_log": fold_oracle_epoch_log,
                     "zero_shot_scores": zero_scores,
                     "calibrated_scores": calibrated_scores,
                     "delta_scores": delta_scores,
@@ -5632,7 +5693,10 @@ def _run_subject_calibration_subject(
                 if prediction_diagnostics_callback is None
                 else list(prediction_diagnostics_callback.history)
             ),
-            "oracle_epoch_log": list(oracle_metrics_callback.history),
+            "oracle_epoch_log": [
+                *list(oracle_metrics_callback.history),
+                *calibration_oracle_epoch_log,
+            ],
             "zero_shot_model": zero_shot_model_artifact,
             "zero_shot_all_trials": all_target_evaluation,
             "calibration_levels": calibration_level_outputs,
@@ -5787,7 +5851,9 @@ def subject_calibration_cv(
       1. restore the exact source-pretrained weights;
       2. evaluate zero-shot on the trials not used for calibration;
       3. call ``model.prepare_for_subject_calibration(...)``;
-      4. fine-tune only the model-defined calibration parameters;
+      4. fine-tune only the model-defined calibration parameters, printing
+         reporting-only oracle predictions on every non-calibration trial
+         after each epoch;
       5. evaluate the calibrated model on the same held-out target trials.
 
     When ``source_model_output_dir`` is provided, the exact source-trained
@@ -7483,4 +7549,3 @@ def _compact_loso_fold_result(fold_output: dict) -> dict:
         "trial_fold_metrics": dict(fold_output["trial_fold_metrics"]),
         "user_metrics": [dict(row) for row in fold_output["user_metrics"]],
     }
-

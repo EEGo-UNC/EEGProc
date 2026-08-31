@@ -406,10 +406,15 @@ class HeldOutUserOracleMetrics(_CrossValHeldOutUserOracleMetrics):
                 "decision_threshold": float(threshold),
                 "official_decision_threshold": self.decision_threshold,
                 "is_official_decision_threshold": is_official,
+                "n_target_trials": self.n_target_trials,
                 "loss": float(probability_loss),
                 **{name: float(value) for name, value in scores.items()},
                 **decoder_scores,
             }
+            if self.calibration_shots is not None:
+                row["calibration_shots"] = self.calibration_shots
+            if self.calibration_fold is not None:
+                row["calibration_fold"] = self.calibration_fold
             if probabilities.shape[1] == 2:
                 row["predicted_class_1_fraction"] = float(np.mean(y_pred == 1))
                 row["true_class_1_fraction"] = float(np.mean(y_true == 1))
@@ -463,7 +468,8 @@ class HeldOutUserOracleMetrics(_CrossValHeldOutUserOracleMetrics):
         )
         oracle_line = (
             f"[ORACLE PREDICTION held-out user={self.target_subject!r} "
-            f"epoch={epoch_number} level={level} "
+            f"epoch={epoch_number}{self._calibration_context()} "
+            f"trials={self.n_target_trials} level={level} "
             f"threshold={self.decision_threshold:.4f}] "
             + " | ".join(parts)
         )
@@ -472,6 +478,7 @@ class HeldOutUserOracleMetrics(_CrossValHeldOutUserOracleMetrics):
             role="oracle",
             line=oracle_line,
             epoch_number=epoch_number,
+            fold_number=self.calibration_fold,
             target_subject=self.target_subject,
             total_epochs=int(self.params.get("epochs", epoch_number)),
             wait_for_counterpart=(
