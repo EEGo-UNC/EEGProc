@@ -5,8 +5,8 @@
     "gcn_gru": 0.0,
     "bilstm": 0.0
   },
-  "mean_selected_latent_mse": 0.01021500676870346,
-  "mean_selected_decoded_mse": 0.5864923596382141,
+  "mean_selected_latent_mse": 0.0026080815587192774,
+  "mean_selected_decoded_mse": 0.6683773994445801,
   "physiological_validity": 0.0,
   "physiological_constraint_enforced": false
 }

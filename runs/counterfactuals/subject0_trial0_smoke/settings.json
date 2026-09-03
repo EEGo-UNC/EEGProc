@@ -1,5 +1,5 @@
 {
-  "created_at_utc": "2026-08-31T18:52:21.077540+00:00",
+  "created_at_utc": "2026-09-01T15:54:42.005858+00:00",
   "arguments": {
     "model": "runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0001_target_0_zero_shot.keras",
     "model_module": "eegproc.deep_learning.joint_architectures.SICModelv11.sic_model",
@@ -20,9 +20,9 @@
       0
     ],
     "target_class": null,
-    "target_probability": 0.8,
+    "target_probability": 0.55,
     "learning_rate": 0.1,
-    "max_steps": 20,
+    "max_steps": 10,
     "gradient_clip_norm": 5.0,
     "target_weight": 1.0,
     "latent_weight": 0.1,
@@ -38,7 +38,7 @@
     "latent_weight": 0.1,
     "decoded_weight": 0.1,
     "physiological_weight": 0.0,
-    "target_probability": 0.8
+    "target_probability": 0.55
   },
   "tensorflow_version": "2.20.0",
   "trial_input_shape": [

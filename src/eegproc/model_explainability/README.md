@@ -1,7 +1,8 @@
 # SIC counterfactuals
 
-Four runtime files. No source training, subject calibration, VAE, KL term,
-window-level optimization, or new model construction.
+Counterfactual optimization and plotting utilities. No source training,
+subject calibration, VAE, KL term, window-level optimization, or new model
+construction.
 
 | File | Owns |
 | --- | --- |
@@ -9,10 +10,14 @@ window-level optimization, or new model construction.
 | `counterfactual_loss.py` | `CounterfactualLoss`: target, latent, decoded, physiological, and central loss methods. |
 | `counterfactual_optimizer.py` | Full-trial latent gradient descent with the saved SIC classifier and decoders. |
 | `run_counterfactuals.py` | Model/data loading, trial selection, printed diagnostics, and result files. |
+| `counterfactual_plotting.py` | Shared counterfactual NPZ loading and channel-label helpers. |
+| `counterfactual_heatmap.py` | Channel-by-time decoded counterfactual difference heatmap. |
+| `counterfactual_topography.py` | Side-by-side whole-trial scalp maps for each EEG band. |
+| `counterfactual_training_monitor.py` | Static or live epoch × target probability × difference trajectory. |
 
 ## Install in EEGProc
 
-Place the four `.py` files together in `src/eegproc/model_explainability/`.
+Keep these `.py` files together in `src/eegproc/model_explainability/`.
 The new runner does not import the old `counterfactual_losses.py` or
 `counterfactual_state.py`. Leave those old files in place if other code still
 imports them; this rewrite is not a compatibility layer for their APIs.
@@ -189,6 +194,117 @@ Missing/disabled decoders cause an explicit error. Verify that reconstruction
 was actually trained in the selected checkpoint; decoder presence alone does
 not establish reconstruction quality. Select the correct saved LOSO model
 for the chosen subject: the runner cannot prove training-subject exclusion.
+
+## Quick start: generate the graphs
+
+Run these commands from the EEGProc repository root after activating the same
+Python environment used for the counterfactual run:
+
+```bash
+cd /Users/tolas/Documents/coding/EEGProc
+source venv/bin/activate
+```
+
+Each completed trial directory contains the two plotting inputs:
+
+```text
+runs/counterfactuals/YOUR_RUN/subject_0_trial_0/
+├── counterfactual.npz   # difference heatmap and scalp topography
+└── history.csv          # three-dimensional optimization trajectory
+```
+
+Replace `YOUR_RUN` and the subject/trial numbers in the commands below with an
+actual completed result directory.
+
+### 1. Counterfactual difference heatmap
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_heatmap \
+  runs/counterfactuals/YOUR_RUN/subject_0_trial_0/counterfactual.npz \
+  --branch gcn_gru \
+  --sampling-rate 128
+```
+
+This interprets the 42 features as 14 electrodes × 3 bands and creates three
+stacked heatmap sections: Theta, Alpha, and Beta. Each section contains the
+same 14 channel rows, its own peak-channel summary, and the same time axis. It
+shows RMS decoded change in one-second bins by default, avoiding the dense
+phase-driven striping produced by plotting every signed EEG sample. Each band
+has its own labeled robust color scale so lower-amplitude band structure stays
+visible. It opens the graph and saves
+`counterfactual_gcn_gru_counterfactual_difference_heatmap.png` beside the NPZ.
+The default difference is
+`x_prime_gcn_gru - x_reconstructed_gcn_gru`, which isolates the intervention
+from decoder reconstruction error. Use `--reference input` only to include
+that reconstruction error. Use `--time-bin-seconds 0.5` for finer temporal
+resolution, `--measure mean-absolute` for average magnitude, or
+`--measure signed-mean` when the direction of a binned change is meaningful.
+Add `--shared-scale` when direct cross-band color comparison is more important
+than seeing lower-amplitude within-band structure.
+
+### 2. Whole-trial scalp topographies by band
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_topography \
+  runs/counterfactuals/YOUR_RUN/subject_0_trial_0/counterfactual.npz \
+  --branch gcn_gru
+```
+
+This interprets the 42 features as 14 electrodes × 3 bands, opens three
+side-by-side scalp maps (Theta, Alpha, and Beta), prints the peak channel for
+each band, and saves
+`counterfactual_gcn_gru_difference_topography.png` beside the NPZ. The default
+maps show the signed mean counterfactual difference over the complete trial on
+a zero-centered red/blue scale. Positive and negative electrodes therefore
+remain distinguishable. Each band has its own symmetric color range, preserving
+spatial contrast within lower-amplitude bands. Colors should be compared within
+a band, not between bands; the adjacent colorbars retain the actual values.
+Add `--shared-scale` only when direct cross-band magnitude comparison is
+desired. Use `--measure mean-absolute` to restore unsigned activity magnitude.
+
+For 14-channel data, the DREAMER order is automatic: AF3, F7, F3, FC5, T7,
+P7, O1, O2, P8, T8, FC6, F4, F8, AF4. The scalp map currently requires these
+positioned DREAMER/Emotiv channel names. Mean absolute activity is used so
+positive and negative EEG values do not cancel only when
+`--measure mean-absolute` is selected; the default signed mean intentionally
+retains cancellation and direction.
+
+The default flattened feature order is channel-major: Theta/Alpha/Beta for
+AF3, then Theta/Alpha/Beta for F7, and so on. If the saved features instead
+contain all channels for Theta followed by all channels for Alpha and Beta, add
+`--feature-order band-major`. Override the labels, if needed, with for example
+`--band-names Delta Theta Alpha`.
+
+### 3. Training/optimization trajectory
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_training_monitor \
+  runs/counterfactuals/YOUR_RUN/subject_0_trial_0/history.csv
+```
+
+This opens the three-dimensional graph and saves
+`history_counterfactual_training_trajectory.png` beside the CSV. Its axes are:
+
+- x: optimization step, displayed as epoch
+- y: `decoded`, the decoded counterfactual MSE relative to the original input
+- z: `target_probability`, displayed as `target_p` and zoomed to its observed
+  variation so small changes remain visible
+
+The current runner writes `history.csv` after a trial finishes, so this command
+plots the completed trajectory. The plotting code contains a TODO for coloring
+the trajectory by validity later.
+
+Add `--full-probability-range` to restore a fixed y-axis from 0 to 1.
+
+### Common options
+
+- Use `--branch bilstm` instead of `--branch gcn_gru` for the BiLSTM decoder.
+- When the NPZ contains both branches, `--branch` is required.
+- Use `--band-names NAME1 NAME2 NAME3` to change the three band labels.
+- Use `--feature-order band-major` if features are grouped by band rather than channel.
+- Add `--no-show` to save the PNG without opening a graph window.
+- Add `--output figures/my_plot.png` to choose a different output path.
+- Append `--help` to any plotting command to see all available options.
 
 ## Verification
 
