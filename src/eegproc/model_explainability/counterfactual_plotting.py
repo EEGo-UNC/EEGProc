@@ -2,9 +2,9 @@
 
 The counterfactual runner stores one trial with shape
 ``(1, windows, timesteps, channels)``.  Plotting flattens the chronological
-window and timestep axes while keeping channels separate.  Each decoder branch
-is handled independently because the runner deliberately does not fuse branch
-reconstructions.
+window and timestep axes while keeping channels separate. Independent decoder
+branches and the learned joint reconstruction share the same ``<branch>`` key
+convention, so the plotting scripts can handle all of them.
 """
 
 from __future__ import annotations

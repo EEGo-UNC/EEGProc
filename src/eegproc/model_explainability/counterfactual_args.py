@@ -93,6 +93,16 @@ def build_parser():
     parser.add_argument("--latent-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument("--decoded-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument(
+        "--decoder-mode",
+        choices=("branches", "joint"),
+        default="branches",
+        help=(
+            "Decoded reconstruction used by the counterfactual objective. "
+            "'branches' preserves the independent-decoder behavior; 'joint' "
+            "uses only the saved learned fusion of both branch reconstructions."
+        ),
+    )
+    parser.add_argument(
         "--physiological-weight",
         type=_nonnegative_float,
         default=0.0,

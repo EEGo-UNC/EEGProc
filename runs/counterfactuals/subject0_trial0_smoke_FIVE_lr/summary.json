@@ -1,0 +1,12 @@
+{
+  "n_trials": 1,
+  "latent_success_rate": 0.0,
+  "decoded_success_rate": {
+    "gcn_gru": 0.0,
+    "bilstm": 0.0
+  },
+  "mean_selected_latent_mse": 0.21361088752746582,
+  "mean_selected_decoded_mse": 0.5632914900779724,
+  "physiological_validity": 0.0,
+  "physiological_constraint_enforced": false
+}

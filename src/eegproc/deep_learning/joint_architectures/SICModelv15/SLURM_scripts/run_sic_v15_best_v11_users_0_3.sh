@@ -76,6 +76,9 @@ source "$VENV_DIR/bin/activate"
 
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
+# Use CUDA's asynchronous allocator so TensorFlow can reuse fragmented GPU
+# memory for the large decoder-gradient temporaries created during MLDG.
+export TF_GPU_ALLOCATOR=cuda_malloc_async
 
 # Locate CUDA libdevice for TensorFlow/XLA.
 MODULE_CUDA_ROOT=""
@@ -205,6 +208,7 @@ echo "Training: MLDG, $SOURCE_EPOCHS source epochs"
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
 echo "Joint reconstruction: initial alpha=0.5, auxiliary branch weight=0.25"
 echo "Configuration source: rank 1 from v11 suite 65452590"
+echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 python --version
 nvidia-smi
 

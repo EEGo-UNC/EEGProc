@@ -17,10 +17,10 @@ class CounterfactualLoss:
     """Weighted target, latent, decoded-signal, and physiological penalties.
 
     The objective is target_weight * target_loss + latent_weight * MSE(z', z)
-    + decoded_weight * mean_b MSE(D_b(z'_b), x) + physiological_weight * 0.
-    b ranges over active encoder branches. Each branch decoder reconstructs
-    the same original, preprocessed EEG trial; it never receives the other
-    branch's features. No physiological constraint is currently enforced.
+    + decoded_weight * mean_r MSE(R_r(z'), x) + physiological_weight * 0.
+    The optimizer selects the reconstruction paths r. They are either the
+    independent active decoder branches or the single learned joint fusion.
+    No physiological constraint is currently enforced.
 
     target_probability is a desired softmax confidence, not a replacement
     for the predicted-class decision rule. The optimizer requires both the
@@ -89,12 +89,14 @@ class CounterfactualLoss:
         decoder is a differentiable callable accepting the complete latent
         trial and returning {branch_name: reconstructed_trial}. Each output
         must match x: (1, windows, timesteps, EEG_features). The optimizer
-        supplies this small adapter to the saved, independent SIC decoders.
+        supplies this small adapter to the saved SIC reconstruction path.
 
-        Each D_b(z'_b) is compared to the ORIGINAL x, not to itself. Branch
-        losses are averaged, so enabling a second decoder does not double
-        the global decoded-loss scale. Returned reconstructions are reused
-        for reporting/physiology without another decoder forward pass.
+        Each returned reconstruction is compared to the ORIGINAL x, not to
+        itself. Branch mode averages its active paths, so enabling a second
+        decoder does not double the global decoded-loss scale. Joint mode
+        returns one fused path and therefore uses exactly its MSE. Returned
+        reconstructions are reused for reporting/physiology without another
+        decoder forward pass.
         No NumPy conversion or gradient stop is applied to decoder outputs.
         """
         reconstructions = decoder(z_prime)
@@ -123,7 +125,7 @@ class CounterfactualLoss:
         """Return (loss_terms, reconstructions) for one optimization step.
 
         loss_terms contains total, the four unweighted terms, their four
-        weighted contributions, and decoded_<branch> distances. All are
+        weighted contributions, and decoded_<path> distances. All are
         scalar tensors, allowing a single GradientTape to differentiate total.
         The caller handles optimization, finite checks, logging, and saving.
         """

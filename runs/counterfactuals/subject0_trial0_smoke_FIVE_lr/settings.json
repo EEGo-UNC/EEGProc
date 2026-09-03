@@ -1,0 +1,56 @@
+{
+  "created_at_utc": "2026-09-03T18:12:26.260210+00:00",
+  "arguments": {
+    "model": "runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models/loso_fold_0001_target_0_zero_shot.keras",
+    "model_module": "eegproc.deep_learning.joint_architectures.SICModelv11.sic_model",
+    "trials_npz": null,
+    "raw_eeg_npy": "datasets/dreamer_eeg.npy",
+    "raw_labels_npy": "datasets/dreamer_labels.npy",
+    "dataset": "dreamer",
+    "label_dimension": "valence",
+    "window_sec": 1.0,
+    "fs": 128.0,
+    "window_normalization": "global_rms",
+    "window_overlap": 0.0,
+    "median_label": 3.0,
+    "label_threshold_mode": "global",
+    "remove_median_label": false,
+    "subject_id": 0,
+    "trial_ids": [
+      0
+    ],
+    "target_class": null,
+    "target_probability": 0.6,
+    "learning_rate": 5.0,
+    "max_steps": 10,
+    "gradient_clip_norm": 5.0,
+    "target_weight": 1.0,
+    "latent_weight": 0.1,
+    "decoded_weight": 0.1,
+    "decoder_mode": "branches",
+    "physiological_weight": 0.0,
+    "stop_on_success": false,
+    "log_every": 1,
+    "seed": 42,
+    "out_dir": "runs/counterfactuals/subject0_trial0_smoke_FIVE_lr"
+  },
+  "loss": {
+    "target_weight": 1.0,
+    "latent_weight": 0.1,
+    "decoded_weight": 0.1,
+    "physiological_weight": 0.0,
+    "target_probability": 0.6
+  },
+  "tensorflow_version": "2.20.0",
+  "trial_input_shape": [
+    60,
+    128,
+    42
+  ],
+  "selected_trial_ids": [
+    0
+  ],
+  "physiological_constraint_enforced": false,
+  "preprocessing_match": "caller must use the settings used to train this checkpoint",
+  "checkpoint_subject_match": "caller must select the intended LOSO checkpoint"
+}

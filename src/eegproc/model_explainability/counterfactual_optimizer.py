@@ -20,10 +20,12 @@ else:
 class CounterfactualOptimizer:
     """Optimize one complete SIC trial, keeping the saved model fixed.
 
-    The model must expose the current SIC v11 feature/decoder interface.
+    The model must expose the current SIC feature/decoder interface.
     Its recurrent classifier consumes every timestep of every window, in
-    chronological order, followed by its existing VC logits head. The two
-    branch feature sequences are split only for their independent decoders.
+    chronological order, followed by its existing VC logits head. In branch
+    mode, the two feature sequences are decoded independently. In joint mode,
+    both branch decoders run and the saved model's learned convex fusion
+    produces the sole decoded reconstruction used by the objective.
 
     Adam performs gradient-based updates to z_prime only. Each optimize()
     call creates fresh Adam state, so trials cannot influence one another.
@@ -42,6 +44,7 @@ class CounterfactualOptimizer:
         max_steps=200,
         gradient_clip_norm=5.0,
         stop_on_success=False,
+        decoder_mode="branches",
     ):
         if not math.isfinite(learning_rate) or learning_rate <= 0:
             raise ValueError("learning_rate must be finite and positive.")
@@ -55,6 +58,9 @@ class CounterfactualOptimizer:
             not math.isfinite(gradient_clip_norm) or gradient_clip_norm <= 0
         ):
             raise ValueError("gradient_clip_norm must be positive or None.")
+        decoder_mode = str(decoder_mode).strip().lower()
+        if decoder_mode not in {"branches", "joint"}:
+            raise ValueError("decoder_mode must be 'branches' or 'joint'.")
         if getattr(model, "classification_level", None) != "trial":
             raise ValueError(
                 "A full-trial SIC model is required; window/VAE models are not supported."
@@ -71,9 +77,26 @@ class CounterfactualOptimizer:
                 self.branches.append((name, int(getattr(model, f"{name}_feature_dim"))))
         if not self.branches:
             raise ValueError("At least one active encoder/decoder branch is required.")
+        if decoder_mode == "joint":
+            if {name for name, _ in self.branches} != {"gcn_gru", "bilstm"}:
+                raise ValueError(
+                    "Joint decoder mode requires active GCN-GRU and BiLSTM branches."
+                )
+            if not getattr(model, "use_joint_reconstruction", False):
+                raise ValueError(
+                    "Joint decoder mode requires a model trained with joint reconstruction."
+                )
+            if getattr(model, "joint_reconstruction_fusion", None) is None:
+                raise ValueError("Missing joint reconstruction fusion layer.")
         self.model, self.loss = (
             model,
             loss if loss is not None else CounterfactualLoss(),
+        )
+        self.decoder_mode = decoder_mode
+        self.decoded_names = (
+            ("joint",)
+            if self.decoder_mode == "joint"
+            else tuple(name for name, _ in self.branches)
         )
         self.learning_rate, self.max_steps = float(learning_rate), int(max_steps)
         self.gradient_clip_norm, self.stop_on_success = (
@@ -87,7 +110,7 @@ class CounterfactualOptimizer:
         embedding = self.model.trial_recurrent_classifier(sequence, training=False)
         return tf.cast(self.model.vc_target(embedding, training=False), tf.float32)
 
-    def _decode(self, latent, x):
+    def _decode_branches(self, latent, x):
         """Decode each branch per window, then restore the original trial axes.
 
         Branch ordering is exactly SIC's concat([gcn_gru, bilstm]). A single
@@ -107,6 +130,27 @@ class CounterfactualOptimizer:
             result[name] = tf.reshape(tf.cast(decoded, tf.float32), tf.shape(x))
             offset += width
         return result
+
+    def _decode(self, latent, x):
+        """Return the reconstruction paths selected for the objective.
+
+        Joint mode still evaluates both independent decoders, then applies the
+        checkpoint's frozen learned fusion weight. Because the gradient tape
+        watches only the counterfactual latent variable, gradients flow through
+        the fusion to both latent branches without changing model parameters.
+        """
+        branches = self._decode_branches(latent, x)
+        if self.decoder_mode == "branches":
+            return branches
+        joint = self.model.joint_reconstruction_fusion(
+            [branches["gcn_gru"], branches["bilstm"]]
+        )
+        tf.debugging.assert_equal(
+            tf.shape(joint),
+            tf.shape(x),
+            message="Joint decoder must reconstruct the original trial shape.",
+        )
+        return {"joint": tf.cast(joint, tf.float32)}
 
     def _prediction(self, logits, target):
         """Return probabilities and an argmax-plus-confidence success decision."""
@@ -308,6 +352,12 @@ class CounterfactualOptimizer:
             "history": history,
             "summary": {
                 "target_class": target_class,
+                "decoder_mode": self.decoder_mode,
+                "joint_reconstruction_alpha": (
+                    float(self.model.joint_reconstruction_fusion.alpha.numpy())
+                    if self.decoder_mode == "joint"
+                    else None
+                ),
                 "required_target_probability": self.loss.target_probability,
                 "prediction_rule": "argmax",
                 "original": original_prediction,

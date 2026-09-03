@@ -230,7 +230,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Plot one whole-trial counterfactual scalp map per EEG band."
     )
     parser.add_argument("npz_path", type=Path)
-    parser.add_argument("--branch", help="Required when both decoder branches exist.")
+    parser.add_argument(
+        "--branch",
+        help=(
+            "Reconstruction path, for example gcn_gru, bilstm, or joint; "
+            "required when multiple paths exist."
+        ),
+    )
     parser.add_argument(
         "--reference",
         choices=("reconstruction", "input"),

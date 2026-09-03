@@ -21,8 +21,9 @@ Keep these `.py` files together in `src/eegproc/model_explainability/`.
 The new runner does not import the old `counterfactual_losses.py` or
 `counterfactual_state.py`. Leave those old files in place if other code still
 imports them; this rewrite is not a compatibility layer for their APIs.
-No change to `cross_val.py`, SIC training, or the SIC model is required for
-the inspected SIC v11 interface.
+No change to `cross_val.py`, SIC training, or the SIC model is required. The
+runner supports SICModelv11's independent reconstructions and SICModelv15's
+learned joint reconstruction.
 
 Use the existing EEGProc environment. Tests here used Python 3.12,
 TensorFlow CPU 2.20.0, Keras 3.15.1, and NumPy. `pytest` is needed only for tests.
@@ -68,6 +69,17 @@ Use `--trial-ids 0 1 2` for a subset, or omit trial selection to process all
 trials of the specified subject. The default target is the opposite of the
 original predicted class for a binary model. Set `--target-class 0` or `1`
 explicitly if desired. Multiclass models require an explicit target.
+
+For SICModelv15's single learned joint reconstruction, add:
+
+```bash
+  --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model \
+  --decoder-mode joint
+```
+
+Joint mode requires a v15 checkpoint trained with the decoder and both encoder
+branches enabled. It runs both branch decoders and applies the checkpoint's
+learned convex fusion weight; it does not train or recalibrate that weight.
 
 Raw mode reuses `load_sic_training_data` and `_group_windows_into_trials` from
 the matching SIC training module. It does not call any training function or
@@ -117,9 +129,54 @@ mask inference, or averaging is introduced. The inspected SIC trainer groups
 equal numbers of real windows per trial and its classifier has no padding
 mask. An NPZ containing a `window_mask` with invalid windows is rejected.
 
+## Slurm: all 18 trials for subject 0
+
+Submit the 18-task array with the subject 0 SICModelv15 checkpoint:
+
+```bash
+sbatch \
+  --export=ALL,MODEL_PATH=/absolute/path/to/subject_0_sic_v15.keras \
+  src/eegproc/model_explainability/SLURM_scripts/run_joint_counterfactuals_user_0.sh
+```
+
+The array indices are exactly `0-17`; each task processes the matching DREAMER
+trial for subject 0 in joint-decoder mode. Raw data defaults to
+`datasets/dreamer_eeg.npy` and `datasets/dreamer_labels.npy`. To use a prepared
+trial file instead, also export `TRIALS_NPZ=/absolute/path/prepared_trials.npz`.
+The optimization settings can be overridden through the environment variables
+listed near the top of the script.
+
+Every task also creates the joint heatmap, signed topography, and optimization
+trajectory. Outputs are grouped under:
+
+```text
+XAI_runs/subject_0_joint_counterfactuals_<array-job-id>/
+├── all_metrics.json
+├── all_metrics.json.lock
+├── trial_00/subject_0_trial_0/
+├── ...
+└── trial_17/subject_0_trial_17/
+```
+
+On exit, every task runs the locked, atomic metrics collector. The last
+successful task therefore leaves `all_metrics.json` containing each complete
+trial's result metrics, complete optimization history, settings, artifact list,
+and cross-trial numeric summaries. `complete` is true only after all 18 trials
+are present. Failed or unfinished trials remain listed in `missing_trial_ids`.
+
+To refresh or validate the combined file manually:
+
+```bash
+PYTHONPATH=src python -m \
+  eegproc.model_explainability.aggregate_counterfactual_metrics \
+  XAI_runs/subject_0_joint_counterfactuals_<array-job-id> \
+  --subject-id 0 --expected-trials 18 --require-complete
+```
+
 ## Objective and gradient path
 
-For original trial `x`, encode once to `z`, then initialize `z_prime = z`:
+For original trial `x`, encode once to `z`, then initialize `z_prime = z`. The
+default `--decoder-mode branches` retains the original objective:
 
 \[
 L = \lambda_t\max(0, \log p_{min}-\log p(y^*\mid z'))
@@ -136,8 +193,22 @@ saved SIC GRU configuration without substituting a different classifier.
 For decoding, split the final feature axis at the saved branch widths.
 GCN-GRU features enter only the GCN-GRU decoder; BiLSTM features enter only
 the BiLSTM decoder. Each decoder sees `(W,T,C_branch)` and reconstructs the
-original EEG windows. Their MSEs are averaged; reconstructions are **not**
-averaged into a new fused EEG output. Single-branch ablations are supported.
+original EEG windows. In branch mode, their MSEs are averaged and each
+reconstruction is saved separately. Single-branch ablations are supported.
+
+With `--decoder-mode joint`, the sole decoded reconstruction and decoded loss
+are:
+
+\[
+\hat{x}_{joint}=\alpha D_g(z'_g)+(1-\alpha)D_b(z'_b),\qquad
+L_x=\operatorname{MSE}(\hat{x}_{joint},x).
+\]
+
+`alpha` is the learned sigmoid fusion weight stored in the SICModelv15
+checkpoint. Only `z_prime` is optimized, so gradients reach both latent branch
+segments through the frozen fusion while neither `alpha` nor decoder weights
+change. This intentionally uses the single joint MSE rather than averaging the
+joint MSE with the two branch MSEs.
 
 All distances are elementwise MSEs. Coefficients are starting settings, not
 empirically tuned values. The loss contains detailed method docstrings.
@@ -182,13 +253,13 @@ overwritten. Completed trials are saved individually.
 | File | Contents |
 | --- | --- |
 | `settings.json` | Arguments, loss weights, model path, input shape, selected trials, environment version. |
-| `subject_<id>_trial_<id>/history.csv` | Step 0 and each finite evaluated step: total/raw/weighted losses, branch MSEs, probabilities, prediction, success, gradient norm. |
+| `subject_<id>_trial_<id>/history.csv` | Step 0 and each finite evaluated step: total/raw/weighted losses, selected reconstruction-path MSEs, probabilities, prediction, success, gradient norm. |
 | `subject_<id>_trial_<id>/result.json` | Original/latent/decoded predictions, selected losses, selected step, update count, runtime, stop reason. |
-| `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, `x_reconstructed_<branch>`, `x_prime_<branch>`. |
+| `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, `x_reconstructed_<path>`, `x_prime_<path>`; joint mode uses `<path>=joint`. |
 | `results.json` | Completed trial summaries, updated after each trial. |
-| `summary.json` | Aggregate latent and per-decoder success rates and mean distances, after all trials finish. |
+| `summary.json` | Aggregate latent and per-reconstruction-path success rates and mean distances, after all trials finish. |
 
-`x_prime_<branch>` remains in the model's preprocessed input space. This
+`x_prime_<path>` remains in the model's preprocessed input space. This
 runner does not reconstruct missing raw EEG bands or undo normalization.
 Missing/disabled decoders cause an explicit error. Verify that reconstruction
 was actually trained in the selected checkpoint; decoder presence alone does
@@ -221,7 +292,7 @@ actual completed result directory.
 ```bash
 PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_heatmap \
   runs/counterfactuals/YOUR_RUN/subject_0_trial_0/counterfactual.npz \
-  --branch gcn_gru \
+  --branch joint \
   --sampling-rate 128
 ```
 
@@ -232,9 +303,9 @@ shows RMS decoded change in one-second bins by default, avoiding the dense
 phase-driven striping produced by plotting every signed EEG sample. Each band
 has its own labeled robust color scale so lower-amplitude band structure stays
 visible. It opens the graph and saves
-`counterfactual_gcn_gru_counterfactual_difference_heatmap.png` beside the NPZ.
+`counterfactual_joint_counterfactual_difference_heatmap.png` beside the NPZ.
 The default difference is
-`x_prime_gcn_gru - x_reconstructed_gcn_gru`, which isolates the intervention
+`x_prime_joint - x_reconstructed_joint`, which isolates the intervention
 from decoder reconstruction error. Use `--reference input` only to include
 that reconstruction error. Use `--time-bin-seconds 0.5` for finer temporal
 resolution, `--measure mean-absolute` for average magnitude, or
@@ -247,13 +318,13 @@ than seeing lower-amplitude within-band structure.
 ```bash
 PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_topography \
   runs/counterfactuals/YOUR_RUN/subject_0_trial_0/counterfactual.npz \
-  --branch gcn_gru
+  --branch joint
 ```
 
 This interprets the 42 features as 14 electrodes × 3 bands, opens three
 side-by-side scalp maps (Theta, Alpha, and Beta), prints the peak channel for
 each band, and saves
-`counterfactual_gcn_gru_difference_topography.png` beside the NPZ. The default
+`counterfactual_joint_difference_topography.png` beside the NPZ. The default
 maps show the signed mean counterfactual difference over the complete trial on
 a zero-centered red/blue scale. Positive and negative electrodes therefore
 remain distinguishable. Each band has its own symmetric color range, preserving
@@ -286,7 +357,8 @@ This opens the three-dimensional graph and saves
 `history_counterfactual_training_trajectory.png` beside the CSV. Its axes are:
 
 - x: optimization step, displayed as epoch
-- y: `decoded`, the decoded counterfactual MSE relative to the original input
+- y: `decoded`, the selected reconstruction-path MSE relative to the original
+  input
 - z: `target_probability`, displayed as `target_p` and zoomed to its observed
   variation so small changes remain visible
 
@@ -298,8 +370,9 @@ Add `--full-probability-range` to restore a fixed y-axis from 0 to 1.
 
 ### Common options
 
-- Use `--branch bilstm` instead of `--branch gcn_gru` for the BiLSTM decoder.
-- When the NPZ contains both branches, `--branch` is required.
+- Joint-mode outputs use `--branch joint`.
+- Branch-mode outputs use `--branch gcn_gru` or `--branch bilstm`.
+- When the NPZ contains multiple reconstruction paths, `--branch` is required.
 - Use `--band-names NAME1 NAME2 NAME3` to change the three band labels.
 - Use `--feature-order band-major` if features are grouped by band rather than channel.
 - Add `--no-show` to save the PNG without opening a graph window.
@@ -309,28 +382,14 @@ Add `--full-probability-range` to restore a fixed y-axis from 0 to 1.
 ## Verification
 
 ```bash
-python -m pytest tests/test_counterfactuals.py -q
+PYTHONPATH=src python -m pytest \
+  src/tests/test_counterfactuals.py \
+  src/tests/test_counterfactual_metrics.py -q
 ```
 
-Run from this extracted bundle directory. In the EEGProc repository, provide
-`PYTHONPATH=src` and point pytest to this test file to also run the real SIC
-integration check. Without the repository, that one check is skipped.
-
-The suite tests loss arithmetic, decoder gradient flow, branch routing,
-all-timestep classifier gradients, fixed model weights, single-branch
-ablations, best-iterate selection, early stopping, zero-step runs, numerical
-failures, data/CLI validation, raw-loader argument forwarding, independent
-trial optimizer state, `.keras` save/load, and runner output consistency.
-
-The real SIC integration uses a tiny randomly initialized checkpoint and
-synthetic trials. It checks the current SIC/BiGRU/VC/GCN-decoder interfaces;
-it does not validate performance on a trained DREAMER checkpoint. No such
-checkpoint or DREAMER arrays were available in this task.
-
-Verified for this delivery: **17 tests passed**, plus a successful
-`python -m eegproc.model_explainability.run_counterfactuals` smoke run with a
-synthetic saved SIC checkpoint. Ruff and Python compilation checks passed.
-The local integration harness used the retrieved SIC, recurrent, VC, and GCN
-sources unchanged, with a test-only `math.prod` helper for the unavailable
-`unsupervised.utils._product` import. Full preprocessing on DREAMER was not
-executed; raw-loader argument forwarding was tested separately.
+The focused integration suite builds a tiny SICModelv15 and verifies joint-only
+loss/output routing, fixed model weights and fusion alpha, backward-compatible
+branch routing, CLI exposure, and joint plotting-file loading.
+The metrics tests verify complete and incomplete 18-task-style collections,
+including full per-trial metrics/history preservation and aggregate values.
+These tests do not validate performance on a trained DREAMER checkpoint.

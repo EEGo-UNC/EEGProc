@@ -146,6 +146,7 @@ def run(args):
         max_steps=args.max_steps,
         gradient_clip_norm=args.gradient_clip_norm,
         stop_on_success=args.stop_on_success,
+        decoder_mode=args.decoder_mode,
     )
     x, subjects, trials, labels = load_trials(args)
     selected = subjects == args.subject_id
@@ -178,6 +179,11 @@ def run(args):
     )
     print(
         f"Model: {args.model}\nTrials: {len(indices)} | input per trial: {x.shape[1:]}",
+        flush=True,
+    )
+    print(
+        f"Decoder mode: {optimizer.decoder_mode} | "
+        f"reconstruction paths: {', '.join(optimizer.decoded_names)}",
         flush=True,
     )
     print(
@@ -259,7 +265,7 @@ def run(args):
                     ]
                 )
             )
-            for name, _ in optimizer.branches
+            for name in optimizer.decoded_names
         },
         "mean_selected_latent_mse": float(
             np.mean([s["selected_losses"]["latent"] for s in summaries])
