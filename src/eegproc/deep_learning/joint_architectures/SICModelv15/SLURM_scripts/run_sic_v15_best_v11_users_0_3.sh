@@ -180,7 +180,7 @@ print(json.dumps({
     "use_gcn_gru_branch": True,
     "use_bilstm_branch": True,
     "use_decoder": True,
-    "reconstruction_loss_weight": 0.1,
+    "reconstruction_loss_weight": {"grid": [0.1, 0.4]},
     "decoder_dropout": 0.1,
     "joint_reconstruction_auxiliary_weight": 0.25,
     "joint_reconstruction_initial_alpha": 0.5,
