@@ -17,6 +17,10 @@ set -euo pipefail
 # suite_65452590/full/
 # dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/
 # hyperparameter_search_summary.csv
+#
+# DREAMER arousal includes subjects with only one low-arousal trial. Use two
+# trials per selected subject so every balanced draw is feasible, and expand
+# each episode from 12 to 18 subjects to preserve 36 total trials per update.
 
 module purge
 module load python/3.12.4
@@ -41,7 +45,6 @@ CALIBRATION_LEVEL_ARGS=(
     --calibration-level 3 6
     --calibration-level 6 3
     --calibration-level 9 2
-    --calibration-level 12 3
 )
 
 cd "$PROJECT_DIR"
@@ -130,9 +133,9 @@ print(json.dumps({
     "weight_decay": 5e-5,
     "vrex_penalty_weight": 1.0,
 
-    "mldg_meta_train_subjects": 8,
-    "mldg_meta_test_subjects": 4,
-    "mldg_trials_per_subject": 3,
+    "mldg_meta_train_subjects": 12,
+    "mldg_meta_test_subjects": 6,
+    "mldg_trials_per_subject": 2,
     "mldg_steps_per_epoch": 20,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
@@ -196,7 +199,7 @@ echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER arousal"
 echo "Scope: all 23 LOSO target subjects"
-echo "Training: MLDG, $SOURCE_EPOCHS source epochs"
+echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 12+6 subjects x 2 trials = 36 trials/episode"
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
 echo "Selection/reporting metric: 12-shot calibrated Brier score"
 echo "Configuration source: rank 1 from v11 valence suite 65452590"

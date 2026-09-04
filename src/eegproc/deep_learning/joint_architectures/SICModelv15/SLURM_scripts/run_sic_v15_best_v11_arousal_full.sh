@@ -1,17 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=sicv15_u0_3
-#SBATCH --output=sicv15_u0_3_%j.out
-#SBATCH --error=sicv15_u0_3_%j.err
+#SBATCH --job-name=sicv15_aro_full
+#SBATCH --output=sicv15_aro_full_%j.out
+#SBATCH --error=sicv15_aro_full_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=02:00:00
+#SBATCH --time=09:00:00
 
 set -euo pipefail
 
-# Run SICModelv15 on DREAMER valence targets 0, 1, 2, and 3. The model
+# Run SICModelv15 on every DREAMER arousal LOSO target. The base model
 # hyperparameters reproduce rank 1 from:
 # runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/
 # suite_65452590/full/
@@ -20,6 +20,9 @@ set -euo pipefail
 #
 # SICModelv15 adds the learned convex joint reconstruction. Its v15 defaults
 # are made explicit below: initial alpha=0.5 and auxiliary branch weight=0.25.
+# DREAMER arousal includes subjects with only one low-arousal trial. Use two
+# trials per selected subject so every balanced draw is feasible, and expand
+# each episode from 12 to 18 subjects to preserve 36 total trials per update.
 
 module purge
 module load python/3.12.4
@@ -33,13 +36,12 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # These reproduce the training budget used by the winning v11 run.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-6}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-3}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-20}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
 SUITE_ID="${SLURM_JOB_ID:-manual}"
-TARGET_SUBJECTS=(0 1 2 3)
 
 CALIBRATION_LEVEL_ARGS=(
     --calibration-level 3 6
@@ -124,9 +126,10 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# One fixed configuration: the rank-1 v11 hyperparameters plus the explicit
-# SICModelv15 joint-reconstruction settings. The fixed wrappers ensure that
-# layer-width lists describe one architecture rather than a search grid.
+# Two configurations: the rank-1 v11 hyperparameters plus the explicit
+# SICModelv15 joint-reconstruction settings and reconstruction weights 0.1
+# and 0.4. The fixed wrappers ensure layer-width lists describe one
+# architecture rather than a search grid.
 MODEL_CONFIG="$(python - <<'PY'
 import json
 
@@ -136,9 +139,9 @@ print(json.dumps({
     "weight_decay": 5e-5,
     "vrex_penalty_weight": 1.0,
 
-    "mldg_meta_train_subjects": 8,
-    "mldg_meta_test_subjects": 4,
-    "mldg_trials_per_subject": 3,
+    "mldg_meta_train_subjects": 12,
+    "mldg_meta_test_subjects": 6,
+    "mldg_trials_per_subject": 2,
     "mldg_steps_per_epoch": 20,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
@@ -202,11 +205,11 @@ PY
 echo "SIC builder: v15"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "Node: $(hostname)"
-echo "Dataset/target: DREAMER valence"
-echo "Target subjects: ${TARGET_SUBJECTS[*]}"
-echo "Training: MLDG, $SOURCE_EPOCHS source epochs"
+echo "Dataset/target: DREAMER arousal"
+echo "Scope: all 23 LOSO target subjects"
+echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 12+6 subjects x 2 trials = 36 trials/episode"
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
-echo "Joint reconstruction: initial alpha=0.5, auxiliary branch weight=0.25"
+echo "Joint reconstruction: weights=0.1,0.4 initial alpha=0.5 auxiliary branch weight=0.25"
 echo "Configuration source: rank 1 from v11 suite 65452590"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 python --version
@@ -217,12 +220,12 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --dataset dreamer \
     --raw-eeg-npy "$EEG_PATH" \
     --raw-labels-npy "$LABELS_PATH" \
-    --label-dimension valence \
+    --label-dimension arousal \
     --classification-level trial \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/full/sic_trial_bigru_v15_joint_best_v11/DREAMER/valence/suite_${SUITE_ID}/users_0_3" \
-    --run-name "dreamer_valence_sic_trial_bigru_v15_mldg_best_v11_users_0_3" \
+    --out-dir "runs/full/sic_trial_bigru_v15_joint_best_v11/DREAMER/arousal/suite_${SUITE_ID}/full" \
+    --run-name "dreamer_arousal_sic_trial_bigru_v15_mldg_best_v11_full" \
     --training-method mldg \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \
@@ -246,8 +249,6 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --prediction-diagnostics-threshold-tolerance 0.01 \
     --prediction-diagnostics-seed 42 \
     --ece-bins 15 \
-    --max-subjects 4 \
-    --target-subjects "${TARGET_SUBJECTS[@]}" \
     --n-jobs 4 \
     --gpu-ids 0 1 2 3 \
     --cpus-per-worker 2 \
