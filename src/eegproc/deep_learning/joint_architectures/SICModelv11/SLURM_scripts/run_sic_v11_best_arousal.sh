@@ -45,6 +45,7 @@ CALIBRATION_LEVEL_ARGS=(
     --calibration-level 3 6
     --calibration-level 6 3
     --calibration-level 9 2
+    --calibration-level 12 3
 )
 
 cd "$PROJECT_DIR"

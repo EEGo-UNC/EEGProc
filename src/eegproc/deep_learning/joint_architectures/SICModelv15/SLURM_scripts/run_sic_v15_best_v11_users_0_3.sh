@@ -139,7 +139,7 @@ print(json.dumps({
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 3,
-    "mldg_steps_per_epoch": 20,
+    "mldg_steps_per_epoch": 10,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
