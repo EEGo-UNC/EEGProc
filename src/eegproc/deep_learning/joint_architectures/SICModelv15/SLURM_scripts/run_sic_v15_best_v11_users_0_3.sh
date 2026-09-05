@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 
 set -euo pipefail
 
@@ -33,7 +33,7 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # These reproduce the training budget used by the winning v11 run.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-6}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-4}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
@@ -139,7 +139,7 @@ print(json.dumps({
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 3,
-    "mldg_steps_per_epoch": 10,
+    "mldg_steps_per_epoch": 20,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
@@ -176,7 +176,7 @@ print(json.dumps({
 
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": 1.0,
+    "subject_loss_weight": {"grid": [0.2, 0.6]},
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
@@ -249,7 +249,7 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --max-subjects 4 \
     --target-subjects "${TARGET_SUBJECTS[@]}" \
     --n-jobs 4 \
-    --gpu-ids 0 1 2 3 \
+    --gpu-ids 0 1 \
     --cpus-per-worker 2 \
     --verbose 2 \
     --seed 42 \
