@@ -36,8 +36,8 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # These reproduce the training budget used by the winning v11 run.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-3}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-20}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-4}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
@@ -126,9 +126,9 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# Two configurations: the rank-1 v11 hyperparameters plus the explicit
-# SICModelv15 joint-reconstruction settings and reconstruction weights 0.1
-# and 0.4. The fixed wrappers ensure layer-width lists describe one
+# One fixed configuration: the rank-1 v11 hyperparameters with subject-loss
+# weight 1.0, reconstruction weight 0.1, and the explicit SICModelv15 joint-
+# reconstruction settings. Fixed wrappers keep layer-width lists as one
 # architecture rather than a search grid.
 MODEL_CONFIG="$(python - <<'PY'
 import json
@@ -186,7 +186,7 @@ print(json.dumps({
     "use_gcn_gru_branch": True,
     "use_bilstm_branch": True,
     "use_decoder": True,
-    "reconstruction_loss_weight": {"grid": [0.1, 0.4]},
+    "reconstruction_loss_weight": 0.1,
     "decoder_dropout": 0.1,
     "joint_reconstruction_auxiliary_weight": 0.25,
     "joint_reconstruction_initial_alpha": 0.5,
@@ -209,7 +209,8 @@ echo "Dataset/target: DREAMER arousal"
 echo "Scope: all 23 LOSO target subjects"
 echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 12+6 subjects x 2 trials = 36 trials/episode"
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
-echo "Joint reconstruction: weights=0.1,0.4 initial alpha=0.5 auxiliary branch weight=0.25"
+echo "Subject loss weight: 1.0"
+echo "Joint reconstruction: weight=0.1 initial alpha=0.5 auxiliary branch weight=0.25"
 echo "Configuration source: rank 1 from v11 suite 65452590"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 python --version

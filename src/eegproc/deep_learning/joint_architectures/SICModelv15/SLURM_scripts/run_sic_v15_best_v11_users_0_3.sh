@@ -176,7 +176,7 @@ print(json.dumps({
 
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": {"grid": [0.2, 0.6]},
+    "subject_loss_weight": {"grid": [0.2, 1.5]},
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
