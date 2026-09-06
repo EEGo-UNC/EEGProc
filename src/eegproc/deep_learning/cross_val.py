@@ -5717,7 +5717,7 @@ def _subject_calibration_process_main(
     cpus_per_worker: int | None,
     assigned_device_label: str | None,
 ) -> None:
-    """Run target-subject calibration evaluations in a persistent worker."""
+    """Run target-subject calibration evaluations in a spawned worker."""
     try:
         _configure_tensorflow_worker(
             gpu_id=gpu_id,
@@ -5725,23 +5725,21 @@ def _subject_calibration_process_main(
             assigned_device_label=assigned_device_label,
         )
         worker_state = cloudpickle.loads(worker_state_payload)
-        while True:
-            task = task_queue.get()
-            if task is None:
-                return
-            subject_number, target_subject = task
-            try:
-                output = _run_subject_calibration_subject(
-                    subject_number=subject_number,
-                    target_subject=target_subject,
-                    **worker_state,
-                )
-                result_queue.put(("ok", int(subject_number), output))
-            except BaseException:
-                result_queue.put(
-                    ("error", int(subject_number), traceback.format_exc())
-                )
-                return
+        task = task_queue.get()
+        if task is None:
+            return
+        subject_number, target_subject = task
+        try:
+            output = _run_subject_calibration_subject(
+                subject_number=subject_number,
+                target_subject=target_subject,
+                **worker_state,
+            )
+            result_queue.put(("ok", int(subject_number), output))
+        except BaseException:
+            result_queue.put(
+                ("error", int(subject_number), traceback.format_exc())
+            )
     except BaseException:
         result_queue.put(("error", -1, traceback.format_exc()))
     finally:
@@ -6228,16 +6226,33 @@ def subject_calibration_cv(
             for subject_number, target_subject in tasks
         ]
     else:
-        subject_outputs = _run_spawned_fold_pool(
-            worker_target=_subject_calibration_process_main,
-            worker_state=worker_state,
-            tasks=tasks,
-            n_workers=effective_n_jobs,
-            gpu_ids=normalized_gpu_ids,
-            cpus_per_worker=cpus_per_worker,
-            worker_name_prefix="SubjectCalibrationWorker",
-            worker_description="target-subject calibration",
-        )
+        # A full subject fit creates large cuDNN RNN workspaces. TensorFlow's
+        # clear_session() releases Keras state but does not destroy the CUDA
+        # context or all native cuDNN caches in a live process. Reusing a GPU
+        # worker for several target subjects can therefore fragment/retain
+        # enough device memory for a later GRU backward pass to fail. Run at
+        # most one subject per spawned process and recycle the worker wave.
+        subject_outputs = []
+        for batch_start in range(0, len(tasks), effective_n_jobs):
+            task_batch = tasks[batch_start : batch_start + effective_n_jobs]
+            batch_n_workers = len(task_batch)
+            batch_gpu_ids = (
+                None
+                if normalized_gpu_ids is None
+                else normalized_gpu_ids[:batch_n_workers]
+            )
+            subject_outputs.extend(
+                _run_spawned_fold_pool(
+                    worker_target=_subject_calibration_process_main,
+                    worker_state=worker_state,
+                    tasks=task_batch,
+                    n_workers=batch_n_workers,
+                    gpu_ids=batch_gpu_ids,
+                    cpus_per_worker=cpus_per_worker,
+                    worker_name_prefix="SubjectCalibrationWorker",
+                    worker_description="target-subject calibration",
+                )
+            )
     subject_outputs.sort(key=lambda row: int(row["subject_number"]))
 
     metric_names = ("loss", *metrics, "joint_loss", *_DECODER_SCORE_NAMES)
