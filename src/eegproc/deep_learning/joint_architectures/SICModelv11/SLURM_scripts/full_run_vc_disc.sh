@@ -15,7 +15,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Full experiment organization
 # ---------------------------------------------------------------------------
-# This worker targets SIC builder API v14: deterministic window encoders,
+# This worker targets SIC builder API v15: deterministic window encoders,
 # independent branch decoders, and a trial-level BiGRU classifier with no
 # averaging across EEG windows.
 # One Slurm array task runs one one-factor-at-a-time ablation. The %2 limit
@@ -55,7 +55,7 @@ PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
 RECONSTRUCTION_LOSS_WEIGHT="${RECONSTRUCTION_LOSS_WEIGHT:-0.10}"
 DECODER_DROPOUT="${DECODER_DROPOUT:-0.10}"
-EXPECTED_SIC_API_VERSION=14
+EXPECTED_SIC_API_VERSION=15
 SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
@@ -93,18 +93,18 @@ if command -v flock >/dev/null 2>&1; then
         if [[ ! -x "$VENV_DIR/bin/python" ]]; then
             python -m venv "$VENV_DIR"
             "$VENV_DIR/bin/python" -m pip install --upgrade pip
-            "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+            "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
         elif [[ "$INSTALL_REQUIREMENTS" == "1" ]]; then
-            "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+            "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
         fi
     ) 9>"$PROJECT_DIR/.venv312_install.lock"
 else
     if [[ ! -x "$VENV_DIR/bin/python" ]]; then
         python -m venv "$VENV_DIR"
         "$VENV_DIR/bin/python" -m pip install --upgrade pip
-        "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+        "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
     elif [[ "$INSTALL_REQUIREMENTS" == "1" ]]; then
-        "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+        "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
     fi
 fi
 source "$VENV_DIR/bin/activate"
@@ -163,7 +163,7 @@ fi
 # Resolve one array profile into explicit branch/data switches
 # ---------------------------------------------------------------------------
 use_gcn_gru=true
-use_bilstm=true
+use_cnn3d=true
 remove_median=false
 
 case "$ABLATION_PROFILE" in
@@ -172,8 +172,8 @@ case "$ABLATION_PROFILE" in
     no_gcn_gru)
         use_gcn_gru=false
         ;;
-    no_bilstm)
-        use_bilstm=false
+    no_cnn3d)
+        use_cnn3d=false
         ;;
     remove_median)
         remove_median=true
@@ -184,36 +184,32 @@ case "$ABLATION_PROFILE" in
         ;;
 esac
 
-# Search BiLSTM width only when that branch is active. This avoids running
-# three duplicate configurations in the no-BiLSTM task.
-search_bilstm_width="$use_bilstm"
+# The 3D-CNN width is fixed for this VC-discriminator comparison.
 
 # ---------------------------------------------------------------------------
 # Build the profile-specific Cartesian grid as valid JSON
 # ---------------------------------------------------------------------------
-# GCN-GRU keeps all 384 output features and the BiLSTM keeps
-# 2*bilstm_units features. Their per-window concatenations form the ordered
+# GCN-GRU keeps all 384 output features and the 3D-CNN keeps 128 features.
+# Their per-window concatenations form the ordered
 # sequence consumed by the trial BiGRU. Each active branch has its own decoder.
 MODEL_GRID="$(python - \
     "$use_gcn_gru" \
-    "$use_bilstm" \
+    "$use_cnn3d" \
     "$remove_median" \
     "$MLDG_STEPS_PER_EPOCH" \
-    "$search_bilstm_width" \
     "$VREX_PENALTY_WEIGHT" \
     "$RECONSTRUCTION_LOSS_WEIGHT" \
     "$DECODER_DROPOUT" <<'PY'
 import json
 import sys
 
-use_gcn_gru, use_bilstm, remove_median = (
+use_gcn_gru, use_cnn3d, remove_median = (
     value.lower() == "true" for value in sys.argv[1:4]
 )
 mldg_steps_per_epoch = int(sys.argv[4])
-search_bilstm_width = sys.argv[5].lower() == "true"
-vrex_penalty_weight = float(sys.argv[6])
-reconstruction_loss_weight = float(sys.argv[7])
-decoder_dropout = float(sys.argv[8])
+vrex_penalty_weight = float(sys.argv[5])
+reconstruction_loss_weight = float(sys.argv[6])
+decoder_dropout = float(sys.argv[7])
 
 print(json.dumps({
     # Source optimizer. The method itself is selected by --training-method.
@@ -245,11 +241,12 @@ print(json.dumps({
     "mi_band_reduction": "mean",
     "mi_max_observations": 15000,
 
-    # Independent temporal branch. Units are per direction, so 63 + 63 gives
-    # a complete 126-wide deterministic BiLSTM representation.
-    "bilstm_units": 63,
-    "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.20,
+    "cnn3d_filters": {"fixed": [32, 64, 128]},
+    "cnn3d_temporal_kernel_size": 7,
+    "cnn3d_spatial_kernel_size": 3,
+    "cnn3d_spatial_pool_sizes": {"fixed": [2, 2, 1]},
+    "cnn3d_dropout": 0.20,
+    "cnn3d_grid_size": 9,
 
     # Trial classifier. Every ordered one-second window embedding is processed
     # by the BiGRU; only its final bidirectional state enters the VC head.
@@ -278,7 +275,7 @@ print(json.dumps({
 
     # Selected architecture/data ablation.
     "use_gcn_gru_branch": use_gcn_gru,
-    "use_bilstm_branch": use_bilstm,
+    "use_cnn3d_branch": use_cnn3d,
     "use_decoder": True,
     "reconstruction_loss_weight": reconstruction_loss_weight,
     "decoder_dropout": decoder_dropout,
@@ -305,7 +302,7 @@ echo "Node: $(hostname)"
 echo "Ablation profile: $ABLATION_PROFILE"
 echo "Target: $TARGET_DIMENSION"
 echo "Training method: $TRAINING_METHOD"
-echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
+echo "Branches: GCN-GRU=$use_gcn_gru 3D-CNN=$use_cnn3d"
 echo "Decoder: independent branches, reconstruction_weight=$RECONSTRUCTION_LOSS_WEIGHT dropout=$DECODER_DROPOUT"
 echo "Remove median trials: $remove_median"
 echo "Trial classifier: BiGRU [128,64] units/direction, final width 128, no cross-window averaging"

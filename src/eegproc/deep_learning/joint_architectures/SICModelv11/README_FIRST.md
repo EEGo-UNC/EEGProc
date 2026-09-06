@@ -1,56 +1,63 @@
-# SIC trial-level BiGRU update
+# SIC MTLFuseNet-style 3D-CNN update
 
-This update changes SIC builder API version 11 from a dense classifier over an
-average trial embedding to a recurrent trial classifier:
+SIC builder API version 15 replaces the within-window temporal BiLSTM with a
+spatio-temporal 3D-CNN while retaining the trial-level BiGRU classifier:
 
 ```text
-one-second EEG windows
-    -> parallel GCN-GRU and BiLSTM encoders
-    -> one embedding per window
-    -> ordered GRU/BiGRU sequence
-    -> final recurrent state
-    -> one trainable VariationalClassifier logits head
+channel-major 3-band EEG, one-second windows (128, 42)
+    -> parallel GCN-GRU and MTLFuseNet-style 3D-CNN encoders
+    -> direct per-timestep feature concatenation
+    -> ordered full-trial BiGRU sequence
+    -> one VariationalClassifier logits head
 ```
 
-There is no averaging across a trial's window embeddings and no dense hidden
-classifier stack. The supplied scripts use a tapered two-layer BiGRU with 128
-units per direction in the first layer and 64 per direction in the second.
-Focal loss and the enabled VC regularizers still use the same sole logits tensor.
+The 3D-CNN first restores each timestep's 14 Emotiv electrodes to the same
+9x9 scalp layout used by EEGProc's MTLFuseNet preprocessing. The input to
+`Conv3D` is `(time, grid-row, grid-column, frequency-band)`. Convolutions span
+time and both scalp axes; pooling acts only on the scalp axes. Spatial global
+average pooling therefore produces `(128, cnn3d_filters[-1])` without removing
+or reordering time.
 
-Install the files over their matching EEGProc paths. In particular:
-
-- `rnn_architectures.py` adds reusable `GRUClassifier`, `BiGRUClassifier`, and
-  `build_sequence_summarizer()` implementations.
-- `sic_model.py` uses that shared recurrent implementation.
-- `sic_model_train.py` groups one-second windows into ordered complete trials.
-- Both Slurm scripts now pass `--classification-level trial` and use the new
-  recurrent-classifier hyperparameters.
-
-The download preserves the `SICModelv11/` folder layout shown in the project.
-It also includes `required_supervised_update/rnn_architectures.py`; copy that
-file over `src/eegproc/deep_learning/supervised/rnn_architectures.py` because
-the per-layer width support is implemented in the shared recurrent builders.
-
-The main classifier settings are:
+The default branch is:
 
 ```json
 {
-  "classifier_rnn_type": "bigru",
-  "classifier_rnn_units": {"fixed": [128, 64]},
-  "n_classifier_rnn_layers": 2,
-  "classifier_rnn_dropout": 0.20
+  "cnn3d_filters": {"fixed": [32, 64, 128]},
+  "cnn3d_temporal_kernel_size": 7,
+  "cnn3d_spatial_kernel_size": 3,
+  "cnn3d_spatial_pool_sizes": {"fixed": [2, 2, 1]},
+  "cnn3d_dropout": 0.2,
+  "cnn3d_grid_size": 9,
+  "use_cnn3d_branch": true
 }
 ```
 
-A scalar width is repeated across the requested number of layers. A sequence
-specifies each layer separately. The `fixed` wrapper makes `[128, 64]` one
-architecture; use `{"grid": [[128], [128, 64]]}` to compare architectures.
+With the standard GCN-GRU width of 384, direct fusion is 384 + 128 = 512
+features per timestep. The classifier still uses the tapered two-layer BiGRU
+`[128, 64]`, and the subject adversary still receives its final trial state.
 
-`calibration_unfreeze_layers=1` adapts only the VC head. A value of `2` adapts
-the GRU/BiGRU and VC together. `calibration_use_vc_target=true` keeps the VC
-regularizers active during calibration; the VC logits head is trainable either
-way.
+When reconstruction is enabled, the 3D-CNN feature sequence has its own
+independent decoder. It is never decoded through the graph branch or a fused
+representation. Calibration freezes the 3D-CNN backbone; unfreeze level 2
+continues to mean trial BiGRU plus VC head.
 
-Retrain the LOSO population models after installing this update. Checkpoints
-created with the former dense classifier or mean-pooled trial representation
-are not architecture-compatible with API version 11.
+## Longleaf order
+
+From the project root, first run one four-subject smoke test per label:
+
+```bash
+TARGET_DIMENSION=valence sbatch src/eegproc/deep_learning/joint_architectures/SICModelv11/SLURM_scripts/smoke_test_sic_mldg_brier_ablations.sh
+TARGET_DIMENSION=arousal sbatch src/eegproc/deep_learning/joint_architectures/SICModelv11/SLURM_scripts/smoke_test_sic_mldg_brier_ablations.sh
+```
+
+After both complete without NaNs, shape failures, or class collapse in the
+first diagnostic rows, submit the full comparison. Its array runs the fused
+model, GCN-GRU-only, and 3D-CNN-only profiles sequentially:
+
+```bash
+TARGET_DIMENSION=valence sbatch src/eegproc/deep_learning/joint_architectures/SICModelv11/SLURM_scripts/full_run_sic_mldg_brier_ablations.sh
+TARGET_DIMENSION=arousal sbatch src/eegproc/deep_learning/joint_architectures/SICModelv11/SLURM_scripts/full_run_sic_mldg_brier_ablations.sh
+```
+
+API-v14/BiLSTM checkpoints are intentionally incompatible with this update;
+retrain the LOSO population models before calibration.

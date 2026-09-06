@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=smoke_sic_v11
-#SBATCH --output=smoke_sic_v11_%A_%a.out
-#SBATCH --error=smoke_sic_v11_%A_%a.err
+#SBATCH --job-name=smoke_sic_cnn3d
+#SBATCH --output=smoke_sic_cnn3d_%A_%a.out
+#SBATCH --error=smoke_sic_cnn3d_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:4
@@ -15,12 +15,12 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Smoke-test purpose
 # ---------------------------------------------------------------------------
-# This worker targets SIC builder API v14: deterministic window encoders,
+# This worker targets SIC builder API v15: deterministic window encoders,
 # independent branch decoders, and a trial-level BiGRU classifier with no
 # averaging across EEG windows.
 # Each array task validates one deterministic feature layout:
-#   task 0: full encoder,       concat(GCN-GRU[384], BiLSTM[126]) -> 510
-#   task 1: no BiLSTM branch,   GCN-GRU[384]                       -> 384
+#   task 0: full encoder,       concat(GCN-GRU[384], 3D-CNN[128]) -> 512
+#   task 1: no 3D-CNN branch,   GCN-GRU[384]                       -> 384
 # Each trial is an ordered sequence of one-second window embeddings. This
 # catches direct-concatenation, BiGRU, adversary, calibration, and MLDG shape
 # errors without running every full ablation.
@@ -61,7 +61,7 @@ PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS="${PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS:-
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-500}"
 RECONSTRUCTION_LOSS_WEIGHT="${RECONSTRUCTION_LOSS_WEIGHT:-0.10}"
 DECODER_DROPOUT="${DECODER_DROPOUT:-0.20}"
-EXPECTED_SIC_API_VERSION=14
+EXPECTED_SIC_API_VERSION=15
 
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
@@ -101,18 +101,18 @@ if command -v flock >/dev/null 2>&1; then
         if [[ ! -x "$VENV_DIR/bin/python" ]]; then
             python -m venv "$VENV_DIR"
             "$VENV_DIR/bin/python" -m pip install --upgrade pip
-            "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+            "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
         elif [[ "$INSTALL_REQUIREMENTS" == "1" ]]; then
-            "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+            "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
         fi
     ) 9>"$PROJECT_DIR/.venv312_install.lock"
 else
     if [[ ! -x "$VENV_DIR/bin/python" ]]; then
         python -m venv "$VENV_DIR"
         "$VENV_DIR/bin/python" -m pip install --upgrade pip
-        "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+        "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
     elif [[ "$INSTALL_REQUIREMENTS" == "1" ]]; then
-        "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+        "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
     fi
 fi
 source "$VENV_DIR/bin/activate"
@@ -171,14 +171,14 @@ fi
 # Resolve the selected ablation into explicit branch switches
 # ---------------------------------------------------------------------------
 use_gcn_gru=true
-use_bilstm=true
+use_cnn3d=true
 remove_median=false
 
 case "$ABLATION_PROFILE" in
     full)
         ;;
-    no_bilstm)
-        use_bilstm=false
+    no_cnn3d)
+        use_cnn3d=false
         ;;
     remove_median)
         remove_median=true
@@ -197,7 +197,7 @@ esac
 # active encoder branch is decoded independently back to the EEG window.
 MODEL_CONFIG="$(python - \
     "$use_gcn_gru" \
-    "$use_bilstm" \
+    "$use_cnn3d" \
     "$remove_median" \
     "$MLDG_STEPS_PER_EPOCH" \
     "$VREX_PENALTY_WEIGHT" \
@@ -206,7 +206,7 @@ MODEL_CONFIG="$(python - \
 import json
 import sys
 
-use_gcn_gru, use_bilstm, remove_median = (
+use_gcn_gru, use_cnn3d, remove_median = (
     value.lower() == "true" for value in sys.argv[1:4]
 )
 mldg_steps_per_epoch = int(sys.argv[4])
@@ -244,11 +244,14 @@ print(json.dumps({
     "mi_band_reduction": "mean",
     "mi_max_observations": 15000,
 
-    # Independent temporal branch. Units are per direction, so 63 + 63 gives
-    # a complete 126-wide deterministic BiLSTM representation.
-    "bilstm_units": 63,
-    "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.20,
+    # MTLFuseNet-style spatio-temporal branch. Conv3D operates over time and
+    # the 9x9 electrode grid; spatial pooling preserves all 128 time steps.
+    "cnn3d_filters": {"fixed": [32, 64, 128]},
+    "cnn3d_temporal_kernel_size": 7,
+    "cnn3d_spatial_kernel_size": 3,
+    "cnn3d_spatial_pool_sizes": {"fixed": [2, 2, 1]},
+    "cnn3d_dropout": 0.20,
+    "cnn3d_grid_size": 9,
 
     # Trial classifier. Every ordered one-second window embedding is processed
     # by the BiGRU; only its final bidirectional state enters the VC head.
@@ -277,7 +280,7 @@ print(json.dumps({
 
     # Selected architecture/data ablation.
     "use_gcn_gru_branch": use_gcn_gru,
-    "use_bilstm_branch": use_bilstm,
+    "use_cnn3d_branch": use_cnn3d,
     "use_decoder": True,
     "reconstruction_loss_weight": reconstruction_loss_weight,
     "decoder_dropout": decoder_dropout,
@@ -304,9 +307,9 @@ echo "Node: $(hostname)"
 echo "Smoke profile: $ABLATION_PROFILE"
 echo "Target: $TARGET_DIMENSION"
 echo "Training method: $TRAINING_METHOD"
-echo "Branches: GCN-GRU=$use_gcn_gru BiLSTM=$use_bilstm"
+echo "Branches: GCN-GRU=$use_gcn_gru 3D-CNN=$use_cnn3d"
 echo "Decoder: independent branches, reconstruction_weight=$RECONSTRUCTION_LOSS_WEIGHT dropout=$DECODER_DROPOUT"
-echo "Feature widths: GCN-GRU=384; BiLSTM=126 when active; full concatenation=510"
+echo "Feature widths: GCN-GRU=384; 3D-CNN=128 when active; full concatenation=512"
 echo "Trial classifier: BiGRU [128,64] units/direction, final width 128, no cross-window averaging"
 echo "Prediction diagnostics: metric=$PREDICTION_DIAGNOSTICS_METRIC every=$PREDICTION_DIAGNOSTICS_EVERY_N_EPOCHS epoch(s) max_samples=$PREDICTION_DIAGNOSTICS_MAX_SAMPLES"
 echo "Selection: minimize 6-shot calibrated Brier score"
@@ -326,8 +329,8 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv11.sic_model_tr
     --classification-level trial \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/smoke/sic_trial_bigru_v11_${TRAINING_METHOD}_brier/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
-    --run-name "dreamer_${TARGET_DIMENSION}_sic_trial_bigru_v11_${TRAINING_METHOD}_${ABLATION_PROFILE}_smoke" \
+    --out-dir "runs/smoke/sic_trial_bigru_cnn3d_${TRAINING_METHOD}_brier/DREAMER/${TARGET_DIMENSION}/suite_${SUITE_ID}/${ABLATION_PROFILE}" \
+    --run-name "dreamer_${TARGET_DIMENSION}_sic_trial_bigru_cnn3d_${TRAINING_METHOD}_${ABLATION_PROFILE}_smoke" \
     --training-method "$TRAINING_METHOD" \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \

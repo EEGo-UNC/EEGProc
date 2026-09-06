@@ -244,7 +244,7 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Train SIC with independent deterministic GCN-GRU and BiLSTM "
+            "Train SIC with independent deterministic GCN-GRU and 3D-CNN "
             "branches, direct per-window feature concatenation, a trial-level "
             "GRU/BiGRU classifier, "
             "ERM/V-REx/first-order MLDG, VC regularization, and multi-level "
@@ -405,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
-        "--use-bilstm-branch",
+        "--use-cnn3d-branch",
         action=argparse.BooleanOptionalAction,
         default=None,
     )
@@ -414,7 +414,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Enable or ablate independent GCN-GRU and BiLSTM EEG "
+            "Enable or ablate independent GCN-GRU and 3D-CNN EEG "
             "reconstruction heads. The model default is enabled."
         ),
     )
@@ -423,7 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Fixed SIC configuration or Cartesian search grid as JSON. The "
-            "complete GCN-GRU and BiLSTM encoder features are concatenated "
+            "complete GCN-GRU and 3D-CNN encoder features are concatenated "
             "per window and recurrently summarized at trial level; there is "
             "no cross-window averaging or z projection. Each active encoder "
             "branch is reconstructed separately when the decoder is enabled. "
@@ -461,7 +461,7 @@ def model_config_from_args(args) -> dict:
         model_config["training_method"] = "erm"
     for key in (
         "use_gcn_gru_branch",
-        "use_bilstm_branch",
+        "use_cnn3d_branch",
         "use_decoder",
         "remove_median_label",
     ):
@@ -519,7 +519,7 @@ def validate_args(args, model_config: dict) -> None:
         training_method = configuration_training_method(builder_config)
         if (
             builder_config.get("use_gcn_gru_branch") is False
-            and builder_config.get("use_bilstm_branch") is False
+            and builder_config.get("use_cnn3d_branch") is False
         ):
             raise ValueError(
                 "At least one encoder branch must be active; grid configuration "

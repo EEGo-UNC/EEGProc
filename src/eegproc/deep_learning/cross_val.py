@@ -88,6 +88,8 @@ _DECODER_SCORE_NAMES = (
     "gcn_gru_decoder_r2",
     "bilstm_reconstruction_loss",
     "bilstm_decoder_r2",
+    "cnn3d_reconstruction_loss",
+    "cnn3d_decoder_r2",
     # Retained for older joint models that used this R2 alias.
     "decoder_accuracy",
 )
@@ -103,6 +105,8 @@ _DEFAULT_SEQUENCE_HYPERPARAMETER_DEPTHS = {
     "pool_after_layers": 1,
     "pool_sizes": 1,
     "gcn_units": 1,
+    "cnn3d_filters": 1,
+    "cnn3d_spatial_pool_sizes": 1,
     "temporal_pool_sizes": 1,
     # Dense classifier layer widths are one architecture value, e.g.
     # [128, 64] means Dense(128) -> Dense(64), not two grid candidates.
@@ -1685,9 +1689,11 @@ class HeldOutUserOracleMetrics(tf.keras.callbacks.Callback):
                     "decoder_r2",
                     "gcn_gru_decoder_r2",
                     "bilstm_decoder_r2",
+                    "cnn3d_decoder_r2",
                     "reconstruction_loss",
                     "gcn_gru_reconstruction_loss",
                     "bilstm_reconstruction_loss",
+                    "cnn3d_reconstruction_loss",
                 )
                 if name in decoder_scores
             ]

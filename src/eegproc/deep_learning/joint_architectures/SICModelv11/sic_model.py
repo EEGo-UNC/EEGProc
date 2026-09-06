@@ -1,6 +1,6 @@
 """SIC: Subject Invariant Calibrator model.
 
-Parallel MTLFuseNet GCN-GRU and temporal BiLSTM encoders with head fusion.
+Parallel MTLFuseNet GCN-GRU and spatio-temporal 3D-CNN encoders with head fusion.
 
 Architecture
 ------------
@@ -8,19 +8,19 @@ For each EEG window, two independent deterministic encoders produce feature
 sequences::
 
     channel-band EEG -> fixed-MI GCN -> spectral GRU -> h_g
-    channel-band EEG -> temporal BiLSTM              -> h_b
+    channel-band EEG -> 9x9 scalp grid -> 3D-CNN    -> h_c
 
 The complete encoder feature vectors are concatenated directly at every
 original EEG timestep. There is no learned projection, bottleneck, temporal
 downsampling, or fusion network between the encoders and the recurrent
 classifier::
 
-    h_joint = concat([h_g, h_b])       # (window, 128, 640 by default)
-    ordered windows -> reshape         # (trial, windows * 128, 640)
+    h_joint = concat([h_g, h_c])       # (window, 128, 512 by default)
+    ordered windows -> reshape         # (trial, windows * 128, 512)
     full-trial sequence -> BiGRU/GRU final state -> VC logits
 
-With the default widths, h_g has 384 features and h_b has 2 * 128 = 256
-features, so both active branches give the final heads all 640 features. Fusion
+With the default widths, h_g has 384 features and h_c has 128 features, so
+both active branches give the final heads all 512 features. Fusion
 occurs in the classifier and subject-adversarial heads. EEGProc's existing
 VariationalClassifier is the sole logits-producing classification head; there
 is no parallel dense-logit head. Focal classification and the VC regularizers
@@ -32,7 +32,7 @@ optional deterministic reconstruction objective decodes each active encoder
 branch independently back to the original EEG window::
 
     h_g -> GCNMTLDecoder -> x_hat_g
-    h_b -> GCNMTLDecoder -> x_hat_b
+    h_c -> GCNMTLDecoder -> x_hat_c
 
 The two decoders never consume the concatenated feature sequence. When both
 branches are active, their mean-squared reconstruction losses are averaged so
@@ -88,7 +88,7 @@ This file is designed for ``cross_val.subject_calibration_cv``.  Its builder
 accepts ``training_features`` and computes the fixed MI adjacency from source
 subjects only, avoiding target-subject leakage.
 
-Ablations are controlled by ``use_gcn_gru_branch``, ``use_bilstm_branch``, and
+Ablations are controlled by ``use_gcn_gru_branch``, ``use_cnn3d_branch``, and
 ``use_decoder``. At least one encoder branch must remain enabled.
 """
 
@@ -112,6 +112,7 @@ except ImportError:
     )
 
 try:
+    from .mtlfusenet_3dcnn import MTLFuseNet3DCNNEncoder
     from ...supervised.rnn_architectures import (
         BiGRUClassifier,
         GRUClassifier,
@@ -123,6 +124,9 @@ try:
         compute_mtl_shared_mi_adjacency,
     )
 except ImportError:
+    from eegproc.deep_learning.joint_architectures.SICModelv11.mtlfusenet_3dcnn import (
+        MTLFuseNet3DCNNEncoder,
+    )
     from eegproc.deep_learning.supervised.rnn_architectures import (
         BiGRUClassifier,
         GRUClassifier,
@@ -137,7 +141,7 @@ except ImportError:
     )
 
 
-SIC_BUILDER_API_VERSION = 14
+SIC_BUILDER_API_VERSION = 15
 JOINT_V6_BUILDER_API_VERSION = SIC_BUILDER_API_VERSION
 
 
@@ -467,22 +471,21 @@ class GradientReversal(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
 class SICModel(tf.keras.Model):
-    """SIC with direct deterministic GCN-GRU/BiLSTM feature concatenation."""
+    """SIC with direct deterministic GCN-GRU/3D-CNN feature concatenation."""
 
     def __init__(
         self,
         *,
         graph_encoder: GCNMTLEncoder | None,
+        cnn3d_encoder: MTLFuseNet3DCNNEncoder | None,
         gcn_gru_decoder: GCNMTLDecoder | None = None,
-        bilstm_decoder: GCNMTLDecoder | None = None,
+        cnn3d_decoder: GCNMTLDecoder | None = None,
         classification_level: str = "trial",
         n_classes: int = 2,
         gcn_gru_feature_dim: int = 384,
-        bilstm_units: int = 128,
-        n_bilstm_layers: int = 1,
-        bilstm_dropout: float = 0.30,
+        cnn3d_feature_dim: int = 128,
         use_gcn_gru_branch: bool = True,
-        use_bilstm_branch: bool = True,
+        use_cnn3d_branch: bool = True,
         use_decoder: bool = False,
         classifier_rnn_type: str = "bigru",
         classifier_rnn_units: int | Sequence[int] = 128,
@@ -539,11 +542,11 @@ class SICModel(tf.keras.Model):
         if classification_level not in {"window", "trial"}:
             raise ValueError("classification_level must be 'window' or 'trial'.")
         use_gcn_gru_branch = bool(use_gcn_gru_branch)
-        use_bilstm_branch = bool(use_bilstm_branch)
+        use_cnn3d_branch = bool(use_cnn3d_branch)
         use_decoder = bool(use_decoder)
-        if not use_gcn_gru_branch and not use_bilstm_branch:
+        if not use_gcn_gru_branch and not use_cnn3d_branch:
             raise ValueError(
-                "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
+                "At least one of use_gcn_gru_branch/use_cnn3d_branch must be true."
             )
         if use_gcn_gru_branch and graph_encoder is None:
             raise ValueError("graph_encoder is required when use_gcn_gru_branch=true.")
@@ -551,16 +554,18 @@ class SICModel(tf.keras.Model):
             raise ValueError(
                 "gcn_gru_decoder is required when the GCN-GRU branch decoder is enabled."
             )
-        if use_decoder and use_bilstm_branch and bilstm_decoder is None:
+        if use_cnn3d_branch and cnn3d_encoder is None:
+            raise ValueError("cnn3d_encoder is required when use_cnn3d_branch=true.")
+        if use_decoder and use_cnn3d_branch and cnn3d_decoder is None:
             raise ValueError(
-                "bilstm_decoder is required when the BiLSTM branch decoder is enabled."
+                "cnn3d_decoder is required when the 3D-CNN branch decoder is enabled."
             )
         if int(n_classes) < 2:
             raise ValueError("n_classes must be >= 2.")
         if int(gcn_gru_feature_dim) < 1:
             raise ValueError("gcn_gru_feature_dim must be positive.")
-        if int(bilstm_units) < 1 or int(n_bilstm_layers) < 1:
-            raise ValueError("BiLSTM dimensions must be positive.")
+        if int(cnn3d_feature_dim) < 1:
+            raise ValueError("cnn3d_feature_dim must be positive.")
         if float(focal_gamma) < 0.0:
             raise ValueError("focal_gamma must be non-negative.")
         if focal_alpha is not None and not 0.0 <= float(focal_alpha) <= 1.0:
@@ -653,8 +658,6 @@ class SICModel(tf.keras.Model):
             raise ValueError("classifier_rnn_type must be 'gru' or 'bigru'.")
         if not 0.0 <= float(classifier_rnn_dropout) < 1.0:
             raise ValueError("classifier_rnn_dropout must be in [0, 1).")
-        if not 0.0 <= float(bilstm_dropout) < 1.0:
-            raise ValueError("bilstm_dropout must be in [0, 1).")
         if not 0.0 <= float(label_smoothing) < 1.0:
             raise ValueError("label_smoothing must be in [0, 1).")
         for loss_name, value in (
@@ -696,21 +699,19 @@ class SICModel(tf.keras.Model):
             )
 
         self.graph_encoder = graph_encoder
+        self.cnn3d_encoder = cnn3d_encoder
         self.gcn_gru_decoder = gcn_gru_decoder
-        self.bilstm_decoder = bilstm_decoder
+        self.cnn3d_decoder = cnn3d_decoder
         self.classification_level = classification_level
         self.n_classes = int(n_classes)
         self.gcn_gru_feature_dim = int(gcn_gru_feature_dim)
-        self.bilstm_units = int(bilstm_units)
-        self.bilstm_feature_dim = 2 * self.bilstm_units
-        self.n_bilstm_layers = int(n_bilstm_layers)
-        self.bilstm_dropout_rate = float(bilstm_dropout)
+        self.cnn3d_feature_dim = int(cnn3d_feature_dim)
         self.use_gcn_gru_branch = use_gcn_gru_branch
-        self.use_bilstm_branch = use_bilstm_branch
+        self.use_cnn3d_branch = use_cnn3d_branch
         self.use_decoder = use_decoder
         self.combined_feature_dim = (
             self.gcn_gru_feature_dim * int(self.use_gcn_gru_branch)
-            + self.bilstm_feature_dim * int(self.use_bilstm_branch)
+            + self.cnn3d_feature_dim * int(self.use_cnn3d_branch)
         )
         self.classifier_rnn_type = classifier_rnn_type
         self.classifier_rnn_units = requested_classifier_widths
@@ -799,36 +800,6 @@ class SICModel(tf.keras.Model):
         self._source_subject_ids = None
         self._source_trial_ids = None
 
-        # MTL encoder already performs GCN + spectral GRU. This recurrent
-        # stack is exclusively temporal and preserves all original timesteps.
-        self.temporal_bilstms: list[tf.keras.layers.Layer] = []
-        self.temporal_norms: list[tf.keras.layers.Layer] = []
-        self.temporal_dropouts: list[tf.keras.layers.Layer] = []
-        for index in range(self.n_bilstm_layers):
-            self.temporal_bilstms.append(
-                tf.keras.layers.Bidirectional(
-                    tf.keras.layers.LSTM(
-                        self.bilstm_units,
-                        return_sequences=True,
-                        name=f"v6_temporal_lstm_{index}",
-                    ),
-                    merge_mode="concat",
-                    name=f"v6_temporal_bilstm_{index}",
-                )
-            )
-            self.temporal_norms.append(
-                tf.keras.layers.LayerNormalization(
-                    axis=-1,
-                    name=f"v6_temporal_bilstm_ln_{index}",
-                )
-            )
-            self.temporal_dropouts.append(
-                tf.keras.layers.Dropout(
-                    self.bilstm_dropout_rate,
-                    name=f"v6_temporal_bilstm_dropout_{index}",
-                )
-            )
-
         # The reusable GRU/BiGRU consumes the entire encoded temporal sequence.
         # Trial inputs are reshaped from (windows, timesteps, features) to
         # (windows * timesteps, features) before reaching this summarizer.
@@ -905,11 +876,11 @@ class SICModel(tf.keras.Model):
         self.gcn_gru_decoder_r2_tracker = StreamingR2(
             name="gcn_gru_decoder_r2"
         )
-        self.bilstm_reconstruction_loss_tracker = tf.keras.metrics.Mean(
-            name="bilstm_reconstruction_loss"
+        self.cnn3d_reconstruction_loss_tracker = tf.keras.metrics.Mean(
+            name="cnn3d_reconstruction_loss"
         )
-        self.bilstm_decoder_r2_tracker = StreamingR2(
-            name="bilstm_decoder_r2"
+        self.cnn3d_decoder_r2_tracker = StreamingR2(
+            name="cnn3d_decoder_r2"
         )
         metric_prefix = self.classification_level
         self.accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(
@@ -980,11 +951,11 @@ class SICModel(tf.keras.Model):
                         self.gcn_gru_decoder_r2_tracker,
                     ]
                 )
-            if self.use_bilstm_branch:
+            if self.use_cnn3d_branch:
                 output.extend(
                     [
-                        self.bilstm_reconstruction_loss_tracker,
-                        self.bilstm_decoder_r2_tracker,
+                        self.cnn3d_reconstruction_loss_tracker,
+                        self.cnn3d_decoder_r2_tracker,
                     ]
                 )
         if self.use_vrex:
@@ -1222,41 +1193,29 @@ class SICModel(tf.keras.Model):
             shape[1],
         )
 
-    def _temporal_encode(self, eeg_sequence, training: bool):
-        x = eeg_sequence
-        for bilstm, norm, dropout in zip(
-            self.temporal_bilstms,
-            self.temporal_norms,
-            self.temporal_dropouts,
-        ):
-            x = bilstm(x, training=training)
-            x = norm(x)
-            x = dropout(x, training=training)
-        return x
-
     def _features_from_flat_windows(self, flat_windows, training: bool):
         graph_sequence = (
             self.graph_encoder(flat_windows, training=training)
             if self.use_gcn_gru_branch
             else None
         )
-        bilstm_sequence = (
-            self._temporal_encode(flat_windows, training=training)
-            if self.use_bilstm_branch
+        cnn3d_sequence = (
+            self.cnn3d_encoder(flat_windows, training=training)
+            if self.use_cnn3d_branch
             else None
         )
 
-        if graph_sequence is not None and bilstm_sequence is not None:
+        if graph_sequence is not None and cnn3d_sequence is not None:
             tf.debugging.assert_equal(
                 tf.shape(graph_sequence)[1],
-                tf.shape(bilstm_sequence)[1],
+                tf.shape(cnn3d_sequence)[1],
                 message=(
-                    "GCN-GRU and BiLSTM feature sequence lengths do not match."
+                    "GCN-GRU and 3D-CNN feature sequence lengths do not match."
                 ),
             )
         feature_parts = [
             value
-            for value in (graph_sequence, bilstm_sequence)
+            for value in (graph_sequence, cnn3d_sequence)
             if value is not None
         ]
         combined_sequence = (
@@ -1271,7 +1230,7 @@ class SICModel(tf.keras.Model):
         )
         return {
             "graph_sequence": graph_sequence,
-            "bilstm_sequence": bilstm_sequence,
+            "cnn3d_sequence": cnn3d_sequence,
             "combined_feature_sequence": combined_sequence,
         }
 
@@ -1591,8 +1550,8 @@ class SICModel(tf.keras.Model):
     def _reconstruction_components(self, outputs, training: bool):
         """Reconstruct EEG independently from each active encoder branch.
 
-        The GCN-GRU decoder consumes only ``graph_sequence`` and the BiLSTM
-        decoder consumes only ``bilstm_sequence``. Their losses are averaged,
+        The GCN-GRU decoder consumes only ``graph_sequence`` and the 3D-CNN
+        decoder consumes only ``cnn3d_sequence``. Their losses are averaged,
         rather than summed, so toggling a branch does not silently change the
         scale controlled by ``reconstruction_loss_weight``.
         """
@@ -1601,9 +1560,9 @@ class SICModel(tf.keras.Model):
         components = {
             "reconstruction_loss": zero,
             "gcn_gru_reconstruction_loss": zero,
-            "bilstm_reconstruction_loss": zero,
+            "cnn3d_reconstruction_loss": zero,
             "gcn_gru_reconstruction": None,
-            "bilstm_reconstruction": None,
+            "cnn3d_reconstruction": None,
         }
         if not self.use_decoder:
             return components
@@ -1629,22 +1588,22 @@ class SICModel(tf.keras.Model):
             components["gcn_gru_reconstruction_loss"] = branch_loss
             branch_losses.append(branch_loss)
 
-        if self.use_bilstm_branch:
-            reconstruction = self.bilstm_decoder(
-                outputs["bilstm_sequence"],
+        if self.use_cnn3d_branch:
+            reconstruction = self.cnn3d_decoder(
+                outputs["cnn3d_sequence"],
                 training=bool(training),
             )
             tf.debugging.assert_equal(
                 tf.shape(reconstruction),
                 tf.shape(target),
                 message=(
-                    "BiLSTM decoder output must match the original flattened "
+                    "3D-CNN decoder output must match the original flattened "
                     "EEG windows."
                 ),
             )
             branch_loss = tf.reduce_mean(tf.square(target - reconstruction))
-            components["bilstm_reconstruction"] = reconstruction
-            components["bilstm_reconstruction_loss"] = branch_loss
+            components["cnn3d_reconstruction"] = reconstruction
+            components["cnn3d_reconstruction_loss"] = branch_loss
             branch_losses.append(branch_loss)
 
         if not branch_losses:
@@ -1862,26 +1821,26 @@ class SICModel(tf.keras.Model):
                         graph_reconstruction,
                     )
 
-            if self.use_bilstm_branch:
-                bilstm_loss = (
+            if self.use_cnn3d_branch:
+                cnn3d_loss = (
                     zero
                     if reconstruction_components is None
-                    else reconstruction_components["bilstm_reconstruction_loss"]
+                    else reconstruction_components["cnn3d_reconstruction_loss"]
                 )
-                self.bilstm_reconstruction_loss_tracker.update_state(bilstm_loss)
-                bilstm_reconstruction = (
+                self.cnn3d_reconstruction_loss_tracker.update_state(cnn3d_loss)
+                cnn3d_reconstruction = (
                     None
                     if reconstruction_components is None
-                    else reconstruction_components["bilstm_reconstruction"]
+                    else reconstruction_components["cnn3d_reconstruction"]
                 )
-                if bilstm_reconstruction is not None:
-                    self.bilstm_decoder_r2_tracker.update_state(
+                if cnn3d_reconstruction is not None:
+                    self.cnn3d_decoder_r2_tracker.update_state(
                         outputs["flat_windows"],
-                        bilstm_reconstruction,
+                        cnn3d_reconstruction,
                     )
                     self.decoder_r2_tracker.update_state(
                         outputs["flat_windows"],
-                        bilstm_reconstruction,
+                        cnn3d_reconstruction,
                     )
         if self.use_vrex:
             self.vrex_penalty_tracker.update_state(
@@ -2204,7 +2163,7 @@ class SICModel(tf.keras.Model):
             )
         if not freeze_decoder and not any(
             decoder is not None
-            for decoder in (self.gcn_gru_decoder, self.bilstm_decoder)
+            for decoder in (self.gcn_gru_decoder, self.cnn3d_decoder)
         ):
             raise ValueError(
                 "calibration_freeze_decoder=false requires at least one "
@@ -2220,14 +2179,10 @@ class SICModel(tf.keras.Model):
             self.graph_encoder.trainable = False
         if self.gcn_gru_decoder is not None:
             self.gcn_gru_decoder.trainable = not freeze_decoder
-        if self.bilstm_decoder is not None:
-            self.bilstm_decoder.trainable = not freeze_decoder
-        for layer in self.temporal_bilstms:
-            layer.trainable = False
-        for layer in self.temporal_norms:
-            layer.trainable = False
-        for layer in self.temporal_dropouts:
-            layer.trainable = False
+        if self.cnn3d_decoder is not None:
+            self.cnn3d_decoder.trainable = not freeze_decoder
+        if self.cnn3d_encoder is not None:
+            self.cnn3d_encoder.trainable = False
         if self.subject_gradient_reversal is not None:
             self.subject_gradient_reversal.trainable = False
         if self.subject_hidden is not None:
@@ -2284,7 +2239,7 @@ class SICModel(tf.keras.Model):
         )
         return {
             "gcn_gru_features": outputs["graph_sequence"],
-            "bilstm_features": outputs["bilstm_sequence"],
+            "cnn3d_features": outputs["cnn3d_sequence"],
             "combined_feature_sequence": outputs[
                 "combined_feature_sequence"
             ],
@@ -2304,14 +2259,14 @@ class SICModel(tf.keras.Model):
             if self.gcn_gru_decoder is None:
                 raise RuntimeError("The GCN-GRU branch decoder is unavailable.")
             return self.gcn_gru_decoder(feature_sequence, training=False)
-        if branch in {"bilstm", "temporal"}:
-            if self.bilstm_decoder is None:
-                raise RuntimeError("The BiLSTM branch decoder is unavailable.")
-            return self.bilstm_decoder(feature_sequence, training=False)
-        raise ValueError("branch must be 'gcn_gru' or 'bilstm'.")
+        if branch in {"cnn3d", "3dcnn", "temporal", "spatiotemporal"}:
+            if self.cnn3d_decoder is None:
+                raise RuntimeError("The 3D-CNN branch decoder is unavailable.")
+            return self.cnn3d_decoder(feature_sequence, training=False)
+        raise ValueError("branch must be 'gcn_gru' or 'cnn3d'.")
 
     def reconstruct_branches(self, inputs):
-        """Return independent GCN-GRU/BiLSTM EEG reconstructions.
+        """Return independent GCN-GRU/3D-CNN EEG reconstructions.
 
         Values preserve the input rank: window models return ``(N, T, F)`` and
         trial models return ``(N, W, T, F)``. No fused reconstruction is
@@ -2333,7 +2288,7 @@ class SICModel(tf.keras.Model):
         reconstructions = {}
         for branch, key in (
             ("gcn_gru", "gcn_gru_reconstruction"),
-            ("bilstm", "bilstm_reconstruction"),
+            ("cnn3d", "cnn3d_reconstruction"),
         ):
             reconstruction = components[key]
             if reconstruction is None:
@@ -2352,7 +2307,9 @@ class SICModel(tf.keras.Model):
         normalized = {
             "gcn": "gcn_gru",
             "graph": "gcn_gru",
-            "temporal": "bilstm",
+            "temporal": "cnn3d",
+            "spatiotemporal": "cnn3d",
+            "3dcnn": "cnn3d",
         }.get(normalized, normalized)
         if normalized not in reconstructions:
             raise ValueError(
@@ -2378,24 +2335,27 @@ class SICModel(tf.keras.Model):
                     if self.graph_encoder is None
                     else _serialize_keras_object(self.graph_encoder)
                 ),
+                "cnn3d_encoder": (
+                    None
+                    if self.cnn3d_encoder is None
+                    else _serialize_keras_object(self.cnn3d_encoder)
+                ),
                 "gcn_gru_decoder": (
                     None
                     if self.gcn_gru_decoder is None
                     else _serialize_keras_object(self.gcn_gru_decoder)
                 ),
-                "bilstm_decoder": (
+                "cnn3d_decoder": (
                     None
-                    if self.bilstm_decoder is None
-                    else _serialize_keras_object(self.bilstm_decoder)
+                    if self.cnn3d_decoder is None
+                    else _serialize_keras_object(self.cnn3d_decoder)
                 ),
                 "classification_level": self.classification_level,
                 "n_classes": self.n_classes,
                 "gcn_gru_feature_dim": self.gcn_gru_feature_dim,
-                "bilstm_units": self.bilstm_units,
-                "n_bilstm_layers": self.n_bilstm_layers,
-                "bilstm_dropout": self.bilstm_dropout_rate,
+                "cnn3d_feature_dim": self.cnn3d_feature_dim,
                 "use_gcn_gru_branch": self.use_gcn_gru_branch,
-                "use_bilstm_branch": self.use_bilstm_branch,
+                "use_cnn3d_branch": self.use_cnn3d_branch,
                 "use_decoder": self.use_decoder,
                 "classifier_rnn_type": self.classifier_rnn_type,
                 "classifier_rnn_units": self.classifier_rnn_units,
@@ -2458,7 +2418,12 @@ class SICModel(tf.keras.Model):
             if config["graph_encoder"] is None
             else _deserialize_keras_object(config["graph_encoder"])
         )
-        for key in ("gcn_gru_decoder", "bilstm_decoder"):
+        config["cnn3d_encoder"] = (
+            None
+            if config.get("cnn3d_encoder") is None
+            else _deserialize_keras_object(config["cnn3d_encoder"])
+        )
+        for key in ("gcn_gru_decoder", "cnn3d_decoder"):
             config[key] = (
                 None
                 if config.get(key) is None
@@ -2493,11 +2458,14 @@ def build_sic_model(
     mi_zero_diagonal: bool = False,
     mi_band_reduction: str = "mean",
     mi_max_observations: int | None = 15000,
-    bilstm_units: int = 128,
-    n_bilstm_layers: int = 1,
-    bilstm_dropout: float = 0.30,
+    cnn3d_filters: Sequence[int] = (32, 64, 128),
+    cnn3d_temporal_kernel_size: int = 7,
+    cnn3d_spatial_kernel_size: int = 3,
+    cnn3d_spatial_pool_sizes: Sequence[int] = (2, 2, 1),
+    cnn3d_dropout: float = 0.20,
+    cnn3d_grid_size: int = 9,
     use_gcn_gru_branch: bool = True,
-    use_bilstm_branch: bool = True,
+    use_cnn3d_branch: bool = True,
     use_decoder: bool = True,
     classifier_rnn_type: str = "bigru",
     classifier_rnn_units: int | Sequence[int] = 128,
@@ -2591,13 +2559,17 @@ def build_sic_model(
             f"{expected_features}."
         )
     gcn_units = _as_positive_tuple("gcn_units", gcn_units)
+    cnn3d_filters = _as_positive_tuple("cnn3d_filters", cnn3d_filters)
+    cnn3d_spatial_pool_sizes = _as_positive_tuple(
+        "cnn3d_spatial_pool_sizes", cnn3d_spatial_pool_sizes
+    )
 
     use_gcn_gru_branch = bool(use_gcn_gru_branch)
-    use_bilstm_branch = bool(use_bilstm_branch)
+    use_cnn3d_branch = bool(use_cnn3d_branch)
     use_decoder = bool(use_decoder)
-    if not use_gcn_gru_branch and not use_bilstm_branch:
+    if not use_gcn_gru_branch and not use_cnn3d_branch:
         raise ValueError(
-            "At least one of use_gcn_gru_branch/use_bilstm_branch must be true."
+            "At least one of use_gcn_gru_branch/use_cnn3d_branch must be true."
         )
     if not 0.0 <= float(decoder_dropout) < 1.0:
         raise ValueError("decoder_dropout must be in [0, 1).")
@@ -2650,6 +2622,21 @@ def build_sic_model(
             name="v6_mtl_gcn_gru_encoder",
         )
 
+    cnn3d_encoder = None
+    if use_cnn3d_branch:
+        cnn3d_encoder = MTLFuseNet3DCNNEncoder(
+            n_channels=int(n_channels),
+            n_bands=int(n_bands),
+            grid_size=int(cnn3d_grid_size),
+            filters=cnn3d_filters,
+            temporal_kernel_size=int(cnn3d_temporal_kernel_size),
+            spatial_kernel_size=int(cnn3d_spatial_kernel_size),
+            spatial_pool_sizes=cnn3d_spatial_pool_sizes,
+            dropout=float(cnn3d_dropout),
+            activation=str(gcn_activation),
+            name="sic_mtlfusenet_3dcnn_encoder",
+        )
+
     def build_branch_decoder(*, emb_dim: int, name: str) -> GCNMTLDecoder:
         # Each call creates a fully independent decoder and therefore an
         # independent reconstruction gradient for one encoder branch.
@@ -2679,27 +2666,26 @@ def build_sic_model(
         if use_decoder and use_gcn_gru_branch
         else None
     )
-    bilstm_decoder = (
+    cnn3d_decoder = (
         build_branch_decoder(
-            emb_dim=2 * int(bilstm_units),
-            name="sic_bilstm_decoder",
+            emb_dim=int(cnn3d_filters[-1]),
+            name="sic_cnn3d_decoder",
         )
-        if use_decoder and use_bilstm_branch
+        if use_decoder and use_cnn3d_branch
         else None
     )
 
     model = SICModel(
         graph_encoder=graph_encoder,
+        cnn3d_encoder=cnn3d_encoder,
         gcn_gru_decoder=gcn_gru_decoder,
-        bilstm_decoder=bilstm_decoder,
+        cnn3d_decoder=cnn3d_decoder,
         classification_level=classification_level,
         n_classes=int(n_classes),
         gcn_gru_feature_dim=int(spectral_gru_units),
-        bilstm_units=int(bilstm_units),
-        n_bilstm_layers=int(n_bilstm_layers),
-        bilstm_dropout=float(bilstm_dropout),
+        cnn3d_feature_dim=int(cnn3d_filters[-1]),
         use_gcn_gru_branch=use_gcn_gru_branch,
-        use_bilstm_branch=use_bilstm_branch,
+        use_cnn3d_branch=use_cnn3d_branch,
         use_decoder=use_decoder,
         classifier_rnn_type=str(classifier_rnn_type),
         classifier_rnn_units=(
@@ -2821,10 +2807,10 @@ def build_sic_model(
             ),
             training=False,
         )
-    if bilstm_decoder is not None:
-        _ = bilstm_decoder(
+    if cnn3d_decoder is not None:
+        _ = cnn3d_decoder(
             tf.zeros(
-                (1, int(timesteps), 2 * int(bilstm_units)),
+                (1, int(timesteps), int(cnn3d_filters[-1])),
                 dtype=tf.float32,
             ),
             training=False,

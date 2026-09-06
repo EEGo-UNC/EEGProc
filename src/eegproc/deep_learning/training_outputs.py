@@ -42,9 +42,11 @@ _DECODER_METRIC_NAMES = (
     "decoder_r2",
     "gcn_gru_decoder_r2",
     "bilstm_decoder_r2",
+    "cnn3d_decoder_r2",
     "reconstruction_loss",
     "gcn_gru_reconstruction_loss",
     "bilstm_reconstruction_loss",
+    "cnn3d_reconstruction_loss",
 )
 
 
@@ -845,6 +847,8 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         "val_gcn_gru_decoder_r2",
         "bilstm_decoder_r2",
         "val_bilstm_decoder_r2",
+        "cnn3d_decoder_r2",
+        "val_cnn3d_decoder_r2",
         "accuracy",
         "val_accuracy",
         "trial_f1",
@@ -876,6 +880,7 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
             "reconstruction_loss",
             "gcn_gru_reconstruction_loss",
             "bilstm_reconstruction_loss",
+            "cnn3d_reconstruction_loss",
             "kl_loss",
             "weighted_kl_loss",
             "vc_loss",
@@ -1072,6 +1077,7 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
         reconstruction = read("reconstruction_loss")
         gcn_gru_reconstruction = read("gcn_gru_reconstruction_loss")
         bilstm_reconstruction = read("bilstm_reconstruction_loss")
+        cnn3d_reconstruction = read("cnn3d_reconstruction_loss")
         raw_kl = read("kl_loss")
         weighted_kl = read("weighted_kl_loss")
         if ae_raw is not None:
@@ -1107,6 +1113,11 @@ class CompactEpochLogger(tf.keras.callbacks.Callback):
                 decoder_details.append(
                     "bilstm="
                     f"{self._format_value(bilstm_reconstruction)}"
+                )
+            if cnn3d_reconstruction is not None:
+                decoder_details.append(
+                    "cnn3d="
+                    f"{self._format_value(cnn3d_reconstruction)}"
                 )
             parts.append(
                 f"DECODER={self._format_value(decoder_contribution)}["

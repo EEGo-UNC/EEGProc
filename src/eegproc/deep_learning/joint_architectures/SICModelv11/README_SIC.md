@@ -11,7 +11,7 @@ The supplied experiments answer four main questions:
 1. How well does the population model predict a completely unseen subject?
 2. How do 3-, 6-, 9-, and 12-shot calibration affect discrimination and probability calibration?
 3. How do ERM, V-REx, and first-order MLDG compare?
-4. How much do the GCN-GRU branch, the BiLSTM branch, and median-rating trials contribute?
+4. How much do the GCN-GRU branch, the 3D-CNN branch, and median-rating trials contribute?
 
 The pipeline reports accuracy, balanced accuracy, F1, precision, recall, their macro variants, ROC-AUC, Brier score, and expected calibration error (ECE). The supplied runs use Brier score as the configuration-selection and prediction-diagnostic metric because lower Brier score means better probability predictions.
 
@@ -26,7 +26,7 @@ ordered window sequence.
 flowchart TD
     T["Complete EEG trial"] --> W["Ordered 1-second windows"]
     W --> G["MI GCN + spectral GRU"]
-    W --> B["BiLSTM window encoder"]
+    W --> B["MTLFuseNet-style 3D-CNN window encoder"]
     G --> C["Direct per-window concatenation"]
     B --> C
     C --> P["One embedding per window"]
@@ -47,22 +47,29 @@ $$
 
 The supplied scripts use \(d_g=384\).
 
-### BiLSTM branch
+### MTLFuseNet-style 3D-CNN branch
 
-The BiLSTM receives the original channel-band sequence independently of the graph branch. Its forward and backward outputs are concatenated, so
+The 3D-CNN receives the original channel-major band waveforms independently of
+the graph branch. Each timestep is scattered onto the DREAMER 9x9 electrode
+grid, with theta/alpha/beta as the three input channels. Its convolutions span
+time and both scalp axes. Max pooling and final averaging act only on the two
+spatial axes, so all 128 time samples remain aligned with the graph branch.
+The branch width is the final convolution's filter count:
 
 $$
-d_b=2\,\texttt{bilstm\_units}.
+d_c=\texttt{cnn3d\_filters}[-1].
 $$
 
-Average pooling aligns only the BiLSTM time axis with the downsampled GCN-GRU time axis. It does not reduce the feature dimension.
+The supplied scripts use filters `[32, 64, 128]`, spatial pool sizes
+`[2, 2, 1]`, and a temporal kernel of 7. Layer normalization is used instead
+of batch normalization because subject-disjoint batches can be small.
 
 ### Direct concatenation
 
 After temporal alignment, the complete branch vectors are concatenated along the feature axis:
 
 $$
-h_{\text{joint},t}=[h_{\text{GCN-GRU},t};h_{\text{BiLSTM},t}],
+h_{\text{joint},t}=[h_{\text{GCN-GRU},t};h_{\text{3D-CNN},t}],
 \qquad
 d_{\text{joint}}=d_g+d_b.
 $$
@@ -93,13 +100,11 @@ $$
 Instead, the complete ordered sequence `E_trial` enters the recurrent
 trial classifier.
 
-| Configuration | GCN-GRU width | BiLSTM width | Concatenated width |
+| Configuration | GCN-GRU width | 3D-CNN width | Concatenated width |
 | --- | ---: | ---: | ---: |
-| Model defaults (`bilstm_units=128`) | 384 | 256 | 640 |
-| Smoke/full candidate (`bilstm_units=63`) | 384 | 126 | 510 |
-| Full-grid candidates (`42`, `63`, `96`) | 384 | 84/126/192 | 468/510/576 |
-| `no_bilstm` | 384 | — | 384 |
-| `no_gcn_gru`, 63 units | — | 126 | 126 |
+| Model defaults (`cnn3d_filters=[32,64,128]`) | 384 | 128 | 512 |
+| `no_cnn3d` | 384 | — | 384 |
+| `no_gcn_gru` | — | 128 | 128 |
 
 At least one encoder branch must remain active.
 
@@ -131,7 +136,7 @@ The `VariationalClassifier` is the sole emotion-classification head. There is no
 
 - it operates inside the final classifier objective;
 - its learned class parameters update during source training and subject calibration;
-- it does not replace or reduce the GCN-GRU or BiLSTM outputs;
+- it does not replace or reduce the GCN-GRU or 3D-CNN outputs;
 - it does not create the encoder's fused representation; and
 - it does not reconstruct EEG.
 
@@ -155,15 +160,15 @@ architectures, use an explicit grid such as
 `{"grid": [[128], [128, 64]]}` and omit
 `n_classifier_rnn_layers` so each candidate's depth is inferred.
 
-The encoder BiLSTM and classifier BiGRU operate at different levels:
+The encoder 3D-CNN and classifier BiGRU operate at different levels:
 
-- `bilstm_units` controls the raw-EEG temporal branch inside each one-second
-  window.
+- `cnn3d_filters` controls the spatio-temporal branch inside each one-second
+  window; its final value is the branch feature width.
 - `classifier_rnn_units` controls the recurrent classifier across the ordered
   sequence of windows in a full trial.
-- Neither recurrent layer makes the signal spatial by itself. Spatial structure
-  comes primarily from the electrode graph in the GCN branch; the BiLSTM and
-  BiGRU model temporal dependencies.
+- Both encoder branches explicitly model spatial structure: the GCN uses its
+  source-only MI graph and the 3D-CNN uses the fixed scalp grid. The BiGRU then
+  models temporal dependencies across the complete fused trial sequence.
 
 The primary supervised classifier term is focal loss:
 
@@ -400,7 +405,7 @@ The smoke array runs:
 | Task | Profile |
 | ---: | --- |
 | 0 | `full` |
-| 1 | `no_bilstm` |
+| 1 | `no_cnn3d` |
 
 Defaults are two target subjects, 50 source epochs, 15 calibration epochs, and
 10 MLDG episodes per epoch. Override these shell variables for a faster
@@ -423,8 +428,8 @@ The four array tasks are:
 | ---: | --- | --- |
 | 0 | `full` | Both deterministic branches; retain rating-3 trials |
 | 1 | `remove_median` | Remove complete trials whose raw target rating is 3 |
-| 2 | `no_gcn_gru` | Use only the BiLSTM branch |
-| 3 | `no_bilstm` | Use only the GCN-GRU branch |
+| 2 | `no_gcn_gru` | Use only the 3D-CNN branch |
+| 3 | `no_cnn3d` | Use only the GCN-GRU branch |
 
 There is no `no_decoder` profile because current SIC has no decoder in any profile.
 
@@ -461,7 +466,8 @@ Task 2 is the `no_gcn_gru` profile.
 
 The full script searches:
 
-- `bilstm_units`: 42, 63, 96 when the BiLSTM is active;
+- `cnn3d_filters`: start with fixed `[32, 64, 128]`; compare a smaller
+  `[16, 32, 64]` only after the baseline completes;
 - `focal_gamma`: 0, 1, 2; and
 - `vc_beta`: 0.5, 1.5, 2.5.
 
@@ -472,7 +478,7 @@ This produces:
 | `full` | 27 |
 | `remove_median` | 27 |
 | `no_gcn_gru` | 27 |
-| `no_bilstm` | 9 |
+| `no_cnn3d` | 9 |
 | Total per target dimension and training method | 90 |
 
 Every candidate performs the configured target-subject LOSO folds and calibration levels. Run the smoke suite before launching the complete grid.

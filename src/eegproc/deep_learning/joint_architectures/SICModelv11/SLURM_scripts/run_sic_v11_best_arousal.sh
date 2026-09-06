@@ -57,18 +57,18 @@ if command -v flock >/dev/null 2>&1; then
         if [[ ! -x "$VENV_DIR/bin/python" ]]; then
             python -m venv "$VENV_DIR"
             "$VENV_DIR/bin/python" -m pip install --upgrade pip
-            "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+            "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
         elif [[ "$INSTALL_REQUIREMENTS" == "1" ]]; then
-            "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+            "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
         fi
     ) 9>"$PROJECT_DIR/.venv312_install.lock"
 else
     if [[ ! -x "$VENV_DIR/bin/python" ]]; then
         python -m venv "$VENV_DIR"
         "$VENV_DIR/bin/python" -m pip install --upgrade pip
-        "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+        "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
     elif [[ "$INSTALL_REQUIREMENTS" == "1" ]]; then
-        "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+        "$VENV_DIR/bin/python" -m pip install -e . tensorflow==2.20.0
     fi
 fi
 source "$VENV_DIR/bin/activate"
@@ -153,9 +153,12 @@ print(json.dumps({
     "mi_band_reduction": "mean",
     "mi_max_observations": 15000,
 
-    "bilstm_units": 63,
-    "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.2,
+    "cnn3d_filters": {"fixed": [32, 64, 128]},
+    "cnn3d_temporal_kernel_size": 7,
+    "cnn3d_spatial_kernel_size": 3,
+    "cnn3d_spatial_pool_sizes": {"fixed": [2, 2, 1]},
+    "cnn3d_dropout": 0.2,
+    "cnn3d_grid_size": 9,
 
     "classifier_rnn_type": "bigru",
     "classifier_rnn_units": {"fixed": [128, 64]},
@@ -178,7 +181,7 @@ print(json.dumps({
     "subject_dropout": 0.0,
 
     "use_gcn_gru_branch": True,
-    "use_bilstm_branch": True,
+    "use_cnn3d_branch": True,
     "use_decoder": True,
     "reconstruction_loss_weight": 0.1,
     "decoder_dropout": 0.1,
