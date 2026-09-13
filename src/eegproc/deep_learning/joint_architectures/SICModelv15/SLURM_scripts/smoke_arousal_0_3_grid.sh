@@ -190,7 +190,7 @@ print(json.dumps({
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": {"grid": [2.0]},
-    "vc_beta": 0.3,
+    "vc_beta": {"grid": [0.6, 1.0]},
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "vc_logit_scale": float(os.environ["VC_LOGIT_SCALE"]),

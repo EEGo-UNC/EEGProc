@@ -36,10 +36,10 @@ INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # Match the 4 source / 10 calibration epochs used by arousal job 330197.
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-4}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
-PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
+PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-100}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
 VC_LOGIT_SCALE=64
 export VC_LOGIT_SCALE
@@ -181,9 +181,9 @@ print(json.dumps({
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": {"grid": [2.0]},
-    "vc_beta": 0.0,
+    "vc_beta": 0.3,
     "vc_gamma": 0.0,
-    "vc_lambda": 0.0,
+    "vc_lambda": 0.05,
     "vc_logit_scale": float(os.environ["VC_LOGIT_SCALE"]),
     "update_vc_discriminator": False,
 
