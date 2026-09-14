@@ -1,0 +1,81 @@
+{
+  "subject_id": 0,
+  "trial_id": 0,
+  "target_class": 0,
+  "target_loss_component": "confidence",
+  "decoder_mode": "joint",
+  "joint_reconstruction_alpha": 0.5,
+  "required_target_probability": 0.6,
+  "prediction_rule": "argmax",
+  "original": {
+    "probabilities": [
+      0.2967306971549988,
+      0.703269362449646
+    ],
+    "predicted_class": 1,
+    "target_probability": 0.2967306971549988,
+    "success": false
+  },
+  "latent_counterfactual": {
+    "probabilities": [
+      0.9986512064933777,
+      0.0013488169061020017
+    ],
+    "predicted_class": 0,
+    "target_probability": 0.9986512064933777,
+    "success": true
+  },
+  "decoded_trials": {
+    "joint": {
+      "original_reconstruction": {
+        "probabilities": [
+          0.4290331304073334,
+          0.570966899394989
+        ],
+        "predicted_class": 1,
+        "target_probability": 0.4290331304073334,
+        "success": false
+      },
+      "counterfactual": {
+        "probabilities": [
+          0.48008063435554504,
+          0.5199193358421326
+        ],
+        "predicted_class": 1,
+        "target_probability": 0.48008063435554504,
+        "success": false
+      },
+      "original_reconstruction_mse": 0.499348908662796,
+      "counterfactual_to_original_mse": 6.000853538513184,
+      "decoded_change_mse": 5.680120944976807,
+      "vcsc_original_reconstruction": 4.139995574951172,
+      "vcsc_counterfactual": 3.5171029567718506,
+      "vcsc_delta": -0.6228926181793213
+    }
+  },
+  "selected_losses": {
+    "total": 1.0460931062698364,
+    "target": 0.0,
+    "latent": 0.9429745674133301,
+    "decoded": 6.000853538513184,
+    "physiological": 3.5171029567718506,
+    "weighted_target": 0.0,
+    "weighted_latent": 0.09429746121168137,
+    "weighted_decoded": 0.6000853776931763,
+    "weighted_physiological": 0.3517102897167206,
+    "decoded_joint": 6.000853538513184,
+    "target_confidence_component": 0.0,
+    "target_focal_component": 3.6410140182852047e-06,
+    "target_vc_component": 0.0,
+    "target_vc_latent_posterior_kl": 0.0,
+    "target_vc_discriminator_kl": 0.0,
+    "target_vc_class_prior_kl": 0.0
+  },
+  "selected_step": 3,
+  "steps_completed": 10,
+  "stop_reason": "max_steps",
+  "elapsed_seconds": 1039.2843946249923,
+  "physiological_validity": 3.5171029567718506,
+  "physiological_constraint_enforced": true,
+  "true_class": 1
+}

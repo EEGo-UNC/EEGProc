@@ -1,0 +1,407 @@
+[
+  {
+    "subject_id": 0,
+    "trial_id": 0,
+    "target_class": 0,
+    "target_loss_component": "confidence",
+    "decoder_mode": "joint",
+    "joint_reconstruction_alpha": 0.5,
+    "required_target_probability": 0.6,
+    "prediction_rule": "argmax",
+    "original": {
+      "probabilities": [
+        0.2967306971549988,
+        0.703269362449646
+      ],
+      "predicted_class": 1,
+      "target_probability": 0.2967306971549988,
+      "success": false
+    },
+    "latent_counterfactual": {
+      "probabilities": [
+        0.9986512064933777,
+        0.0013488169061020017
+      ],
+      "predicted_class": 0,
+      "target_probability": 0.9986512064933777,
+      "success": true
+    },
+    "decoded_trials": {
+      "joint": {
+        "original_reconstruction": {
+          "probabilities": [
+            0.4290331304073334,
+            0.570966899394989
+          ],
+          "predicted_class": 1,
+          "target_probability": 0.4290331304073334,
+          "success": false
+        },
+        "counterfactual": {
+          "probabilities": [
+            0.48008063435554504,
+            0.5199193358421326
+          ],
+          "predicted_class": 1,
+          "target_probability": 0.48008063435554504,
+          "success": false
+        },
+        "original_reconstruction_mse": 0.499348908662796,
+        "counterfactual_to_original_mse": 6.000853538513184,
+        "decoded_change_mse": 5.680120944976807,
+        "vcsc_original_reconstruction": 4.139995574951172,
+        "vcsc_counterfactual": 3.5171029567718506,
+        "vcsc_delta": -0.6228926181793213
+      }
+    },
+    "selected_losses": {
+      "total": 1.0460931062698364,
+      "target": 0.0,
+      "latent": 0.9429745674133301,
+      "decoded": 6.000853538513184,
+      "physiological": 3.5171029567718506,
+      "weighted_target": 0.0,
+      "weighted_latent": 0.09429746121168137,
+      "weighted_decoded": 0.6000853776931763,
+      "weighted_physiological": 0.3517102897167206,
+      "decoded_joint": 6.000853538513184,
+      "target_confidence_component": 0.0,
+      "target_focal_component": 3.6410140182852047e-06,
+      "target_vc_component": 0.0,
+      "target_vc_latent_posterior_kl": 0.0,
+      "target_vc_discriminator_kl": 0.0,
+      "target_vc_class_prior_kl": 0.0
+    },
+    "selected_step": 3,
+    "steps_completed": 10,
+    "stop_reason": "max_steps",
+    "elapsed_seconds": 1039.2843946249923,
+    "physiological_validity": 3.5171029567718506,
+    "physiological_constraint_enforced": true,
+    "true_class": 1
+  },
+  {
+    "subject_id": 0,
+    "trial_id": 1,
+    "target_class": 1,
+    "target_loss_component": "confidence",
+    "decoder_mode": "joint",
+    "joint_reconstruction_alpha": 0.5,
+    "required_target_probability": 0.6,
+    "prediction_rule": "argmax",
+    "original": {
+      "probabilities": [
+        0.6938069462776184,
+        0.306193083524704
+      ],
+      "predicted_class": 0,
+      "target_probability": 0.306193083524704,
+      "success": false
+    },
+    "latent_counterfactual": {
+      "probabilities": [
+        0.0009436264517717063,
+        0.9990563988685608
+      ],
+      "predicted_class": 1,
+      "target_probability": 0.9990563988685608,
+      "success": true
+    },
+    "decoded_trials": {
+      "joint": {
+        "original_reconstruction": {
+          "probabilities": [
+            0.6405726075172424,
+            0.3594273626804352
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.3594273626804352,
+          "success": false
+        },
+        "counterfactual": {
+          "probabilities": [
+            0.5871222019195557,
+            0.41287779808044434
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.41287779808044434,
+          "success": false
+        },
+        "original_reconstruction_mse": 0.5031468272209167,
+        "counterfactual_to_original_mse": 5.866387367248535,
+        "decoded_change_mse": 5.538059711456299,
+        "vcsc_original_reconstruction": 4.078649044036865,
+        "vcsc_counterfactual": 2.3348944187164307,
+        "vcsc_delta": -1.7437546253204346
+      }
+    },
+    "selected_losses": {
+      "total": 0.9142829775810242,
+      "target": 0.0,
+      "latent": 0.9415478706359863,
+      "decoded": 5.866387367248535,
+      "physiological": 2.3348944187164307,
+      "weighted_target": 0.0,
+      "weighted_latent": 0.09415479004383087,
+      "weighted_decoded": 0.5866387486457825,
+      "weighted_physiological": 0.23348943889141083,
+      "decoded_joint": 5.866387367248535,
+      "target_confidence_component": 0.0,
+      "target_focal_component": 1.7816122408476076e-06,
+      "target_vc_component": 0.0,
+      "target_vc_latent_posterior_kl": 0.0,
+      "target_vc_discriminator_kl": 0.0,
+      "target_vc_class_prior_kl": 0.0
+    },
+    "selected_step": 3,
+    "steps_completed": 10,
+    "stop_reason": "max_steps",
+    "elapsed_seconds": 1112.5188989580056,
+    "physiological_validity": 2.3348944187164307,
+    "physiological_constraint_enforced": true,
+    "true_class": 1
+  },
+  {
+    "subject_id": 0,
+    "trial_id": 2,
+    "target_class": 1,
+    "target_loss_component": "confidence",
+    "decoder_mode": "joint",
+    "joint_reconstruction_alpha": 0.5,
+    "required_target_probability": 0.6,
+    "prediction_rule": "argmax",
+    "original": {
+      "probabilities": [
+        0.6370096206665039,
+        0.3629903793334961
+      ],
+      "predicted_class": 0,
+      "target_probability": 0.3629903793334961,
+      "success": false
+    },
+    "latent_counterfactual": {
+      "probabilities": [
+        0.0004740278236567974,
+        0.9995260238647461
+      ],
+      "predicted_class": 1,
+      "target_probability": 0.9995260238647461,
+      "success": true
+    },
+    "decoded_trials": {
+      "joint": {
+        "original_reconstruction": {
+          "probabilities": [
+            0.6548585295677185,
+            0.3451414704322815
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.3451414704322815,
+          "success": false
+        },
+        "counterfactual": {
+          "probabilities": [
+            0.6281917691230774,
+            0.37180817127227783
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.37180817127227783,
+          "success": false
+        },
+        "original_reconstruction_mse": 0.5045852661132812,
+        "counterfactual_to_original_mse": 5.620482921600342,
+        "decoded_change_mse": 5.309861660003662,
+        "vcsc_original_reconstruction": 4.789647579193115,
+        "vcsc_counterfactual": 2.6039907932281494,
+        "vcsc_delta": -2.185656785964966
+      }
+    },
+    "selected_losses": {
+      "total": 0.9190250635147095,
+      "target": 0.0,
+      "latent": 0.9657762050628662,
+      "decoded": 5.620482921600342,
+      "physiological": 2.6039907932281494,
+      "weighted_target": 0.0,
+      "weighted_latent": 0.09657762199640274,
+      "weighted_decoded": 0.5620483160018921,
+      "weighted_physiological": 0.26039907336235046,
+      "decoded_joint": 5.620482921600342,
+      "target_confidence_component": 0.0,
+      "target_focal_component": 4.4942621002519445e-07,
+      "target_vc_component": 0.0,
+      "target_vc_latent_posterior_kl": 0.0,
+      "target_vc_discriminator_kl": 0.0,
+      "target_vc_class_prior_kl": 0.0
+    },
+    "selected_step": 3,
+    "steps_completed": 10,
+    "stop_reason": "max_steps",
+    "elapsed_seconds": 1025.5028024170024,
+    "physiological_validity": 2.6039907932281494,
+    "physiological_constraint_enforced": true,
+    "true_class": 1
+  },
+  {
+    "subject_id": 0,
+    "trial_id": 3,
+    "target_class": 0,
+    "target_loss_component": "confidence",
+    "decoder_mode": "joint",
+    "joint_reconstruction_alpha": 0.5,
+    "required_target_probability": 0.6,
+    "prediction_rule": "argmax",
+    "original": {
+      "probabilities": [
+        0.42992857098579407,
+        0.5700714588165283
+      ],
+      "predicted_class": 1,
+      "target_probability": 0.42992857098579407,
+      "success": false
+    },
+    "latent_counterfactual": {
+      "probabilities": [
+        0.9992125034332275,
+        0.0007875124574638903
+      ],
+      "predicted_class": 0,
+      "target_probability": 0.9992125034332275,
+      "success": true
+    },
+    "decoded_trials": {
+      "joint": {
+        "original_reconstruction": {
+          "probabilities": [
+            0.6710058450698853,
+            0.32899409532546997
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.6710058450698853,
+          "success": true
+        },
+        "counterfactual": {
+          "probabilities": [
+            0.5376331806182861,
+            0.46236684918403625
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.5376331806182861,
+          "success": false
+        },
+        "original_reconstruction_mse": 0.535137414932251,
+        "counterfactual_to_original_mse": 5.462745666503906,
+        "decoded_change_mse": 5.161218643188477,
+        "vcsc_original_reconstruction": 5.1298394203186035,
+        "vcsc_counterfactual": 3.486161708831787,
+        "vcsc_delta": -1.6436777114868164
+      }
+    },
+    "selected_losses": {
+      "total": 0.9900982975959778,
+      "target": 0.0,
+      "latent": 0.952075183391571,
+      "decoded": 5.462745666503906,
+      "physiological": 3.486161708831787,
+      "weighted_target": 0.0,
+      "weighted_latent": 0.09520751982927322,
+      "weighted_decoded": 0.5462746024131775,
+      "weighted_physiological": 0.34861618280410767,
+      "decoded_joint": 5.462745666503906,
+      "target_confidence_component": 0.0,
+      "target_focal_component": 1.2407516578605282e-06,
+      "target_vc_component": 0.0,
+      "target_vc_latent_posterior_kl": 0.0,
+      "target_vc_discriminator_kl": 0.0,
+      "target_vc_class_prior_kl": 0.0
+    },
+    "selected_step": 3,
+    "steps_completed": 10,
+    "stop_reason": "max_steps",
+    "elapsed_seconds": 1033.021628041999,
+    "physiological_validity": 3.486161708831787,
+    "physiological_constraint_enforced": true,
+    "true_class": 1
+  },
+  {
+    "subject_id": 0,
+    "trial_id": 4,
+    "target_class": 0,
+    "target_loss_component": "confidence",
+    "decoder_mode": "joint",
+    "joint_reconstruction_alpha": 0.5,
+    "required_target_probability": 0.6,
+    "prediction_rule": "argmax",
+    "original": {
+      "probabilities": [
+        0.345170795917511,
+        0.654829204082489
+      ],
+      "predicted_class": 1,
+      "target_probability": 0.345170795917511,
+      "success": false
+    },
+    "latent_counterfactual": {
+      "probabilities": [
+        0.9980844259262085,
+        0.0019156457856297493
+      ],
+      "predicted_class": 0,
+      "target_probability": 0.9980844259262085,
+      "success": true
+    },
+    "decoded_trials": {
+      "joint": {
+        "original_reconstruction": {
+          "probabilities": [
+            0.33007630705833435,
+            0.669923722743988
+          ],
+          "predicted_class": 1,
+          "target_probability": 0.33007630705833435,
+          "success": false
+        },
+        "counterfactual": {
+          "probabilities": [
+            0.5930036306381226,
+            0.40699639916419983
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.5930036306381226,
+          "success": false
+        },
+        "original_reconstruction_mse": 0.5449126958847046,
+        "counterfactual_to_original_mse": 5.472008228302002,
+        "decoded_change_mse": 5.205558776855469,
+        "vcsc_original_reconstruction": 7.557140827178955,
+        "vcsc_counterfactual": 4.669976711273193,
+        "vcsc_delta": -2.8871641159057617
+      }
+    },
+    "selected_losses": {
+      "total": 1.1146986484527588,
+      "target": 0.0,
+      "latent": 1.005000352859497,
+      "decoded": 5.472008228302002,
+      "physiological": 4.669976711273193,
+      "weighted_target": 0.0,
+      "weighted_latent": 0.10050003975629807,
+      "weighted_decoded": 0.5472008585929871,
+      "weighted_physiological": 0.4669976830482483,
+      "decoded_joint": 5.472008228302002,
+      "target_confidence_component": 0.0,
+      "target_focal_component": 7.345958692894783e-06,
+      "target_vc_component": 0.0,
+      "target_vc_latent_posterior_kl": 0.0,
+      "target_vc_discriminator_kl": 0.0,
+      "target_vc_class_prior_kl": 0.0
+    },
+    "selected_step": 3,
+    "steps_completed": 10,
+    "stop_reason": "max_steps",
+    "elapsed_seconds": 1037.3082915419945,
+    "physiological_validity": 4.669976711273193,
+    "physiological_constraint_enforced": true,
+    "true_class": 1
+  }
+]

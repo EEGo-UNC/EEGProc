@@ -73,3 +73,7 @@
     - Removing the subject adversarial head reduced BAcc to 52% on 0-shot and had subsequent decreasing accuracies on increasing calibration counts.
 - 09/10/2026
     - SIC v15 fuses the 42 dimensional reconstruction and has shown better performance on early smoke tests. Replicability has shown to affect this though. We should now focus on making sure new processes don't change seeding.
+- 09/13/2026
+    - SIC v15 achieves high classification accuracies with sub .24 brier. This is without VC.
+    - Focal + vc_beta=0.3 + vc_lambda=0.05 achieves higher prediction accuracies by about 2%.
+    - Running full models again with increased vc. Running smoke test with vc grid search.
