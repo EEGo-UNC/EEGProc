@@ -110,7 +110,7 @@ class ModelAgnosticCounterfactualOptimizer:
             }
         return values
 
-    def _objective(self, variable, original_state, inputs, target_class):
+    def _objective(self, variable, original_state, inputs, target_class, *, baseline_reconstructions=None):
         logits = self.adapter.logits_from_state(variable)
         reconstructions = dict(self.adapter.reconstruct(variable, inputs))
         if not reconstructions:
@@ -126,8 +126,15 @@ class ModelAgnosticCounterfactualOptimizer:
             - log_probability
         )
         state = _mean_mse(variable, original_state)
+        if baseline_reconstructions is None:
+            baseline_reconstructions = dict(
+                self.adapter.reconstruct(tf.stop_gradient(original_state), inputs)
+            )
+        if set(reconstructions) != set(baseline_reconstructions):
+            raise ValueError("Candidate and original reconstruction paths must match.")
         signal_by_output = {
-            name: _mean_mse(value, inputs) for name, value in reconstructions.items()
+            name: _mean_mse(value, baseline_reconstructions[name])
+            for name, value in reconstructions.items()
         }
         signal = tf.add_n(list(signal_by_output.values())) / len(signal_by_output)
         active_constraint_names = [
@@ -192,9 +199,10 @@ class ModelAgnosticCounterfactualOptimizer:
             raise ValueError(f"target_class must be an integer in [0, {n_classes}).")
         target_class = int(target_class)
         original_prediction = self._prediction(original_logits, target_class)
-        baseline_reconstructions = dict(
-            self.adapter.reconstruct(original_state, x)
-        )
+        baseline_reconstructions = {
+            name: tf.stop_gradient(value)
+            for name, value in self.adapter.reconstruct(original_state, x).items()
+        }
 
         variable = tf.Variable(original_state, name="counterfactual_state")
         descent = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
@@ -207,7 +215,8 @@ class ModelAgnosticCounterfactualOptimizer:
             with tf.GradientTape(watch_accessed_variables=False) as tape:
                 tape.watch(variable)
                 logits, _, tensor_terms = self._objective(
-                    variable, original_state, x, target_class
+                    variable, original_state, x, target_class,
+                    baseline_reconstructions=baseline_reconstructions,
                 )
             gradient = tape.gradient(tensor_terms["total"], variable)
             if gradient is None:
@@ -238,6 +247,7 @@ class ModelAgnosticCounterfactualOptimizer:
             )
             row = {
                 "step": step,
+                "signal_distance_reference": "original_reconstruction",
                 **values,
                 **{key: value for key, value in prediction.items() if key != "probabilities"},
                 **{
@@ -267,7 +277,8 @@ class ModelAgnosticCounterfactualOptimizer:
             steps_completed += 1
 
         final_logits, reconstructions, final_terms = self._objective(
-            best_state, original_state, x, target_class
+            best_state, original_state, x, target_class,
+            baseline_reconstructions=baseline_reconstructions,
         )
         final_prediction = self._prediction(final_logits, target_class)
         all_constraint_names = tuple(
@@ -322,6 +333,7 @@ class ModelAgnosticCounterfactualOptimizer:
             }
         summary = {
             "adapter": self.adapter.metadata(),
+            "signal_distance_reference": "original_reconstruction",
             "target_class": target_class,
             "required_target_probability": self.target_probability,
             "original": original_prediction,

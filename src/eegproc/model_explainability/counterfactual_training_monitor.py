@@ -2,7 +2,8 @@
 
 Axes are optimization epoch, target-class probability, and decoded
 counterfactual difference. Existing histories provide the last quantity in the
-``decoded`` column: decoded counterfactual MSE relative to the original input.
+``decoded`` column: counterfactual reconstruction MSE relative to R(z).
+Older archives used the original input; inspect the saved reference metadata.
 
 Example::
 
@@ -159,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("history_csv", type=Path)
     parser.add_argument(
         "--difference-column",
-        help="Default: decoded (MSE from decoded counterfactual to original input).",
+        help="Default: decoded (MSE from counterfactual reconstruction to original reconstruction in new runs).",
     )
     parser.add_argument(
         "--watch",

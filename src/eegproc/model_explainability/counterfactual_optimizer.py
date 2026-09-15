@@ -47,6 +47,9 @@ class CounterfactualOptimizer:
         gradient_clip_norm=5.0,
         stop_on_success=False,
         decoder_mode="branches",
+        typicality=None,
+        typicality_weight=0.0,
+        require_decoded_success=False,
     ):
         if not math.isfinite(learning_rate) or learning_rate <= 0:
             raise ValueError("learning_rate must be finite and positive.")
@@ -101,6 +104,13 @@ class CounterfactualOptimizer:
                 )
             if getattr(model, "joint_reconstruction_fusion", None) is None:
                 raise ValueError("Missing joint reconstruction fusion layer.")
+        if not math.isfinite(typicality_weight) or typicality_weight < 0:
+            raise ValueError("typicality_weight must be finite and nonnegative.")
+        if typicality_weight > 0 and typicality is None:
+            raise ValueError("A fitted source-only typicality region is required.")
+        self.typicality = typicality
+        self.typicality_weight = float(typicality_weight)
+        self.require_decoded_success = bool(require_decoded_success)
         self.model, self.loss = (
             model,
             loss if loss is not None else CounterfactualLoss(),
@@ -223,7 +233,20 @@ class CounterfactualOptimizer:
             ),
         }
 
-    def optimize(self, inputs, *, target_class=None, progress=None):
+    def _objective(self, **kwargs):
+        terms, decoded = self.loss.central_loss(**kwargs)
+        if self.typicality is not None:
+            if kwargs["target_class"] != self.typicality.metadata["target_class"]:
+                raise ValueError("Typicality target class does not match optimization target.")
+            self._current_typicality_sequence = self.typicality.sequence(kwargs["z_prime"])
+            discrepancy = self.typicality.discrepancy(kwargs["z_prime"], sequence=self._current_typicality_sequence)
+            penalty = tf.square(tf.nn.relu(discrepancy - self.typicality.tau))
+            terms.update(typicality=penalty, discrepancy=discrepancy,
+                         weighted_typicality=self.typicality_weight * penalty)
+            terms["total"] = terms["total"] + terms["weighted_typicality"]
+        return terms, decoded
+
+    def optimize(self, inputs, *, target_class=None, progress=None, state_progress=None):
         """Return scalar history, a summary, and original/counterfactual arrays.
 
         inputs is one preprocessed trial: (W,T,F) or (1,W,T,F), not a batch
@@ -236,6 +259,13 @@ class CounterfactualOptimizer:
         progress, if supplied, receives one scalar dictionary per finite
         evaluated step. Step 0 is before updates; selected_step may precede
         steps_completed because the best candidate is retained independently.
+
+        state_progress(row, arrays) optionally receives every finite iterate,
+        full decoded arrays, raw gradient and Adam state for streamed archival.
+        With require_decoded_success, selection/stopping also requires decoded
+        argmax target validity on every selected output. An active typicality
+        penalty adds D <= tau to selection/stopping. The probability threshold
+        remains a separate, stricter optimization criterion.
 
         Final decoded trials are passed through the FULL saved model again.
         Their target success is distinct from success in latent space. Neither
@@ -292,7 +322,10 @@ class CounterfactualOptimizer:
             raise ValueError(f"target_class must be an integer in [0, {n_classes}).")
         target_class = int(target_class)
         original_prediction = self._prediction(original_logits, target_class)
-        original_decoded = self._decode(z, x)
+        original_decoded = {
+            name: tf.stop_gradient(value) for name, value in self._decode(z, x).items()
+        }
+        original_typicality_sequence = self.typicality.sequence(z) if self.typicality is not None else None
         variable = tf.Variable(z, name="counterfactual_trial_features")
         learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=self.learning_rate,
@@ -312,13 +345,14 @@ class CounterfactualOptimizer:
                 target_loss, target_components = self._target_components(
                     embedding, logits, target_class
                 )
-                terms, _ = self.loss.central_loss(
+                terms, current_decoded = self._objective(
                     logits=logits,
                     target_class=target_class,
                     z_prime=variable,
                     z=z,
                     x=x,
                     decoder=decode,
+                    reference_reconstructions=original_decoded,
                     target_loss_override=target_loss,
                     target_components=target_components,
                 )
@@ -338,13 +372,26 @@ class CounterfactualOptimizer:
                 stop_reason = "non_finite_loss"
                 break
             prediction = self._prediction(logits, target_class)
+            typical = self.typicality is None or values["discrepancy"] <= self.typicality.tau
+            decoded_step = {}
+            if self.require_decoded_success or state_progress is not None:
+                decoded_step = {
+                    name: self._prediction(self.model(value, training=False), target_class)
+                    for name, value in current_decoded.items()
+                }
+            decoded_valid = all(p["predicted_class"] == target_class for p in decoded_step.values())
+            optimization_success = (
+                prediction["success"]
+                and (self.typicality_weight == 0 or typical)
+                and (not self.require_decoded_success or decoded_valid)
+            )
             proximity = sum(
                 values[f"weighted_{name}"]
                 for name in ("latent", "decoded", "physiological")
             )
             key = (
-                not prediction["success"],
-                proximity if prediction["success"] else values["total"],
+                not optimization_success,
+                proximity if optimization_success else values["total"],
             )
             if best_key is None or key < best_key:
                 best_key, best_latent, selected_step = key, tf.identity(variable), step
@@ -355,6 +402,7 @@ class CounterfactualOptimizer:
             row = {
                 "step": step,
                 "target_loss_component": self.target_loss_component,
+                "decoded_distance_reference": "original_reconstruction",
                 "learning_rate": self.learning_rate
                 * self.learning_rate_decay**step,
                 **values,
@@ -365,13 +413,39 @@ class CounterfactualOptimizer:
                 },
                 "gradient_norm": norm if finite_gradient else None,
             }
+            if self.typicality is not None:
+                row.update(typicality_threshold=self.typicality.tau,
+                           typical=bool(typical), optimization_success=bool(optimization_success))
+            if self.require_decoded_success or state_progress is not None:
+                row.update(decoded_valid=bool(decoded_valid),
+                           optimization_success=bool(optimization_success))
+                row["decoder_latent_rmse"] = float(tf.sqrt(tf.reduce_mean(tf.square(variable - z))).numpy())
+                row["d_z"] = (float(tf.sqrt(tf.reduce_mean(tf.square(self._current_typicality_sequence - original_typicality_sequence))).numpy())
+                              if self.typicality is not None else row["decoder_latent_rmse"])
+                for name, value in current_decoded.items():
+                    row[f"decoded_{name}_target_probability"] = decoded_step[name]["target_probability"]
+                    row[f"decoded_{name}_predicted_class"] = decoded_step[name]["predicted_class"]
+                    row[f"delta_dec_{name}"] = float(tf.sqrt(tf.reduce_mean(tf.square(value - original_decoded[name]))).numpy())
+                row["selected_step_so_far"] = selected_step
             history.append(row)
             if progress is not None:
                 progress(dict(row))
+            if state_progress is not None:
+                state_progress(dict(row), {
+                    **({"typicality_sequence": self._current_typicality_sequence.numpy()}
+                       if self.typicality is not None else {}),
+                    "step": np.asarray(step), "z": variable.numpy(),
+                    "best_z": best_latent.numpy(), "selected_step": np.asarray(selected_step),
+                    "gradient": gradient.numpy(), "classification_embedding": embedding.numpy(),
+                    "logits": logits.numpy(),
+                    **{f"x_prime_{name}": value.numpy() for name, value in current_decoded.items()},
+                    "optimizer_variable_names": np.asarray([v.name for v in descent.variables]),
+                    **{f"optimizer_{i}": value.numpy() for i, value in enumerate(descent.variables)},
+                })
             if not finite_gradient:
                 stop_reason = "non_finite_gradient"
                 break
-            if prediction["success"] and (step == 0 or self.stop_on_success):
+            if optimization_success and (step == 0 or self.stop_on_success):
                 stop_reason = "already_satisfied" if step == 0 else "target_reached"
                 break
             if step == self.max_steps:
@@ -388,13 +462,14 @@ class CounterfactualOptimizer:
         final_target_loss, final_target_components = self._target_components(
             final_embedding, final_logits, target_class
         )
-        final_terms, decoded = self.loss.central_loss(
+        final_terms, decoded = self._objective(
             logits=final_logits,
             target_class=target_class,
             z_prime=best_latent,
             z=z,
             x=x,
             decoder=decode,
+            reference_reconstructions=original_decoded,
             target_loss_override=final_target_loss,
             target_components=final_target_components,
         )
@@ -434,12 +509,32 @@ class CounterfactualOptimizer:
                     ).numpy()
                 ),
             }
+        extra_summary = {}
+        if self.typicality is not None:
+            original_d = float(self.typicality.discrepancy(z).numpy())
+            final_d = float(self.typicality.discrepancy(best_latent).numpy())
+            typical = final_d <= self.typicality.tau
+            decoded_valid = all(v["counterfactual"]["predicted_class"] == target_class for v in decoded_results.values())
+            extra_summary = {
+                "typicality": {"original_discrepancy": original_d,
+                               "counterfactual_discrepancy": final_d,
+                               "threshold": self.typicality.tau,
+                               "typical": bool(typical), "weight": self.typicality_weight,
+                               "decoded_valid": bool(decoded_valid),
+                               "joint_success": bool(typical and decoded_valid)},
+            }
+            arrays["typicality_sequence"] = self.typicality.sequence(z).numpy()
+            arrays["typicality_sequence_prime"] = self.typicality.sequence(best_latent).numpy()
+            arrays["classification_embedding"] = self._classification_state(z)[0].numpy()
+            arrays["classification_embedding_prime"] = final_embedding.numpy()
         return {
             "history": history,
             "summary": {
+                **extra_summary,
                 "target_class": target_class,
                 "target_loss_component": self.target_loss_component,
                 "decoder_mode": self.decoder_mode,
+                "decoded_distance_reference": "original_reconstruction",
                 "joint_reconstruction_alpha": (
                     float(self.model.joint_reconstruction_fusion.alpha.numpy())
                     if self.decoder_mode == "joint"

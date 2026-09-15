@@ -1,5 +1,10 @@
 # SIC counterfactuals
 
+For the paired distributional-typicality study using Eq. (7), source-only
+threshold calibration, complete optimization archives, and offline manuscript
+tables/figures, see [TYPICALITY.md](TYPICALITY.md). Its entry point is
+`python -m eegproc.model_explainability.run_typicality_counterfactuals`.
+
 Counterfactual optimization and plotting utilities. No source training,
 subject calibration, VAE, KL term, window-level optimization, or new model
 construction.
@@ -248,12 +253,12 @@ its normalized-unit behavior are unchanged.
 ## Objective and gradient path
 
 For original trial `x`, encode once to `z`, then initialize `z_prime = z`. The
-default `--decoder-mode branches` retains the original objective:
+default `--decoder-mode branches` uses the objective:
 
 \[
 L = \lambda_t\max(0, \log p_{min}-\log p(y^*\mid z'))
   + \lambda_z\operatorname{MSE}(z',z)
-  + \lambda_x\frac{1}{R}\sum_r\operatorname{MSE}(R_r(z'),x)
+  + \lambda_x\frac{1}{R}\sum_r\operatorname{MSE}(R_r(z'),R_r(z))
   + \lambda_{phys}\frac{1}{R}\sum_r\operatorname{VCSC}(R_r(z')).
 \]
 
@@ -271,7 +276,9 @@ saved SIC GRU configuration without substituting a different classifier.
 For decoding, split the final feature axis at the saved branch widths.
 GCN-GRU features enter only the GCN-GRU decoder; BiLSTM features enter only
 the BiLSTM decoder. Each decoder sees `(W,T,C_branch)` and reconstructs the
-original EEG windows. In branch mode, their MSEs are averaged and each
+original EEG windows. The fixed original reconstructions are computed once
+per trial; each candidate is compared to its matching reconstruction R_r(z).
+In branch mode, their MSEs are averaged and each
 reconstruction is saved separately. Single-branch ablations are supported.
 
 With `--decoder-mode joint`, the sole decoded reconstruction and decoded loss
@@ -279,7 +286,7 @@ are:
 
 \[
 \hat{x}_{joint}=\alpha D_g(z'_g)+(1-\alpha)D_b(z'_b),\qquad
-L_x=\operatorname{MSE}(\hat{x}_{joint},x).
+L_x=\operatorname{MSE}(\hat{x}_{joint}(z'),\hat{x}_{joint}(z)).
 \]
 
 `alpha` is the learned sigmoid fusion weight stored in the SICModelv15
@@ -290,6 +297,12 @@ joint MSE with the two branch MSEs.
 
 All distances are elementwise MSEs. Coefficients are starting settings, not
 empirically tuned values. The loss contains detailed method docstrings.
+The adapter-based optimizer uses the same reconstruction reference for its
+`signal` term. For an identity/input-space adapter, the original reconstruction
+equals the original input. Decoder reconstruction error relative to observed
+input remains a separate reported diagnostic. New histories and summaries
+record `decoded_distance_reference` (or `signal_distance_reference`) as
+`original_reconstruction`; older archives retain their original semantics.
 
 Only `z_prime` is watched by `GradientTape` and passed to Adam. Every model
 call uses `training=False`. Encoder weights, BiGRU/VC weights, decoder weights,
@@ -448,7 +461,7 @@ This opens the three-dimensional graph and saves
 
 - x: optimization step, displayed as epoch
 - y: `decoded`, the selected reconstruction-path MSE relative to the original
-  input
+  reconstruction R(z) in new runs (older runs used the observed input)
 - z: `target_probability`, displayed as `target_p` and zoomed to its observed
   variation so small changes remain visible
 

@@ -80,6 +80,12 @@ def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
         "x_prime_joint",
     }
     decoded = result["summary"]["decoded_trials"]["joint"]
+    assert result["history"][0]["decoded"] == pytest.approx(0.0)
+    assert decoded["original_reconstruction_mse"] > 0
+    assert result["summary"]["selected_losses"]["decoded"] == pytest.approx(
+        decoded["decoded_change_mse"]
+    )
+    assert result["summary"]["decoded_distance_reference"] == "original_reconstruction"
     assert np.isfinite(decoded["vcsc_original_reconstruction"])
     assert np.isfinite(decoded["vcsc_counterfactual"])
     assert decoded["vcsc_delta"] == pytest.approx(
@@ -112,6 +118,41 @@ def test_branch_decoder_mode_remains_backward_compatible(tiny_joint_model):
     assert result["summary"]["joint_reconstruction_alpha"] is None
     assert set(result["summary"]["decoded_trials"]) == {"gcn_gru", "bilstm"}
     assert "x_prime_joint" not in result["arrays"]
+    assert result["history"][0]["decoded"] == pytest.approx(0.0)
+    assert all(result["history"][0][f"decoded_{branch}"] == pytest.approx(0.0)
+               for branch in ("gcn_gru", "bilstm"))
+
+
+def test_decoded_distance_uses_fixed_reconstruction_and_candidate_gradients():
+    original = tf.Variable([1.0, 3.0])
+    candidate = tf.Variable([2.0, 5.0])
+    decoder = lambda z: {"gcn_gru": 2 * z + 10, "bilstm": -3 * z + 4}
+    with tf.GradientTape(persistent=True) as tape:
+        distance, _, paths = CounterfactualLoss().decoded_distance(candidate, original, decoder)
+    # The original decoder bias does not enter the displacement. Branch MSEs
+    # are 4*mean([1,4]) and 9*mean([1,4]), then averaged.
+    assert float(paths["gcn_gru"]) == pytest.approx(10.0)
+    assert float(paths["bilstm"]) == pytest.approx(22.5)
+    assert float(distance) == pytest.approx(16.25)
+    np.testing.assert_allclose(tape.gradient(distance, candidate), [6.5, 13.0])
+    assert tape.gradient(distance, original) is None
+
+
+def test_decoded_distance_reuses_cached_original_reconstruction():
+    calls = []
+    def decoder(z):
+        calls.append(z)
+        return {"joint": 2 * z + 10}
+    original = tf.constant([1.0, 3.0])
+    reference = decoder(original)
+    distance, _, _ = CounterfactualLoss().decoded_distance(
+        tf.constant([2.0, 5.0]), original, decoder, reference_reconstructions=reference,
+    )
+    assert len(calls) == 2
+    assert float(distance) == pytest.approx(10.0)
+    with pytest.raises(ValueError, match="paths must match"):
+        CounterfactualLoss().decoded_distance(original, original, decoder,
+                                              reference_reconstructions={"wrong_path": original})
 
 
 def test_joint_decoder_mode_is_exposed_by_cli():

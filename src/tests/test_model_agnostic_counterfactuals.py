@@ -91,6 +91,30 @@ def test_report_only_constraint_is_not_computed_during_steps():
     assert metrics["magnitude"]["weight"] == 0.0
 
 
+def test_adapter_signal_loss_excludes_original_reconstruction_error():
+    class BiasedDecoderAdapter(TinyInputAdapter):
+        def __init__(self):
+            super().__init__()
+            self.decode_calls = 0
+
+        def reconstruct(self, state, reference_input):
+            self.decode_calls += 1
+            return {"input": 2 * state + 7}
+
+    adapter = BiasedDecoderAdapter()
+    result = ModelAgnosticCounterfactualOptimizer(
+        adapter, signal_weight=0.1, max_steps=2,
+    ).optimize(tf.zeros((1, 2, 3), dtype=tf.float32), target_class=1)
+    summary = result["summary"]
+    decoded = summary["reconstructed_outputs"]["input"]
+    assert result["history"][0]["signal"] == pytest.approx(0.0)
+    assert decoded["original_reconstruction_mse"] == pytest.approx(49.0)
+    assert summary["selected_losses"]["signal"] == pytest.approx(decoded["decoded_change_mse"])
+    assert summary["signal_distance_reference"] == "original_reconstruction"
+    # Once for the reference, once per evaluated step, once for the endpoint.
+    assert adapter.decode_calls == len(result["history"]) + 2
+
+
 def test_normalization_transform_restores_original_source_values():
     original = np.arange(24, dtype=np.float32).reshape(2, 3, 4) - 7
     normalized, offset, scale = _normalize_windows(original, "global_rms")

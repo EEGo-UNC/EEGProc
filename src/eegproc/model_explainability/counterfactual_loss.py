@@ -201,7 +201,7 @@ class CounterfactualLoss:
     """Weighted target, latent, decoded-signal, and physiological penalties.
 
     The objective is target_weight * target_loss + latent_weight * MSE(z', z)
-    + decoded_weight * mean_r MSE(R_r(z'), x) + physiological_weight *
+    + decoded_weight * mean_r MSE(R_r(z'), R_r(z)) + physiological_weight *
     mean_r VCSC(R_r(z')). The optimizer supplies the selected reconstruction
     paths: independent branch decoders or the saved joint reconstruction.
     The physiological term only participates in optimization when
@@ -285,23 +285,27 @@ class CounterfactualLoss:
             tf.square(z_prime - tf.stop_gradient(tf.cast(z, z_prime.dtype)))
         )
 
-    def decoded_distance(self, z_prime, x, decoder):
+    def decoded_distance(self, z_prime, z, decoder, *, reference_reconstructions=None):
         """Decode z' and return (mean MSE, reconstructions, branch MSEs).
 
         decoder is a differentiable callable accepting the complete latent
         trial and returning {path_name: reconstructed_trial}. Each output
-        must match x: (1, windows, timesteps, EEG_features). The optimizer
+        has shape (1, windows, timesteps, EEG_features). The optimizer
         supplies this adapter for either independent or joint reconstruction.
 
-        Each D_b(z'_b) is compared to the ORIGINAL x, not to itself. Branch
-        losses are averaged, so enabling a second decoder does not double
-        the global decoded-loss scale. Returned reconstructions are reused
-        for reporting/physiology without another decoder forward pass.
-        No NumPy conversion or gradient stop is applied to decoder outputs.
+        Each R_r(z') is compared to the fixed original reconstruction R_r(z).
+        The optimizer may supply that cached reference, computed once per
+        trial. Otherwise it is decoded here from the fixed original latent.
+        Reference gradients are stopped; candidate decoder gradients remain
+        active. Branch losses are averaged to preserve the global loss scale.
         """
+        if reference_reconstructions is None:
+            reference_reconstructions = decoder(tf.stop_gradient(z))
         reconstructions = decoder(z_prime)
+        if not reconstructions or set(reconstructions) != set(reference_reconstructions):
+            raise ValueError("Candidate and original reconstruction paths must match and be nonempty.")
         distances = {
-            name: self.latent_distance(value, x)
+            name: self.latent_distance(value, reference_reconstructions[name])
             for name, value in reconstructions.items()
         }
         return (
@@ -363,6 +367,7 @@ class CounterfactualLoss:
         z,
         x,
         decoder,
+        reference_reconstructions=None,
         target_loss_override=None,
         target_components=None,
     ):
@@ -377,8 +382,13 @@ class CounterfactualLoss:
         and saving.
         """
         decoded, reconstructions, branch_distances = self.decoded_distance(
-            z_prime, x, decoder
+            z_prime, z, decoder, reference_reconstructions=reference_reconstructions
         )
+        for name, reconstruction in reconstructions.items():
+            tf.debugging.assert_equal(
+                tf.shape(reconstruction), tf.shape(x),
+                message=f"{name} reconstruction must match the original input shape.",
+            )
         target = (
             self.target_loss(logits, target_class)
             if target_loss_override is None
