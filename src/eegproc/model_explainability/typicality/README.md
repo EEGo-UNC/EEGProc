@@ -170,6 +170,36 @@ there is no automatic mid-trial restart from Adam snapshots. Changes to data,
 checkpoint, protocol, or recorded source hashes cause resume to refuse mixing
 incompatible results.
 
+## Offline class-1 awareness and subject-invariance audit
+
+After a `typicality.runner` study has produced its counterfactual archives,
+recompute the requested correct-class-1 reference and evaluate both held-out
+real trials and counterfactual endpoints without loading TensorFlow or a model:
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.typicality.class_awareness \
+  runs/typicality/valence \
+  --samples-per-source-subject 3 \
+  --samples-per-target-subject 3 \
+  --typicality-quantile 0.95 --seed 42 \
+  --out-dir runs/typicality/valence_class_awareness
+```
+
+Sampling is performed independently within every source subject after applying
+`true_class == 1 AND predicted_class == 1`. The held-out subject's correct
+class-1 trials are sampled separately and never influence the primary audit
+threshold. The report also retains the generation threshold, calculates an
+all-true-class-1 sensitivity result, and labels a source-plus-target pooled
+threshold as descriptive only. Set either sample count to `0` to use every
+available correct class-1 trial.
+
+The audit writes fold, real-trial, counterfactual, and aggregate CSV files plus
+the exact sampling manifest and input hashes. Counterfactual transitions are
+reported as entered, preserved inside, exited, or stayed outside. Plain
+`counterfactuals.runner` archives contain `z` and `z_prime` but not the mapped
+VC sequences or source reference bank; those older runs require one
+checkpoint-backed enrichment pass before this offline command can be used.
+
 ## Rebuild tables and figures without models
 
 ```bash
