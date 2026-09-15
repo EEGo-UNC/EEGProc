@@ -12,7 +12,7 @@ shows whether the counterfactual is above or below its reference on average.
 
 Example::
 
-    PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_topography \
+    PYTHONPATH=src python -m eegproc.model_explainability.counterfactuals.topography \
         runs/.../subject_0_trial_0/counterfactual.npz \
         --branch gcn_gru
 """
@@ -28,7 +28,7 @@ import numpy as np
 from matplotlib.patches import Circle, Polygon
 
 if __package__:
-    from .counterfactual_plotting import (
+    from .plotting import (
         DEFAULT_BAND_NAMES,
         flatten_trial,
         load_counterfactual_trial,
@@ -36,7 +36,7 @@ if __package__:
         split_channel_bands,
     )
 else:
-    from counterfactual_plotting import (  # type: ignore[no-redef]
+    from plotting import (  # type: ignore[no-redef]
         DEFAULT_BAND_NAMES,
         flatten_trial,
         load_counterfactual_trial,

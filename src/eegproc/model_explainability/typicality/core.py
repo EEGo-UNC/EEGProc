@@ -127,7 +127,7 @@ class TypicalityRegion:
 
     def save(self, directory):
         from pathlib import Path
-        from .typicality_artifacts import write_json, write_npz
+        from .artifacts import write_json, write_npz
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
         write_npz(directory / "region.npz", prior_mean=self.prior_mean,

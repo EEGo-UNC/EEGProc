@@ -7,7 +7,7 @@ Older archives used the original input; inspect the saved reference metadata.
 
 Example::
 
-    PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_training_monitor \
+    PYTHONPATH=src python -m eegproc.model_explainability.counterfactuals.training_monitor \
         runs/.../subject_0_trial_0/history.csv --no-show
 """
 

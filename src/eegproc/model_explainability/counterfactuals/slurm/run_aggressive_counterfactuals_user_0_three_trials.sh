@@ -93,7 +93,7 @@ run_trial() {
         mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
         echo "Starting subject $SUBJECT_ID trial $trial_id on GPU $CUDA_VISIBLE_DEVICES"
-        "$VENV_DIR/bin/python" -m eegproc.model_explainability.run_counterfactuals \
+        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.runner \
             --model "$MODEL_PATH" \
             --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model \
             --raw-eeg-npy "$EEG_PATH" \
@@ -124,18 +124,18 @@ run_trial() {
             --seed "$SEED" \
             --out-dir "$task_root"
 
-        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactual_heatmap \
+        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.heatmap \
             "$trial_directory/counterfactual.npz" \
             --branch joint \
             --sampling-rate 128 \
             --no-show
 
-        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactual_topography \
+        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.topography \
             "$trial_directory/counterfactual.npz" \
             --branch joint \
             --no-show
 
-        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactual_training_monitor \
+        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.training_monitor \
             "$trial_directory/history.csv" \
             --no-show
 
@@ -167,14 +167,14 @@ for pid in "${pids[@]}"; do
 done
 
 if (( worker_status == 0 )); then
-    "$VENV_DIR/bin/python" -m eegproc.model_explainability.aggregate_counterfactual_metrics \
+    "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.aggregate_metrics \
         "$RUN_ROOT" \
         --subject-id "$SUBJECT_ID" \
         --expected-trials "$EXPECTED_TRIALS" \
         --require-complete
     echo "Completed all three counterfactual trials."
 else
-    "$VENV_DIR/bin/python" -m eegproc.model_explainability.aggregate_counterfactual_metrics \
+    "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.aggregate_metrics \
         "$RUN_ROOT" \
         --subject-id "$SUBJECT_ID" \
         --expected-trials "$EXPECTED_TRIALS" || true

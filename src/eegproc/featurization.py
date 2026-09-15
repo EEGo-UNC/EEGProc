@@ -149,17 +149,20 @@ def psd_bandpowers(
 
 
 def shannons_entropy(
-    psd_df: pd.DataFrame,
+    df: pd.DataFrame,
+    fs: float,
     bands: dict[str, tuple[float, float]] = FREQUENCY_BANDS,
+    window_sec: float = 4.0,
+    overlap: float = 0.5,
     eps: float = 1e-300,
-    assume_log: bool | None = False,
+    detrend: str | None = "constant",
 ) -> pd.DataFrame:
     """Compute normalized Shannon spectral entropy per channel-band over windows.
 
     Expects columns named ``{channel}_{band}`` where each ``band`` is a key in ``bands``
     (bandpass_filter) may be used to achieve the expected table.
-    A PSD dataframe is expected as input, then
-    then it converts each windowed row (bin) of energy to probability.
+    For each ``{channel}_{band}`` column, computes a Welch PSD in the band's
+    frequency range, then converts the spectral-bin energies to probabilities.
     Returns ``-Σplog2p/log2(#bins)`` in ``[0, 1]`` (NaN if insufficient bins or invalid totals).
 
     Parameters
@@ -167,67 +170,113 @@ def shannons_entropy(
     df : pandas.DataFrame
         Bandpass Filtered EEG dataframe. Numeric columns must be named like
         ``{channel}_{band}`` (e.g., ``AF3_alpha``).
+    fs : float
+        Sampling rate in Hz.
     bands : dict[str, tuple[float, float]], default=FREQUENCY_BANDS
         Mapping from band name to inclusive frequency bounds (Hz).
+    window_sec : float, default=4.0
+        Window length in seconds for Welch.
+    overlap : float, default=0.5
+        Fractional overlap in ``[0, 1)`` between windows.
     eps : float, default=1e-300
         Numerical guard to avoid log(0) and zero division.
+    detrend : {"constant", "linear", None}, default="constant"
+        Detrending applied before PSD and Shannon entropy.
 
     Returns
     -------
     pandas.DataFrame
-        One row per window. Columns are ``{channel}_{band}_entropy`` for each input band column.
+        One row per window. Columns are ``{channel}_{band}_entropy`` for each
+        input band column.
 
     Raises
     ------
     ValueError
-        If no band-annotated columns are found, window is too small, or overlap invalid.
+        If no band-annotated columns are found, the window is too small, or
+        overlap is invalid.
 
     Notes
     -----
     - Entropy is normalized by ``log2(count_of_band_bins)`` to yield values in ``[0, 1]``.
+    - Entropy is evaluated independently inside every channel's already
+      band-filtered waveform; it is not entropy across the named EEG bands.
     """
-    band_names = set(bands.keys())
-    ch_to_cols: dict[str, list[str]] = {}
+    df = apply_detrend(detrend, df)
+    band_keys = set(bands.keys())
+    col_band = {}
+    for col in df.columns:
+        parts = col.rsplit("_", 1)
+        if len(parts) == 2 and parts[1] in band_keys:
+            col_band[col] = parts[1]
+    if not col_band:
+        raise ValueError(
+            "No columns named like '{channel}_{band}' with band in FREQUENCY_BANDS."
+        )
+    df = df[list(col_band.keys())]
 
-    for col in psd_df.columns:
-        if "_" not in col:
-            continue
-        ch, b = col.rsplit("_", 1)
-        if b in band_names:
-            ch_to_cols.setdefault(ch, []).append(col)
+    data = df.to_numpy(dtype=float, copy=False)
+    n_samples = data.shape[0]
+    nperseg = int(round(window_sec * fs))
+    if nperseg <= 8:
+        raise ValueError("window_sec too small for given fs; increase window_sec.")
+    if not (0.0 <= overlap < 1.0):
+        raise ValueError("overlap must be in [0.0, 1.0).")
+    hop = int(round(nperseg * (1.0 - overlap)))
+    if hop <= 0:
+        raise ValueError("overlap too large; hop size must be >= 1 sample.")
+    output_columns = [f"{column}_entropy" for column in df.columns]
+    if nperseg > n_samples:
+        return pd.DataFrame(columns=output_columns)
 
-    out = pd.DataFrame(index=psd_df.index)
+    band_to_idx = {}
+    for index, column in enumerate(df.columns):
+        band_to_idx.setdefault(col_band[column], []).append(index)
 
-    for ch, cols_found in ch_to_cols.items():
-        cols = [f"{ch}_{b}" for b in bands.keys() if f"{ch}_{b}" in cols_found]
-        if len(cols) < 2:
-            out[f"{ch}_entropy"] = np.nan
-            continue
+    rows = []
+    for start in range(0, n_samples - nperseg + 1, hop):
+        segment = data[start : start + nperseg, :]
+        frequencies, psd = welch(
+            segment,
+            fs=fs,
+            window="hann",
+            nperseg=nperseg,
+            noverlap=0,
+            detrend=False,
+            scaling="density",
+            return_onesided=True,
+            axis=0,
+        )
 
-        X = psd_df[cols].to_numpy(dtype=float)
+        row = {}
+        for band, indices in band_to_idx.items():
+            low, high = bands[band]
+            mask = (frequencies >= low) & (frequencies <= high)
+            count = int(np.count_nonzero(mask))
+            if count < 2:
+                for index in indices:
+                    row[f"{df.columns[index]}_entropy"] = np.nan
+                continue
 
-        if assume_log is None:
-            neg_ratio = np.mean(X < 0.0)
-            use_log = neg_ratio > 0.2
-        else:
-            use_log = assume_log
+            band_psd = psd[mask][:, indices]
+            totals = np.sum(band_psd, axis=0)
+            probabilities = np.divide(
+                band_psd,
+                totals,
+                out=np.full_like(band_psd, np.nan),
+                where=np.isfinite(totals) & (totals > 0),
+            )
+            probabilities = np.clip(probabilities, eps, 1.0)
+            entropy = -np.nansum(probabilities * np.log2(probabilities), axis=0)
+            entropy /= np.log2(count)
 
-        if use_log:
-            row_max = np.nanmax(X, axis=1, keepdims=True)
-            X = np.exp(X - row_max)
-        else:
-            X = np.clip(X, 0.0, np.inf)
+            for offset, index in enumerate(indices):
+                value = entropy[offset]
+                row[f"{df.columns[index]}_entropy"] = (
+                    float(value) if np.isfinite(value) else np.nan
+                )
+        rows.append(row)
 
-        totals = np.nansum(X, axis=1, keepdims=True)
-        valid = np.isfinite(totals) & (totals > 0)
-
-        P = np.divide(X, totals, out=np.full_like(X, np.nan, dtype=float), where=valid)
-        P = np.clip(P, eps, 1.0)
-        H = -np.nansum(P * np.log2(P), axis=1) / np.log2(X.shape[1])
-
-        out[f"{ch}_entropy"] = H
-
-    return out
+    return pd.DataFrame(rows, columns=output_columns)
 
 
 # ----------------------
@@ -1008,7 +1057,7 @@ if __name__ == "__main__":
     )
     clean = pd.concat([patients, videos, clean], axis=1)
     psd_df = psd_bandpowers(clean, FS, bands=FREQUENCY_BANDS)
-    shannons_df = shannons_entropy(psd_df, bands=FREQUENCY_BANDS)
+    shannons_df = shannons_entropy(clean, FS, bands=FREQUENCY_BANDS)
     print(shannons_df)
     # hj = hjorth_params(clean, FS)
     # wt_df = wavelet_band_energy(eeg_df, FS, bands=FREQUENCY_BANDS)

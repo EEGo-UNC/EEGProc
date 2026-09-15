@@ -1,6 +1,6 @@
 """Load a saved SIC model, optimize selected trials, and write diagnostics.
 
-Use --help for arguments (defined separately in counterfactual_args.py).
+Use --help for arguments (defined separately in arguments.py).
 No model is rebuilt or trained. Prepared NPZ trials are used as-is; raw mode
 reuses the existing SIC data preparation functions with explicit settings.
 """
@@ -16,13 +16,13 @@ import numpy as np
 import tensorflow as tf
 
 if __package__:
-    from .counterfactual_args import parse_args
-    from .counterfactual_loss import CounterfactualLoss
-    from .counterfactual_optimizer import CounterfactualOptimizer
+    from .arguments import parse_args
+    from .loss import CounterfactualLoss
+    from .optimizer import CounterfactualOptimizer
 else:
-    from counterfactual_args import parse_args
-    from counterfactual_loss import CounterfactualLoss
-    from counterfactual_optimizer import CounterfactualOptimizer
+    from arguments import parse_args
+    from loss import CounterfactualLoss
+    from optimizer import CounterfactualOptimizer
 
 
 OBJECTIVE_TERMS = ("target", "latent", "decoded", "physiological")

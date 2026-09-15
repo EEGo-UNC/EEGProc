@@ -17,7 +17,7 @@ latent intervention from ordinary decoder reconstruction error. Pass
 
 Example::
 
-    PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_heatmap \
+    PYTHONPATH=src python -m eegproc.model_explainability.counterfactuals.heatmap \
         runs/.../subject_0_trial_0/counterfactual.npz \
         --branch gcn_gru --sampling-rate 128
 """
@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 if __package__:
-    from .counterfactual_plotting import (
+    from .plotting import (
         DEFAULT_BAND_NAMES,
         flatten_trial,
         load_counterfactual_trial,
@@ -39,7 +39,7 @@ if __package__:
         split_channel_bands,
     )
 else:
-    from counterfactual_plotting import (  # type: ignore[no-redef]
+    from plotting import (  # type: ignore[no-redef]
         DEFAULT_BAND_NAMES,
         flatten_trial,
         load_counterfactual_trial,

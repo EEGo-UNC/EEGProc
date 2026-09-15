@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Mapping
 import numpy as np
 import tensorflow as tf
 
-from .counterfactual_adapter import CounterfactualAdapter
+from .adapter import CounterfactualAdapter
 
 
 def _mean_mse(left: tf.Tensor, right: tf.Tensor) -> tf.Tensor:

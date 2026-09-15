@@ -9,19 +9,19 @@ tf = pytest.importorskip("tensorflow")
 from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import (  # noqa: E402
     build_sic_model,
 )
-from eegproc.model_explainability.counterfactual_args import (  # noqa: E402
+from eegproc.model_explainability.counterfactuals.arguments import (  # noqa: E402
     build_parser,
 )
-from eegproc.model_explainability.counterfactual_loss import (  # noqa: E402
+from eegproc.model_explainability.counterfactuals.loss import (  # noqa: E402
     CounterfactualLoss,
 )
-from eegproc.model_explainability.counterfactual_optimizer import (  # noqa: E402
+from eegproc.model_explainability.counterfactuals.optimizer import (  # noqa: E402
     CounterfactualOptimizer,
 )
-from eegproc.model_explainability.counterfactual_plotting import (  # noqa: E402
+from eegproc.model_explainability.counterfactuals.plotting import (  # noqa: E402
     load_counterfactual_trial,
 )
-from eegproc.model_explainability.run_counterfactuals import (  # noqa: E402
+from eegproc.model_explainability.counterfactuals.runner import (  # noqa: E402
     format_optimization_diagnostics,
 )
 

@@ -87,7 +87,7 @@ def load_counterfactual_trial(
         if not branches:
             raise KeyError(
                 f"{npz_path} has no x_prime_<branch> arrays. "
-                "Pass a counterfactual.npz file produced by run_counterfactuals."
+                "Pass a counterfactual.npz file produced by counterfactuals.runner."
             )
         if branch is None:
             if len(branches) != 1:

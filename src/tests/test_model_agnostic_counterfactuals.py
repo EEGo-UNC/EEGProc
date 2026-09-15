@@ -6,18 +6,18 @@ import pytest
 
 tf = pytest.importorskip("tensorflow")
 
-from eegproc.model_explainability.counterfactual_adapter import (  # noqa: E402
+from eegproc.model_explainability.model_agnostic.adapter import (  # noqa: E402
     CounterfactualAdapter,
     TrialDataset,
     validate_trial_dataset,
 )
-from eegproc.model_explainability.model_agnostic_counterfactual_optimizer import (  # noqa: E402
+from eegproc.model_explainability.model_agnostic.optimizer import (  # noqa: E402
     ModelAgnosticCounterfactualOptimizer,
 )
-from eegproc.model_explainability.model_agnostic_counterfactual_topography import (  # noqa: E402
+from eegproc.model_explainability.model_agnostic.topography import (  # noqa: E402
     restore_source_units,
 )
-from eegproc.model_explainability.sic_counterfactual_adapter import (  # noqa: E402
+from eegproc.model_explainability.model_agnostic.sic_adapter import (  # noqa: E402
     _normalize_windows,
     create_sic_adapter,
 )

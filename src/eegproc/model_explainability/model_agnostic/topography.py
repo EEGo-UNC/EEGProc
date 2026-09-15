@@ -8,14 +8,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .counterfactual_plotting import (
+from ..counterfactuals.plotting import (
     DEFAULT_BAND_NAMES,
     flatten_trial,
     load_counterfactual_trial,
     resolve_channel_names,
     split_channel_bands,
 )
-from .counterfactual_topography import (
+from ..counterfactuals.topography import (
     plot_band_topographies,
     summarize_activity,
 )

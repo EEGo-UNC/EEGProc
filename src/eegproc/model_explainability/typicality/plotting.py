@@ -14,8 +14,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .counterfactual_topography import plot_band_topographies
-from .typicality_artifacts import write_npz, write_json
+from ..counterfactuals.topography import plot_band_topographies
+from .artifacts import write_npz, write_json
 
 
 def _csv(path):

@@ -12,9 +12,9 @@ import numpy as np
 import tensorflow as tf
 
 if __package__:
-    from .counterfactual_loss import CounterfactualLoss
+    from .loss import CounterfactualLoss
 else:
-    from counterfactual_loss import CounterfactualLoss
+    from loss import CounterfactualLoss
 
 
 class CounterfactualOptimizer:

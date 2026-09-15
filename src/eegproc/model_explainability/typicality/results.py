@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import roc_auc_score
 
-from .typicality_artifacts import write_json, write_csv, write_npz
+from .artifacts import write_json, write_csv, write_npz
 
 
 def recognition_metrics(labels, probabilities, *, ece_bins=15):

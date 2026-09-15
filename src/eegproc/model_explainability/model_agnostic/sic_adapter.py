@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
-from .counterfactual_adapter import CounterfactualAdapter, TrialDataset
-from .counterfactual_loss import CounterfactualLoss
+from .adapter import CounterfactualAdapter, TrialDataset
+from ..counterfactuals.loss import CounterfactualLoss
 
 
 class SICCounterfactualAdapter(CounterfactualAdapter):

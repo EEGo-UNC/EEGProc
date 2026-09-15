@@ -82,7 +82,7 @@ mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 aggregate_metrics() {
     "$VENV_DIR/bin/python" -m \
-        eegproc.model_explainability.aggregate_counterfactual_metrics \
+        eegproc.model_explainability.counterfactuals.aggregate_metrics \
         "$RUN_ROOT" \
         --subject-id "$SUBJECT_ID" \
         --expected-trials "$EXPECTED_TRIALS"
@@ -134,7 +134,7 @@ echo "Subject: $SUBJECT_ID"
 echo "Model: $MODEL_PATH"
 echo "Output: $TASK_ROOT"
 
-"$VENV_DIR/bin/python" -m eegproc.model_explainability.run_counterfactuals \
+"$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.runner \
     --model "$MODEL_PATH" \
     --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model \
     "${DATA_ARGUMENTS[@]}" \
@@ -161,19 +161,19 @@ TRIAL_DIRECTORY="$TASK_ROOT/subject_${SUBJECT_ID}_trial_${TRIAL_ID}"
 COUNTERFACTUAL_NPZ="$TRIAL_DIRECTORY/counterfactual.npz"
 HISTORY_CSV="$TRIAL_DIRECTORY/history.csv"
 
-"$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactual_heatmap \
+"$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.heatmap \
     "$COUNTERFACTUAL_NPZ" \
     --branch joint \
     --sampling-rate 128 \
     --no-show
 
-"$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactual_topography \
+"$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.topography \
     "$COUNTERFACTUAL_NPZ" \
     --branch joint \
     --no-show
 
 "$VENV_DIR/bin/python" -m \
-    eegproc.model_explainability.counterfactual_training_monitor \
+    eegproc.model_explainability.counterfactuals.training_monitor \
     "$HISTORY_CSV" \
     --no-show
 

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from eegproc.model_explainability.aggregate_counterfactual_metrics import (
+from eegproc.model_explainability.counterfactuals.aggregate_metrics import (
     build_metrics_payload,
     write_metrics_json,
 )

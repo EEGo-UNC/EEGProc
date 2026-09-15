@@ -132,7 +132,7 @@ class PhysiologicalReference:
 
 def source_vcsc_calibration(source_features):
     """Match existing differentiable VCSC estimator, using source trials only."""
-    from .counterfactual_loss import _vcsc_band_coherence_wpli
+    from ..counterfactuals.loss import _vcsc_band_coherence_wpli
     import tensorflow as tf
     coherence, wpli = [], []
     for x in source_features:
@@ -149,7 +149,7 @@ def source_vcsc_calibration(source_features):
 def make_source_loss(calibration, **weights):
     """Use the existing CFO objective with source-only VCSC constants."""
     import tensorflow as tf
-    from .counterfactual_loss import CounterfactualLoss, _vcsc_band_coherence_wpli, _VCSC_DISTANCES_CM
+    from ..counterfactuals.loss import CounterfactualLoss, _vcsc_band_coherence_wpli, _VCSC_DISTANCES_CM
 
     class SourceVCSCLoss(CounterfactualLoss):
         def physiological_validity(self, x_prime):

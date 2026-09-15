@@ -15,9 +15,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 
-from .typicality_artifacts import write_json, write_npz, write_csv
-from .typicality_results import collect_study
-from .typicality import trial_representation
+from .artifacts import write_json, write_npz, write_csv
+from .results import collect_study
+from .core import trial_representation
 
 
 def prepare_probe(studies, *, representation="moments"):

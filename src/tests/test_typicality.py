@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 from eegproc.model_explainability.typicality import TypicalityRegion, diagonal_gaussian_kl, trial_representation
-from eegproc.model_explainability.typicality_artifacts import TrialRecorder, completed_attempt
-from eegproc.model_explainability.typicality_results import population_summary, recognition_metrics, build_report
+from eegproc.model_explainability.typicality.artifacts import TrialRecorder, completed_attempt
+from eegproc.model_explainability.typicality.results import population_summary, recognition_metrics, build_report
 
 
 def test_eq7_matches_analytic_mean_and_variance_terms():
@@ -115,8 +115,8 @@ def test_tf_eq7_gradient_matches_finite_difference():
 
 def test_exact_hinge_and_typicality_aware_stopping():
     tf = pytest.importorskip("tensorflow")
-    from eegproc.model_explainability.counterfactual_loss import CounterfactualLoss
-    from eegproc.model_explainability.counterfactual_optimizer import CounterfactualOptimizer
+    from eegproc.model_explainability.counterfactuals.loss import CounterfactualLoss
+    from eegproc.model_explainability.counterfactuals.optimizer import CounterfactualOptimizer
 
     class Loss(CounterfactualLoss):
         def physiological_validity(self, x):
@@ -170,7 +170,7 @@ def test_exact_hinge_and_typicality_aware_stopping():
 def test_sic_mapping_has_vc_width_and_frozen_weights(mode):
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
-    from eegproc.model_explainability.sic_typicality_sequence import SICVCSequence
+    from eegproc.model_explainability.typicality.sic_sequence import SICVCSequence
     model = build_sic_model(input_shape=(3, 8, 42), adjacency=np.eye(14, dtype=np.float32),
                             classification_level="trial", n_channels=14, n_bands=3, gcn_units=(4,),
                             spectral_gru_units=5, bilstm_units=2, classifier_rnn_units=3,
@@ -191,7 +191,7 @@ def test_sic_mapping_has_vc_width_and_frozen_weights(mode):
 
 
 def test_band_filtered_physiology_never_claims_complete_pass():
-    from eegproc.model_explainability.typicality_physiology import signal_diagnostics, PhysiologicalReference
+    from eegproc.model_explainability.typicality.physiology import signal_diagnostics, PhysiologicalReference
     rng = np.random.default_rng(14)
     diagnostics = [signal_diagnostics(rng.normal(size=(4, 32, 6)), fs=128, n_channels=2) for _ in range(3)]
     reference = PhysiologicalReference.fit(diagnostics)
@@ -205,7 +205,7 @@ def test_band_filtered_physiology_never_claims_complete_pass():
 def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
-    from eegproc.model_explainability import run_typicality_counterfactuals as study
+    from eegproc.model_explainability.typicality import runner as study
     tf.keras.utils.set_random_seed(17)
     model = build_sic_model(input_shape=(3, 32, 42), adjacency=np.eye(14, dtype=np.float32),
                             classification_level="trial", n_channels=14, n_bands=3, gcn_units=(4,),
@@ -239,7 +239,7 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     # Rebuilding results is independent of both the checkpoint and TensorFlow calls.
     rebuilt = build_report([out], tmp_path / "rebuilt")
     assert rebuilt == result
-    from eegproc.model_explainability.plot_typicality_results import plot_report
+    from eegproc.model_explainability.typicality.plotting import plot_report
     figure_directory = tmp_path / "figures"
     plot_report(tmp_path / "rebuilt", figure_directory)
     assert (figure_directory / "valence_discrepancy.png").stat().st_size > 1000
@@ -264,7 +264,7 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
 
 
 def test_subject_probe_uses_disjoint_matched_trials_and_records_fitted_model(tmp_path):
-    from eegproc.model_explainability.typicality_subject_probe import fit_subject_probe
+    from eegproc.model_explainability.typicality.subject_probe import fit_subject_probe
     keys = np.array([[s, t] for s in range(3) for t in range(4)])
     original = np.column_stack((keys[:, 0] * 3.0, keys[:, 1] * 0.01))
     values = {"original": original, "base": original + 0.1, "typicality": original - 0.1}

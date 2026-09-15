@@ -12,12 +12,12 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
-from .counterfactual_adapter import (
+from .adapter import (
     create_adapter,
     load_json_mapping,
     load_trial_dataset,
 )
-from .model_agnostic_counterfactual_optimizer import (
+from .optimizer import (
     ModelAgnosticCounterfactualOptimizer,
 )
 
@@ -47,7 +47,7 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description=(
             "Optimize counterfactuals through a model adapter. Existing SIC-specific "
-            "commands remain available in run_counterfactuals."
+            "commands remain available in counterfactuals.runner."
         )
     )
     parser.add_argument("--model", type=Path, required=True)

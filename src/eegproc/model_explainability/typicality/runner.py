@@ -16,19 +16,19 @@ import sys
 import numpy as np
 import tensorflow as tf
 
-from .counterfactual_adapter import load_trial_dataset, load_json_mapping
-from .counterfactual_args import _positive_float, _nonnegative_float, _nonnegative_int, _decay_float
-from .counterfactual_optimizer import CounterfactualOptimizer
-from .counterfactual_loss import _VCSC_CHANNELS
-from .run_model_agnostic_counterfactuals import _metadata_arrays
-from .sic_counterfactual_adapter import create_sic_adapter
-from .sic_typicality_sequence import SICVCSequence
-from .typicality import TypicalityRegion, trial_representation
-from .typicality_artifacts import (write_json, write_npz, write_csv, file_sha256,
+from ..model_agnostic.adapter import load_trial_dataset, load_json_mapping
+from ..counterfactuals.arguments import _positive_float, _nonnegative_float, _nonnegative_int, _decay_float
+from ..counterfactuals.optimizer import CounterfactualOptimizer
+from ..counterfactuals.loss import _VCSC_CHANNELS
+from ..model_agnostic.runner import _metadata_arrays
+from ..model_agnostic.sic_adapter import create_sic_adapter
+from .sic_sequence import SICVCSequence
+from .core import TypicalityRegion, trial_representation
+from .artifacts import (write_json, write_npz, write_csv, file_sha256,
                                   array_sha256, TrialRecorder, completed_attempt, next_attempt)
-from .typicality_physiology import (signal_diagnostics, PhysiologicalReference,
+from .physiology import (signal_diagnostics, PhysiologicalReference,
                                    source_vcsc_calibration, make_source_loss, DEFAULT_BANDS, FAMILIES)
-from .typicality_results import recognition_metrics, build_report
+from .results import recognition_metrics, build_report
 
 
 def build_parser():
@@ -42,7 +42,7 @@ def build_parser():
     data.add_argument("--data-loader", help="Existing TrialDataset loader as package.module:function.")
     parser.add_argument("--data-config", help="Inline JSON or JSON file passed to the data loader.")
     parser.add_argument("--subjects", type=int, nargs="+", help="Optional fold shard; all eligible trials remain included within each fold.")
-    parser.add_argument("--typicality-sequence", required=True, choices=("vc_window_embeddings", "vc_hidden_sequence"), help="Explicit mapping into the learned VC coordinates; see TYPICALITY.md.")
+    parser.add_argument("--typicality-sequence", required=True, choices=("vc_window_embeddings", "vc_hidden_sequence"), help="Explicit mapping into the learned VC coordinates; see typicality/README.md.")
     parser.add_argument("--typicality-weight", type=_positive_float, default=1.0)
     parser.add_argument("--typicality-quantile", type=_positive_float, default=0.95)
     parser.add_argument("--variance-floor", type=_positive_float, default=1e-6)
@@ -149,11 +149,21 @@ def _protocol(args, dataset, folds):
         if getattr(dataset, name) is not None:
             arrays[name] = getattr(dataset, name)
     code_dir = Path(__file__).parent
-    code_files = [*code_dir.glob("*typicality*.py"), code_dir / "counterfactual_optimizer.py",
-                  code_dir / "counterfactual_loss.py", code_dir / "sic_counterfactual_adapter.py"]
+    package_dir = code_dir.parent
+    code_files = [
+        *code_dir.glob("*.py"),
+        package_dir / "counterfactuals" / "optimizer.py",
+        package_dir / "counterfactuals" / "loss.py",
+        package_dir / "model_agnostic" / "adapter.py",
+        package_dir / "model_agnostic" / "runner.py",
+        package_dir / "model_agnostic" / "sic_adapter.py",
+    ]
     return {"schema_version": 1, "task": args.task, "arguments": arguments, "folds": folds,
             "dataset_sha256": {name: array_sha256(value) for name, value in arrays.items()},
-            "source_sha256": {p.name: file_sha256(p) for p in sorted(set(code_files))},
+            "source_sha256": {
+                p.relative_to(package_dir).as_posix(): file_sha256(p)
+                for p in sorted(set(code_files))
+            },
             "dataset_metadata": dataset.metadata,
             "eligibility": "true_class == 0 and original argmax prediction == 0",
             "target_class": 1, "prediction_rule": "argmax; confidence threshold separately recorded",

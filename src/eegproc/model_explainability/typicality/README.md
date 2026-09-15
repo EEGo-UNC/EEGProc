@@ -51,7 +51,7 @@ From the EEGProc repository root, use the saved LOSO manifest and prepared
 trials from the same preprocessing configuration as training:
 
 ```bash
-PYTHONPATH=src python -m eegproc.model_explainability.run_typicality_counterfactuals \
+PYTHONPATH=src python -m eegproc.model_explainability.typicality.runner \
   --models-json /path/to/configuration/loso_zero_shot_models.json \
   --model-dir /path/to/configuration/loso_zero_shot_models \
   --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model \
@@ -84,7 +84,7 @@ figures. Do not describe normalized amplitudes as microvolts.
 The existing raw loader is also supported. Replace `--trials-npz` with:
 
 ```bash
---data-loader eegproc.model_explainability.sic_counterfactual_adapter:load_sic_raw_trials \
+--data-loader eegproc.model_explainability.model_agnostic.sic_adapter:load_sic_raw_trials \
 --data-config /path/to/data_config.json
 ```
 
@@ -173,13 +173,29 @@ incompatible results.
 ## Rebuild tables and figures without models
 
 ```bash
-PYTHONPATH=src python -m eegproc.model_explainability.typicality_results \
+PYTHONPATH=src python -m eegproc.model_explainability.typicality.results \
   runs/typicality/valence runs/typicality/arousal \
   --out-dir runs/typicality/paper_report
 
-PYTHONPATH=src python -m eegproc.model_explainability.plot_typicality_results \
+PYTHONPATH=src python -m eegproc.model_explainability.typicality.plotting \
   runs/typicality/paper_report --out-dir runs/typicality/paper_figures
 ```
+
+After the counterfactual artifacts have been produced, build the paired
+channel-by-band spectral table without loading a model:
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.typicality.spectral_features \
+  runs/typicality/valence runs/typicality/arousal \
+  --output runs/typicality/paper_report/spectral_entropy_features.csv
+```
+
+The CSV contains trial-level decoded-original, decoded-counterfactual, and
+paired-change values for peak frequency and spectral centroid. It also records
+the median and IQR of normalized Shannon spectral entropy across the original
+decoder windows. The analysis uses the decoded original reconstruction as its
+reference, never concatenates independent windows, flags peaks on band edges,
+and reuses saved physiology PSDs when they are available.
 
 These commands need no TensorFlow or checkpoint inference. Outputs include
 recognition fold means and sample SDs, recalls, AUROC, top-label ECE,
@@ -213,7 +229,7 @@ support; the archived signals allow subsequent offline work on this.
 The subject probe also runs offline:
 
 ```bash
-PYTHONPATH=src python -m eegproc.model_explainability.typicality_subject_probe \
+PYTHONPATH=src python -m eegproc.model_explainability.typicality.subject_probe \
   runs/typicality/valence --coordinate-policy fold_specific_descriptive \
   --out-dir runs/typicality/valence_probe
 ```
@@ -232,5 +248,5 @@ invariance conclusion. The lower-level probe API supports supplied common-space
 representations; `--coordinate-policy shared` rejects differing checkpoint
 spaces. The default report does not silently evaluate a confounded probe.
 
-Add saved probe result files to `typicality_results --probe-results ...` to
+Add saved probe result files to `typicality.results --probe-results ...` to
 include the subject-identification table. Unavailable values remain `--`.
