@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=6:00:00
+#SBATCH --time=01:00:00
 #SBATCH --array=0-15
 
 set -euo pipefail
@@ -159,7 +159,7 @@ echo "==========================================================================
 
 # --trial-id omitted on purpose: the runner defaults to every trial of the
 # selected subject, in source order.
-python -u -m eegproc.model_explainability.run_counterfactuals \
+python -u -m eegproc.model_explainability.counterfactuals.run_counterfactuals \
     --model "$MODEL_PATH" \
     --model-module "$MODEL_MODULE" \
     --decoder-mode "$DECODER_MODE" \
