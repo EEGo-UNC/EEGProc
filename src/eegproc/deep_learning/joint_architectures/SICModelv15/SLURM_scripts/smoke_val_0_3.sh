@@ -8,12 +8,12 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=16:00:00
+#SBATCH --time=5:00:00
 
 set -euo pipefail
 
 # Grid-search smoke run for DREAMER valence targets 0, 1, 2, and 3.
-# Two Slurm array tasks test VC logit scales (inverse temperatures) 64 and 16.
+# Two Slurm array tasks test VC logit scales (inverse temperatures) 32 and 16.
 # Each task runs the fixed focal-gamma/VC-weight smoke configuration and uses
 # the same deterministic per-target initialization for a fair comparison.
 # Selection maximizes mean zero-shot LOSO balanced accuracy.
@@ -36,13 +36,13 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # Match the arousal smoke run: 4 source and 10 calibration epochs.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-12}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-6}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
-TEMPERATURES=(64)
+TEMPERATURES=(32 16)
 TASK_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
 if [[ ! "$TASK_INDEX" =~ ^[0-9]+$ ]] || (( TASK_INDEX >= ${#TEMPERATURES[@]} )); then
     echo "ERROR: SLURM_ARRAY_TASK_ID must be between 0 and $((${#TEMPERATURES[@]} - 1)); got $TASK_INDEX."
@@ -159,7 +159,7 @@ print(json.dumps({
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 3,
-    "mldg_steps_per_epoch": 12,
+    "mldg_steps_per_epoch": 10,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": seed,
@@ -185,11 +185,11 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": {"grid": [0.3, 0.5]},
+    "focal_gamma": {"grid": [0.3]},
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": {"grid": [2.0]},
-    "vc_beta": {"grid": [0.6, 1.0]},
+    "vc_beta": {"grid": [0.6]},
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "vc_logit_scale": float(os.environ["VC_LOGIT_SCALE"]),
@@ -197,14 +197,14 @@ print(json.dumps({
 
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": {"grid": [0.2, 0.4]},
+    "subject_loss_weight": {"grid": [0.2]},
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
     "use_gcn_gru_branch": True,
     "use_bilstm_branch": True,
     "use_decoder": True,
-    "reconstruction_loss_weight": {"grid": [0.4, 0.6]},
+    "reconstruction_loss_weight": {"grid": [0.6]},
     "decoder_dropout": 0.1,
     "joint_reconstruction_auxiliary_weight": 0.25,
     "joint_reconstruction_initial_alpha": 0.5,
@@ -231,12 +231,12 @@ echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-tes
 echo "Per GPU: 12 meta-train / 6 meta-test trials; full-episode VC statistics"
 echo "Valence uses the identical 2-distinct-trials-per-subject episode design."
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
-echo "Temperature grid: vc_logit_scale=$VC_LOGIT_SCALE (task values: 64,16)"
+echo "Temperature grid: vc_logit_scale=$VC_LOGIT_SCALE (task values: 32,16)"
 echo "Within-task configuration: focal_gamma=1.0; vc_alpha=2.0; reconstruction=0.6"
 echo "Selection: maximize zero-shot LOSO balanced accuracy"
 echo "Subject loss weight: 0.2"
 echo "Joint reconstruction: weight=0.6 initial alpha=0.5 auxiliary branch weight=0.25"
-echo "Configurations: 1 per task, 2 across the array; subject loss weight fixed at 0.2"
+echo "Temperature settings: 1 per task, 2 across the array; subject loss weight fixed at 0.2"
 echo "Deterministic training: enabled; base seed=$TRAINING_SEED; subject seed=base+target ID"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 echo "Git commit: $(git rev-parse HEAD)"

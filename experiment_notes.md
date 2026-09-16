@@ -77,3 +77,6 @@
     - SIC v15 achieves high classification accuracies with sub .24 brier. This is without VC.
     - Focal + vc_beta=0.3 + vc_lambda=0.05 achieves higher prediction accuracies by about 2%.
     - Running full models again with increased vc. Running smoke test with vc grid search.
+- 09/16/2026
+    - More MLDG outer loops and less inner increase learning. Best confidence on arousal achieved.
+    - Best arousal model 837420 is imbalanced, only high arousal classes are learned.
