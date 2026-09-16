@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=08:00:00
+#SBATCH --time=10:00:00
 
 set -euo pipefail
 
@@ -37,7 +37,7 @@ INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # Match the arousal smoke run: 4 source and 10 calibration epochs.
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
-CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-6}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
@@ -156,8 +156,8 @@ print(json.dumps({
     "weight_decay": 5e-5,
     "vrex_penalty_weight": 1.0,
 
-    "mldg_meta_train_subjects": 10,
-    "mldg_meta_test_subjects": 5,
+    "mldg_meta_train_subjects": 8,
+    "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 3,
     "mldg_steps_per_epoch": 12,
     "mldg_inner_learning_rate": 1e-4,
@@ -197,14 +197,14 @@ print(json.dumps({
 
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": 0.2,
+    "subject_loss_weight": {"grid": [0.2, 0.4]},
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
     "use_gcn_gru_branch": True,
     "use_bilstm_branch": True,
     "use_decoder": True,
-    "reconstruction_loss_weight": 0.6,
+    "reconstruction_loss_weight": {"grid": [0.4, 0.6]},
     "decoder_dropout": 0.1,
     "joint_reconstruction_auxiliary_weight": 0.25,
     "joint_reconstruction_initial_alpha": 0.5,
