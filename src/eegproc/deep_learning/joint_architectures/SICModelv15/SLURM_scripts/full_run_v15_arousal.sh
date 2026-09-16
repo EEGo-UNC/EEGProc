@@ -35,7 +35,7 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # Match the 4 source / 10 calibration epochs used by arousal job 330197.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-3}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
@@ -151,7 +151,7 @@ print(json.dumps({
     "mldg_meta_train_subjects": 12,
     "mldg_meta_test_subjects": 6,
     "mldg_trials_per_subject": 2,
-    "mldg_steps_per_epoch": 20,
+    "mldg_steps_per_epoch": 12,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": seed,

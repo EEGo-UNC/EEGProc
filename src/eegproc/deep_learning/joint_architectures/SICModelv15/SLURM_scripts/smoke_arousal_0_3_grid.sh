@@ -1,10 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=smoke_arousal_0_3_grid
-#SBATCH --output=smoke_arousal_0_3_grid_%A_%a.out
-#SBATCH --error=smoke_arousal_0_3_grid_%A_%a.err
+#SBATCH --output=smoke_arousal_0_3_grid_%j.out
+#SBATCH --error=smoke_arousal_0_3_grid_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --array=0-1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
@@ -12,9 +11,8 @@
 
 set -euo pipefail
 
-# Grid-search smoke run for DREAMER arousal targets 0, 1, 2, and 3.
-# Two Slurm array tasks test VC logit scales (inverse temperatures) 64 and 16.
-# Each task runs the fixed focal-gamma/VC-weight smoke configuration and uses
+# Smoke run for DREAMER arousal targets 0, 1, 2, and 3.
+# The job runs the fixed scale-64 focal-gamma/VC-weight configuration and uses
 # the same deterministic per-target initialization for a fair comparison.
 # Selection maximizes mean zero-shot LOSO balanced accuracy.
 #
@@ -37,21 +35,15 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # Match the 4 source / 10 calibration epochs used by arousal job 330197.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-15}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-6}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-10000}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
-TEMPERATURES=(64)
-TASK_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
-if [[ ! "$TASK_INDEX" =~ ^[0-9]+$ ]] || (( TASK_INDEX >= ${#TEMPERATURES[@]} )); then
-    echo "ERROR: SLURM_ARRAY_TASK_ID must be between 0 and $((${#TEMPERATURES[@]} - 1)); got $TASK_INDEX."
-    exit 1
-fi
-VC_LOGIT_SCALE="${TEMPERATURES[$TASK_INDEX]}"
+VC_LOGIT_SCALE=64
 export VC_LOGIT_SCALE
-SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
+SUITE_ID="${SLURM_JOB_ID:-manual}"
 TARGET_SUBJECTS=(0 1 2 3)
 
 CALIBRATION_LEVEL_ARGS=(
@@ -142,9 +134,9 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# Six configurations vary only focal gamma and VC classification weight.
+# One fixed configuration uses the selected focal gamma and VC weights.
 # Reconstruction, subject-adversarial, and other VC regularization weights
-# remain fixed so zero-shot balanced accuracy isolates this small search.
+# remain fixed.
 MODEL_CONFIG="$(python - <<'PY'
 import json
 import os
@@ -223,7 +215,6 @@ PY
 
 echo "SIC builder: v15"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
-echo "Array task: $TASK_INDEX"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER arousal"
 echo "Target subjects: ${TARGET_SUBJECTS[*]}"
@@ -232,12 +223,12 @@ echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-tes
 echo "Per GPU: 12 meta-train / 6 meta-test trials; full-episode VC statistics"
 echo "Arousal retains 2 distinct trials/subject because some class pools contain only 1 trial."
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
-echo "Temperature grid: vc_logit_scale=$VC_LOGIT_SCALE (task values: 64,16)"
-echo "Within-task configuration: focal_gamma=1.0; vc_alpha=2.0; reconstruction=0.6"
+echo "Fixed temperature: vc_logit_scale=$VC_LOGIT_SCALE"
+echo "Configuration: focal_gamma=1.0; vc_alpha=2.0; reconstruction=0.6"
 echo "Selection: maximize zero-shot LOSO balanced accuracy"
 echo "Subject loss weight: 0.2"
 echo "Joint reconstruction: weight=0.6 initial alpha=0.5 auxiliary branch weight=0.25"
-echo "Configurations: 1 per task, 2 across the array; subject loss weight fixed at 0.2"
+echo "Configurations: 1 fixed scale-64 configuration; subject loss weight fixed at 0.2"
 echo "Deterministic training: enabled; base seed=$TRAINING_SEED; subject seed=base+target ID"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 echo "Git commit: $(git rev-parse HEAD)"

@@ -28,8 +28,31 @@ module load python/3.12.4
 module load cuda/12.9
 module load cudnn/9.11.0
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+find_project_dir() {
+    local start candidate
+    for start in "${SLURM_SUBMIT_DIR:-}" "$SCRIPT_DIR"; do
+        [[ -n "$start" ]] || continue
+        candidate="$(cd -- "$start" 2>/dev/null && pwd)" || continue
+        while [[ "$candidate" != "/" ]]; do
+            if [[ -d "$candidate/src/eegproc" ]]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+            candidate="$(dirname -- "$candidate")"
+        done
+    done
+    return 1
+}
+
+if [[ -n "${PROJECT_DIR:-}" ]]; then
+    PROJECT_DIR="$(cd -- "$PROJECT_DIR" && pwd)"
+elif ! PROJECT_DIR="$(find_project_dir)"; then
+    echo "ERROR: could not locate the EEGProc repository. Submit from inside the repository or export PROJECT_DIR."
+    exit 2
+fi
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 SAVED_CONFIG_DIR="$PROJECT_DIR/runs/full/sic_v15_arousal_scale64/DREAMER/arousal/suite_837240/full/full_run_v15_arousal_scale64_20260912_225458/configuration_0001"
 MODELS_JSON="${MODELS_JSON:-$SAVED_CONFIG_DIR/loso_zero_shot_models.json}"
