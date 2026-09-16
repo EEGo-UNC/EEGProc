@@ -42,6 +42,7 @@ def build_parser():
     data.add_argument("--data-loader", help="Existing TrialDataset loader as package.module:function.")
     parser.add_argument("--data-config", help="Inline JSON or JSON file passed to the data loader.")
     parser.add_argument("--subjects", type=int, nargs="+", help="Optional fold shard; all eligible trials remain included within each fold.")
+    parser.add_argument("--trial-ids", type=int, nargs="+", help="Optional trial filter applied only to the selected held-out fold(s); source calibration still uses the complete dataset.")
     parser.add_argument("--typicality-sequence", required=True, choices=("vc_window_embeddings", "vc_hidden_sequence"), help="Explicit mapping into the learned VC coordinates; see typicality/README.md.")
     parser.add_argument("--typicality-weight", type=_positive_float, default=1.0)
     parser.add_argument("--typicality-quantile", type=_positive_float, default=0.95)
@@ -181,6 +182,10 @@ def run_fold(args, dataset, entry, out):
     directory = out / f"subject_{subject}"
     directory.mkdir(parents=True, exist_ok=True)
     held = np.flatnonzero(dataset.subject_ids == subject)
+    if args.trial_ids is not None:
+        held = held[np.isin(dataset.trial_ids[held], args.trial_ids)]
+        if not len(held):
+            raise ValueError(f"Requested trial IDs {sorted(set(args.trial_ids))} are absent for subject {subject}")
     source = np.flatnonzero(np.isin(dataset.subject_ids, entry["source_subject_ids"]))
     adapter = create_sic_adapter(model_path=Path(entry["path"]),
                                  config={"model_module": args.model_module, "decoder_mode": args.decoder_mode},
