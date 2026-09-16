@@ -36,7 +36,7 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
 # Match the arousal smoke run: 4 source and 10 calibration epochs.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-4}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
@@ -159,7 +159,7 @@ print(json.dumps({
     "mldg_meta_train_subjects": 10,
     "mldg_meta_test_subjects": 5,
     "mldg_trials_per_subject": 3,
-    "mldg_steps_per_epoch": 20,
+    "mldg_steps_per_epoch": 12,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": seed,
@@ -185,11 +185,11 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": {"grid": [0.5, 1.0]},
+    "focal_gamma": {"grid": [0.3, 0.5]},
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": {"grid": [2.0]},
-    "vc_beta": {"grid": [0.3, 0.6]},
+    "vc_beta": {"grid": [0.6, 1.0]},
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
     "vc_logit_scale": float(os.environ["VC_LOGIT_SCALE"]),

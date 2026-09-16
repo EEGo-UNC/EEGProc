@@ -176,13 +176,13 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": {"grid": [0.5, 1.0]},
+    "focal_gamma": {"grid": [0.2, 0.5]},
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": {"grid": [2.0]},
-    "vc_beta": {"grid": [0.3, 0.6]},
+    "vc_beta": {"grid": [0.6, 1.0]},
     "vc_gamma": 0.0,
-    "vc_lambda": 0.0,
+    "vc_lambda": 0.05,
     "vc_logit_scale": float(os.environ["VC_LOGIT_SCALE"]),
     "update_vc_discriminator": False,
 
