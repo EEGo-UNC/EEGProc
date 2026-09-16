@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=vcsc_z0
-#SBATCH --output=vcsc_z0_%A_%a.out
-#SBATCH --error=vcsc_z0_%A_%a.err
+#SBATCH --output=slurm_logs/vcsc_z0_%A_%a.out
+#SBATCH --error=slurm_logs/vcsc_z0_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=01:00:00
-#SBATCH --array=0-15
+#SBATCH --array=0-3
 
 set -euo pipefail
 
@@ -22,23 +22,25 @@ set -euo pipefail
 # carries no information. VCSC only penalises a pair once its combined
 # deviation exceeds Z0, so lowering Z0 is what gives the metric range.
 #
-# This sweeps Z0 over 2.0 / 1.5 / 1.0 / 0.5 for every subject, running all
-# trials per subject. The useful output is the spread of vcsc_counterfactual
+# This sweeps Z0 over 2.0 / 1.5 / 1.0 / 0.5 for subject 0, running all
+# trials for that subject. The useful output is the spread of vcsc_counterfactual
 # within each Z0: the smallest Z0 that still separates trials is the one
 # worth adopting.
 #
-# One array task = one (subject, Z0) pair. 4 subjects x 4 Z0 values = 16
-# tasks, hence --array=0-15. Change the arrays below and the --array range
-# together or the extra combinations silently never run.
+# One array task = one (subject 0, Z0) pair. 1 subject x 4 Z0 values = 4
+# tasks, hence --array=0-3. Change the Z0 array and the --array range together
+# or the extra values silently never run.
 #
-# NOTE ON SUBJECTS. The temperature_64 smoke suite only contains LOSO folds
-# 1-4, i.e. subjects 0-3. Running "all users" needs a full 23-fold suite;
-# point MODEL_ROOT at it and set SUBJECTS_OVERRIDE="0 1 2 ... 22", and widen
-# the --array range to match.
+# NOTE ON SUBJECTS. This script is intentionally fixed to subject 0. Expanding
+# it later requires editing SUBJECTS and widening the --array range together.
+#
+# Submit with the companion wrapper. It creates
+# runs/counterfactuals/z0_sweep_slurm_logs before sbatch opens the output
+# files, then stores every array task's .out and .err file there.
 #
 # Example:
-#   sbatch run_vcsc_z0_sweep.sh
-#   SUBJECTS_OVERRIDE="0 1" Z0_OVERRIDE="1.0 0.5" sbatch --array=0-3 run_vcsc_z0_sweep.sh
+#   ./submit_vcsc_z0_sweep.sh
+#   Z0_OVERRIDE="1.0 0.5" ./submit_vcsc_z0_sweep.sh --array=0-1
 # ---------------------------------------------------------------------------
 
 module purge
@@ -57,7 +59,7 @@ MODEL_ROOT="${MODEL_ROOT:-$PROJECT_DIR/runs/smoke/sic_v15_arousal_grid/DREAMER/a
 MODEL_MODULE="${MODEL_MODULE:-eegproc.deep_learning.joint_architectures.SICModelv15.sic_model}"
 
 # Sweep grid --------------------------------------------------------------
-SUBJECTS=(${SUBJECTS_OVERRIDE:-0 1 2 3})
+SUBJECTS=(0)
 Z0_VALUES=(${Z0_OVERRIDE:-2.0 1.5 1.0 0.5})
 
 # Optimization settings ---------------------------------------------------
@@ -159,7 +161,7 @@ echo "==========================================================================
 
 # --trial-id omitted on purpose: the runner defaults to every trial of the
 # selected subject, in source order.
-python -u -m eegproc.model_explainability.counterfactuals.run_counterfactuals \
+python -u -m eegproc.model_explainability.counterfactuals.runner \
     --model "$MODEL_PATH" \
     --model-module "$MODEL_MODULE" \
     --decoder-mode "$DECODER_MODE" \
