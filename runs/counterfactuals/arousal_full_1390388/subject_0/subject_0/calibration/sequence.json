@@ -1,8 +1,0 @@
-{
-  "mode": "vc_window_embeddings",
-  "dimension": 128,
-  "sequence_axis": "windows",
-  "recurrent_reset": "each window",
-  "classification": "original full-sequence summarizer remains unchanged",
-  "prior_training_support": "learned on full-trial terminal embeddings; threshold empirically calibrated on chosen sequences"
-}
