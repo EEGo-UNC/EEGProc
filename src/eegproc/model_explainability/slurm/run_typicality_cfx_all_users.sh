@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
-#SBATCH --time=12:00:00
+#SBATCH --time=01:00:00
 #SBATCH --array=0-22%8
 
 set -euo pipefail
@@ -121,6 +121,60 @@ export PYTHONUNBUFFERED=1
 export MPLBACKEND=Agg
 export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export TF_GPU_ALLOCATOR=cuda_malloc_async
+
+# Keras executes an XLA-compiled tf.sign operation while rebuilding the saved
+# recurrent classifier. Longleaf's CUDA module is not rooted at
+# /usr/local/cuda, so XLA must be pointed at the toolkit that owns libdevice.
+MODULE_CUDA_ROOT=""
+if [[ -n "${EBROOTCUDA:-}" && -d "${EBROOTCUDA}" ]]; then
+    MODULE_CUDA_ROOT="$EBROOTCUDA"
+elif [[ -n "${CUDA_HOME:-}" && -d "${CUDA_HOME}" ]]; then
+    MODULE_CUDA_ROOT="$CUDA_HOME"
+elif command -v nvcc >/dev/null 2>&1; then
+    MODULE_CUDA_ROOT="$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")"
+fi
+
+find_libdevice() {
+    local roots=()
+    [[ -n "$MODULE_CUDA_ROOT" && -d "$MODULE_CUDA_ROOT" ]] && roots+=("$MODULE_CUDA_ROOT")
+    [[ -d "$VENV_DIR/lib/python3.12/site-packages/nvidia" ]] && roots+=("$VENV_DIR/lib/python3.12/site-packages/nvidia")
+    [[ -d /usr/local/cuda ]] && roots+=("/usr/local/cuda")
+    [[ -d /opt/cuda ]] && roots+=("/opt/cuda")
+    [[ ${#roots[@]} -eq 0 ]] && return 0
+    find "${roots[@]}" -type f -path "*/nvvm/libdevice/libdevice.10.bc" -print -quit 2>/dev/null || true
+}
+
+LIBDEVICE_PATH="$(find_libdevice)"
+if [[ -z "$LIBDEVICE_PATH" || ! -f "$LIBDEVICE_PATH" ]]; then
+    echo "ERROR: unable to locate CUDA libdevice.10.bc after loading cuda/12.9." >&2
+    echo "EBROOTCUDA=${EBROOTCUDA:-unset} CUDA_HOME=${CUDA_HOME:-unset} nvcc=$(command -v nvcc || echo unset)" >&2
+    exit 2
+fi
+
+CUDA_XLA_ROOT="${LIBDEVICE_PATH%/nvvm/libdevice/libdevice.10.bc}"
+export XLA_FLAGS="${XLA_FLAGS:+${XLA_FLAGS} }--xla_gpu_cuda_data_dir=${CUDA_XLA_ROOT}"
+if [[ -n "$MODULE_CUDA_ROOT" ]]; then
+    export CUDA_HOME="$MODULE_CUDA_ROOT"
+    export CUDA_PATH="$MODULE_CUDA_ROOT"
+fi
+
+echo "CUDA XLA root: $CUDA_XLA_ROOT"
+echo "CUDA libdevice: $LIBDEVICE_PATH"
+
+# Exercise the exact GPU operation that failed during Keras deserialization,
+# before the runner writes its large input archive.
+"$VENV_DIR/bin/python" - <<'PY'
+import tensorflow as tf
+
+gpus = tf.config.list_physical_devices("GPU")
+if len(gpus) != 1:
+    raise RuntimeError(f"Expected exactly one visible GPU; TensorFlow sees {gpus}")
+with tf.device("/GPU:0"):
+    actual = tf.sign(tf.constant([-1.0, 0.0, 1.0])).numpy().tolist()
+if actual != [-1.0, 0.0, 1.0]:
+    raise RuntimeError(f"Unexpected tf.sign result on GPU 0: {actual}")
+print("TensorFlow GPU libdevice preflight passed", flush=True)
+PY
 
 HELP="$("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runner --help)"
 for required_option in --models-json --task --typicality-sequence --typicality-weight --subjects --out-dir; do
