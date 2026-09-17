@@ -365,12 +365,6 @@ def run(args):
         write_json(out / "environment.json", {"created_at_utc": datetime.now(timezone.utc).isoformat(),
                    "python": sys.version, "numpy": np.__version__, "tensorflow": tf.__version__,
                    "git_revision": git_revision, "command": sys.argv})
-        metadata = _metadata_arrays(dataset, 0)
-        for name in ("normalization_offset", "normalization_scale"):
-            if getattr(dataset, name) is not None:
-                metadata[name] = getattr(dataset, name)
-        write_npz(out / "inputs.npz", features=dataset.features, subject_ids=dataset.subject_ids,
-                  trial_ids=dataset.trial_ids, labels=dataset.labels, **metadata)
     for fold in folds:
         info = out / f"subject_{fold['subject_id']}" / "fold.json"
         if args.resume and info.exists():

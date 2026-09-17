@@ -128,7 +128,6 @@ Concurrent jobs should use separate output directories.
 ```text
 study.json                       protocol, checkpoint/data/code hashes, fold membership
 environment.json                 versions, command, source revision
-inputs.npz                       prepared dataset, labels, IDs, normalization metadata
 subject_<id>/
   fold.json                      threshold, eligibility, recognition metrics, status
   observations.npz               all held-out predictions, moments, discrepancies
