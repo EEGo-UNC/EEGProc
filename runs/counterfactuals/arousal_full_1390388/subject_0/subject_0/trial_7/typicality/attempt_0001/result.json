@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "task": "arousal",
+  "subject_id": 0,
+  "trial_id": 7,
+  "true_class": 0,
+  "objective": "typicality",
+  "seed": 346678866,
+  "report_output": "joint",
+  "checkpoint_sha256": "26fe446acceee0a25a15f8a44e586a0db556df13691f3b33a4aa23e92d71134f",
+  "sequence_definition": "vc_window_embeddings",
+  "typicality": {
+    "original_discrepancy": 0.14943242073059082,
+    "counterfactual_discrepancy": 0.14890645444393158,
+    "threshold": 0.678627684362383,
+    "typical": true,
+    "weight": 1.0,
+    "decoded_valid": true,
+    "joint_success": true
+  },
+  "target_class": 1,
+  "target_loss_component": "confidence",
+  "decoder_mode": "joint",
+  "decoded_distance_reference": "original_reconstruction",
+  "joint_reconstruction_alpha": 0.4983747601509094,
+  "required_target_probability": 0.8,
+  "prediction_rule": "argmax",
+  "original": {
+    "probabilities": [
+      0.5267878174781799,
+      0.4732121527194977
+    ],
+    "predicted_class": 0,
+    "target_probability": 0.4732121527194977,
+    "success": false
+  },
+  "latent_counterfactual": {
+    "probabilities": [
+      0.1349530667066574,
+      0.8650469779968262
+    ],
+    "predicted_class": 1,
+    "target_probability": 0.8650469779968262,
+    "success": true
+  },
+  "decoded_trials": {
+    "joint": {
+      "original_reconstruction": {
+        "probabilities": [
+          0.40944215655326843,
+          0.590557873249054
+        ],
+        "predicted_class": 1,
+        "target_probability": 0.590557873249054,
+        "success": false
+      },
+      "counterfactual": {
+        "probabilities": [
+          0.4093868136405945,
+          0.5906131863594055
+        ],
+        "predicted_class": 1,
+        "target_probability": 0.5906131863594055,
+        "success": false
+      },
+      "original_reconstruction_mse": 0.5364104509353638,
+      "counterfactual_to_original_mse": 0.5364164113998413,
+      "decoded_change_mse": 8.255469765572343e-07,
+      "vcsc_original_reconstruction": 7.227906703948975,
+      "vcsc_counterfactual": 7.224389553070068,
+      "vcsc_delta": -0.00351715087890625
+    }
+  },
+  "selected_losses": {
+    "total": 3.1350757012660324e-07,
+    "target": 0.0,
+    "latent": 2.3095285541785415e-06,
+    "decoded": 8.255469765572343e-07,
+    "physiological": 7.224389553070068,
+    "weighted_target": 0.0,
+    "weighted_latent": 2.3095286394436698e-07,
+    "weighted_decoded": 8.25546990768089e-08,
+    "weighted_physiological": 0.0,
+    "decoded_joint": 8.255469765572343e-07,
+    "target_confidence_component": 0.0,
+    "target_focal_component": 0.03912867233157158,
+    "target_vc_component": 0.0,
+    "target_vc_latent_posterior_kl": 0.0,
+    "target_vc_discriminator_kl": 0.0,
+    "target_vc_class_prior_kl": 0.0,
+    "typicality": 0.0,
+    "discrepancy": 0.14890645444393158,
+    "weighted_typicality": 0.0
+  },
+  "selected_step": 2,
+  "steps_completed": 200,
+  "stop_reason": "max_steps",
+  "elapsed_seconds": 469.37341507477686,
+  "physiological_validity": 7.224389553070068,
+  "physiological_constraint_enforced": false,
+  "physiology": {
+    "checks": {
+      "amplitude": {
+        "passed": true,
+        "fraction_in_range": 0.9523809523809523,
+        "n_checked": 42,
+        "n_components": 42,
+        "n_undefined_candidate": 0,
+        "reason": null
+      },
+      "spectral_power": {
+        "passed": false,
+        "fraction_in_range": 0.8571428571428571,
+        "n_checked": 42,
+        "n_components": 42,
+        "n_undefined_candidate": 0,
+        "reason": null
+      },
+      "aperiodic_exponent": {
+        "passed": null,
+        "fraction_in_range": null,
+        "n_checked": 0,
+        "n_components": 14,
+        "n_undefined_candidate": 0,
+        "reason": "not_estimable_from_band_filtered_decoder"
+      },
+      "coherence": {
+        "passed": false,
+        "fraction_in_range": 0.2673992673992674,
+        "n_checked": 273,
+        "n_components": 273,
+        "n_undefined_candidate": 0,
+        "reason": null
+      },
+      "debiased_wpli_squared": {
+        "passed": false,
+        "fraction_in_range": 0.6373626373626373,
+        "n_checked": 273,
+        "n_components": 273,
+        "n_undefined_candidate": 0,
+        "reason": null
+      }
+    },
+    "passed_count": 1,
+    "available_count": 4,
+    "required_count": 5,
+    "all_required_passed": null,
+    "available_checks_passed": false
+  },
+  "vcsc_original_input": 814.57373046875,
+  "d_z": 0.029778148978948593,
+  "decoder_latent_rmse": 0.0015197133131543401,
+  "status": "completed"
+}

@@ -1,0 +1,128 @@
+{
+  "subject_id": 0,
+  "status": "running",
+  "checkpoint": {
+    "subject_id": 0,
+    "path": "/nas/longleaf/home/inserra/EEGProc/runs/full/sic_v15_arousal_scale64/DREAMER/arousal/suite_837240/full/full_run_v15_arousal_scale64_20260912_225458/configuration_0001/loso_zero_shot_models/loso_fold_0001_target_0_zero_shot.keras",
+    "sha256": "26fe446acceee0a25a15f8a44e586a0db556df13691f3b33a4aa23e92d71134f",
+    "stage": "zero_shot_source_model",
+    "source_subject_ids": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22
+    ],
+    "source_subject_ids_origin": "LOSO complement of dataset"
+  },
+  "threshold": 0.678627684362383,
+  "sequence": {
+    "mode": "vc_window_embeddings",
+    "dimension": 128,
+    "sequence_axis": "windows",
+    "recurrent_reset": "each window",
+    "classification": "original full-sequence summarizer remains unchanged",
+    "prior_training_support": "learned on full-trial terminal embeddings; threshold empirically calibrated on chosen sequences"
+  },
+  "eligible_trial_ids": [
+    5,
+    7,
+    8,
+    16
+  ],
+  "all_trial_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+  ],
+  "loss": {
+    "target_weight": 1.0,
+    "latent_weight": 0.1,
+    "decoded_weight": 0.1,
+    "physiological_weight": 0.0,
+    "target_probability": 0.8,
+    "vcsc_distance_cm": 12.0,
+    "vcsc_tau_cm": 4.0,
+    "vcsc_z0": 2.0,
+    "vcsc_z_max": 20.0
+  },
+  "recognition": {
+    "n_trials": 18,
+    "balanced_accuracy": 0.6493506493506493,
+    "recall_0": 0.5714285714285714,
+    "recall_1": 0.7272727272727273,
+    "auroc": 0.6103896103896105,
+    "ece": 0.12025036414464316,
+    "ece_bins": 15,
+    "calibration_bins": [
+      {
+        "bin": 7,
+        "n": 3,
+        "accuracy": 0.6666666666666666,
+        "confidence": 0.5255407094955444
+      },
+      {
+        "bin": 8,
+        "n": 2,
+        "accuracy": 0.5,
+        "confidence": 0.56184321641922
+      },
+      {
+        "bin": 9,
+        "n": 4,
+        "accuracy": 0.75,
+        "confidence": 0.6397950202226639
+      },
+      {
+        "bin": 10,
+        "n": 7,
+        "accuracy": 0.7142857142857143,
+        "confidence": 0.6959193689482552
+      },
+      {
+        "bin": 11,
+        "n": 1,
+        "accuracy": 1.0,
+        "confidence": 0.7579455375671387
+      },
+      {
+        "bin": 12,
+        "n": 1,
+        "accuracy": 0.0,
+        "confidence": 0.8060034513473511
+      }
+    ]
+  }
+}

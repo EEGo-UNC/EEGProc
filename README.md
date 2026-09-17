@@ -2,7 +2,7 @@
 
 # EEGProc: EEG Preprocessing and Featurization Library
 
-EEGProc is a fully vectorized library designed for preprocessing and extracting features from EEG (Electroencephalogram) data. This library is optimized for performance and ease of use, making it suitable for researchers and developers working in the field of neuroscience, biomedical engineering, and machine learning.
+EEGProc is a fully vectorized library designed for preprocessing and extracting features from EEG (Electroencephalogram) data. This research-born library is optimized for performance and ease of use, making it suitable for researchers and developers working in the field of neuroscience, biomedical engineering, and machine learning.
 
 ## Documentation
 
@@ -12,8 +12,13 @@ EEGProc is a fully vectorized library designed for preprocessing and extracting 
 
 - **Preprocessing**: Includes functions for filtering, artifact removal, and normalization of EEG signals.
 - **Featurization**: Extracts meaningful features from EEG data, such as power spectral density, band power, and more.
+- **Deep Learning**: Includes experiment-ready training utilities for supervised and unsupervised EEG models under the deep learning package.
 - **Vectorized Operations**: Fully vectorized implementation ensures high performance and scalability for working with pandas dataframes.
 - **Ease of Integration**: Designed to integrate seamlessly with existing Python workflows.
+
+## Deep Learning
+
+The repository also includes a compact deep learning toolkit for EEG experiments, with modules for supervised and unsupervised training, joint architectures, dataset preparation, and experiment execution under the deep learning package.
 
 ## Installation
 

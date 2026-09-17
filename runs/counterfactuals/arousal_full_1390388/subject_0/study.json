@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "task": "arousal",
+  "arguments": {
+    "models_json": "/nas/longleaf/home/inserra/EEGProc/runs/full/sic_v15_arousal_scale64/DREAMER/arousal/suite_837240/full/full_run_v15_arousal_scale64_20260912_225458/configuration_0001/loso_zero_shot_models.json",
+    "model_dir": "/nas/longleaf/home/inserra/EEGProc/runs/full/sic_v15_arousal_scale64/DREAMER/arousal/suite_837240/full/full_run_v15_arousal_scale64_20260912_225458/configuration_0001/loso_zero_shot_models",
+    "model_module": "eegproc.deep_learning.joint_architectures.SICModelv15.sic_model",
+    "task": "arousal",
+    "trials_npz": null,
+    "data_loader": "eegproc.model_explainability.model_agnostic.sic_adapter:load_sic_raw_trials",
+    "data_config": {
+      "raw_eeg_npy": "/nas/longleaf/home/inserra/EEGProc/datasets/dreamer_eeg.npy",
+      "raw_labels_npy": "/nas/longleaf/home/inserra/EEGProc/datasets/dreamer_labels.npy",
+      "dataset": "dreamer",
+      "label_dimension": "arousal",
+      "fs": 128,
+      "window_sec": 1,
+      "window_overlap": 0,
+      "window_normalization": "global_rms",
+      "label_threshold_mode": "global",
+      "median_label": 3
+    },
+    "subjects": [
+      0
+    ],
+    "trial_ids": null,
+    "typicality_sequence": "vc_window_embeddings",
+    "typicality_weight": 1.0,
+    "typicality_quantile": 0.95,
+    "variance_floor": 1e-06,
+    "decoder_mode": "joint",
+    "report_output": "joint",
+    "target_probability": 0.8,
+    "target_loss_component": "confidence",
+    "target_weight": 1.0,
+    "latent_weight": 0.1,
+    "decoded_weight": 0.1,
+    "physiological_weight": 0.0,
+    "learning_rate": 0.01,
+    "learning_rate_decay": 1.0,
+    "max_steps": 200,
+    "gradient_clip_norm": 5.0,
+    "stop_on_success": false,
+    "snapshot_every": 10,
+    "fs": 128.0,
+    "physiology_quantile": 0.95,
+    "physiology_required_fraction": 0.95,
+    "ece_bins": 15,
+    "seed": 42
+  },
+  "folds": [
+    {
+      "subject_id": 0,
+      "path": "/nas/longleaf/home/inserra/EEGProc/runs/full/sic_v15_arousal_scale64/DREAMER/arousal/suite_837240/full/full_run_v15_arousal_scale64_20260912_225458/configuration_0001/loso_zero_shot_models/loso_fold_0001_target_0_zero_shot.keras",
+      "sha256": "26fe446acceee0a25a15f8a44e586a0db556df13691f3b33a4aa23e92d71134f",
+      "stage": "zero_shot_source_model",
+      "source_subject_ids": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ],
+      "source_subject_ids_origin": "LOSO complement of dataset"
+    }
+  ],
+  "dataset_sha256": {
+    "features": "e7f2154b6701aa7a60af8ff0d41a033ff556234712f7ed5100bdd7b01f0b0cef",
+    "subject_ids": "65ad0413a8e1bbc71f00e2307577d7a50a24036f27cc340e2a3ed01c8d1d3f34",
+    "trial_ids": "227ac293059005ac9b2ebfae16855116c1df858b153f457325ef2c42169cc3fc",
+    "labels": "c6f5584428fe56e13fa332366334071319300bc69695c891fd15da22e5c5593e",
+    "normalization_offset": "c2c425ca22fd92e6c5f7d63e448b67a22358b444494ab14c130000299aebb6f7",
+    "normalization_scale": "3c1b08b2ca772c17f71840c0e32b09343c8b831709f0131bc4714a8f45577974",
+    "channel_names": "8594d089551d1c39b1a38455d0ea455e3a1b2243d8eae6f4d3f94e8f850bc593",
+    "band_names": "cac1b74cd323aacc9e3f19eb118d693600f658df37bb7df3d79accb6d4ca7312",
+    "feature_order": "6918b522a662704de876b0a3a850ab2db946ca70c4ee78413b3493cdc7fba4b5"
+  },
+  "source_sha256": {
+    "counterfactuals/loss.py": "7fb27709c755ad9f07e2e865b67a5575455f2a06c9105a3c728980be521f3a4a",
+    "counterfactuals/optimizer.py": "ca187061d1c308ea555e4bb0d6fee8e4c70e68de03300d1e50a92696c0b7ce3e",
+    "model_agnostic/adapter.py": "6123fd12a7949ce6abb180d15e646b7afa6d1bf28fe6d3fd8c5f3639bbf101c8",
+    "model_agnostic/runner.py": "0ea5b386e280f7e3eaa720c0a0811210f3a10ed389eef65840205fa5700d6ed5",
+    "model_agnostic/sic_adapter.py": "baf2c9eaf7d1a91e29830dd6e70e27e4952d1a0022d5bf8c5afa563b8e00bc2f",
+    "typicality/__init__.py": "5757e2d964350ca57c8150bc9ba833dc1f898242444927662c0953d444729ca2",
+    "typicality/artifacts.py": "b1cf1d775b46389d48969127c26651f3fcfe9b178b755b8cc4ad35c211a69800",
+    "typicality/class_awareness.py": "43ba19cd92192d07cb2d82b72c738487f48bc5d83aa9377ff70e56dd53753ecd",
+    "typicality/core.py": "523da0975e3661993e8f9e275537216e2186432c890ce67caf86e55ddf47002f",
+    "typicality/physiology.py": "afaa54e1a23029de8f7bf4716f9e4771c6f8b8125881681fee5373a6b8932704",
+    "typicality/plotting.py": "52ccabbd3f102e5f81b40fc175c00531ca056651a2295a6ea6937a98f20443c2",
+    "typicality/results.py": "13f856f10152dc0ea487c735e65f2b2276e673fb7097afe03fdae6b0995a070a",
+    "typicality/runner.py": "918f603a6adfc336fdb3d2681242d00418ff24d9fed298187d6688bb368909a4",
+    "typicality/sic_sequence.py": "dac77f3ece494513ab2207de0c6a5e8fcf2eec31352681983eb2cc5d9c2e5112",
+    "typicality/spectral_features.py": "ff5b1423858760aedda18b8d07f528a204d107960442ef42bc50d0b9846cad39",
+    "typicality/subject_probe.py": "0fd7ecd233886d067d4ce36c92c794b1a2fb5262f93ce790a31c807ae6644677"
+  },
+  "dataset_metadata": {
+    "dataset": "dreamer",
+    "label_dimension": "arousal",
+    "window_normalization": "global_rms",
+    "fs": 128.0,
+    "window_sec": 1.0
+  },
+  "eligibility": "true_class == 0 and original argmax prediction == 0",
+  "target_class": 1,
+  "prediction_rule": "argmax; confidence threshold separately recorded",
+  "typicality_formula": "0.5 * mean((var_q + (mu_q-mu_p)^2)/var_p - 1 + log(var_p/var_q))",
+  "penalty": "lambda * max(0,D-tau)^2",
+  "prior": "frozen learned VC parameters",
+  "distance_definition": "d_z=RMSE(Zcf,Z) in mapped VC sequence; delta_dec=RMSE(dec(Zcf),dec(Z)); e_rec=RMSE(dec(Z),x)",
+  "physiology_unit": null,
+  "physiology_families": [
+    "amplitude",
+    "spectral_power",
+    "aperiodic_exponent",
+    "coherence",
+    "debiased_wpli_squared"
+  ],
+  "band_edges_hz": [
+    [
+      4.0,
+      8.0
+    ],
+    [
+      8.0,
+      13.0
+    ],
+    [
+      13.0,
+      30.0
+    ]
+  ],
+  "physiology_reference": "all source classes, empirical per-component central intervals",
+  "aperiodic_status": "unavailable from band-filtered decoder; never counted as passed"
+}
