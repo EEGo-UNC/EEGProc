@@ -158,7 +158,8 @@ def run(args):
     Existing nonempty output directories are refused. Each completed trial is
     written immediately, so results survive a later trial's failure. Step
     metrics are optimization diagnostics, not estimates of classifier accuracy.
-    The aggregate separates latent and decoded-trial success rates.
+    Counterfactual success is measured directly in the optimized latent state.
+    Reconstructions are reported only for signal distance and physiology.
     """
     out = Path(args.out_dir)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
@@ -286,9 +287,9 @@ def run(args):
             flush=True,
         )
         for branch, details in summary["decoded_trials"].items():
-            decoded = details["counterfactual"]
             print(
-                f"Decoded {branch}: class={decoded['predicted_class']} target_p={decoded['target_probability']:.4f} success={decoded['success']} MSE_to_x={details['counterfactual_to_original_mse']:.6g}",
+                f"Decoded {branch}: MSE_to_x={details['counterfactual_to_original_mse']:.6g} "
+                f"change_MSE={details['decoded_change_mse']:.6g}",
                 flush=True,
             )
             print(
@@ -303,17 +304,6 @@ def run(args):
         "latent_success_rate": float(
             np.mean([s["latent_counterfactual"]["success"] for s in summaries])
         ),
-        "decoded_success_rate": {
-            name: float(
-                np.mean(
-                    [
-                        s["decoded_trials"][name]["counterfactual"]["success"]
-                        for s in summaries
-                    ]
-                )
-            )
-            for name in optimizer.decoded_names
-        },
         "mean_selected_latent_mse": float(
             np.mean([s["selected_losses"]["latent"] for s in summaries])
         ),
@@ -364,20 +354,6 @@ def run(args):
                 ]
             )
         ),
-        "decoded_class_flip_rate": {
-            name: float(
-                np.mean(
-                    [
-                        s["decoded_trials"][name]["counterfactual"][
-                            "predicted_class"
-                        ]
-                        != s["original"]["predicted_class"]
-                        for s in summaries
-                    ]
-                )
-            )
-            for name in optimizer.decoded_names
-        },
         "mean_target_probability_delta": float(
             np.mean(
                 [

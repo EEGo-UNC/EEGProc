@@ -301,12 +301,6 @@ class ModelAgnosticCounterfactualOptimizer:
             arrays[f"x_reconstructed_{name}"] = baseline.numpy()
             arrays[f"x_prime_{name}"] = reconstruction.numpy()
             decoded_results[name] = {
-                "original_reconstruction": self._prediction(
-                    self.adapter.logits_from_input(baseline), target_class
-                ),
-                "counterfactual": self._prediction(
-                    self.adapter.logits_from_input(reconstruction), target_class
-                ),
                 "original_reconstruction_mse": float(_mean_mse(baseline, x).numpy()),
                 "counterfactual_to_original_mse": float(
                     _mean_mse(reconstruction, x).numpy()

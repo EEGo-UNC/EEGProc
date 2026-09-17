@@ -54,17 +54,17 @@ def test_trial_moments_use_complete_sequence_ddof_zero():
 
 
 def test_failed_and_pending_optimizations_remain_in_denominator():
-    rows = [dict(status="completed", decoded_valid=True, typical=True, joint_success=True,
+    rows = [dict(status="completed", latent_target_success=True, typical=True, typicality_success=True,
                  d_z=1, delta_dec=2, e_rec=3, physiological_passed=None),
             dict(status="error"), dict(status="pending")]
     result = population_summary(rows)
-    assert result["joint_success_percent"] == pytest.approx(100 / 3)
+    assert result["typicality_success_percent"] == pytest.approx(100 / 3)
     assert result["n_eligible"] == 3
     assert result["d_z_median"] == 1
     assert result["d_z_n"] == 1
     assert result["physiological_pass_percent"] is None
     assert result["provisional"]
-    assert population_summary([])["joint_success_percent"] is None
+    assert population_summary([])["typicality_success_percent"] is None
 
 
 def test_recognition_ece_and_absent_class():
@@ -223,6 +223,37 @@ def test_band_filtered_physiology_never_claims_complete_pass():
     assert result["checks"]["aperiodic_exponent"]["reason"] == "not_estimable_from_band_filtered_decoder"
 
 
+def test_vcsc_reference_decodes_each_initial_state():
+    tf = pytest.importorskip("tensorflow")
+    from eegproc.model_explainability.typicality.runner import _initial_reconstructions
+
+    class Adapter:
+        def __init__(self):
+            self.initial_inputs = []
+
+        def initial_state(self, inputs):
+            self.initial_inputs.append(inputs.numpy())
+            return inputs + 2
+
+        def reconstruct(self, state, reference_input):
+            return {"joint": state * 3, "branch": reference_input - 1}
+
+    features = np.arange(24, dtype=np.float32).reshape(2, 2, 2, 3)
+    adapter = Adapter()
+    actual = np.stack(list(_initial_reconstructions(adapter, features, "joint")))
+    np.testing.assert_array_equal(actual, (features + 2) * 3)
+    assert len(adapter.initial_inputs) == len(features)
+
+
+def test_typicality_runner_enables_stopping_defaults():
+    from eegproc.model_explainability.typicality.runner import build_parser
+
+    actions = {action.dest: action for action in build_parser()._actions}
+    assert actions["stop_on_success"].default is True
+    assert actions["min_gradient_norm"].default == pytest.approx(1e-6)
+    assert actions["low_gradient_patience"].default == 5
+
+
 def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
@@ -239,16 +270,24 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     manifest.write_text(json.dumps({"models": [{"path": str(model_path), "target_subject": 0,
                                                 "stage": "zero_shot_source_model"}]}))
     data_path = tmp_path / "trials.npz"
-    x = np.random.default_rng(19).normal(size=(5, 3, 32, 42)).astype(np.float32)
-    np.savez_compressed(data_path, features=x, subject_ids=[0, 1, 1, 2, 2], trial_ids=[0, 0, 1, 0, 1], labels=[0, 1, 1, 1, 1])
+    x = np.random.default_rng(19).normal(size=(6, 3, 32, 42)).astype(np.float32)
+    np.savez_compressed(data_path, features=x, subject_ids=[0, 0, 1, 1, 2, 2],
+                        trial_ids=[0, 1, 0, 1, 0, 1], labels=[0, 0, 1, 1, 1, 1])
     out = tmp_path / "study"
     args = study.parse_args(["--models-json", str(manifest), "--task", "valence", "--trials-npz", str(data_path),
                             "--typicality-sequence", "vc_window_embeddings", "--out-dir", str(out),
-                            "--max-steps", "1", "--log-every", "0"])
+                            "--trial-ids", "0", "--max-steps", "1", "--log-every", "0"])
     result = study.run(args)
     assert result["complete"]
     assert len(result["population"]) == 2
     assert all(row["n_eligible"] == row["n_completed"] == 1 for row in result["population"])
+    with np.load(out / "subject_0/calibration/vcsc.npz", allow_pickle=False) as data:
+        assert data["reference"].item() == "held_out_subject_initial_reconstruction"
+        assert data["decoder_output"].item() == "joint"
+        np.testing.assert_array_equal(data["subject_ids"], [0, 0])
+        np.testing.assert_array_equal(data["trial_ids"], [0, 1])
+        assert "labels" not in data.files
+        assert data["reference_coherence"].shape[0] == 2
     for objective in ("base", "typicality"):
         attempt = completed_attempt(out / "subject_0/trial_0" / objective)
         assert attempt is not None

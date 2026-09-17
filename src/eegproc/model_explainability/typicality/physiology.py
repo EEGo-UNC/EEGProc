@@ -130,28 +130,38 @@ class PhysiologicalReference:
                 **{f"upper_{k}": v for k, v in self.upper.items()}}
 
 
-def source_vcsc_calibration(source_features):
-    """Match existing differentiable VCSC estimator, using source trials only."""
+def vcsc_calibration(reference_features):
+    """Calibrate the differentiable VCSC estimator on reference signals."""
     from ..counterfactuals.loss import _vcsc_band_coherence_wpli
     import tensorflow as tf
     coherence, wpli = [], []
-    for x in source_features:
+    for x in reference_features:
         c, w = _vcsc_band_coherence_wpli(tf.convert_to_tensor(x[None], dtype=tf.float32))
         coherence.append(c.numpy())
         wpli.append(w.numpy())
+    if not coherence:
+        raise ValueError("VCSC calibration requires at least one reference trial")
     c, w = np.stack(coherence), np.stack(wpli)
     return {"c_hat": c.mean(axis=0), "w_hat": w.mean(axis=0),
             "sigma_raw": np.maximum(c.std(axis=0), 1e-4),
             "sigma_spec": np.maximum(w.std(axis=0), 1e-4),
-            "source_coherence": c, "source_dwpli_squared": w}
+            "reference_coherence": c, "reference_dwpli_squared": w}
 
 
-def make_source_loss(calibration, **weights):
-    """Use the existing CFO objective with source-only VCSC constants."""
+def source_vcsc_calibration(source_features):
+    """Backward-compatible alias for calibration on arbitrary references."""
+    calibration = vcsc_calibration(source_features)
+    return {**calibration,
+            "source_coherence": calibration["reference_coherence"],
+            "source_dwpli_squared": calibration["reference_dwpli_squared"]}
+
+
+def make_vcsc_loss(calibration, **weights):
+    """Use the existing CFO objective with fixed VCSC reference constants."""
     import tensorflow as tf
     from ..counterfactuals.loss import CounterfactualLoss, _vcsc_band_coherence_wpli, _VCSC_DISTANCES_CM
 
-    class SourceVCSCLoss(CounterfactualLoss):
+    class CalibratedVCSCLoss(CounterfactualLoss):
         def physiological_validity(self, x_prime):
             c, w = _vcsc_band_coherence_wpli(x_prime)
             zc = (c - tf.constant(calibration["c_hat"], tf.float32)) / tf.constant(calibration["sigma_raw"], tf.float32)
@@ -160,4 +170,9 @@ def make_source_loss(calibration, **weights):
             weight = tf.exp(tf.nn.relu(self.vcsc_distance_cm - tf.constant(_VCSC_DISTANCES_CM, tf.float32)) / self.vcsc_tau_cm)
             return tf.cast(tf.reduce_mean(weight * tf.math.expm1(tf.nn.relu(z - self.vcsc_z0))), x_prime.dtype)
 
-    return SourceVCSCLoss(**weights)
+    return CalibratedVCSCLoss(**weights)
+
+
+def make_source_loss(calibration, **weights):
+    """Backward-compatible alias for a loss with fixed VCSC constants."""
+    return make_vcsc_loss(calibration, **weights)

@@ -55,7 +55,6 @@ def _study(root, held_discrepancy=2.5):
                     "typical": False,
                 },
                 "latent_counterfactual": {"success": True},
-                "decoded_trials": {"joint": {"counterfactual": {"predicted_class": 1}}},
             },
         )
     return root
@@ -111,10 +110,10 @@ def test_audit_recomputes_correct1_threshold_and_counterfactual_membership(tmp_p
     assert all(float(row["audit_tau_correct1_all_available"]) <= 4.0 for row in fold_rows)
     counterfactuals = _csv_rows(tmp_path / "audit/class_typicality_counterfactuals.csv")
     assert all(row["transition"] == "entered" for row in counterfactuals)
-    assert all(row["audit_joint_success"] == "True" for row in counterfactuals)
+    assert all(row["audit_typicality_success"] == "True" for row in counterfactuals)
     assert all(row["generation_typical"] == "False" for row in counterfactuals)
     audit = json.loads((tmp_path / "audit/class_typicality_audit.json").read_text())
-    assert audit["aggregate"][0]["counterfactual_joint_success_macro_percent"] == 100.0
+    assert audit["aggregate"][0]["counterfactual_typicality_success_macro_percent"] == 100.0
 
 
 def test_heldout_scores_cannot_change_source_audit_threshold(tmp_path):

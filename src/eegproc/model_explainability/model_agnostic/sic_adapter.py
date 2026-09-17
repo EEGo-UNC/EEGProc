@@ -99,9 +99,6 @@ class SICCounterfactualAdapter(CounterfactualAdapter):
         )
         return {"joint": tf.cast(joint, tf.float32)}
 
-    def logits_from_input(self, inputs):
-        return tf.cast(self.model(inputs, training=False), tf.float32)
-
     def constraint(self, name, signal):
         if name != "vcsc":
             return super().constraint(name, signal)

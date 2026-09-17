@@ -59,7 +59,7 @@ def population_summary(rows):
               "n_completed": sum(r["status"] == "completed" for r in rows),
               "n_error": sum(r["status"] == "error" for r in rows),
               "n_pending": sum(r["status"] == "pending" for r in rows)}
-    for field in ("decoded_valid", "typical", "joint_success", "latent_target_success"):
+    for field in ("typical", "latent_target_success", "typicality_success"):
         result[f"{field}_percent"] = 100 * sum(bool(r.get(field, False)) for r in rows) / n if n else None
     for field in ("d_z", "delta_dec", "e_rec"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
@@ -111,8 +111,8 @@ def collect_study(root):
             for objective in ("base", "typicality"):
                 record = {"task": task, "subject_id": subject, "trial_id": trial,
                           "objective": objective, "status": "pending", "threshold": fold["threshold"],
-                          "decoded_valid": False, "typical": False, "joint_success": False,
-                          "latent_target_success": False}
+                          "typical": False, "latent_target_success": False,
+                          "typicality_success": False}
                 attempt = _latest_result(fold_dir / f"trial_{trial}" / objective)
                 if attempt:
                     summary = json.loads((attempt / "result.json").read_text())
@@ -121,18 +121,17 @@ def collect_study(root):
                         typ = summary["typicality"]
                         decoded = summary["decoded_trials"][summary["report_output"]]
                         physiology = summary["physiology"]
+                        latent_target_success = summary["latent_counterfactual"]["success"]
                         record.update(
-                            decoded_valid=decoded["counterfactual"]["predicted_class"] == 1,
                             typical=typ["typical"],
-                            joint_success=bool(typ["typical"] and decoded["counterfactual"]["predicted_class"] == 1),
-                            latent_target_success=summary["latent_counterfactual"]["success"],
+                            latent_target_success=latent_target_success,
+                            typicality_success=bool(typ["typical"] and latent_target_success),
                             original_discrepancy=typ["original_discrepancy"],
                             discrepancy=typ["counterfactual_discrepancy"],
                             d_z=summary["d_z"], delta_dec=float(np.sqrt(decoded["decoded_change_mse"])),
                             e_rec=float(np.sqrt(decoded["original_reconstruction_mse"])),
                             original_probability=summary["original"]["target_probability"],
                             latent_probability=summary["latent_counterfactual"]["target_probability"],
-                            decoded_probability=decoded["counterfactual"]["target_probability"],
                             vcsc_original=summary["vcsc_original_input"],
                             vcsc_original_reconstruction=decoded["vcsc_original_reconstruction"],
                             vcsc_counterfactual=decoded["vcsc_counterfactual"],
@@ -203,18 +202,18 @@ def build_report(roots, output, *, probe_results=()):
         for index, objective in enumerate(("base", "typicality")):
             changes.update({f"{objective}_{key}": val for key, val in _quantiles([p[index] for p in paired_rates]).items()})
         pop = [p for p in populations if p["task"] == task]
-        for metric in ("decoded_valid", "typical", "joint_success"):
+        for metric in ("latent_target_success", "typical", "typicality_success"):
             a, b = [p[f"{metric}_percent"] for p in pop]
             changes[f"{metric}_change_percentage_points"] = b - a if a is not None and b is not None else None
         subject_changes.append(changes)
-        successful = [r for r in rows if r["task"] == task and r["objective"] == "typicality" and r["joint_success"]]
+        successful = [r for r in rows if r["task"] == task and r["objective"] == "typicality" and r["typicality_success"]]
         if successful:
             median = np.median([r["d_z"] for r in successful])
             selected = min(successful, key=lambda r: (abs(r["d_z"] - median), r["subject_id"], r["trial_id"]))
-            examples.append({**selected, "selection_rule": "joint-success typicality arm nearest its task median d_z; ties by subject/trial",
+            examples.append({**selected, "selection_rule": "latent-target-and-typical typicality arm nearest its task median d_z; ties by subject/trial",
                              "successful_median_d_z": float(median)})
         else:
-            examples.append({"task": task, "status": "no_joint_success_example"})
+            examples.append({"task": task, "status": "no_typicality_success_example"})
     for name, values in (("trial_metrics", rows), ("discrepancy_distributions", observed),
                          ("population_counterfactuals", populations), ("subject_counterfactuals", subject_rows),
                          ("emotion_recognition_folds", [{k: v for k, v in r.items() if k != "calibration_bins"} for r in recognition]),
@@ -256,10 +255,10 @@ def _write_latex(path, populations, recognition, probes=()):
                    for name, percent in (("balanced_accuracy", True), ("recall_0", True), ("recall_1", True), ("auroc", False), ("ece", False))]
         lines.append(" & ".join([row["task"].title(), *entries]) + r" \\")
     lines.extend([r"\end{tabular}", "", r"\begin{tabular}{llcccccc}",
-                  r"Task & Objective & Valid (\%) & Typ. (\%) & Joint (\%) & $d_z$ & $\Delta_{dec}$ & Phys. (\%) \\ \hline"])
+                  r"Task & Objective & Latent (\%) & Typ. (\%) & Both (\%) & $d_z$ & $\Delta_{dec}$ & Phys. (\%) \\ \hline"])
     for row in populations:
         entries = [row["task"].title(), "Base CFO" if row["objective"] == "base" else r"$+\mathcal{L}_{typ}$",
-                   fmt(row["decoded_valid_percent"]), fmt(row["typical_percent"]), fmt(row["joint_success_percent"]),
+                   fmt(row["latent_target_success_percent"]), fmt(row["typical_percent"]), fmt(row["typicality_success_percent"]),
                    distance(row, "d_z"), distance(row, "delta_dec"), fmt(row["physiological_pass_percent"])]
         lines.append(" & ".join(entries) + r" \\")
     lines.append(r"\end{tabular}")

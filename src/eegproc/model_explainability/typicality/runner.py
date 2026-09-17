@@ -1,4 +1,4 @@
-"""Paired base/typicality SIC study with source-only calibration and archives.
+"""Paired base/typicality SIC study with fold-isolated calibration and archives.
 
 Run --help for the CLI. No training or held-out hyperparameter selection is
 performed. Use a frozen LOSO model manifest; tune all protocol choices on
@@ -27,7 +27,7 @@ from .core import TypicalityRegion, trial_representation
 from .artifacts import (write_json, write_npz, write_csv, file_sha256,
                                   array_sha256, TrialRecorder, completed_attempt, next_attempt)
 from .physiology import (signal_diagnostics, PhysiologicalReference,
-                                   source_vcsc_calibration, make_source_loss, DEFAULT_BANDS, FAMILIES)
+                                   vcsc_calibration, make_vcsc_loss, DEFAULT_BANDS, FAMILIES)
 from .results import recognition_metrics, build_report
 
 
@@ -42,7 +42,7 @@ def build_parser():
     data.add_argument("--data-loader", help="Existing TrialDataset loader as package.module:function.")
     parser.add_argument("--data-config", help="Inline JSON or JSON file passed to the data loader.")
     parser.add_argument("--subjects", type=int, nargs="+", help="Optional fold shard; all eligible trials remain included within each fold.")
-    parser.add_argument("--trial-ids", type=int, nargs="+", help="Optional trial filter applied only to the selected held-out fold(s); source calibration still uses the complete dataset.")
+    parser.add_argument("--trial-ids", type=int, nargs="+", help="Optional optimization filter for selected held-out fold(s); source calibration and held-out VCSC calibration still use their complete trial sets.")
     parser.add_argument("--typicality-sequence", required=True, choices=("vc_window_embeddings", "vc_hidden_sequence"), help="Explicit mapping into the learned VC coordinates; see typicality/README.md.")
     parser.add_argument("--typicality-weight", type=_positive_float, default=1.0)
     parser.add_argument("--typicality-quantile", type=_positive_float, default=0.95)
@@ -59,7 +59,12 @@ def build_parser():
     parser.add_argument("--learning-rate-decay", type=_decay_float, default=1.0)
     parser.add_argument("--max-steps", type=_nonnegative_int, default=200)
     parser.add_argument("--gradient-clip-norm", type=_positive_float, default=5.0)
-    parser.add_argument("--stop-on-success", action="store_true")
+    parser.add_argument("--stop-on-success", action=argparse.BooleanOptionalAction, default=True,
+                        help="Stop as soon as the target criterion is met (default: enabled).")
+    parser.add_argument("--min-gradient-norm", type=_nonnegative_float, default=1e-6,
+                        help="Raw global gradient norm at or below which a step is considered stalled; 0 disables with patience 0.")
+    parser.add_argument("--low-gradient-patience", type=_nonnegative_int, default=5,
+                        help="Consecutive low-gradient evaluations required before stopping; 0 disables with threshold 0.")
     parser.add_argument("--log-every", type=_nonnegative_int, default=10)
     parser.add_argument("--fs", type=_positive_float, default=128.0)
     parser.add_argument("--physiology-quantile", type=_positive_float, default=0.95)
@@ -79,6 +84,8 @@ def parse_args(argv=None):
             parser.error(f"--{name.replace('_', '-')} must be below 1")
     if args.physiology_required_fraction > 1 or args.ece_bins < 1:
         parser.error("Invalid physiology fraction or ECE bin count")
+    if (args.min_gradient_norm == 0) != (args.low_gradient_patience == 0):
+        parser.error("--min-gradient-norm and --low-gradient-patience must both be zero to disable stopping, or both be positive")
     if args.decoder_mode == "branches" and args.report_output not in ("gcn_gru", "bilstm"):
         parser.error("Branch mode requires an explicit --report-output gcn_gru or bilstm")
     if args.decoder_mode == "joint" and args.report_output not in (None, "joint"):
@@ -173,14 +180,39 @@ def _protocol(args, dataset, folds):
             "physiology_unit": dataset.signal_unit if dataset.normalization_scale is not None else "model_input_units",
             "physiology_families": list(FAMILIES), "band_edges_hz": DEFAULT_BANDS,
             "physiology_reference": "all source classes, empirical per-component central intervals",
+            "vcsc_reference": "all held-out subject initial reconstructions R(Z0)",
+            "vcsc_reference_output": args.report_output,
+            "vcsc_label_usage": "none",
             "aperiodic_status": "unavailable from band-filtered decoder; never counted as passed"}
+
+
+def _initial_reconstructions(adapter, features, output_name):
+    """Yield initial reconstructions one at a time without retaining an archive."""
+    if not len(features):
+        raise ValueError("VCSC calibration requires at least one held-out trial")
+    for feature in features:
+        x0 = tf.convert_to_tensor(feature[None], dtype=tf.float32)
+        z0 = tf.stop_gradient(adapter.initial_state(x0))
+        outputs = adapter.reconstruct(z0, x0)
+        if output_name not in outputs:
+            raise ValueError(f"Decoder output {output_name!r} is unavailable for VCSC calibration")
+        reconstruction = tf.stop_gradient(tf.cast(outputs[output_name], tf.float32)).numpy()
+        if reconstruction.shape != tuple(x0.shape):
+            raise ValueError(
+                "Initial reconstruction shape does not match the model input: "
+                f"{reconstruction.shape} != {tuple(x0.shape)}"
+            )
+        if not np.isfinite(reconstruction).all():
+            raise ValueError("Initial reconstruction contains non-finite values")
+        yield reconstruction[0]
 
 
 def run_fold(args, dataset, entry, out):
     subject = entry["subject_id"]
     directory = out / f"subject_{subject}"
     directory.mkdir(parents=True, exist_ok=True)
-    held = np.flatnonzero(dataset.subject_ids == subject)
+    held_all = np.flatnonzero(dataset.subject_ids == subject)
+    held = held_all
     if args.trial_ids is not None:
         held = held[np.isin(dataset.trial_ids[held], args.trial_ids)]
         if not len(held):
@@ -212,19 +244,26 @@ def run_fold(args, dataset, entry, out):
               probabilities=np.stack(source_probabilities), discrepancy=region.score(source_moments),
               subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source],
               learned_prior_log_sigma=model.vc_target.prior_log_sigma.numpy(), learned_prior_mu=model.vc_target.prior_mu.numpy())
-    vcsc = source_vcsc_calibration(dataset.features[source])
-    write_npz(directory / "calibration" / "vcsc.npz", **vcsc, subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source])
+    vcsc = vcsc_calibration(_initial_reconstructions(
+        adapter, dataset.features[held_all], args.report_output
+    ))
+    write_npz(directory / "calibration" / "vcsc.npz", **vcsc,
+              subject_ids=dataset.subject_ids[held_all], trial_ids=dataset.trial_ids[held_all],
+              reference=np.asarray("held_out_subject_initial_reconstruction"),
+              decoder_output=np.asarray(args.report_output))
     source_diagnostics = [_diagnostics(dataset, i, dataset.features[i], args) for i in source]
     physiological = PhysiologicalReference.fit(source_diagnostics, quantile=args.physiology_quantile,
                                                required_fraction=args.physiology_required_fraction)
     write_npz(directory / "calibration" / "physiology.npz", **physiological.arrays(),
               **{f"source_{name}": np.stack([d[name] for d in source_diagnostics]) for name in FAMILIES})
-    loss = make_source_loss(vcsc, target_weight=args.target_weight, latent_weight=args.latent_weight,
+    loss = make_vcsc_loss(vcsc, target_weight=args.target_weight, latent_weight=args.latent_weight,
                             decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
                             target_probability=args.target_probability)
     common = dict(loss=loss, learning_rate=args.learning_rate, learning_rate_decay=args.learning_rate_decay,
                   target_loss_component=args.target_loss_component, max_steps=args.max_steps,
                   gradient_clip_norm=args.gradient_clip_norm, stop_on_success=args.stop_on_success,
+                  min_gradient_norm=args.min_gradient_norm,
+                  low_gradient_patience=args.low_gradient_patience,
                   decoder_mode=args.decoder_mode, typicality=region)
     # Both arms use identical seeds, frozen models, starts, budgets, and losses.
     optimizers = {name: CounterfactualOptimizer(model, typicality_weight=weight, **common)

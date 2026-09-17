@@ -1,7 +1,7 @@
 """Model and dataset contracts for architecture-agnostic counterfactuals.
 
-Adapters isolate model-specific encoding, classification, decoding, and
-optional validity metrics from the optimizer.  External projects can provide
+Adapters isolate model-specific state initialization, classification, decoding,
+and optional validity metrics from the optimizer. External projects can provide
 an adapter factory without changing EEGProc; factories are addressed as
 ``package.module:function`` and receive ``model_path``, ``config``, and one
 sample trial.
@@ -59,10 +59,6 @@ class CounterfactualAdapter(ABC):
         self, state: tf.Tensor, reference_input: tf.Tensor
     ) -> Mapping[str, tf.Tensor]:
         """Map state to one or more input-shaped differentiable signals."""
-
-    @abstractmethod
-    def logits_from_input(self, inputs: tf.Tensor) -> tf.Tensor:
-        """Return class logits when an input-shaped reconstruction is evaluated."""
 
     def constraint(self, name: str, signal: tf.Tensor) -> tf.Tensor:
         """Return one scalar validity metric; subclasses opt in by name."""
@@ -253,17 +249,14 @@ class KerasInputAdapter(CounterfactualAdapter):
         return tf.cast(inputs, tf.float32)
 
     def logits_from_state(self, state):
-        return self.logits_from_input(state)
+        return _as_logits(
+            _model_output(self.model, state, output_key=self.output_key),
+            output_kind=self.output_kind,
+        )
 
     def reconstruct(self, state, reference_input):
         del reference_input
         return {"input": tf.cast(state, tf.float32)}
-
-    def logits_from_input(self, inputs):
-        return _as_logits(
-            _model_output(self.model, inputs, output_key=self.output_key),
-            output_kind=self.output_kind,
-        )
 
     def metadata(self):
         return {

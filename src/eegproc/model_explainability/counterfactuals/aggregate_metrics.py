@@ -147,22 +147,6 @@ def build_metrics_payload(
         name: _describe(values) for name, values in sorted(numeric_values.items())
     }
 
-    decoder_paths = sorted(
-        {
-            path
-            for record in records
-            for path in record["metrics"].get("decoded_trials", {})
-        }
-    )
-    decoded_success_rate = {}
-    for path in decoder_paths:
-        successes = [
-            bool(record["metrics"]["decoded_trials"][path]["counterfactual"]["success"])
-            for record in records
-            if path in record["metrics"].get("decoded_trials", {})
-        ]
-        decoded_success_rate[path] = sum(successes) / len(successes)
-
     latent_successes = [
         bool(record["metrics"]["latent_counterfactual"]["success"])
         for record in records
@@ -186,7 +170,6 @@ def build_metrics_payload(
                 if latent_successes
                 else None
             ),
-            "decoded_success_rate": decoded_success_rate,
             "numeric_metric_summaries": numeric_summaries,
         },
         "trials": records,

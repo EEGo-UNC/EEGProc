@@ -287,13 +287,6 @@ def run(args):
             flush=True,
         )
 
-    output_names = sorted(
-        {
-            name
-            for summary in summaries
-            for name in summary["reconstructed_outputs"]
-        }
-    )
     aggregate = {
         "n_trials": len(summaries),
         "counterfactual_success_rate": float(
@@ -308,20 +301,6 @@ def run(args):
                 ]
             )
         ),
-        "reconstructed_success_rate": {
-            name: float(
-                np.mean(
-                    [
-                        summary["reconstructed_outputs"][name]["counterfactual"][
-                            "success"
-                        ]
-                        for summary in summaries
-                        if name in summary["reconstructed_outputs"]
-                    ]
-                )
-            )
-            for name in output_names
-        },
     }
     _write_json(out / "summary.json", aggregate)
     print(f"Run summary:\n{json.dumps(aggregate, indent=2)}", flush=True)

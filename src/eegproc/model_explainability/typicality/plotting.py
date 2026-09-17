@@ -77,8 +77,6 @@ def plot_report(report_directory, output):
         steps = [int(r["step"]) for r in history]
         fig, axes = plt.subplots(3, 1, figsize=(8, 8), sharex=True, layout="constrained")
         axes[0].plot(steps, [float(r["target_probability"]) for r in history], label="Latent classifier")
-        key = f"decoded_{summary['report_output']}_target_probability"
-        axes[0].plot(steps, [float(r[key]) for r in history], label="Decoded/reclassified")
         axes[0].axhline(summary["required_target_probability"], linestyle="--", color="grey", label="Target probability")
         axes[0].set(ylabel="Class-1 probability", ylim=(0, 1))
         axes[0].legend()
@@ -99,7 +97,7 @@ def plot_report(report_directory, output):
         "population_maps_cohort": "all finite completed endpoints, including unsuccessful counterfactuals",
         "power_reference": "decoded original reconstruction; power differences retain each run's documented units",
         "discrepancy_plot": "D minus each trial's fold threshold; raw values and thresholds remain in report CSV",
-        "example_rule": "joint-success typicality arm nearest task median VC sequence displacement",
+        "example_rule": "latent-target-and-typical arm nearest task median VC sequence displacement",
     })
 
 

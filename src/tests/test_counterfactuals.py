@@ -80,6 +80,8 @@ def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
         "x_prime_joint",
     }
     decoded = result["summary"]["decoded_trials"]["joint"]
+    assert "counterfactual" not in decoded
+    assert "original_reconstruction" not in decoded
     assert result["history"][0]["decoded"] == pytest.approx(0.0)
     assert decoded["original_reconstruction_mse"] > 0
     assert result["summary"]["selected_losses"]["decoded"] == pytest.approx(
@@ -223,6 +225,26 @@ def test_learning_rate_decay_is_recorded_per_step(tiny_joint_model):
     assert [row["learning_rate"] for row in result["history"]] == pytest.approx(
         [0.2, 0.1, 0.05]
     )
+
+
+def test_consecutive_low_gradients_stop_optimization(tiny_joint_model):
+    inputs = tf.random.normal((1, 2, 4, 42), seed=29)
+    result = CounterfactualOptimizer(
+        tiny_joint_model,
+        max_steps=20,
+        decoder_mode="joint",
+        min_gradient_norm=1e9,
+        low_gradient_patience=2,
+    ).optimize(inputs)
+
+    assert result["summary"]["stop_reason"] == "low_gradient"
+    assert result["summary"]["steps_completed"] == 1
+    assert [row["low_gradient_steps"] for row in result["history"]] == [1, 2]
+    assert result["summary"]["stopping"] == {
+        "stop_on_success": False,
+        "min_gradient_norm": 1e9,
+        "low_gradient_patience": 2,
+    }
 
 
 def test_vcsc_settings_are_exposed_by_cli():

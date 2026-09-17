@@ -14,7 +14,8 @@
 set -euo pipefail
 
 # One array task is one DREAMER held-out subject (0--22). The typicality
-# runner owns source-only calibration and paired base/typicality objectives.
+# runner owns source-only typicality calibration, held-out R(Z0) VCSC
+# calibration, and paired base/typicality objectives.
 # Required exports: MODELS_JSON and TYPICALITY_WEIGHT.
 
 module purge
@@ -63,6 +64,9 @@ TARGET_LOSS_COMPONENT="${TARGET_LOSS_COMPONENT:-confidence}"
 LEARNING_RATE="${LEARNING_RATE:-0.01}"
 LEARNING_RATE_DECAY="${LEARNING_RATE_DECAY:-1.0}"
 MAX_STEPS="${MAX_STEPS:-200}"
+STOP_ON_SUCCESS="${STOP_ON_SUCCESS:-1}"
+MIN_GRADIENT_NORM="${MIN_GRADIENT_NORM:-1e-6}"
+LOW_GRADIENT_PATIENCE="${LOW_GRADIENT_PATIENCE:-5}"
 TARGET_WEIGHT="${TARGET_WEIGHT:-1.0}"
 LATENT_WEIGHT="${LATENT_WEIGHT:-0.1}"
 DECODED_WEIGHT="${DECODED_WEIGHT:-0.1}"
@@ -91,6 +95,14 @@ if [[ -z "$TYPICALITY_WEIGHT" ]]; then
     echo "ERROR: set TYPICALITY_WEIGHT to the frozen source-only tuned weight."
     exit 2
 fi
+case "$STOP_ON_SUCCESS" in
+    1|true|TRUE) STOP_ARGUMENTS=(--stop-on-success) ;;
+    0|false|FALSE) STOP_ARGUMENTS=(--no-stop-on-success) ;;
+    *)
+        echo "ERROR: STOP_ON_SUCCESS must be 1/0 or true/false."
+        exit 2
+        ;;
+esac
 if [[ -n "$MODEL_DIR" && ! -d "$MODEL_DIR" ]]; then
     echo "ERROR: MODEL_DIR does not exist: $MODEL_DIR"
     exit 2
@@ -236,6 +248,9 @@ echo "Output: $OUT_DIR"
     --learning-rate "$LEARNING_RATE" \
     --learning-rate-decay "$LEARNING_RATE_DECAY" \
     --max-steps "$MAX_STEPS" \
+    "${STOP_ARGUMENTS[@]}" \
+    --min-gradient-norm "$MIN_GRADIENT_NORM" \
+    --low-gradient-patience "$LOW_GRADIENT_PATIENCE" \
     --physiology-quantile "$PHYSIOLOGY_QUANTILE" \
     --physiology-required-fraction "$PHYSIOLOGY_REQUIRED_FRACTION" \
     --fs "$FS" \

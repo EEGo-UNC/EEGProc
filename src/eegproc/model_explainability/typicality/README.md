@@ -59,7 +59,8 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.runner \
   --typicality-sequence vc_window_embeddings \
   --decoder-mode joint --target-probability 0.8 \
   --typicality-weight 1 --typicality-quantile 0.95 \
-  --learning-rate 0.01 --max-steps 200 --fs 128 \
+  --learning-rate 0.01 --max-steps 200 \
+  --min-gradient-norm 1e-6 --low-gradient-patience 5 --fs 128 \
   --out-dir runs/typicality/valence
 ```
 
@@ -102,12 +103,18 @@ Concurrent jobs should use separate output directories.
   sequence, seed, budget, frozen model, and source calibration.
 - The optimizer's target criterion is argmax class 1 and `p1 >= p_target`.
   The typicality arm additionally requires `D <= tau` for candidate selection
-  and early stopping. Both arms are evaluated for typicality.
-- Decoded validity is argmax class 1 after decoder traversal and full-model
-  reclassification. It is saved separately from latent confidence success.
-- The results table's joint success is decoded validity AND `D <= tau`.
-  This is distinct from the equation's latent-confidence AND typicality
-  condition, which is also recoverable from saved scalar results.
+  and success stopping. Both arms are evaluated for typicality. Success stopping
+  is enabled by default and can be disabled with `--no-stop-on-success`.
+- Independently, optimization stops after `--low-gradient-patience` consecutive
+  evaluated steps whose raw global gradient norm is at most
+  `--min-gradient-norm`. The defaults are five steps and `1e-6`; set both to
+  zero to disable this rule. The history and result record the counter and the
+  final stop reason.
+- Decoded signals are never passed back through the encoder. Counterfactual
+  success is measured directly by the frozen classifier on the optimized
+  latent state.
+- The results table's typicality success requires latent target success AND
+  `D <= tau`.
 - `d_z` is RMSE between the original and counterfactual VC-space sequences.
   `decoder_latent_rmse` separately measures the actual optimized decoder
   features and corresponds to the square root of the CFO latent MSE term.
@@ -135,7 +142,7 @@ subject_<id>/
     region.json + region.npz      Eq. (7) definition, learned Gaussian, epsilon, tau
     source_trials.npz            source IDs, labels, moments, scores, learned priors
     sequence.json                mapping and coordinate-space definition
-    vcsc.npz                    source-only VCSC calibration and source measurements
+    vcsc.npz                    held-out R(Z0) VCSC calibration and measurements
     physiology.npz              source descriptors and empirical check bounds
   trial_<id>/
     observed.npz                original input, decoder latent, VC sequence, predictions
@@ -232,7 +239,7 @@ These commands need no TensorFlow or checkpoint inference. Outputs include
 recognition fold means and sample SDs, recalls, AUROC, top-label ECE,
 population percentages and medians/IQRs, per-subject rates, paired percentage
 point changes, and all observed/counterfactual discrepancy distributions.
-The example is the typicality-arm joint success nearest its task's median
+The example is the typicality-arm latent-target-and-typical success nearest its task's median
 VC-sequence displacement, with deterministic subject/trial tie breaking.
 
 Figures include probability/discrepancy/displacement trajectories, per-subject
@@ -243,7 +250,12 @@ Existing counterfactual heatmap and topography commands can read the new
 
 ## Physiology and subject-identification limits
 
-VCSC is calibrated on source trials using the existing differentiable estimator.
+VCSC is calibrated without labels on all initial reconstructions `R(Z0)` from
+the held-out subject, using the same selected decoder output that the study
+reports and optimizes. A `--trial-ids` smoke-test filter does not reduce this
+calibration set. Only VCSC summary statistics, measurements, and trial IDs are
+saved; labels are not used, and full calibration reconstructions are processed
+one at a time rather than retained or archived.
 Additional source-calibrated checks cover the 99th-percentile absolute
 amplitude, band spectral power, coherence, and signed debiased wPLI squared.
 Per-component central intervals and required in-range fractions are explicit

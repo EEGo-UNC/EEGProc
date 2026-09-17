@@ -46,9 +46,6 @@ class TinyInputAdapter(CounterfactualAdapter):
         del reference_input
         return {"input": state}
 
-    def logits_from_input(self, inputs):
-        return self.logits_from_state(inputs)
-
     def constraint(self, name, signal):
         if name != "magnitude":
             return super().constraint(name, signal)
@@ -109,6 +106,8 @@ def test_adapter_signal_loss_excludes_original_reconstruction_error():
     decoded = summary["reconstructed_outputs"]["input"]
     assert result["history"][0]["signal"] == pytest.approx(0.0)
     assert decoded["original_reconstruction_mse"] == pytest.approx(49.0)
+    assert "counterfactual" not in decoded
+    assert "original_reconstruction" not in decoded
     assert summary["selected_losses"]["signal"] == pytest.approx(decoded["decoded_change_mse"])
     assert summary["signal_distance_reference"] == "original_reconstruction"
     # Once for the reference, once per evaluated step, once for the endpoint.

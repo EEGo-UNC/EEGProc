@@ -26,10 +26,6 @@ def _write_trial(root, trial_id, *, success, decoded_mse):
         },
         "decoded_trials": {
             "joint": {
-                "counterfactual": {
-                    "success": success,
-                    "target_probability": 0.75 if success else 0.35,
-                },
                 "counterfactual_to_original_mse": decoded_mse,
             }
         },
@@ -70,9 +66,7 @@ def test_write_metrics_json_preserves_trials_histories_and_aggregates(tmp_path):
     assert saved["completed_trial_ids"] == [0, 1]
     assert saved["missing_trial_ids"] == []
     assert saved["aggregate"]["latent_success_rate"] == pytest.approx(0.5)
-    assert saved["aggregate"]["decoded_success_rate"]["joint"] == pytest.approx(
-        0.5
-    )
+    assert "decoded_success_rate" not in saved["aggregate"]
     decoded_summary = saved["aggregate"]["numeric_metric_summaries"][
         "selected_losses.decoded"
     ]

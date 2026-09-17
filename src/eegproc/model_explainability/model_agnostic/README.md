@@ -1,8 +1,8 @@
 # Model-agnostic counterfactuals
 
 This package provides an adapter-based counterfactual optimizer. An adapter
-creates the optimization state, classifies it, reconstructs input-shaped
-signals, and classifies the reconstructed signals. Optional validity
+creates the optimization state, classifies it, and reconstructs input-shaped
+signals. Reconstructed signals are not classified again. Optional validity
 constraints also belong to the adapter rather than the optimizer.
 
 | File | Owns |

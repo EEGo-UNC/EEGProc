@@ -277,11 +277,11 @@ percentage of the total loss. `--log-every N` reduces the display frequency;
 Joint mode also prints the checkpoint's frozen GCN-GRU `alpha` and BiLSTM
 `1-alpha` weights once before optimization.
 
-Each decoded counterfactual is re-encoded and classified by the full saved
-model. Report its success separately: a successful latent need not decode
-to EEG that the model classifies as the target. Original reconstructions are
-also reclassified to expose decoder error before any counterfactual change.
-The final report includes VCSC for the reconstructed original, the decoded
+Decoded signals are never passed back through the encoder. Counterfactual
+success is the frozen classifier's prediction directly from the optimized
+latent state. Reconstructions are used only for decoded displacement,
+reconstruction error, VCSC, and other signal-domain diagnostics. The final
+report includes VCSC for the reconstructed original, the decoded
 counterfactual, and their difference. These are optimization diagnostics, not
 improved accuracy or causal effects.
 
@@ -294,10 +294,10 @@ overwritten. Completed trials are saved individually.
 | --- | --- |
 | `settings.json` | Arguments, loss weights, model path, input shape, selected trials, environment version. |
 | `subject_<id>_trial_<id>/history.csv` | Step 0 and each finite evaluated step: total/raw/weighted losses, selected reconstruction-path MSEs, probabilities, prediction, success, gradient norm. |
-| `subject_<id>_trial_<id>/result.json` | Original/latent/decoded predictions, selected losses, VCSC metrics, selected step, update count, runtime, stop reason. |
+| `subject_<id>_trial_<id>/result.json` | Original/latent predictions, reconstruction distances, selected losses, VCSC metrics, selected step, update count, runtime, stop reason. |
 | `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, `x_reconstructed_<path>`, `x_prime_<path>`; joint mode uses `<path>=joint`. |
 | `results.json` | Completed trial summaries, updated after each trial. |
-| `summary.json` | Aggregate success, class-flip, distance, probability-change, and VCSC metrics after all trials finish. |
+| `summary.json` | Aggregate latent success, class-flip, distance, probability-change, and VCSC metrics after all trials finish. |
 
 `x_prime_<path>` remains in the model's preprocessed input space. This
 runner does not reconstruct missing raw EEG bands or undo normalization.

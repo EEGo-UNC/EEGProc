@@ -219,9 +219,7 @@ def _counterfactual_rows(*, root, task, fold, audit_tau):
                 else "entered" if counterfactual_inside
                 else "stayed_outside"
             )
-            report_output = summary["report_output"]
-            decoded = summary["decoded_trials"][report_output]["counterfactual"]
-            decoded_valid = int(decoded["predicted_class"]) == 1
+            latent_target_success = bool(summary["latent_counterfactual"]["success"])
             row.update(
                 original_discrepancy=original_d,
                 counterfactual_discrepancy=counterfactual_d,
@@ -234,9 +232,8 @@ def _counterfactual_rows(*, root, task, fold, audit_tau):
                 exited_audit_region=transition == "exited",
                 counterfactual_audit_margin=counterfactual_d - audit_tau,
                 counterfactual_audit_ratio=counterfactual_d / audit_tau if audit_tau > 0 else None,
-                latent_target_success=bool(summary["latent_counterfactual"]["success"]),
-                decoded_valid=bool(decoded_valid),
-                audit_joint_success=bool(decoded_valid and counterfactual_inside),
+                latent_target_success=latent_target_success,
+                audit_typicality_success=bool(latent_target_success and counterfactual_inside),
                 generation_typical=bool(typicality["typical"]),
             )
             rows.append(row)
@@ -251,7 +248,7 @@ def _counterfactual_summary(rows):
         return (100.0 * sum(bool(row.get(field, False)) for row in completed) / denominator
                 if denominator else None)
 
-    decoded_flips = [row for row in completed if row.get("decoded_valid")]
+    latent_successes = [row for row in completed if row.get("latent_target_success")]
     return {
         "n_attempted": n_attempted,
         "n_completed": n_scored,
@@ -261,13 +258,13 @@ def _counterfactual_summary(rows):
         "typical_percent_scored": percent("counterfactual_inside_audit_region", n_scored),
         "entered_percent_all_attempts": percent("entered_audit_region", n_attempted),
         "preserved_inside_percent_all_attempts": percent("preserved_inside_audit_region", n_attempted),
-        "decoded_valid_percent_all_attempts": percent("decoded_valid", n_attempted),
-        "joint_success_percent_all_attempts": percent("audit_joint_success", n_attempted),
-        "typical_among_decoded_flips_percent": (
-            100.0 * sum(row["counterfactual_inside_audit_region"] for row in decoded_flips) / len(decoded_flips)
-            if decoded_flips else None
+        "latent_target_success_percent_all_attempts": percent("latent_target_success", n_attempted),
+        "typicality_success_percent_all_attempts": percent("audit_typicality_success", n_attempted),
+        "typical_among_latent_successes_percent": (
+            100.0 * sum(row["counterfactual_inside_audit_region"] for row in latent_successes) / len(latent_successes)
+            if latent_successes else None
         ),
-        "n_decoded_flips": len(decoded_flips),
+        "n_latent_target_successes": len(latent_successes),
     }
 
 
@@ -445,7 +442,7 @@ def build_class_typicality_audit(
                 "heldout_all_true1_coverage_macro_percent": _mean(group, "heldout_all_true1_percent"),
                 "counterfactual_typical_macro_percent": _mean(group, "typical_percent_all_attempts"),
                 "counterfactual_entry_macro_percent": _mean(group, "entered_percent_all_attempts"),
-                "counterfactual_joint_success_macro_percent": _mean(group, "joint_success_percent_all_attempts"),
+                "counterfactual_typicality_success_macro_percent": _mean(group, "typicality_success_percent_all_attempts"),
                 "n_counterfactual_attempts": int(sum(row["n_attempted"] for row in group)),
             })
 
