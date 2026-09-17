@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=typicality_cfx_smoke
-#SBATCH --output=typicality_cfx_smoke_%j.out
-#SBATCH --error=typicality_cfx_smoke_%j.err
+#SBATCH --output=typicality_outs/typicality_cfx_smoke_%j.out
+#SBATCH --error=typicality_outs/typicality_cfx_smoke_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:1
