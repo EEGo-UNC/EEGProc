@@ -1,0 +1,25 @@
+{
+  "n_trials": 1,
+  "latent_success_rate": 0.0,
+  "decoded_success_rate": {
+    "joint": 0.0
+  },
+  "mean_selected_latent_mse": 0.01044549886137247,
+  "mean_selected_decoded_mse": 0.5441723465919495,
+  "mean_selected_physiological": 10.655674934387207,
+  "mean_vcsc_reconstructed_original": {
+    "joint": 13.722040176391602
+  },
+  "mean_vcsc_counterfactual": {
+    "joint": 10.655674934387207
+  },
+  "mean_vcsc_delta": {
+    "joint": -3.0663652420043945
+  },
+  "latent_class_flip_rate": 1.0,
+  "decoded_class_flip_rate": {
+    "joint": 1.0
+  },
+  "mean_target_probability_delta": 0.04289960861206055,
+  "physiological_constraint_enforced": false
+}

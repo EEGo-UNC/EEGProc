@@ -1,0 +1,83 @@
+[
+  {
+    "subject_id": 0,
+    "trial_id": 0,
+    "target_class": 0,
+    "target_loss_component": "confidence",
+    "decoder_mode": "joint",
+    "joint_reconstruction_alpha": 0.5,
+    "required_target_probability": 0.6,
+    "prediction_rule": "argmax",
+    "original": {
+      "probabilities": [
+        0.4993746280670166,
+        0.5006254315376282
+      ],
+      "predicted_class": 1,
+      "target_probability": 0.4993746280670166,
+      "success": false
+    },
+    "latent_counterfactual": {
+      "probabilities": [
+        0.5422742366790771,
+        0.45772573351860046
+      ],
+      "predicted_class": 0,
+      "target_probability": 0.5422742366790771,
+      "success": false
+    },
+    "decoded_trials": {
+      "joint": {
+        "original_reconstruction": {
+          "probabilities": [
+            0.4999844431877136,
+            0.5000155568122864
+          ],
+          "predicted_class": 1,
+          "target_probability": 0.4999844431877136,
+          "success": false
+        },
+        "counterfactual": {
+          "probabilities": [
+            0.5036213994026184,
+            0.4963786005973816
+          ],
+          "predicted_class": 0,
+          "target_probability": 0.5036213994026184,
+          "success": false
+        },
+        "original_reconstruction_mse": 0.5422641038894653,
+        "counterfactual_to_original_mse": 0.5441723465919495,
+        "decoded_change_mse": 0.001249777153134346,
+        "vcsc_original_reconstruction": 13.722040176391602,
+        "vcsc_counterfactual": 10.655674934387207,
+        "vcsc_delta": -3.0663652420043945
+      }
+    },
+    "selected_losses": {
+      "total": 0.10115784406661987,
+      "target": 0.10115784406661987,
+      "latent": 0.01044549886137247,
+      "decoded": 0.5441723465919495,
+      "physiological": 10.655674934387207,
+      "weighted_target": 0.10115784406661987,
+      "weighted_latent": 0.0,
+      "weighted_decoded": 0.0,
+      "weighted_physiological": 0.0,
+      "decoded_joint": 0.5441723465919495,
+      "target_confidence_component": 0.10115784406661987,
+      "target_focal_component": 0.560241162776947,
+      "target_vc_component": 0.03474844619631767,
+      "target_vc_latent_posterior_kl": 0.0,
+      "target_vc_discriminator_kl": 0.0,
+      "target_vc_class_prior_kl": 0.03474844619631767
+    },
+    "selected_step": 10,
+    "steps_completed": 10,
+    "stop_reason": "max_steps",
+    "elapsed_seconds": 1094.4849788749998,
+    "physiological_validity": 10.655674934387207,
+    "physiological_constraint_enforced": false,
+    "true_class": 1
+  }
+]
