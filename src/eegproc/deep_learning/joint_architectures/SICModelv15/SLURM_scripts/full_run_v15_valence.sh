@@ -1,28 +1,26 @@
 #!/bin/bash
 #SBATCH --job-name=full_run_v15_valence
-#SBATCH --output=full_run_v15_valence_%A_%a.out
-#SBATCH --error=full_run_v15_valence_%A_%a.err
+#SBATCH --output=full_run_v15_valence_%j.out
+#SBATCH --error=full_run_v15_valence_%j.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --array=0-1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=30:00:00
+#SBATCH --time=12:00:00
 
 set -euo pipefail
 
 # Full run for all 23 DREAMER valence LOSO target subjects.
-# Two Slurm array tasks test VC logit scales (inverse temperatures) 32 and 16.
-# Each task uses the same deterministic per-target initialization for a fair
-# comparison.
-# Selection maximizes mean zero-shot LOSO balanced accuracy.
+# One fixed configuration: the selected LOSO balanced-accuracy configuration
+# (id=1, score=0.5892701048951049), with 6 source epochs by default.
+# Deterministic per-target initialization uses base seed 42 by default.
 #
 # SICModelv15 uses the learned convex joint reconstruction with initial
 # alpha=0.5 and auxiliary branch weight=0.25. Four allocated GPUs run two
-# folds concurrently on pairs (0,1) and (2,3). To isolate the label dimension,
-# preserve the arousal smoke run's 12 meta-train + 6 meta-test subjects x 2
-# distinct trials setup: 24/12 trials globally and 12/6 per GPU.
+# folds concurrently on pairs (0,1) and (2,3). Each MLDG episode uses
+# 8 meta-train + 4 meta-test subjects x 3 distinct trials: 24/12 trials
+# globally and 12/6 per GPU, with 10 steps per source epoch.
 
 module purge
 module load python/3.12.4
@@ -35,22 +33,14 @@ EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
-# Match the arousal smoke run: 4 source and 10 calibration epochs.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-8}"
+# Full run defaults: 6 source epochs and 1 calibration epoch.
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-100}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
-TEMPERATURES=(64)
-TASK_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
-if [[ ! "$TASK_INDEX" =~ ^[0-9]+$ ]] || (( TASK_INDEX >= ${#TEMPERATURES[@]} )); then
-    echo "ERROR: SLURM_ARRAY_TASK_ID must be between 0 and $((${#TEMPERATURES[@]} - 1)); got $TASK_INDEX."
-    exit 1
-fi
-VC_LOGIT_SCALE="${TEMPERATURES[$TASK_INDEX]}"
-export VC_LOGIT_SCALE
-SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
+SUITE_ID="${SLURM_JOB_ID:-manual}"
 
 CALIBRATION_LEVEL_ARGS=(
     --calibration-level 3 6
@@ -140,9 +130,7 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# Six configurations vary only focal gamma and VC classification weight.
-# Reconstruction, subject-adversarial, and other VC regularization weights
-# remain fixed so zero-shot balanced accuracy isolates this small search.
+# Only the selected configuration; sequence-valued widths are fixed lists.
 MODEL_CONFIG="$(python - <<'PY'
 import json
 import os
@@ -155,10 +143,10 @@ print(json.dumps({
     "weight_decay": 5e-5,
     "vrex_penalty_weight": 1.0,
 
-    "mldg_meta_train_subjects": 10,
-    "mldg_meta_test_subjects": 5,
+    "mldg_meta_train_subjects": 8,
+    "mldg_meta_test_subjects": 4,
     "mldg_trials_per_subject": 3,
-    "mldg_steps_per_epoch": 20,
+    "mldg_steps_per_epoch": 10,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": seed,
@@ -184,14 +172,14 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": {"grid": [0.2, 0.5]},
+    "focal_gamma": 0.3,
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
-    "vc_alpha": {"grid": [2.0]},
-    "vc_beta": {"grid": [0.6, 1.0]},
+    "vc_alpha": 2.0,
+    "vc_beta": 0.6,
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
-    "vc_logit_scale": float(os.environ["VC_LOGIT_SCALE"]),
+    "vc_logit_scale": 16.0,
     "update_vc_discriminator": False,
 
     "use_subject_adversarial": True,
@@ -221,21 +209,17 @@ PY
 
 echo "SIC builder: v15"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
-echo "Array task: $TASK_INDEX"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER valence"
 echo "Scope: all 23 LOSO target subjects"
-echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 12+6 subjects x 2 trials = 36 trials/episode"
+echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 8+4 subjects x 3 trials = 36 trials/episode; 10 steps/epoch"
 echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-test"
 echo "Per GPU: 12 meta-train / 6 meta-test trials; full-episode VC statistics"
-echo "Valence uses the identical 2-distinct-trials-per-subject episode design."
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
-echo "Temperature grid: vc_logit_scale=$VC_LOGIT_SCALE (task values: 32,16)"
-echo "Within-task configuration: focal_gamma=1.0; vc_alpha=2.0; reconstruction=0.6"
-echo "Selection: maximize zero-shot LOSO balanced accuracy"
+echo "Fixed configuration: focal_gamma=0.3; vc_alpha=2.0; vc_beta=0.6; vc_logit_scale=16.0"
+echo "Evaluation: zero-shot LOSO balanced accuracy; one configuration"
 echo "Subject loss weight: 0.2"
 echo "Joint reconstruction: weight=0.6 initial alpha=0.5 auxiliary branch weight=0.25"
-echo "Temperature settings: 1 per task, 2 across the array; subject loss weight fixed at 0.2"
 echo "Deterministic training: enabled; base seed=$TRAINING_SEED; subject seed=base+target ID"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 echo "Git commit: $(git rev-parse HEAD)"
@@ -263,8 +247,8 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --classification-level trial \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/full/sic_v15_valence_temperature_grid/DREAMER/valence/suite_${SUITE_ID}/temperature_${VC_LOGIT_SCALE}/all_subjects" \
-    --run-name "full_run_v15_valence_temperature_${VC_LOGIT_SCALE}" \
+    --out-dir "runs/full/sic_v15_valence_best_config/DREAMER/valence/suite_${SUITE_ID}/all_subjects" \
+    --run-name "full_run_v15_valence_best_config" \
     --training-method mldg \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \
