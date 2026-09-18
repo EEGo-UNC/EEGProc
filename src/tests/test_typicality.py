@@ -134,7 +134,7 @@ def test_tf_eq7_gradient_matches_finite_difference():
     assert gradient[0, 0, 0, 0] == pytest.approx(float(numerical[0]), rel=1e-3)
 
 
-def test_exact_hinge_and_typicality_aware_stopping():
+def test_two_phase_normalized_typicality_and_feasible_selection():
     tf = pytest.importorskip("tensorflow")
     from eegproc.model_explainability.counterfactuals.loss import CounterfactualLoss
     from eegproc.model_explainability.counterfactuals.optimizer import CounterfactualOptimizer
@@ -176,14 +176,27 @@ def test_exact_hinge_and_typicality_aware_stopping():
     region = TypicalityRegion(np.array([2.0]), np.array([0.25]), 0.05, {"target_class": 1})
     x = np.array([[[[-1.0], [0.0]]]], dtype=np.float32)
     loss = Loss(target_probability=0.6, latent_weight=0, decoded_weight=0)
-    common = dict(loss=loss, typicality=region, max_steps=80, learning_rate=0.1, stop_on_success=True)
+    common = dict(loss=loss, typicality=region, max_steps=80, learning_rate=0.1,
+                  stop_on_success=True, typicality_improvement_patience=10,
+                  typicality_min_delta=1e-7)
     base = CounterfactualOptimizer(Model(), typicality_weight=0, **common).optimize(x, target_class=1)
     constrained = CounterfactualOptimizer(Model(), typicality_weight=1, **common).optimize(x, target_class=1)
     first = constrained["history"][0]
-    assert first["weighted_typicality"] == pytest.approx(max(0, first["discrepancy"] - region.tau) ** 2)
+    assert first["optimization_stage"] == "target"
+    assert first["weighted_typicality"] == 0
+    typicality_rows = [row for row in constrained["history"] if row["optimization_stage"] == "typicality"]
+    assert typicality_rows
+    assert typicality_rows[0]["weighted_typicality"] == pytest.approx(
+        typicality_rows[0]["discrepancy"] / region.tau
+    )
     assert base["summary"]["latent_counterfactual"]["success"]
     assert not base["summary"]["typicality"]["typical"]
     assert constrained["summary"]["typicality"]["typical"]
+    assert constrained["summary"]["selected_feasible"]
+    feasible_discrepancies = [row["discrepancy"] for row in constrained["history"] if row["feasible"]]
+    assert constrained["summary"]["typicality"]["counterfactual_discrepancy"] == pytest.approx(
+        min(feasible_discrepancies)
+    )
     assert constrained["summary"]["selected_step"] > base["summary"]["selected_step"]
 
 
@@ -252,6 +265,9 @@ def test_typicality_runner_enables_stopping_defaults():
     assert actions["stop_on_success"].default is True
     assert actions["min_gradient_norm"].default == pytest.approx(1e-6)
     assert actions["low_gradient_patience"].default == 5
+    assert actions["typicality_improvement_patience"].default == 10
+    assert actions["typicality_min_delta"].default == pytest.approx(1e-6)
+    assert actions["physiological_weight"].default == pytest.approx(1.0)
 
 
 def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):

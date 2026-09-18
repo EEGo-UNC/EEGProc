@@ -240,11 +240,10 @@ def test_consecutive_low_gradients_stop_optimization(tiny_joint_model):
     assert result["summary"]["stop_reason"] == "low_gradient"
     assert result["summary"]["steps_completed"] == 1
     assert [row["low_gradient_steps"] for row in result["history"]] == [1, 2]
-    assert result["summary"]["stopping"] == {
-        "stop_on_success": False,
-        "min_gradient_norm": 1e9,
-        "low_gradient_patience": 2,
-    }
+    stopping = result["summary"]["stopping"]
+    assert stopping["stop_on_success"] is False
+    assert stopping["min_gradient_norm"] == 1e9
+    assert stopping["low_gradient_patience"] == 2
 
 
 def test_vcsc_settings_are_exposed_by_cli():

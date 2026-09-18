@@ -78,7 +78,8 @@ class TypicalityRegion:
             raise ValueError("Need at least two source target-class calibration trials")
         region = cls(prior_mean, prior_variance, 1.0, {}, variance_floor, sequence_transform)
         scores = region.score(values)
-        # No extra tau floor: the paper uses D - tau, not division by tau.
+        # Tau remains the unchanged evaluation threshold. Optimization may use
+        # it only as a fold-scale normalizer; that never changes this cutoff.
         region.tau = float(np.quantile(scores[target], quantile, method="higher"))
         region.metadata = {
             "schema_version": 1, "definition": "Eq7_diagonal_gaussian_KL_per_dimension",
@@ -91,7 +92,8 @@ class TypicalityRegion:
             "variance_floor": variance_floor, "tau": region.tau,
             "n_calibration_trials": int(target.sum()), "dimension": int(len(prior_mean)),
             "coverage_claim": "empirical source quantile; no held-out coverage guarantee",
-            "penalty": "lambda * max(0, D - tau)^2",
+            "evaluation": "typical iff D <= tau",
+            "optimization_penalty": "lambda * D / max(tau, variance_floor), activated after target and physiology feasibility",
         }
         return region
 

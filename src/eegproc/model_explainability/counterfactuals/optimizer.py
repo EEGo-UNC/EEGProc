@@ -48,6 +48,9 @@ class CounterfactualOptimizer:
         stop_on_success=False,
         min_gradient_norm=0.0,
         low_gradient_patience=0,
+        physiological_tolerance=1e-8,
+        typicality_improvement_patience=0,
+        typicality_min_delta=0.0,
         decoder_mode="branches",
         typicality=None,
         typicality_weight=0.0,
@@ -88,6 +91,16 @@ class CounterfactualOptimizer:
                 "min_gradient_norm and low_gradient_patience must both be zero "
                 "to disable low-gradient stopping, or both be positive."
             )
+        if not math.isfinite(physiological_tolerance) or physiological_tolerance < 0:
+            raise ValueError("physiological_tolerance must be finite and nonnegative.")
+        if (
+            isinstance(typicality_improvement_patience, bool)
+            or not isinstance(typicality_improvement_patience, (int, np.integer))
+            or typicality_improvement_patience < 0
+        ):
+            raise ValueError("typicality_improvement_patience must be a nonnegative integer.")
+        if not math.isfinite(typicality_min_delta) or typicality_min_delta < 0:
+            raise ValueError("typicality_min_delta must be finite and nonnegative.")
         decoder_mode = str(decoder_mode).strip().lower()
         if decoder_mode not in {"branches", "joint"}:
             raise ValueError("decoder_mode must be 'branches' or 'joint'.")
@@ -144,6 +157,9 @@ class CounterfactualOptimizer:
         )
         self.min_gradient_norm = float(min_gradient_norm)
         self.low_gradient_patience = int(low_gradient_patience)
+        self.physiological_tolerance = float(physiological_tolerance)
+        self.typicality_improvement_patience = int(typicality_improvement_patience)
+        self.typicality_min_delta = float(typicality_min_delta)
 
     def _classification_state(self, latent):
         """Return the frozen SIC classifier embedding and its sole logits."""
@@ -248,16 +264,18 @@ class CounterfactualOptimizer:
             ),
         }
 
-    def _objective(self, **kwargs):
+    def _objective(self, *, typicality_active=True, **kwargs):
         terms, decoded = self.loss.central_loss(**kwargs)
         if self.typicality is not None:
             if kwargs["target_class"] != self.typicality.metadata["target_class"]:
                 raise ValueError("Typicality target class does not match optimization target.")
             self._current_typicality_sequence = self.typicality.sequence(kwargs["z_prime"])
             discrepancy = self.typicality.discrepancy(kwargs["z_prime"], sequence=self._current_typicality_sequence)
-            penalty = tf.square(tf.nn.relu(discrepancy - self.typicality.tau))
+            normalizer = max(self.typicality.tau, self.typicality.variance_floor)
+            penalty = discrepancy / tf.cast(normalizer, discrepancy.dtype)
+            active_weight = self.typicality_weight if typicality_active else 0.0
             terms.update(typicality=penalty, discrepancy=discrepancy,
-                         weighted_typicality=self.typicality_weight * penalty)
+                         weighted_typicality=active_weight * penalty)
             terms["total"] = terms["total"] + terms["weighted_typicality"]
         return terms, decoded
 
@@ -277,10 +295,10 @@ class CounterfactualOptimizer:
 
         state_progress(row, arrays) optionally receives every finite iterate,
         full decoded arrays, raw gradient and Adam state for streamed archival.
-        An active typicality penalty adds D <= tau to selection/stopping. The
-        probability threshold remains a separate, stricter optimization
-        criterion. Decoded signals are never passed back through the encoder;
-        target success is defined directly in the optimized latent space.
+        The typicality arm first reaches target and physiological feasibility,
+        then minimizes normalized D while retaining those constraints. Decoded
+        signals are never passed back through the encoder; target success is
+        defined directly in the optimized latent space.
         """
         started = time.perf_counter()
         x = tf.cast(tf.convert_to_tensor(inputs), tf.float32)
@@ -348,6 +366,9 @@ class CounterfactualOptimizer:
         decode = lambda candidate: self._decode(candidate, x)
         history, best_key, best_latent, selected_step = [], None, None, None
         stop_reason, steps_completed, low_gradient_steps = "max_steps", 0, 0
+        typicality_active = self.typicality_weight == 0
+        best_typicality_discrepancy = None
+        typicality_no_improvement_steps = 0
 
         for step in range(self.max_steps + 1):
             with tf.GradientTape(watch_accessed_variables=False) as tape:
@@ -357,6 +378,7 @@ class CounterfactualOptimizer:
                     embedding, logits, target_class
                 )
                 terms, current_decoded = self._objective(
+                    typicality_active=typicality_active,
                     logits=logits,
                     target_class=target_class,
                     z_prime=variable,
@@ -384,18 +406,27 @@ class CounterfactualOptimizer:
                 break
             prediction = self._prediction(logits, target_class)
             typical = self.typicality is None or values["discrepancy"] <= self.typicality.tau
+            physiological_valid = (
+                self.loss.physiological_weight == 0
+                or values["physiological"] <= self.physiological_tolerance
+            )
+            feasible = prediction["success"] and physiological_valid
             optimization_success = (
-                prediction["success"]
+                feasible
                 and (self.typicality_weight == 0 or typical)
             )
             proximity = sum(
                 values[f"weighted_{name}"]
                 for name in ("latent", "decoded", "physiological")
             )
-            key = (
-                not optimization_success,
-                proximity if optimization_success else values["total"],
-            )
+            if self.typicality_weight > 0:
+                key = (not feasible,
+                       values["discrepancy"] if feasible else values["total"],
+                       proximity)
+            else:
+                key = (not feasible,
+                       proximity if feasible else values["total"],
+                       values["total"])
             if best_key is None or key < best_key:
                 best_key, best_latent, selected_step = key, tf.identity(variable), step
             norm = float(tf.linalg.global_norm([gradient]).numpy())
@@ -408,6 +439,16 @@ class CounterfactualOptimizer:
                     if norm <= self.min_gradient_norm
                     else 0
                 )
+            if typicality_active and self.typicality_weight > 0 and feasible:
+                if (
+                    best_typicality_discrepancy is None
+                    or values["discrepancy"]
+                    < best_typicality_discrepancy - self.typicality_min_delta
+                ):
+                    best_typicality_discrepancy = values["discrepancy"]
+                    typicality_no_improvement_steps = 0
+                else:
+                    typicality_no_improvement_steps += 1
             row = {
                 "step": step,
                 "target_loss_component": self.target_loss_component,
@@ -422,6 +463,13 @@ class CounterfactualOptimizer:
                 },
                 "gradient_norm": norm if finite_gradient else None,
                 "low_gradient_steps": low_gradient_steps,
+                "physiological_valid": bool(physiological_valid),
+                "feasible": bool(feasible),
+                "optimization_stage": (
+                    "typicality" if self.typicality_weight > 0 and typicality_active
+                    else "target"
+                ),
+                "typicality_no_improvement_steps": typicality_no_improvement_steps,
             }
             if self.typicality is not None:
                 row.update(typicality_threshold=self.typicality.tau,
@@ -452,17 +500,37 @@ class CounterfactualOptimizer:
             if not finite_gradient:
                 stop_reason = "non_finite_gradient"
                 break
-            if optimization_success and (step == 0 or self.stop_on_success):
+            transitioned_to_typicality = (
+                self.typicality_weight > 0 and not typicality_active and feasible
+            )
+            if transitioned_to_typicality:
+                typicality_active = True
+                low_gradient_steps = 0
+                # The stage-one target/VCSC loss can be exactly flat at the
+                # feasibility boundary. Re-evaluate this same candidate with
+                # the typicality term active before applying any stop rule.
+                if step < self.max_steps:
+                    continue
+            if optimization_success and not transitioned_to_typicality and (step == 0 or self.stop_on_success):
                 stop_reason = "already_satisfied" if step == 0 else "target_reached"
                 break
             if norm == 0:
                 stop_reason = "zero_gradient"
                 break
-            if (
+            if (not transitioned_to_typicality and
                 self.low_gradient_patience
                 and low_gradient_steps >= self.low_gradient_patience
             ):
                 stop_reason = "low_gradient"
+                break
+            if (
+                typicality_active
+                and self.typicality_weight > 0
+                and self.typicality_improvement_patience
+                and typicality_no_improvement_steps
+                >= self.typicality_improvement_patience
+            ):
+                stop_reason = "typicality_plateau"
                 break
             if step == self.max_steps:
                 break
@@ -476,6 +544,7 @@ class CounterfactualOptimizer:
             final_embedding, final_logits, target_class
         )
         final_terms, decoded = self._objective(
+            typicality_active=True,
             logits=final_logits,
             target_class=target_class,
             z_prime=best_latent,
@@ -487,6 +556,10 @@ class CounterfactualOptimizer:
             target_components=final_target_components,
         )
         latent_prediction = self._prediction(final_logits, target_class)
+        final_physiological_valid = (
+            self.loss.physiological_weight == 0
+            or float(final_terms["physiological"].numpy()) <= self.physiological_tolerance
+        )
         arrays = {"x": x.numpy(), "z": z.numpy(), "z_prime": best_latent.numpy()}
         decoded_results = {}
         for name, reconstruction in decoded.items():
@@ -526,7 +599,8 @@ class CounterfactualOptimizer:
                                "counterfactual_discrepancy": final_d,
                                "threshold": self.typicality.tau,
                                "typical": bool(typical), "weight": self.typicality_weight,
-                               "typicality_success": bool(typical and latent_prediction["success"])},
+                               "typicality_success": bool(typical and latent_prediction["success"]),
+                               "selection_priority": "target_and_physiology_feasible_then_lowest_D_then_proximity"},
             }
             arrays["typicality_sequence"] = self.typicality.sequence(z).numpy()
             arrays["typicality_sequence_prime"] = self.typicality.sequence(best_latent).numpy()
@@ -549,6 +623,8 @@ class CounterfactualOptimizer:
                 "prediction_rule": "argmax",
                 "original": original_prediction,
                 "latent_counterfactual": latent_prediction,
+                "selected_feasible": bool(latent_prediction["success"] and final_physiological_valid),
+                "selected_physiological_valid": bool(final_physiological_valid),
                 "decoded_trials": decoded_results,
                 "selected_losses": {
                     k: float(v.numpy()) for k, v in final_terms.items()
@@ -560,6 +636,8 @@ class CounterfactualOptimizer:
                     "stop_on_success": self.stop_on_success,
                     "min_gradient_norm": self.min_gradient_norm,
                     "low_gradient_patience": self.low_gradient_patience,
+                    "typicality_improvement_patience": self.typicality_improvement_patience,
+                    "typicality_min_delta": self.typicality_min_delta,
                 },
                 "elapsed_seconds": time.perf_counter() - started,
                 "physiological_validity": float(
@@ -568,6 +646,7 @@ class CounterfactualOptimizer:
                 "physiological_constraint_enforced": (
                     self.loss.physiological_weight > 0
                 ),
+                "physiological_tolerance": self.physiological_tolerance,
             },
             "arrays": arrays,
         }

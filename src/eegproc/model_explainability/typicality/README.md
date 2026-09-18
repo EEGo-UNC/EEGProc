@@ -17,11 +17,14 @@ var_p = exp(2 * model.vc_target.prior_log_sigma[1])
 var_q = maximum(trial_variance, epsilon)
 var_p = maximum(var_p, epsilon)
 D = 0.5 * mean((var_q + (mu_q - mu_p)^2) / var_p - 1 + log(var_p) - log(var_q))
-L_typ = lambda_typ * maximum(0, D - tau)^2
+evaluation: typical iff D <= tau
+phase-2 loss: L_typ = lambda_typ * D / maximum(tau, epsilon)
 ```
 
 The default variance floor is `1e-6`. There is no Gaussian refitting, covariance
-shrinkage, division by `tau`, or logit-temperature factor in this equation.
+shrinkage, or logit-temperature factor in the discrepancy equation. Division
+by `tau` only scales the optimization penalty across folds; it does not alter
+`D` or the `D <= tau` evaluation.
 The threshold is the empirical 95th percentile (`method="higher"`) of source
 class-1 trial discrepancies, configurable before the study. All source
 class-1 trials contribute regardless of their predicted class. The held-out
@@ -60,7 +63,9 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.runner \
   --decoder-mode joint --target-probability 0.8 \
   --typicality-weight 1 --typicality-quantile 0.95 \
   --learning-rate 0.01 --max-steps 200 \
-  --min-gradient-norm 1e-6 --low-gradient-patience 5 --fs 128 \
+  --min-gradient-norm 1e-6 --low-gradient-patience 5 \
+  --typicality-improvement-patience 10 --typicality-min-delta 1e-6 \
+  --physiological-weight 1 --fs 128 \
   --out-dir runs/typicality/valence
 ```
 
@@ -102,14 +107,21 @@ Concurrent jobs should use separate output directories.
   eligible trial is attempted with both objectives from the same original
   sequence, seed, budget, frozen model, and source calibration.
 - The optimizer's target criterion is argmax class 1 and `p1 >= p_target`.
-  The typicality arm additionally requires `D <= tau` for candidate selection
-  and success stopping. Both arms are evaluated for typicality. Success stopping
-  is enabled by default and can be disabled with `--no-stop-on-success`.
+  A positive physiological weight additionally requires the raw VCSC penalty
+  to be at most `--physiological-tolerance` for feasibility. The base arm stops
+  at its first feasible success by default.
+- The typicality arm first reaches target and VCSC feasibility, then activates
+  the normalized, always-on `D` penalty. It does not stop at the first success.
+  Among feasible candidates it selects the lowest `D`, breaking ties by latent,
+  decoded, and physiological proximity. Evaluation remains `D <= tau`.
 - Independently, optimization stops after `--low-gradient-patience` consecutive
   evaluated steps whose raw global gradient norm is at most
   `--min-gradient-norm`. The defaults are five steps and `1e-6`; set both to
   zero to disable this rule. The history and result record the counter and the
   final stop reason.
+- The typicality phase also stops after
+  `--typicality-improvement-patience` feasible evaluations without a decrease
+  of at least `--typicality-min-delta` in `D`.
 - Decoded signals are never passed back through the encoder. Counterfactual
   success is measured directly by the frozen classifier on the optimized
   latent state.

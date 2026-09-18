@@ -54,7 +54,8 @@ def build_parser():
     parser.add_argument("--target-weight", type=_positive_float, default=1.0)
     parser.add_argument("--latent-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument("--decoded-weight", type=_nonnegative_float, default=0.1)
-    parser.add_argument("--physiological-weight", type=_nonnegative_float, default=0.0)
+    parser.add_argument("--physiological-weight", type=_nonnegative_float, default=1.0,
+                        help="VCSC optimization weight; positive by default so physiology is enforced.")
     parser.add_argument("--learning-rate", type=_positive_float, default=0.01)
     parser.add_argument("--learning-rate-decay", type=_decay_float, default=1.0)
     parser.add_argument("--max-steps", type=_nonnegative_int, default=200)
@@ -65,6 +66,12 @@ def build_parser():
                         help="Raw global gradient norm at or below which a step is considered stalled; 0 disables with patience 0.")
     parser.add_argument("--low-gradient-patience", type=_nonnegative_int, default=5,
                         help="Consecutive low-gradient evaluations required before stopping; 0 disables with threshold 0.")
+    parser.add_argument("--typicality-improvement-patience", type=_nonnegative_int, default=10,
+                        help="Stop the typicality phase after this many feasible evaluations without a meaningful D improvement; 0 disables.")
+    parser.add_argument("--typicality-min-delta", type=_nonnegative_float, default=1e-6,
+                        help="Minimum decrease in D that resets typicality improvement patience.")
+    parser.add_argument("--physiological-tolerance", type=_nonnegative_float, default=1e-8,
+                        help="Largest raw VCSC penalty considered physiologically feasible when its weight is positive.")
     parser.add_argument("--log-every", type=_nonnegative_int, default=10)
     parser.add_argument("--fs", type=_positive_float, default=128.0)
     parser.add_argument("--physiology-quantile", type=_positive_float, default=0.95)
@@ -175,7 +182,10 @@ def _protocol(args, dataset, folds):
             "eligibility": "true_class == 0 and original argmax prediction == 0",
             "target_class": 1, "prediction_rule": "argmax; confidence threshold separately recorded",
             "typicality_formula": "0.5 * mean((var_q + (mu_q-mu_p)^2)/var_p - 1 + log(var_p/var_q))",
-            "penalty": "lambda * max(0,D-tau)^2", "prior": "frozen learned VC parameters",
+            "evaluation": "typical iff D <= tau",
+            "optimization_penalty": "lambda * D / max(tau,variance_floor), activated after target and physiology feasibility",
+            "selection_priority": "target and physiology feasible, then lowest D, then proximity",
+            "prior": "frozen learned VC parameters",
             "distance_definition": "d_z=RMSE(Zcf,Z) in mapped VC sequence; delta_dec=RMSE(dec(Zcf),dec(Z)); e_rec=RMSE(dec(Z),x)",
             "physiology_unit": dataset.signal_unit if dataset.normalization_scale is not None else "model_input_units",
             "physiology_families": list(FAMILIES), "band_edges_hz": DEFAULT_BANDS,
@@ -261,13 +271,26 @@ def run_fold(args, dataset, entry, out):
                             target_probability=args.target_probability)
     common = dict(loss=loss, learning_rate=args.learning_rate, learning_rate_decay=args.learning_rate_decay,
                   target_loss_component=args.target_loss_component, max_steps=args.max_steps,
-                  gradient_clip_norm=args.gradient_clip_norm, stop_on_success=args.stop_on_success,
+                  gradient_clip_norm=args.gradient_clip_norm,
                   min_gradient_norm=args.min_gradient_norm,
                   low_gradient_patience=args.low_gradient_patience,
+                  physiological_tolerance=args.physiological_tolerance,
                   decoder_mode=args.decoder_mode, typicality=region)
-    # Both arms use identical seeds, frozen models, starts, budgets, and losses.
-    optimizers = {name: CounterfactualOptimizer(model, typicality_weight=weight, **common)
-                  for name, weight in (("base", 0.0), ("typicality", args.typicality_weight))}
+    # Both arms use identical seeds, frozen models, starts, budgets, and central
+    # losses. Base stops at first feasible success; typicality then minimizes D.
+    optimizers = {
+        "base": CounterfactualOptimizer(
+            model, typicality_weight=0.0, stop_on_success=args.stop_on_success,
+            **common,
+        ),
+        "typicality": CounterfactualOptimizer(
+            model, typicality_weight=args.typicality_weight,
+            stop_on_success=False,
+            typicality_improvement_patience=args.typicality_improvement_patience,
+            typicality_min_delta=args.typicality_min_delta,
+            **common,
+        ),
+    }
     if args.report_output not in optimizers["base"].decoded_names:
         raise ValueError("The selected report output is not present in this checkpoint")
     predictions, discrepancies, moments, eligible = [], [], [], []
