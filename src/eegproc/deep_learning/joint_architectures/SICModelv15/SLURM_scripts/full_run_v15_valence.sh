@@ -7,22 +7,19 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=09:00:00
+#SBATCH --time=24:00:00
 
 set -euo pipefail
 
-# Run SICModelv15 on every DREAMER valence LOSO target. The base model
-# hyperparameters reproduce rank 1 from:
-# runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/
-# suite_65452590/full/
-# dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/
-# hyperparameter_search_summary.csv
+# Run the single best DREAMER valence configuration reported on 2026-09-18
+# across every LOSO target. This launcher deliberately contains no search or
+# ablation axes: the supplied configuration is the only configuration run.
 #
 # SICModelv15 adds the learned convex joint reconstruction. Its v15 defaults
 # are made explicit below: initial alpha=0.5 and auxiliary branch weight=0.25.
 # Four allocated GPUs run two folds concurrently on pairs (0,1) and (2,3).
-# Each episode uses 8 meta-train + 4 meta-test subjects x 4 distinct trials:
-# 32/16 trials globally, 16/8 per GPU, matching smoke_val_0_3.
+# Each episode uses 8 meta-train + 4 meta-test subjects x 3 distinct trials:
+# 24/12 trials globally and 12/6 per GPU.
 
 module purge
 module load python/3.12.4
@@ -35,8 +32,9 @@ EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
-# These reproduce the training budget used by the winning v11 run.
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-4}"
+# Run six source epochs as requested. Calibration retains the existing full-run
+# budget because it is not part of the reported model hyperparameter record.
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-6}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
@@ -126,23 +124,27 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# One fixed configuration: the rank-1 v11 hyperparameters with subject-loss
-# weight 1.0, reconstruction weight 0.1, and the explicit SICModelv15 joint-
-# reconstruction settings. Fixed wrappers keep layer-width lists as one
-# architecture rather than a search grid.
+# The only configuration in this run. Fixed wrappers make the two layer-width
+# lists unambiguously describe one architecture rather than search axes.
 MODEL_CONFIG="$(python - <<'PY'
 import json
 
 print(json.dumps({
+    "classification_level": "trial",
+    "n_channels": 14,
+    "n_bands": 3,
+    "n_classes": 2,
+
     "optimizer_name": "adamw",
     "learning_rate": 1e-4,
     "weight_decay": 5e-5,
     "vrex_penalty_weight": 1.0,
+    "training_method": "mldg",
 
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
-    "mldg_trials_per_subject": 4,
-    "mldg_steps_per_epoch": 20,
+    "mldg_trials_per_subject": 3,
+    "mldg_steps_per_epoch": 10,
     "mldg_inner_learning_rate": 1e-4,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
@@ -168,25 +170,26 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": 0.5,
+    "focal_gamma": 0.3,
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
-    "vc_alpha": 1.0,
-    "vc_beta": 0.3,
+    "vc_alpha": 2.0,
+    "vc_beta": 0.6,
     "vc_gamma": 0.0,
     "vc_lambda": 0.05,
+    "vc_logit_scale": 16.0,
     "update_vc_discriminator": False,
 
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": 1.0,
+    "subject_loss_weight": 0.2,
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
     "use_gcn_gru_branch": True,
     "use_bilstm_branch": True,
     "use_decoder": True,
-    "reconstruction_loss_weight": 0.1,
+    "reconstruction_loss_weight": 0.6,
     "decoder_dropout": 0.1,
     "joint_reconstruction_auxiliary_weight": 0.25,
     "joint_reconstruction_initial_alpha": 0.5,
@@ -207,13 +210,15 @@ echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER valence"
 echo "Scope: all 23 LOSO target subjects"
-echo "Training: MLDG, $SOURCE_EPOCHS source epochs"
-echo "Parallelism: 2 folds x 2 GPUs; episode trials: 32 meta-train / 16 meta-test"
-echo "Per GPU: 16 meta-train / 8 meta-test trials; full-episode VC statistics"
+echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 10 steps/epoch"
+echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-test"
+echo "Per GPU: 12 meta-train / 6 meta-test trials; full-episode VC statistics"
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
-echo "Subject loss weight: 1.0"
-echo "Joint reconstruction: weight=0.1 initial alpha=0.5 auxiliary branch weight=0.25"
-echo "Configuration source: rank 1 from v11 suite 65452590"
+echo "Selection: maximize zero-shot LOSO balanced accuracy"
+echo "Fixed winner: focal_gamma=0.3 vc_alpha=2.0 vc_beta=0.6 vc_lambda=0.05 vc_logit_scale=16.0"
+echo "Subject loss weight: 0.2; reconstruction loss weight: 0.6"
+echo "Joint reconstruction: initial alpha=0.5 auxiliary branch weight=0.25"
+echo "Configuration source: best configuration id=1 reported 2026-09-18 07:04:42"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 python --version
 nvidia-smi
@@ -236,8 +241,8 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --classification-level trial \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/full/sic_trial_bigru_v15_joint_best_v11/DREAMER/valence/suite_${SUITE_ID}/full" \
-    --run-name "full_run_v15_valence" \
+    --out-dir "runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_${SUITE_ID}/full" \
+    --run-name "full_run_v15_valence_best_20260918" \
     --training-method mldg \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \
@@ -251,11 +256,11 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --calibration-optimizer adamw \
     --calibration-weight-decay 0.00005 \
     --calibration-seed 42 \
-    --selection-metric brier_score \
-    --hyperparameter-selection-level calibration \
+    --selection-metric balanced_accuracy \
+    --hyperparameter-selection-level losocv \
     --decision-threshold 0.5 \
     --prediction-diagnostics \
-    --prediction-diagnostics-metric brier_score \
+    --prediction-diagnostics-metric balanced_accuracy \
     --prediction-diagnostics-every-n-epochs 1 \
     --prediction-diagnostics-max-samples "$PREDICTION_DIAGNOSTICS_MAX_SAMPLES" \
     --prediction-diagnostics-threshold-tolerance 0.01 \

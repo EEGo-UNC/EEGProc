@@ -129,17 +129,23 @@ sbatch src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/f
 sbatch src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/full_run_v15_valence.sh
 ```
 
-Each job reserves **four GPUs**, runs **two folds concurrently with two GPUs
-per fold**, and covers all 23 LOSO targets using all other 22 subjects as the
-source pool. Submitting both jobs can therefore use eight GPUs in total.
-Each job retains its existing 8 CPUs, 128 GB RAM, nine-hour limit, 4 source
-epochs with 20 MLDG steps per epoch, 10 calibration epochs, calibration shots
-3/6/9/12, reconstruction weight 0.1, and subject-loss weight 1.0. The model architecture,
-losses, and distinct, class-balanced trial sampling rules are unchanged.
+The valence launcher is one non-array job covering all 23 LOSO targets with
+the single best configuration reported on 2026-09-18. It reserves **four
+GPUs**, runs **two folds concurrently with two GPUs per fold**, and uses all
+other 22 subjects as the source pool. The run uses 6 source epochs with 10
+MLDG steps per epoch, 10 calibration epochs, and calibration shots 3/6/9/12.
+Its fixed winner has `focal_gamma=0.3`, `vc_alpha=2.0`, `vc_beta=0.6`,
+`vc_lambda=0.05`, `vc_logit_scale=16.0`, reconstruction weight `0.6`, and
+subject-loss weight `0.2`. There are no hyperparameter grid axes, so the run
+performs exactly 23 source fits, with independent calibration at every shot
+level. Prediction diagnostics report balanced accuracy.
+
+The valence episode uses 8 meta-train and 4 meta-test subjects with 3 trials
+per subject. This gives 24/12 trials globally and 12/6 trials on each GPU.
 
 | Target | Meta-train / meta-test subjects | Trials per subject | Global trials, train / test | Trials per GPU, train / test |
 | --- | --- | --- | --- | --- |
-| Valence | 8 / 4 | 4 | 32 / 16 | 16 / 8 |
+| Valence | 8 / 4 | 3 | 24 / 12 | 12 / 6 |
 | Arousal | 12 / 6 | 2 | 24 / 12 | 12 / 6 |
 
 Arousal retains its existing episode configuration because some subjects have
@@ -149,7 +155,7 @@ memory cannot resolve that data constraint. No repeated trials or subject
 exclusions are introduced.
 
 Both launchers run the same two-GPU correctness preflight as the smoke job and
-stop if it fails. Their job names, run names, and log prefixes match their new
-filenames. Logs are `full_run_v15_TARGET_JOBID.out/.err`; results remain under
-`runs/full/sic_trial_bigru_v15_joint_best_v11/DREAMER/TARGET/suite_JOBID/full`.
+stop if it fails. Valence logs are `full_run_v15_valence_JOB_ID.out/.err`;
+its results are under
+`runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_JOB_ID/full`.
 The full datasets and CUDA memory use must still be verified on Longleaf.
