@@ -172,7 +172,7 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": 0.3,
+    "focal_gamma": 0.5,
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 2.0,
@@ -184,7 +184,7 @@ print(json.dumps({
 
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": 0.2,
+    "subject_loss_weight": 0.5,
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
