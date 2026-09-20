@@ -1,36 +1,36 @@
-"""Eq. (7): dimension-normalized diagonal KL(q_Z || learned VC class prior).
+"""Squared diagonal Mahalanobis distance per full-trial embedding coordinate.
 
-The learned Gaussian is copied from the frozen checkpoint, never estimated
-again from source trials. Source class-1 trials calibrate only the threshold.
-A sequence mapping must explicitly put Z into the VC prior's coordinates.
+The learned class Gaussian is copied from the frozen checkpoint. Source
+class-1 trial embeddings calibrate only the acceptance threshold. Both the
+Gaussian and the scored vector live in the classifier's terminal trial space.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 
 import numpy as np
 
 
-def trial_representation(latent):
-    """Concatenated [mean, variance], population moments (ddof=0) per trial."""
-    z = np.asarray(latent, dtype=np.float64)
-    if z.ndim < 3 or any(d == 0 for d in z.shape) or not np.isfinite(z).all():
-        raise ValueError("latent must be finite with batch, sequence, and coordinate axes")
-    axes = tuple(range(1, z.ndim - 1))
-    return np.concatenate((z.mean(axis=axes), z.var(axis=axes)), axis=-1)
+SCHEMA_VERSION = 2
+SCORE_DEFINITION = "full_trial_diagonal_squared_mahalanobis_per_dimension"
+REPRESENTATION = "vc_trial_embedding"
 
 
-def diagonal_gaussian_kl(mean_q, variance_q, mean_p, variance_p, *, variance_floor=1e-6):
-    """NumPy Eq. (7), averaged over dimensions; keep leading batch axes."""
-    mq, vq, mp, vp = (np.asarray(v, dtype=np.float64) for v in (mean_q, variance_q, mean_p, variance_p))
-    if mq.shape != vq.shape or mp.shape != vp.shape or mq.shape[-1] != mp.shape[-1]:
-        raise ValueError("Posterior/prior mean and variance dimensions must agree")
-    if any(not np.isfinite(v).all() for v in (mq, vq, mp, vp)) or np.any(vq < 0) or np.any(vp < 0):
-        raise ValueError("Gaussian moments must be finite with nonnegative variances")
+def diagonal_mahalanobis_squared(embedding, mean, variance, *, variance_floor=1e-6):
+    """Return mean_j((embedding_j - mean_j)^2 / max(variance_j, epsilon)).
+
+    This is squared Mahalanobis distance divided by dimension, not its square
+    root. Leading embedding axes are retained. No within-trial moments, logit
+    temperature, Gaussian refitting, or covariance estimation are involved.
+    """
+    e, mu, var = (np.asarray(value, dtype=np.float64) for value in (embedding, mean, variance))
+    if mu.ndim != 1 or not mu.size or var.shape != mu.shape or e.ndim < 1 or e.shape[-1] != mu.size:
+        raise ValueError("Embedding and Gaussian dimensions must agree with nonempty coordinate vectors")
+    if any(not np.isfinite(value).all() for value in (e, mu, var)) or np.any(var < 0):
+        raise ValueError("Embeddings and Gaussian parameters must be finite; variances must be nonnegative")
     if not math.isfinite(variance_floor) or variance_floor <= 0:
         raise ValueError("variance_floor must be positive")
-    vq, vp = np.maximum(vq, variance_floor), np.maximum(vp, variance_floor)
-    return np.maximum(0.5 * np.mean((vq + (mq - mp) ** 2) / vp - 1 + np.log(vp) - np.log(vq), axis=-1), 0.0)
+    return np.mean(np.square(e - mu) / np.maximum(var, variance_floor), axis=-1)
 
 
 @dataclass
@@ -40,33 +40,31 @@ class TypicalityRegion:
     tau: float
     metadata: dict
     variance_floor: float = 1e-6
-    sequence_transform: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         self.prior_mean = np.asarray(self.prior_mean, dtype=np.float64).copy()
         self.prior_variance = np.asarray(self.prior_variance, dtype=np.float64).copy()
-        if self.prior_mean.ndim != 1 or not len(self.prior_mean) or self.prior_variance.shape != self.prior_mean.shape:
-            raise ValueError("Learned VC prior must contain matching coordinate vectors")
+        diagonal_mahalanobis_squared(self.prior_mean, self.prior_mean, self.prior_variance,
+                                     variance_floor=self.variance_floor)
         if not math.isfinite(self.tau) or self.tau < 0:
             raise ValueError("tau must be finite and nonnegative")
-        diagonal_gaussian_kl(self.prior_mean, self.prior_variance,
-                             self.prior_mean, self.prior_variance,
-                             variance_floor=self.variance_floor)
+        self.metadata = dict(self.metadata)
+        for key, value in (("schema_version", SCHEMA_VERSION), ("definition", SCORE_DEFINITION),
+                           ("representation", REPRESENTATION)):
+            if key in self.metadata and self.metadata[key] != value:
+                raise ValueError("Incompatible typicality definition; recalibrate full-trial Mahalanobis scores")
+            self.metadata[key] = value
 
     @classmethod
-    def calibrate(cls, representations, *, prior_mean, prior_variance,
+    def calibrate(cls, embeddings, *, prior_mean, prior_variance,
                   subject_ids, trial_ids, labels, held_out_subject,
-                  target_class=1, quantile=0.95, variance_floor=1e-6,
-                  sequence_transform=None, sequence_definition="provided_VC_coordinate_sequence"):
-        values = np.asarray(representations, dtype=np.float64)
+                  target_class=1, quantile=0.95, variance_floor=1e-6):
+        values = np.asarray(embeddings, dtype=np.float64)
         subjects, trials, labels = (np.asarray(v) for v in (subject_ids, trial_ids, labels))
-        prior_mean, prior_variance = (np.asarray(v, dtype=np.float64).copy() for v in (prior_mean, prior_variance))
-        if prior_mean.ndim != 1 or prior_variance.shape != prior_mean.shape or not len(prior_mean):
-            raise ValueError("Learned VC prior must contain matching coordinate vectors")
-        if values.ndim != 2 or values.shape[1] != 2 * len(prior_mean) or not np.isfinite(values).all():
-            raise ValueError("Source moments must match the learned VC prior coordinates")
+        region = cls(prior_mean, prior_variance, 1.0, {}, variance_floor)
+        scores = region.score(values)
         if any(v.shape != (len(values),) for v in (subjects, trials, labels)):
-            raise ValueError("Each representation needs a subject, trial, and label")
+            raise ValueError("Each embedding needs a subject, trial, and label")
         if held_out_subject in subjects:
             raise ValueError("Held-out subject leaked into source threshold calibration")
         if len(set(zip(subjects.tolist(), trials.tolist()))) != len(values):
@@ -76,56 +74,41 @@ class TypicalityRegion:
         target = labels == target_class
         if target.sum() < 2:
             raise ValueError("Need at least two source target-class calibration trials")
-        region = cls(prior_mean, prior_variance, 1.0, {}, variance_floor, sequence_transform)
-        scores = region.score(values)
-        # Tau remains the unchanged evaluation threshold. Optimization may use
-        # it only as a fold-scale normalizer; that never changes this cutoff.
+        # The cutoff is calibrated anew for this score. It also normalizes the
+        # optimization penalty; normalization never changes acceptance.
         region.tau = float(np.quantile(scores[target], quantile, method="higher"))
-        region.metadata = {
-            "schema_version": 1, "definition": "Eq7_diagonal_gaussian_KL_per_dimension",
-            "sequence_definition": sequence_definition, "moments_ddof": 0,
+        region.metadata.update({
             "prior": "frozen learned VC Gaussian; variance=exp(2*prior_log_sigma)",
             "target_class": int(target_class), "held_out_subject": int(held_out_subject),
             "quantile": quantile, "quantile_method": "higher",
             "source_subject_ids": np.unique(subjects).tolist(),
             "calibration_trial_keys": np.column_stack((subjects[target], trials[target])).tolist(),
             "variance_floor": variance_floor, "tau": region.tau,
-            "n_calibration_trials": int(target.sum()), "dimension": int(len(prior_mean)),
+            "n_calibration_trials": int(target.sum()), "dimension": int(len(region.prior_mean)),
             "coverage_claim": "empirical source quantile; no held-out coverage guarantee",
-            "evaluation": "typical iff D <= tau",
+            "evaluation": "typical iff D <= tau; class-conditional embedding compatibility",
             "optimization_penalty": "lambda * D / max(tau, variance_floor), activated after target and physiology feasibility",
-        }
+        })
         return region
 
-    def score(self, representations):
-        values = np.asarray(representations, dtype=np.float64)
-        if values.ndim != 2 or values.shape[1] != 2 * len(self.prior_mean):
-            raise ValueError("Typicality representation dimensions do not match the VC prior")
-        mean, variance = np.split(values, 2, axis=-1)
-        return diagonal_gaussian_kl(mean, variance, self.prior_mean, self.prior_variance,
-                                    variance_floor=self.variance_floor)
+    def score(self, embeddings):
+        values = np.asarray(embeddings, dtype=np.float64)
+        if values.ndim != 2 or values.shape[1] != len(self.prior_mean):
+            raise ValueError("Expected full-trial embeddings shaped (trials, VC dimension), not window moments")
+        return diagonal_mahalanobis_squared(values, self.prior_mean, self.prior_variance,
+                                             variance_floor=self.variance_floor)
 
-    def sequence(self, latent):
+    def discrepancy(self, embedding):
+        """Differentiable score of the SAME embedding used by the VC head."""
         import tensorflow as tf
-        z = tf.cast(self.sequence_transform(latent) if self.sequence_transform else latent, tf.float32)
-        if z.shape.rank is None or z.shape.rank < 3:
-            raise ValueError("Typicality requires an ordered sequence, not one pooled vector")
-        tf.debugging.assert_equal(tf.shape(z)[0], 1)
-        tf.debugging.assert_equal(tf.shape(z)[-1], len(self.prior_mean),
-                                  message="Z and the learned VC Gaussian must share coordinates")
-        return z
-
-    def discrepancy(self, latent, *, sequence=None):
-        """Differentiable Eq. (7), with the checkpoint's prior held fixed."""
-        import tensorflow as tf
-        z = self.sequence(latent) if sequence is None else sequence
-        mean, variance = tf.nn.moments(z, axes=tuple(range(1, z.shape.rank - 1)))
-        variance = tf.maximum(variance, self.variance_floor)
-        prior_mean = tf.constant(self.prior_mean, tf.float32)
-        prior_variance = tf.maximum(tf.constant(self.prior_variance, tf.float32), self.variance_floor)
-        terms = (variance + tf.square(mean - prior_mean)) / prior_variance - 1.0
-        terms += tf.math.log(prior_variance) - tf.math.log(variance)
-        return tf.maximum(0.5 * tf.reduce_mean(terms), 0.0)
+        e = tf.cast(embedding, tf.float32)
+        tf.debugging.assert_rank(e, 2, message="Supply one full-trial classification embedding")
+        tf.debugging.assert_equal(tf.shape(e)[0], 1)
+        tf.debugging.assert_equal(tf.shape(e)[1], len(self.prior_mean))
+        tf.debugging.assert_all_finite(e, "Full-trial embedding must be finite")
+        mean = tf.constant(self.prior_mean, tf.float32)
+        variance = tf.maximum(tf.constant(self.prior_variance, tf.float32), self.variance_floor)
+        return tf.reduce_mean(tf.square(e - mean) / variance)
 
     def save(self, directory):
         from pathlib import Path
@@ -137,13 +120,15 @@ class TypicalityRegion:
         write_json(directory / "region.json", self.metadata)
 
     @classmethod
-    def load(cls, directory, *, sequence_transform=None):
+    def load(cls, directory):
         import json
         from pathlib import Path
         directory = Path(directory)
+        metadata = json.loads((directory / "region.json").read_text())
+        if (metadata.get("schema_version") != SCHEMA_VERSION
+                or metadata.get("definition") != SCORE_DEFINITION
+                or metadata.get("representation") != REPRESENTATION):
+            raise ValueError("Legacy or incompatible typicality region; recalibrate full-trial Mahalanobis scores in a new study")
         with np.load(directory / "region.npz", allow_pickle=False) as data:
-            region = cls(data["prior_mean"], data["prior_variance"], float(data["tau"]),
-                         json.loads((directory / "region.json").read_text()), float(data["variance_floor"]), sequence_transform)
-        if not np.isfinite(region.tau) or region.tau < 0:
-            raise ValueError("Invalid saved typicality threshold")
-        return region
+            return cls(data["prior_mean"], data["prior_variance"], float(data["tau"]),
+                       metadata, float(data["variance_floor"]))

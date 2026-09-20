@@ -1,9 +1,5 @@
-"""Distributional-typicality counterfactual studies and reporting."""
+"""Full-trial embedding typicality, counterfactual studies, and reporting."""
 
-from .core import TypicalityRegion, diagonal_gaussian_kl, trial_representation
+from .core import TypicalityRegion, diagonal_mahalanobis_squared
 
-__all__ = [
-    "TypicalityRegion",
-    "diagonal_gaussian_kl",
-    "trial_representation",
-]
+__all__ = ["TypicalityRegion", "diagonal_mahalanobis_squared"]

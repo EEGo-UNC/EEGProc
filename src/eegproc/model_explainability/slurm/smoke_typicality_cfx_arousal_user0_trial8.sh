@@ -63,7 +63,7 @@ LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 TASK="${TASK:-arousal}"
 SMOKE_SUBJECT="${SMOKE_SUBJECT:-0}"
 SMOKE_TRIAL="${SMOKE_TRIAL:-8}"
-TYPICALITY_SEQUENCE="${TYPICALITY_SEQUENCE:-vc_window_embeddings}"
+TYPICALITY_REPRESENTATION="${TYPICALITY_REPRESENTATION:-${TYPICALITY_SEQUENCE:-vc_trial_embedding}}"
 TYPICALITY_WEIGHT="${TYPICALITY_WEIGHT:-1.0}"
 TYPICALITY_QUANTILE="${TYPICALITY_QUANTILE:-0.95}"
 VARIANCE_FLOOR="${VARIANCE_FLOOR:-1e-6}"
@@ -183,7 +183,7 @@ print("TensorFlow GPU libdevice preflight passed", flush=True)
 PY
 
 HELP="$("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runner --help)"
-for required_option in --models-json --task --typicality-sequence --typicality-weight --subjects --trial-ids --out-dir; do
+for required_option in --models-json --task --typicality-representation --typicality-weight --subjects --trial-ids --out-dir; do
     if [[ "$HELP" != *"$required_option"* ]]; then
         echo "ERROR: typicality.runner lacks $required_option."
         exit 3
@@ -213,7 +213,7 @@ fi
 
 echo "Typicality smoke: task=$TASK subject=$SMOKE_SUBJECT trial=$SMOKE_TRIAL"
 echo "Manifest: $MODELS_JSON"
-echo "Sequence: $TYPICALITY_SEQUENCE | weight: $TYPICALITY_WEIGHT | steps: $MAX_STEPS"
+echo "Representation: $TYPICALITY_REPRESENTATION | weight: $TYPICALITY_WEIGHT | steps: $MAX_STEPS"
 echo "Output: $OUT_DIR"
 
 "$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runner \
@@ -223,7 +223,7 @@ echo "Output: $OUT_DIR"
     --task "$TASK" \
     --subjects "$SMOKE_SUBJECT" \
     --trial-ids "$SMOKE_TRIAL" \
-    --typicality-sequence "$TYPICALITY_SEQUENCE" \
+    --typicality-representation "$TYPICALITY_REPRESENTATION" \
     --typicality-weight "$TYPICALITY_WEIGHT" \
     --typicality-quantile "$TYPICALITY_QUANTILE" \
     --variance-floor "$VARIANCE_FLOOR" \

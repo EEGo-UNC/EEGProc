@@ -16,6 +16,27 @@ from sklearn.metrics import roc_auc_score
 from .artifacts import write_json, write_csv, write_npz
 
 
+def compatible_typicality_definition(roots):
+    """Keep old reports readable, but never pool distinct score definitions."""
+    definition = None
+    for root in roots:
+        manifest = Path(root) / "study.json"
+        if not manifest.is_file():
+            raise ValueError("Expected a typicality.runner archive with study.json")
+        study = json.loads(manifest.read_text())
+        current = {
+            "score": study.get("typicality_definition", "legacy_window_moment_KL"),
+            "representation": study.get("typicality_representation",
+                                        study.get("arguments", {}).get("typicality_sequence", "legacy_unspecified")),
+        }
+        if definition is not None and current != definition:
+            raise ValueError("Cannot combine incompatible typicality definitions; report legacy KL and full-trial Mahalanobis studies separately")
+        definition = current
+    if definition is None:
+        raise ValueError("At least one typicality study is required")
+    return definition
+
+
 def recognition_metrics(labels, probabilities, *, ece_bins=15):
     labels = np.asarray(labels, dtype=int)
     probabilities = np.asarray(probabilities, dtype=float)
@@ -61,7 +82,18 @@ def population_summary(rows):
               "n_pending": sum(r["status"] == "pending" for r in rows)}
     for field in ("typical", "latent_target_success", "typicality_success"):
         result[f"{field}_percent"] = 100 * sum(bool(r.get(field, False)) for r in rows) / n if n else None
+    result["n_round_trip_evaluated"] = sum(bool(r.get("round_trip_evaluated")) for r in rows)
+    expected = any(r.get("round_trip_expected") or r.get("round_trip_evaluated") for r in rows)
+    for field in ("decoded_target_success", "decoded_typical", "decoded_typicality_success",
+                  "reconstruction_preserves_prediction"):
+        unknown = any(r["status"] == "completed" and r.get(field) is None for r in rows)
+        result[f"{field}_percent"] = (100 * sum(r.get(field) is True for r in rows) / n
+                                      if n and expected and not unknown else None)
     for field in ("d_z", "delta_dec", "e_rec"):
+        for key, value in _quantiles([r.get(field) for r in rows]).items():
+            result[f"{field}_{key}"] = value
+    for field in ("reconstruction_confidence_drop", "counterfactual_target_probability_drop",
+                  "reconstruction_embedding_cycle_rmse", "counterfactual_embedding_cycle_rmse"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
             result[f"{field}_{key}"] = value
     assessed = sum(r.get("physiological_passed") is not None for r in rows)
@@ -112,7 +144,9 @@ def collect_study(root):
                 record = {"task": task, "subject_id": subject, "trial_id": trial,
                           "objective": objective, "status": "pending", "threshold": fold["threshold"],
                           "typical": False, "latent_target_success": False,
-                          "typicality_success": False}
+                          "typicality_success": False,
+                          "round_trip_expected": study.get("round_trip_evaluation", "latent_only") != "latent_only",
+                          "round_trip_evaluated": False}
                 attempt = _latest_result(fold_dir / f"trial_{trial}" / objective)
                 if attempt:
                     summary = json.loads((attempt / "result.json").read_text())
@@ -143,6 +177,26 @@ def collect_study(root):
                             physiological_required_count=physiology["required_count"],
                             available_physiological_checks_passed=physiology["available_checks_passed"],
                         )
+                        if "counterfactual" in decoded and "original_reconstruction" in decoded:
+                            cf, rec = decoded["counterfactual"], decoded["original_reconstruction"]
+                            record.update(
+                                round_trip_evaluated=True,
+                                decoded_target_success=cf["success"],
+                                decoded_typical=cf["typical"],
+                                decoded_typicality_success=bool(cf["success"] and cf["typical"]),
+                                decoded_probability=cf["target_probability"],
+                                decoded_discrepancy=cf["discrepancy"],
+                                reconstruction_probability=rec["target_probability"],
+                                reconstruction_discrepancy=rec["discrepancy"],
+                                reconstruction_preserves_prediction=decoded["reconstruction_preserves_prediction"],
+                                reconstruction_confidence_drop=decoded["reconstruction_confidence_drop"],
+                                counterfactual_target_probability_drop=decoded["counterfactual_target_probability_drop"],
+                                reconstruction_embedding_cycle_rmse=rec["embedding_cycle_rmse"],
+                                counterfactual_embedding_cycle_rmse=cf["embedding_cycle_rmse"],
+                            )
+                            observed.append({"task": task, "subject_id": subject, "trial_id": trial,
+                                             "representation": f"{objective}_reencoded", "discrepancy": cf["discrepancy"],
+                                             "threshold": fold["threshold"], "correct": None})
                         observed.append({"task": task, "subject_id": subject, "trial_id": trial,
                                          "representation": objective, "discrepancy": record["discrepancy"],
                                          "threshold": fold["threshold"], "correct": None})
@@ -153,6 +207,14 @@ def collect_study(root):
 
 
 def build_report(roots, output, *, probe_results=()):
+    roots = list(roots)
+    definition = compatible_typicality_definition(roots)
+    evaluation_protocols = {json.loads((Path(root) / "study.json").read_text()).get(
+        "round_trip_evaluation", "latent_only") for root in roots}
+    if len(evaluation_protocols) != 1:
+        raise ValueError("Cannot combine latent-only and round-trip evaluation protocols; report them separately")
+    evaluation_protocol = evaluation_protocols.pop()
+    has_round_trip = evaluation_protocol != "latent_only"
     rows, observed, recognition, folds = [], [], [], []
     seen = set()
     for root in roots:
@@ -193,24 +255,30 @@ def build_report(roots, output, *, probe_results=()):
         recognition_rows.append(rec)
         subjects = sorted({r["subject_id"] for r in subject_rows if r["task"] == task})
         paired_rates = []
+        rate_field = "decoded_typical_percent" if has_round_trip else "typical_percent"
         for subject in subjects:
             pair = [r for r in subject_rows if r["task"] == task and r["subject_id"] == subject]
-            if len(pair) == 2 and all(r["n_eligible"] and not r["provisional"] and r["fold_status"] == "completed" for r in pair):
-                paired_rates.append([r["typical_percent"] for r in pair])
+            if len(pair) == 2 and all(r["n_eligible"] and not r["provisional"] and r["fold_status"] == "completed"
+                                      and r[rate_field] is not None for r in pair):
+                paired_rates.append([r[rate_field] for r in pair])
         changes = {"task": task, "n_expected_subjects": len(subjects), "n_evaluable_subjects": len(paired_rates),
+                   "typicality_space": "decoded_then_reencoded" if has_round_trip else "latent",
                    "n_improved": sum(p[1] > p[0] for p in paired_rates)}
         for index, objective in enumerate(("base", "typicality")):
             changes.update({f"{objective}_{key}": val for key, val in _quantiles([p[index] for p in paired_rates]).items()})
         pop = [p for p in populations if p["task"] == task]
-        for metric in ("latent_target_success", "typical", "typicality_success"):
+        for metric in ("latent_target_success", "typical", "typicality_success",
+                       "decoded_target_success", "decoded_typical", "decoded_typicality_success"):
             a, b = [p[f"{metric}_percent"] for p in pop]
             changes[f"{metric}_change_percentage_points"] = b - a if a is not None and b is not None else None
         subject_changes.append(changes)
-        successful = [r for r in rows if r["task"] == task and r["objective"] == "typicality" and r["typicality_success"]]
+        success_field = "decoded_typicality_success" if has_round_trip else "typicality_success"
+        success_space = "decoded-target-and-reencoded-typical" if has_round_trip else "latent-target-and-typical"
+        successful = [r for r in rows if r["task"] == task and r["objective"] == "typicality" and r.get(success_field)]
         if successful:
             median = np.median([r["d_z"] for r in successful])
             selected = min(successful, key=lambda r: (abs(r["d_z"] - median), r["subject_id"], r["trial_id"]))
-            examples.append({**selected, "selection_rule": "latent-target-and-typical typicality arm nearest its task median d_z; ties by subject/trial",
+            examples.append({**selected, "selection_rule": f"{success_space} typicality arm nearest its task median d_z; ties by subject/trial",
                              "successful_median_d_z": float(median)})
         else:
             examples.append({"task": task, "status": "no_typicality_success_example"})
@@ -226,12 +294,21 @@ def build_report(roots, output, *, probe_results=()):
         probe = json.loads(Path(path).read_text())
         if probe.get("task") not in tasks or any(p["task"] == probe["task"] for p in probes):
             raise ValueError("Probe results must identify one unique task present in this report")
+        probe_definition = probe.get("typicality_definition")
+        legacy_probe = probe_definition is None and definition["score"] == "legacy_window_moment_KL"
+        if not legacy_probe and probe_definition != definition:
+            raise ValueError("Probe and report typicality definitions differ; rebuild the matching full-trial probe")
         probes.append(probe)
-    payload = {"schema_version": 1, "population": populations, "emotion_recognition": recognition_rows,
+    payload = {"schema_version": 3, "typicality_definition": definition,
+               "round_trip_evaluation": evaluation_protocol,
+               "population": populations, "emotion_recognition": recognition_rows,
                "subject_typicality": subject_changes, "examples": examples,
                "subject_identifiability": probes,
                "complete": all(f["status"] == "completed" for f in folds) and all(r["status"] != "pending" for r in rows),
                "notes": ["Distances are RMSE in latent/input coordinates; IQR is Q25,Q75 over all finite selected endpoints, including failures.",
+                         "Decoded validity uses target argmax and confidence after full-trial re-encoding. Latent success remains a diagnostic.",
+                         "Decoded typicality uses the same frozen class distribution and source threshold as latent typicality.",
+                         "Reconstruction failures are retained; all eligible attempts remain in success-rate denominators. Legacy round-trip metrics are unavailable.",
                          "Unknown physiological checks are NA, never silently passed.",
                          "ECE uses equal-width top-label confidence bins; fold SD uses ddof=1.",
                          "Subject probe must be run explicitly with a declared coordinate policy."]}
@@ -239,11 +316,11 @@ def build_report(roots, output, *, probe_results=()):
     write_json(output / "subject_probe_status.json", {"status": "provided" if probes else "not_evaluated", "tasks": [p["task"] for p in probes], "reason": "Independent LOSO latent coordinate systems can confound subject identification; inspect each probe's coordinate policy."})
     if probes:
         write_csv(output / "subject_identifiability.csv", [{"task": p["task"], **row} for p in probes for row in p["rows"]])
-    _write_latex(output / "tables.tex", populations, recognition_rows, probes)
+    _write_latex(output / "tables.tex", populations, recognition_rows, probes, round_trip=has_round_trip)
     return payload
 
 
-def _write_latex(path, populations, recognition, probes=()):
+def _write_latex(path, populations, recognition, probes=(), *, round_trip=False):
     def fmt(value, percent=False):
         return "--" if value is None else f"{value * (100 if percent else 1):.2f}"
     def distance(row, name):
@@ -255,13 +332,26 @@ def _write_latex(path, populations, recognition, probes=()):
                    for name, percent in (("balanced_accuracy", True), ("recall_0", True), ("recall_1", True), ("auroc", False), ("ece", False))]
         lines.append(" & ".join([row["task"].title(), *entries]) + r" \\")
     lines.extend([r"\end{tabular}", "", r"\begin{tabular}{llcccccc}",
-                  r"Task & Objective & Latent (\%) & Typ. (\%) & Both (\%) & $d_z$ & $\Delta_{dec}$ & Phys. (\%) \\ \hline"])
+                  (r"Task & Objective & Decoded (\%) & Re-enc. typ. (\%) & Both (\%) & $d_z$ & $\Delta_{dec}$ & Phys. (\%) \\ \hline"
+                   if round_trip else r"Task & Objective & Latent (\%) & Typ. (\%) & Both (\%) & $d_z$ & $\Delta_{dec}$ & Phys. (\%) \\ \hline")])
+    success_fields = (("decoded_target_success_percent", "decoded_typical_percent", "decoded_typicality_success_percent")
+                      if round_trip else ("latent_target_success_percent", "typical_percent", "typicality_success_percent"))
     for row in populations:
         entries = [row["task"].title(), "Base CFO" if row["objective"] == "base" else r"$+\mathcal{L}_{typ}$",
-                   fmt(row["latent_target_success_percent"]), fmt(row["typical_percent"]), fmt(row["typicality_success_percent"]),
+                   *[fmt(row[field]) for field in success_fields],
                    distance(row, "d_z"), distance(row, "delta_dec"), fmt(row["physiological_pass_percent"])]
         lines.append(" & ".join(entries) + r" \\")
     lines.append(r"\end{tabular}")
+    if round_trip:
+        lines.extend(["", r"% Latent optimization diagnostics; reconstruction failures remain in the cohort.",
+                      r"\begin{tabular}{llcccc}",
+                      r"Task & Objective & Latent (\%) & Latent typ. (\%) & Both (\%) & Reconstruction preserves class (\%) \\ \hline"])
+        for row in populations:
+            entries = [row["task"].title(), "Base CFO" if row["objective"] == "base" else r"$+\mathcal{L}_{typ}$",
+                       *[fmt(row[field]) for field in ("latent_target_success_percent", "typical_percent",
+                                                       "typicality_success_percent", "reconstruction_preserves_prediction_percent")]]
+            lines.append(" & ".join(entries) + r" \\")
+        lines.append(r"\end{tabular}")
     if probes:
         lines.extend(["", r"% Check subject_identifiability.json coordinate policy before interpreting these values.",
                       r"\begin{tabular}{lcc}", r"Representation & Valence probe BA (\%) & Arousal probe BA (\%) \\ \hline"])

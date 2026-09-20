@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from .artifacts import file_sha256, write_csv, write_json
-from .results import _latest_result
+from .results import _latest_result, compatible_typicality_definition
 
 
 def _validate_predictions(labels, probabilities, discrepancies, *, name):
@@ -395,6 +395,8 @@ def build_class_typicality_audit(
     seed=42, quantile=0.95,
 ):
     """Build an offline class-awareness report from one or more study roots."""
+    roots = list(roots)
+    definition = compatible_typicality_definition(roots)
     output = Path(output)
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise FileExistsError(f"Output must be new or empty: {output}")
@@ -454,6 +456,7 @@ def build_class_typicality_audit(
     write_json(output / "class_typicality_sampling.json", sampling)
     payload = {
         "schema_version": 1,
+        "typicality_definition": definition,
         "definition": "true_class == 1 and argmax(probabilities) == 1",
         "primary_threshold": "source-only sampled correct-class-1 discrepancy quantile",
         "heldout_role": "evaluation only; never contributes to primary threshold",

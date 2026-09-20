@@ -55,7 +55,7 @@ TRIALS_NPZ="${TRIALS_NPZ:-}"
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 TASK="${TASK:-arousal}"
-TYPICALITY_SEQUENCE="${TYPICALITY_SEQUENCE:-vc_window_embeddings}"
+TYPICALITY_REPRESENTATION="${TYPICALITY_REPRESENTATION:-${TYPICALITY_SEQUENCE:-vc_trial_embedding}}"
 TYPICALITY_WEIGHT="${TYPICALITY_WEIGHT:-}"
 TYPICALITY_QUANTILE="${TYPICALITY_QUANTILE:-0.95}"
 VARIANCE_FLOOR="${VARIANCE_FLOOR:-1e-6}"
@@ -191,7 +191,7 @@ print("TensorFlow GPU libdevice preflight passed", flush=True)
 PY
 
 HELP="$("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runner --help)"
-for required_option in --models-json --task --typicality-sequence --typicality-weight --subjects --out-dir; do
+for required_option in --models-json --task --typicality-representation --typicality-weight --subjects --out-dir; do
     if [[ "$HELP" != *"$required_option"* ]]; then
         echo "ERROR: typicality.runner lacks $required_option."
         exit 3
@@ -228,7 +228,7 @@ fi
 
 echo "Typicality CFX: task=$TASK subject=$SUBJECT_ID"
 echo "Manifest: $MODELS_JSON"
-echo "Sequence: $TYPICALITY_SEQUENCE | weight: $TYPICALITY_WEIGHT"
+echo "Representation: $TYPICALITY_REPRESENTATION | weight: $TYPICALITY_WEIGHT"
 echo "Output: $OUT_DIR"
 
 "$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runner \
@@ -237,7 +237,7 @@ echo "Output: $OUT_DIR"
     --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model \
     --task "$TASK" \
     --subjects "$SUBJECT_ID" \
-    --typicality-sequence "$TYPICALITY_SEQUENCE" \
+    --typicality-representation "$TYPICALITY_REPRESENTATION" \
     --typicality-weight "$TYPICALITY_WEIGHT" \
     --typicality-quantile "$TYPICALITY_QUANTILE" \
     --variance-floor "$VARIANCE_FLOOR" \

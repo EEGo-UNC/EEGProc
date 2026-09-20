@@ -6,25 +6,29 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from eegproc.model_explainability.typicality import TypicalityRegion, diagonal_gaussian_kl, trial_representation
+from eegproc.model_explainability.typicality import TypicalityRegion, diagonal_mahalanobis_squared
+from eegproc.model_explainability.typicality.core import SCORE_DEFINITION, REPRESENTATION
 from eegproc.model_explainability.typicality.artifacts import TrialRecorder, completed_attempt
 from eegproc.model_explainability.typicality.results import population_summary, recognition_metrics, build_report
 
 
-def test_eq7_matches_analytic_mean_and_variance_terms():
-    # Per-coordinate KLs: 0.5*(4 + 1 - 1 - log(4)); 0.5*(1 + 4 - 1).
-    actual = diagonal_gaussian_kl([[1, 2]], [[4, 1]], [0, 0], [1, 1])
-    expected = (0.5 * (4 - np.log(4)) + 2) / 2
-    assert actual[0] == pytest.approx(expected)
-    assert diagonal_gaussian_kl([0, 1], [2, 3], [0, 1], [2, 3]) == pytest.approx(0)
-    assert np.isfinite(diagonal_gaussian_kl([1], [0], [0], [0]))
+def test_mahalanobis_matches_standardized_distance_and_variance_floor():
+    # Standardized deviations are 1 and 2: mean squared distance is 2.5.
+    actual = diagonal_mahalanobis_squared([[3, 6], [1, 2]], [1, 2], [4, 4])
+    np.testing.assert_allclose(actual, [2.5, 0.0])
+    assert diagonal_mahalanobis_squared([1], [0], [0], variance_floor=0.25) == pytest.approx(4)
     with pytest.raises(ValueError, match="nonnegative"):
-        diagonal_gaussian_kl([0], [-1], [0], [1])
-
+        diagonal_mahalanobis_squared([0], [0], [-1])
+    with pytest.raises(ValueError, match="finite"):
+        diagonal_mahalanobis_squared([np.nan], [0], [1])
+    with pytest.raises(ValueError, match="dimensions"):
+        diagonal_mahalanobis_squared([[0, 1]], [0], [1])
+    with pytest.raises(ValueError, match="positive"):
+        diagonal_mahalanobis_squared([0], [0], [1], variance_floor=0)
 
 def calibrated_region():
     return TypicalityRegion.calibrate(
-        np.array([[0, 1], [1, 1], [100, 1]], dtype=float),
+        np.array([[0], [1], [100]], dtype=float),
         prior_mean=[0], prior_variance=[1], subject_ids=[1, 2, 2],
         trial_ids=[0, 0, 1], labels=[1, 1, 0], held_out_subject=0,
     )
@@ -34,24 +38,30 @@ def test_calibration_keeps_learned_prior_and_excludes_class_zero(tmp_path):
     region = calibrated_region()
     np.testing.assert_array_equal(region.prior_mean, [0])
     np.testing.assert_array_equal(region.prior_variance, [1])
-    assert region.tau == pytest.approx(0.5)
+    assert region.tau == pytest.approx(1.0)
     assert region.metadata["calibration_trial_keys"] == [[1, 0], [2, 0]]
     region.save(tmp_path)
     loaded = TypicalityRegion.load(tmp_path)
-    assert loaded.score([[1, 1]])[0] == pytest.approx(region.tau)
+    assert loaded.score([[1]])[0] == pytest.approx(region.tau)
     assert loaded.metadata == region.metadata
 
 
 def test_heldout_subject_is_rejected_even_for_class_zero():
     with pytest.raises(ValueError, match="Held-out"):
-        TypicalityRegion.calibrate([[0, 1], [1, 1], [10, 1]], prior_mean=[0], prior_variance=[1],
+        TypicalityRegion.calibrate([[0], [1], [10]], prior_mean=[0], prior_variance=[1],
             subject_ids=[1, 2, 0], trial_ids=[0, 0, 0], labels=[1, 1, 0], held_out_subject=0)
 
 
-def test_trial_moments_use_complete_sequence_ddof_zero():
-    z = np.asarray([[[[0, 2], [2, 4]], [[4, 6], [6, 8]]]])
-    np.testing.assert_allclose(trial_representation(z), [[3, 5, 5, 5]])
-
+def test_region_rejects_window_moments_and_legacy_calibration(tmp_path):
+    region = calibrated_region()
+    with pytest.raises(ValueError, match="full-trial embeddings"):
+        region.score([[0, 1]])
+    region.save(tmp_path)
+    metadata = json.loads((tmp_path / "region.json").read_text())
+    metadata.update(schema_version=1, definition="Eq7_diagonal_gaussian_KL_per_dimension")
+    (tmp_path / "region.json").write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="recalibrate"):
+        TypicalityRegion.load(tmp_path)
 
 def test_failed_and_pending_optimizations_remain_in_denominator():
     rows = [dict(status="completed", latent_target_success=True, typical=True, typicality_success=True,
@@ -117,22 +127,23 @@ def test_trace_survives_error_and_complete_marker_verifies_arrays(tmp_path):
         completed_attempt(arm)
 
 
-def test_tf_eq7_gradient_matches_finite_difference():
+def test_tf_mahalanobis_gradient_matches_finite_difference():
     tf = pytest.importorskip("tensorflow")
-    z = tf.Variable([[[[-0.5], [2.0]], [[1.0], [3.0]]]], dtype=tf.float32)
-    region = calibrated_region()
+    embedding = tf.Variable([[3.0, -1.0]], dtype=tf.float32)
+    region = TypicalityRegion([1, 2], [4, 9], 2.0, {"target_class": 1})
     with tf.GradientTape() as tape:
-        d = region.discrepancy(z)
-    gradient = tape.gradient(d, z).numpy()
-    expected = region.score(trial_representation(z.numpy()))[0]
-    assert float(d) == pytest.approx(expected, rel=1e-6)
-    delta = 1e-3
-    before, after = z.numpy(), z.numpy()
-    before[0, 0, 0, 0] -= delta
-    after[0, 0, 0, 0] += delta
-    numerical = (region.score(trial_representation(after)) - region.score(trial_representation(before))) / (2 * delta)
-    assert gradient[0, 0, 0, 0] == pytest.approx(float(numerical[0]), rel=1e-3)
-
+        d = region.discrepancy(embedding)
+    gradient = tape.gradient(d, embedding).numpy()
+    assert float(d) == pytest.approx(region.score(embedding.numpy())[0], rel=1e-6)
+    for coordinate in range(2):
+        delta = 1e-3
+        before, after = embedding.numpy(), embedding.numpy()
+        before[0, coordinate] -= delta
+        after[0, coordinate] += delta
+        numerical = (region.score(after) - region.score(before)) / (2 * delta)
+        assert gradient[0, coordinate] == pytest.approx(float(numerical[0]), rel=1e-3)
+    with pytest.raises((ValueError, tf.errors.InvalidArgumentError)):
+        region.discrepancy(tf.zeros((1, 2, 2)))
 
 def test_two_phase_normalized_typicality_and_feasible_selection():
     tf = pytest.importorskip("tensorflow")
@@ -165,7 +176,8 @@ def test_two_phase_normalized_typicality_and_feasible_selection():
             return tf.reduce_mean(sequence, axis=1)
 
         def get_encoder_features(self, x):
-            return {"window_features": x, "probabilities": tf.nn.softmax(self(x))}
+            return {"window_features": x, "classification_embedding": tf.reduce_mean(x, axis=(1, 2)),
+                    "probabilities": tf.nn.softmax(self(x))}
 
         def __call__(self, x, training=False):
             return self.vc_target(tf.reduce_mean(x, axis=(1, 2)))
@@ -200,28 +212,63 @@ def test_two_phase_normalized_typicality_and_feasible_selection():
     assert constrained["summary"]["selected_step"] > base["summary"]["selected_step"]
 
 
-@pytest.mark.parametrize("mode", ["vc_window_embeddings", "vc_hidden_sequence"])
-def test_sic_mapping_has_vc_width_and_frozen_weights(mode):
+@pytest.mark.parametrize("rnn_type", ["gru", "bigru"])
+def test_full_trial_embedding_matches_prediction_and_preserves_frozen_weights(rnn_type):
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
-    from eegproc.model_explainability.typicality.sic_sequence import SICVCSequence
+    from eegproc.model_explainability.typicality.sic_embedding import SICTrialEmbedding
+    tf.keras.utils.set_random_seed(41)
     model = build_sic_model(input_shape=(3, 8, 42), adjacency=np.eye(14, dtype=np.float32),
                             classification_level="trial", n_channels=14, n_bands=3, gcn_units=(4,),
                             spectral_gru_units=5, bilstm_units=2, classifier_rnn_units=3,
+                            classifier_rnn_type=rnn_type,
                             use_decoder=True, use_subject_adversarial=False, decoder_dropout=0)
     x = tf.random.normal((1, 3, 8, 42), seed=41)
-    z = tf.Variable(model.get_encoder_features(x)["window_features"])
+    features = model.get_encoder_features(x)
+    z = tf.Variable(features["window_features"])
     before = [w.numpy().copy() for w in model.weights]
-    mapping = SICVCSequence(model, mode=mode)
+    mapping = SICTrialEmbedding(model)
+    mean, variance = mapping.learned_prior()
+    region = TypicalityRegion(mean, variance, 1.0, {"target_class": 1})
     with tf.GradientTape(watch_accessed_variables=False) as tape:
         tape.watch(z)
-        output = mapping(z)
-        value = tf.reduce_sum(output ** 2)
-    assert output.shape == (1, 3 if mode == "vc_window_embeddings" else 24, 6)
+        embedding = mapping(z)
+        value = region.discrepancy(embedding)
+    np.testing.assert_allclose(embedding.numpy(), features["classification_embedding"].numpy(), atol=1e-6)
+    np.testing.assert_allclose(tf.nn.softmax(model.vc_target(embedding)).numpy(), features["probabilities"].numpy(), atol=1e-6)
+    assert embedding.shape == (1, 6 if rnn_type == "bigru" else 3)
     assert np.isfinite(tape.gradient(value, z).numpy()).all()
+    # Window boundaries must not reset the summarizer: the same flattened
+    # chronological sequence, regrouped into 6 windows, gives the same vector.
+    regrouped = tf.reshape(z, (1, 6, 4, z.shape[-1]))
+    np.testing.assert_allclose(mapping(regrouped), embedding, atol=1e-6)
     assert len(before) == len(model.weights)
     for left, right in zip(before, model.weights):
         np.testing.assert_array_equal(left, right.numpy())
+
+
+def test_full_trial_score_uses_order_and_all_window_timesteps():
+    tf = pytest.importorskip("tensorflow")
+    from eegproc.model_explainability.typicality.sic_embedding import SICTrialEmbedding
+    recurrent = tf.keras.layers.SimpleRNN(1, activation="linear", use_bias=False,
+                                         kernel_initializer="ones", recurrent_initializer=tf.keras.initializers.Constant(0.5))
+    model = SimpleNamespace(classification_level="trial", trial_recurrent_classifier=recurrent,
+                            vc_target=SimpleNamespace(prior_mu=tf.constant([[0.0], [0.0]]),
+                                                      prior_log_sigma=tf.zeros((2, 1))))
+    mapping = SICTrialEmbedding(model)
+    z = tf.Variable([[[[1.0], [2.0]], [[3.0], [4.0]]]])
+    region = TypicalityRegion([0], [1], 100, {"target_class": 1})
+    with tf.GradientTape() as tape:
+        score = region.discrepancy(mapping(z))
+    # h_t = x_t + 0.5*h_(t-1), traversing all four steps without a reset.
+    expected = 1 / 8 + 2 / 4 + 3 / 2 + 4
+    assert mapping(z).numpy()[0, 0] == pytest.approx(expected)
+    assert float(score) == pytest.approx(expected ** 2)
+    gradient = tape.gradient(score, z).numpy()
+    assert np.all(np.abs(gradient) > 0)
+    permuted = tf.reverse(z, axis=[1])
+    np.testing.assert_allclose(tf.reduce_mean(z, axis=(1, 2)), tf.reduce_mean(permuted, axis=(1, 2)))
+    assert float(region.discrepancy(mapping(permuted))) != pytest.approx(float(score))
 
 
 def test_band_filtered_physiology_never_claims_complete_pass():
@@ -262,6 +309,8 @@ def test_typicality_runner_enables_stopping_defaults():
     from eegproc.model_explainability.typicality.runner import build_parser
 
     actions = {action.dest: action for action in build_parser()._actions}
+    assert actions["typicality_representation"].default == REPRESENTATION
+    assert actions["typicality_representation"].choices == (REPRESENTATION,)
     assert actions["stop_on_success"].default is True
     assert actions["min_gradient_norm"].default == pytest.approx(1e-6)
     assert actions["low_gradient_patience"].default == 5
@@ -291,7 +340,7 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
                         trial_ids=[0, 1, 0, 1, 0, 1], labels=[0, 0, 1, 1, 1, 1])
     out = tmp_path / "study"
     args = study.parse_args(["--models-json", str(manifest), "--task", "valence", "--trials-npz", str(data_path),
-                            "--typicality-sequence", "vc_window_embeddings", "--out-dir", str(out),
+                            "--out-dir", str(out),
                             "--trial-ids", "0", "--max-steps", "1", "--log-every", "0"])
     result = study.run(args)
     assert result["complete"]
@@ -308,10 +357,37 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
         attempt = completed_attempt(out / "subject_0/trial_0" / objective)
         assert attempt is not None
         with np.load(attempt / "counterfactual.npz", allow_pickle=False) as data:
-            assert "typicality_sequence_prime" in data.files
+            assert "classification_embedding_prime" in data.files
+            assert data["classification_embedding_prime"].shape == (1, 8)
+            assert "typicality_sequence_prime" not in data.files
+            region = TypicalityRegion.load(out / "subject_0/calibration")
+            summary = json.loads((attempt / "result.json").read_text())
+            assert summary["typicality"]["counterfactual_discrepancy"] == pytest.approx(
+                region.score(data["classification_embedding_prime"])[0], rel=1e-5)
+            assert summary["d_z"] == pytest.approx(float(np.sqrt(np.mean(
+                (data["classification_embedding_prime"] - data["classification_embedding"]) ** 2))))
+            decoded = summary["decoded_trials"]["joint"]
+            for label, array_name in (("counterfactual", "classification_embedding_reencoded_joint"),
+                                      ("original_reconstruction", "classification_embedding_reconstructed_joint")):
+                assert decoded[label]["discrepancy"] == pytest.approx(region.score(data[array_name])[0], rel=1e-5)
+                assert decoded[label]["typicality_success"] == (decoded[label]["success"] and decoded[label]["typical"])
             assert "x_prime_joint" in data.files
         assert (attempt / "trajectory/step_000000.npz").exists()
         assert (attempt / "physiology_counterfactual.npz").exists()
+    with np.load(out / "subject_0/calibration/source_trials.npz", allow_pickle=False) as data:
+        assert data["embeddings"].shape == (4, 8)
+        assert "moments" not in data.files
+        np.testing.assert_allclose(region.score(data["embeddings"]), data["discrepancy"])
+    assert result["typicality_definition"] == {"score": SCORE_DEFINITION, "representation": REPRESENTATION}
+    assert result["round_trip_evaluation"] == "full_trial_decoder_encoder_v1"
+    assert all(row["n_round_trip_evaluated"] == 1 for row in result["population"])
+    assert all(row["decoded_target_success_percent"] is not None for row in result["population"])
+    assert "Decoded (\\%)" in (out / "report/tables.tex").read_text()
+    from eegproc.model_explainability.typicality.subject_probe import prepare_probe
+    keys, representations, probe_metadata = prepare_probe([out])
+    np.testing.assert_array_equal(keys, [[0, 0]])
+    assert all(value.shape == (1, 8) for value in representations.values())
+    assert probe_metadata["representation"] == "classification_embedding"
     # Rebuilding results is independent of both the checkpoint and TensorFlow calls.
     rebuilt = build_report([out], tmp_path / "rebuilt")
     assert rebuilt == result
@@ -334,6 +410,18 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     monkeypatch.setattr(study, "create_sic_adapter", forbidden_model_load)
     args.resume = True
     assert study.run(args) == result
+    saved_protocol = (out / "study.json").read_text()
+    legacy_protocol = json.loads(saved_protocol)
+    legacy_protocol.pop("round_trip_evaluation")
+    (out / "study.json").write_text(json.dumps(legacy_protocol))
+    with pytest.raises(ValueError, match="protocol changed"):
+        study.run(args)
+    legacy_protocol = json.loads(saved_protocol)
+    legacy_protocol.update(schema_version=1, typicality_definition="legacy_window_moment_KL")
+    (out / "study.json").write_text(json.dumps(legacy_protocol))
+    with pytest.raises(ValueError, match="protocol changed"):
+        study.run(args)
+    (out / "study.json").write_text(saved_protocol)
     args.typicality_weight = 2
     with pytest.raises(ValueError, match="protocol changed"):
         study.run(args)
@@ -368,3 +456,25 @@ def test_pending_fold_prevents_final_population_claim(tmp_path):
     assert not result["complete"]
     assert all(row["provisional"] for row in result["population"])
     assert all(row["n_pending_folds"] == 1 for row in result["population"])
+
+
+@pytest.mark.parametrize("legacy_mode", ["vc_window_embeddings", "vc_hidden_sequence"])
+def test_runner_rejects_legacy_sequence_modes(legacy_mode):
+    from eegproc.model_explainability.typicality.runner import parse_args
+    with pytest.raises(SystemExit):
+        parse_args(["--models-json", "unused.json", "--task", "valence", "--trials-npz", "unused.npz",
+                    "--out-dir", "unused", "--typicality-sequence", legacy_mode])
+
+
+def test_reports_reject_mixing_legacy_kl_and_mahalanobis(tmp_path):
+    from eegproc.model_explainability.typicality.class_awareness import build_class_typicality_audit
+    old, new = tmp_path / "old", tmp_path / "new"
+    for root in (old, new):
+        root.mkdir()
+        manifest = {"task": "valence", "folds": []}
+        if root == new:
+            manifest.update(typicality_definition=SCORE_DEFINITION, typicality_representation=REPRESENTATION)
+        (root / "study.json").write_text(json.dumps(manifest))
+    for builder in (build_report, build_class_typicality_audit):
+        with pytest.raises(ValueError, match="incompatible typicality"):
+            builder([old, new], tmp_path / "report")

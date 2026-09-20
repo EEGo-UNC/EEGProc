@@ -16,11 +16,17 @@ from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 
 from .artifacts import write_json, write_npz, write_csv
-from .results import collect_study
-from .core import trial_representation
+from .results import collect_study, compatible_typicality_definition
+from .core import SCORE_DEFINITION
 
 
-def prepare_probe(studies, *, representation="moments"):
+def prepare_probe(studies, *, representation="classification_embedding"):
+    studies = list(studies)
+    definition = compatible_typicality_definition(studies)
+    if definition["score"] != SCORE_DEFINITION:
+        raise ValueError("Full-trial subject probes require a new Mahalanobis study; legacy window-moment archives are incompatible")
+    if representation != "classification_embedding":
+        raise ValueError("The probe uses full-trial classification_embedding vectors")
     groups, coordinate_spaces, expected_subjects = {}, {}, set()
     task = None
     for root in studies:
@@ -45,21 +51,15 @@ def prepare_probe(studies, *, representation="moments"):
             excluded.append(list(key))
             continue
         with np.load(Path(pair["base"]["artifact_directory"]) / "counterfactual.npz", allow_pickle=False) as data:
-            original, base = data["typicality_sequence"], data["typicality_sequence_prime"]
+            original, base = data["classification_embedding"], data["classification_embedding_prime"]
         with np.load(Path(pair["typicality"]["artifact_directory"]) / "counterfactual.npz", allow_pickle=False) as data:
-            constrained = data["typicality_sequence_prime"]
-            if not np.allclose(original, data["typicality_sequence"], rtol=1e-5, atol=1e-6):
+            constrained = data["classification_embedding_prime"]
+            if not np.allclose(original, data["classification_embedding"], rtol=1e-5, atol=1e-6):
                 raise ValueError("Paired arms have different original representations")
-        for name, sequence in (("original", original), ("base", base), ("typicality", constrained)):
-            if representation == "moments":
-                moments = trial_representation(sequence)
-                mean, variance = np.split(moments, 2, axis=-1)
-                value = np.concatenate((mean, np.sqrt(variance)), axis=-1)[0]
-            elif representation == "full_sequence":
-                value = sequence.reshape(-1)
-            else:
-                raise ValueError("Unknown probe representation")
-            features[name].append(value)
+        for name, embedding in (("original", original), ("base", base), ("typicality", constrained)):
+            if embedding.ndim != 2 or embedding.shape[0] != 1 or not np.isfinite(embedding).all():
+                raise ValueError("Expected one finite full-trial classification embedding")
+            features[name].append(embedding[0])
         keys.append(key)
     if not keys:
         raise ValueError("No matched finite counterfactual pairs are available")
@@ -67,7 +67,7 @@ def prepare_probe(studies, *, representation="moments"):
         features = {name: np.stack(values) for name, values in features.items()}
     except ValueError as error:
         raise ValueError("Probe representation dimensions differ across folds") from error
-    metadata = {"task": task, "representation": representation,
+    metadata = {"task": task, "representation": representation, "typicality_definition": definition,
                 "n_eligible_pairs": len(groups), "n_included_pairs": len(keys), "excluded_trial_keys": excluded,
                 "expected_subject_ids": sorted(expected_subjects),
                 "coordinate_spaces": coordinate_spaces,
@@ -142,7 +142,7 @@ def main(argv=None):
     parser.add_argument("studies", nargs="+", type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--coordinate-policy", required=True, choices=("shared", "fold_specific_descriptive"))
-    parser.add_argument("--representation", choices=("moments", "full_sequence"), default="moments")
+    parser.add_argument("--representation", choices=("classification_embedding",), default="classification_embedding")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-fraction", type=float, default=0.3)
     args = parser.parse_args(argv)

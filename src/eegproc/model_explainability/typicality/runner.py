@@ -18,12 +18,12 @@ import tensorflow as tf
 
 from ..model_agnostic.adapter import load_trial_dataset, load_json_mapping
 from ..counterfactuals.arguments import _positive_float, _nonnegative_float, _nonnegative_int, _decay_float
-from ..counterfactuals.optimizer import CounterfactualOptimizer
+from ..counterfactuals.optimizer import CounterfactualOptimizer, ROUND_TRIP_EVALUATION
 from ..counterfactuals.loss import _VCSC_CHANNELS
 from ..model_agnostic.runner import _metadata_arrays
 from ..model_agnostic.sic_adapter import create_sic_adapter
-from .sic_sequence import SICVCSequence
-from .core import TypicalityRegion, trial_representation
+from .sic_embedding import SICTrialEmbedding
+from .core import TypicalityRegion, SCHEMA_VERSION, SCORE_DEFINITION, REPRESENTATION
 from .artifacts import (write_json, write_npz, write_csv, file_sha256,
                                   array_sha256, TrialRecorder, completed_attempt, next_attempt)
 from .physiology import (signal_diagnostics, PhysiologicalReference,
@@ -43,7 +43,9 @@ def build_parser():
     parser.add_argument("--data-config", help="Inline JSON or JSON file passed to the data loader.")
     parser.add_argument("--subjects", type=int, nargs="+", help="Optional fold shard; all eligible trials remain included within each fold.")
     parser.add_argument("--trial-ids", type=int, nargs="+", help="Optional optimization filter for selected held-out fold(s); source calibration and held-out VCSC calibration still use their complete trial sets.")
-    parser.add_argument("--typicality-sequence", required=True, choices=("vc_window_embeddings", "vc_hidden_sequence"), help="Explicit mapping into the learned VC coordinates; see typicality/README.md.")
+    parser.add_argument("--typicality-representation", "--typicality-sequence", dest="typicality_representation",
+                        default=REPRESENTATION, choices=(REPRESENTATION,),
+                        help="Full-trial terminal classification embedding. Legacy window/hidden-sequence KL modes are no longer supported.")
     parser.add_argument("--typicality-weight", type=_positive_float, default=1.0)
     parser.add_argument("--typicality-quantile", type=_positive_float, default=0.95)
     parser.add_argument("--variance-floor", type=_positive_float, default=1e-6)
@@ -172,7 +174,7 @@ def _protocol(args, dataset, folds):
         package_dir / "model_agnostic" / "runner.py",
         package_dir / "model_agnostic" / "sic_adapter.py",
     ]
-    return {"schema_version": 1, "task": args.task, "arguments": arguments, "folds": folds,
+    return {"schema_version": SCHEMA_VERSION, "task": args.task, "arguments": arguments, "folds": folds,
             "dataset_sha256": {name: array_sha256(value) for name, value in arrays.items()},
             "source_sha256": {
                 p.relative_to(package_dir).as_posix(): file_sha256(p)
@@ -181,12 +183,18 @@ def _protocol(args, dataset, folds):
             "dataset_metadata": dataset.metadata,
             "eligibility": "true_class == 0 and original argmax prediction == 0",
             "target_class": 1, "prediction_rule": "argmax; confidence threshold separately recorded",
-            "typicality_formula": "0.5 * mean((var_q + (mu_q-mu_p)^2)/var_p - 1 + log(var_p/var_q))",
+            "round_trip_evaluation": ROUND_TRIP_EVALUATION,
+            "counterfactual_validity": "target argmax and confidence on E(R(Zcf)); all eligible trials retained",
+            "round_trip_typicality": "same frozen VC distribution and source threshold, evaluated on E(R(Zcf))",
+            "round_trip_input": "all supplied windows in order, already in model input space; no repeated preprocessing",
+            "typicality_definition": SCORE_DEFINITION,
+            "typicality_representation": REPRESENTATION,
+            "typicality_formula": "mean((classification_embedding - prior_mean)^2 / max(prior_variance, variance_floor))",
             "evaluation": "typical iff D <= tau",
             "optimization_penalty": "lambda * D / max(tau,variance_floor), activated after target and physiology feasibility",
             "selection_priority": "target and physiology feasible, then lowest D, then proximity",
             "prior": "frozen learned VC parameters",
-            "distance_definition": "d_z=RMSE(Zcf,Z) in mapped VC sequence; delta_dec=RMSE(dec(Zcf),dec(Z)); e_rec=RMSE(dec(Z),x)",
+            "distance_definition": "d_z=RMSE(e(Hcf),e(H)) in full-trial classification embeddings; delta_dec=RMSE(dec(Hcf),dec(H)); e_rec=RMSE(dec(H),x)",
             "physiology_unit": dataset.signal_unit if dataset.normalization_scale is not None else "model_input_units",
             "physiology_families": list(FAMILIES), "band_edges_hz": DEFAULT_BANDS,
             "physiology_reference": "all source classes, empirical per-component central intervals",
@@ -232,26 +240,25 @@ def run_fold(args, dataset, entry, out):
                                  config={"model_module": args.model_module, "decoder_mode": args.decoder_mode},
                                  sample_input=dataset.features[held[0]])
     model = adapter.model
-    sequence = SICVCSequence(model, mode=args.typicality_sequence)
-    prior_mean, prior_variance = sequence.learned_prior(1)
-    source_moments = []
+    embedding_map = SICTrialEmbedding(model)
+    prior_mean, prior_variance = embedding_map.learned_prior(1)
+    source_embeddings = []
     source_probabilities = []
     print(f"Subject {subject}: encoding {len(source)} source trials for calibration", flush=True)
     for index in source:
         features = model.get_encoder_features(dataset.features[index:index + 1])
-        source_moments.append(trial_representation(sequence(features["window_features"]).numpy())[0])
+        source_embeddings.append(features["classification_embedding"].numpy()[0])
         source_probabilities.append(features["probabilities"].numpy()[0])
-    source_moments = np.stack(source_moments)
+    source_embeddings = np.stack(source_embeddings)
     region = TypicalityRegion.calibrate(
-        source_moments, prior_mean=prior_mean, prior_variance=prior_variance,
+        source_embeddings, prior_mean=prior_mean, prior_variance=prior_variance,
         subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source],
         held_out_subject=subject, quantile=args.typicality_quantile, variance_floor=args.variance_floor,
-        sequence_transform=sequence, sequence_definition=args.typicality_sequence,
     )
     region.save(directory / "calibration")
-    write_json(directory / "calibration" / "sequence.json", sequence.metadata())
-    write_npz(directory / "calibration" / "source_trials.npz", moments=source_moments,
-              probabilities=np.stack(source_probabilities), discrepancy=region.score(source_moments),
+    write_json(directory / "calibration" / "representation.json", embedding_map.metadata())
+    write_npz(directory / "calibration" / "source_trials.npz", embeddings=source_embeddings,
+              probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
               subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source],
               learned_prior_log_sigma=model.vc_target.prior_log_sigma.numpy(), learned_prior_mu=model.vc_target.prior_mu.numpy())
     vcsc = vcsc_calibration(_initial_reconstructions(
@@ -293,33 +300,32 @@ def run_fold(args, dataset, entry, out):
     }
     if args.report_output not in optimizers["base"].decoded_names:
         raise ValueError("The selected report output is not present in this checkpoint")
-    predictions, discrepancies, moments, eligible = [], [], [], []
+    predictions, discrepancies, embeddings, eligible = [], [], [], []
     for index in held:
         features = model.get_encoder_features(dataset.features[index:index + 1])
         z = features["window_features"]
-        vc_sequence = sequence(z)
-        moment = trial_representation(vc_sequence.numpy())[0]
+        embedding = features["classification_embedding"]
         probabilities = features["probabilities"].numpy()[0]
         if probabilities.shape != (2,) or not np.isfinite(probabilities).all():
             raise ValueError("The study requires finite binary trial probabilities")
-        d = float(region.discrepancy(z).numpy())
+        d = float(region.discrepancy(embedding).numpy())
         predictions.append(probabilities)
         discrepancies.append(d)
-        moments.append(moment)
+        embeddings.append(embedding.numpy()[0])
         trial = int(dataset.trial_ids[index])
         trial_dir = directory / f"trial_{trial}"
         trial_dir.mkdir(exist_ok=True)
         write_npz(trial_dir / "observed.npz", x=dataset.features[index:index + 1], z=z.numpy(),
-                  typicality_sequence=vc_sequence.numpy(), moments=moment, probabilities=probabilities,
-                  classification_embedding=features["classification_embedding"].numpy(),
+                  classification_embedding=embedding.numpy(), probabilities=probabilities,
                   discrepancy=d, **_metadata_arrays(dataset, index))
         if dataset.labels[index] == 0 and probabilities.argmax() == 0:
             eligible.append(index)
     observations = dict(trial_ids=dataset.trial_ids[held], labels=dataset.labels[held],
-                        probabilities=np.stack(predictions), discrepancy=np.asarray(discrepancies), moments=np.stack(moments))
+                        probabilities=np.stack(predictions), discrepancy=np.asarray(discrepancies), embeddings=np.stack(embeddings))
     write_npz(directory / "observations.npz", **observations)
     fold_info = {"subject_id": subject, "status": "running", "checkpoint": entry,
-                 "threshold": region.tau, "sequence": sequence.metadata(),
+                 "threshold": region.tau, "representation": embedding_map.metadata(),
+                 "typicality_definition": SCORE_DEFINITION,
                  "eligible_trial_ids": dataset.trial_ids[eligible].tolist(),
                  "all_trial_ids": dataset.trial_ids[held].tolist(), "loss": asdict(loss),
                  "recognition": recognition_metrics(dataset.labels[held], np.stack(predictions), ece_bins=args.ece_bins)}
@@ -335,9 +341,11 @@ def run_fold(args, dataset, entry, out):
             seed = int(np.random.SeedSequence([args.seed, subject, trial]).generate_state(1)[0])
             tf.keras.utils.set_random_seed(seed)
             recorder = TrialRecorder(next_attempt(arm_dir))
-            metadata = {"schema_version": 1, "task": args.task, "subject_id": subject, "trial_id": trial,
+            metadata = {"schema_version": SCHEMA_VERSION, "task": args.task, "subject_id": subject, "trial_id": trial,
                         "true_class": 0, "objective": objective, "seed": seed, "report_output": args.report_output,
-                        "checkpoint_sha256": entry["sha256"], "sequence_definition": args.typicality_sequence}
+                        "checkpoint_sha256": entry["sha256"], "typicality_definition": SCORE_DEFINITION,
+                        "typicality_representation": REPRESENTATION,
+                        "round_trip_evaluation": ROUND_TRIP_EVALUATION}
 
             def progress(row):
                 if args.log_every and row["step"] % args.log_every == 0:
@@ -355,7 +363,7 @@ def run_fold(args, dataset, entry, out):
                 phys = physiological.assess(diagnostic_sets["counterfactual"])
                 summary.update(physiology=phys,
                                vcsc_original_input=float(loss.physiological_validity(tf.convert_to_tensor(original)).numpy()),
-                               d_z=float(np.sqrt(np.mean((arrays["typicality_sequence_prime"] - arrays["typicality_sequence"]) ** 2))),
+                               d_z=float(np.sqrt(np.mean((arrays["classification_embedding_prime"] - arrays["classification_embedding"]) ** 2))),
                                decoder_latent_rmse=float(np.sqrt(summary["selected_losses"]["latent"])),
                                report_output=args.report_output)
                 for prefix, diagnostics in diagnostic_sets.items():

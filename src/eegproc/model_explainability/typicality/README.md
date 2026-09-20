@@ -1,52 +1,72 @@
-# Distributional typicality counterfactuals
+# Full-trial embedding typicality counterfactuals
 
-This workflow implements the supplied distributional-typicality equation and
-paired base CFO / typicality CFO evaluation. It optimizes the complete SIC
-decoder-latent trial through the frozen classifier and decoders. It does not
-train or select the emotion-recognition models.
+This workflow runs paired base CFO / typicality CFO evaluation. It optimizes
+all encoder features of one complete supplied trial through the frozen
+classifier and decoders. It does not train or select emotion-recognition models.
 
-## Equation and coordinate space
+## Score and representation
 
-For each coordinate of the chosen ordered VC-space sequence, compute the
-trial mean and population variance (`ddof=0`). The class-1 Gaussian comes
-directly from the checkpoint:
+Let `H` have shape `(1, W, T, D_encoder)`. Preserve all windows and timesteps
+in chronological order, reshape it to `(1, W*T, D_encoder)`, and run the saved
+trial recurrent classifier once. Its terminal embedding `e(H)` is exactly the
+vector passed to the frozen VC head for prediction. Typicality reuses that same
+embedding during optimization, so its gradient traverses the complete trial
+without a second recurrent pass or a reset between windows.
+
+The score is **squared diagonal Mahalanobis distance divided by VC dimension**:
 
 ```text
-mu_p = model.vc_target.prior_mu[1]
-var_p = exp(2 * model.vc_target.prior_log_sigma[1])
-var_q = maximum(trial_variance, epsilon)
-var_p = maximum(var_p, epsilon)
-D = 0.5 * mean((var_q + (mu_q - mu_p)^2) / var_p - 1 + log(var_p) - log(var_q))
+e = frozen_trial_recurrent_classifier(reshape(H, (1, W*T, D_encoder)))
+mu = model.vc_target.prior_mu[1]
+var = maximum(exp(2 * model.vc_target.prior_log_sigma[1]), epsilon)
+D = mean((e - mu)^2 / var)
 evaluation: typical iff D <= tau
 phase-2 loss: L_typ = lambda_typ * D / maximum(tau, epsilon)
 ```
 
-The default variance floor is `1e-6`. There is no Gaussian refitting, covariance
-shrinkage, or logit-temperature factor in the discrepancy equation. Division
-by `tau` only scales the optimization penalty across folds; it does not alter
-`D` or the `D <= tau` evaluation.
-The threshold is the empirical 95th percentile (`method="higher"`) of source
-class-1 trial discrepancies, configurable before the study. All source
+The default variance floor is `1e-6`. There is no square root, factor of 1/2,
+within-trial mean/variance aggregation, Gaussian KL, covariance refitting, or
+logit-temperature factor in this score. Both the Gaussian and `e(H)` belong to
+the full-trial terminal classification space used during training.
+
+The cutoff is the empirical 95th percentile (`method="higher"`) of source
+class-1 **trial embedding scores**, configurable before the study. All source
 class-1 trials contribute regardless of their predicted class. The held-out
-subject never contributes to threshold or physiological calibration.
+subject never contributes to this threshold. Division by `tau` scales the
+optimization penalty across folds and does not change the acceptance cutoff.
 
-**The sequence definition needs an explicit choice.** In the current valence
-configuration, decoder features have 510 coordinates and the learned VC
-Gaussian has 128. Their coordinates cannot be compared directly. Both
-supported mappings reuse the checkpoint's recurrent weights:
+### Assumptions and interpretation
 
-| `--typicality-sequence` | Definition of the ordered sequence used in Eq. (7) |
-| --- | --- |
-| `vc_window_embeddings` | One VC-space vector per original window, obtained by running the frozen BiGRU summarizer on each window; recurrent state resets per window. |
-| `vc_hidden_sequence` | Every hidden timestep from the last frozen GRU/BiGRU, followed by its saved normalization; recurrent state traverses the entire trial. |
+- A full trial means every supplied window and timestep, with no cropping,
+  subsampling, or temporal averaging in the counterfactual workflow. The current
+  DREAMER preprocessing retains the middle 60 seconds of each stimulus; with
+  the launch scripts' one-second non-overlapping windows, this is 60 windows
+  of 128 timesteps. It does not restore the original uncropped recording.
+- The checkpoint's learned class Gaussian and model weights remain frozen.
+  Only the source threshold is recalibrated; no new emotion model is trained.
+- `--typicality-representation vc_trial_embedding` is the default and sole
+  supported representation. Classifier state spans the complete trial.
+- The existing one-sided cutoff and two-stage optimizer are retained. This is
+  an operational measure of class-conditional embedding compatibility, not
+  proof of a statistical typical set, temporal plausibility, or physiological
+  validity. Minimizing the score favors the class Gaussian's center. Separate
+  physiological checks and counterfactual proximity terms still apply.
 
-Neither option changes full-trial classification. These are distinct
-operational definitions of the manuscript's `Z`; select the intended one
-before collecting results. The VC priors were trained on terminal trial
-embeddings, so applying them to either sequence is an explicit modeling
-choice. The chosen definition, sequence length, learned priors, and source
-scores are retained. `TypicalityRegion` also accepts an explicitly supplied
-sequence transform through its Python API.
+### Migration from window-moment KL
+
+Use a **new output directory** and recalibrate each fold. Old KL scores,
+thresholds, and tuned weights must not be assumed transferable. Study and
+region metadata use schema version 2 and explicitly record the score and
+representation. Legacy regions cannot be loaded for new optimization; resume
+rejects changed code/protocol. Offline reports and class-awareness audits can
+still read legacy archives separately, but reject mixtures of score or
+representation definitions. The full-trial subject probe requires new archives.
+
+The old `vc_window_embeddings` and `vc_hidden_sequence` modes are rejected.
+`--typicality-sequence` remains an option-name alias but accepts only the new
+`vc_trial_embedding` value. Launch scripts use `TYPICALITY_REPRESENTATION`;
+an explicitly supplied legacy `TYPICALITY_SEQUENCE` value is forwarded and
+rejected rather than silently changing its meaning.
 
 ## Run a paired LOSO study
 
@@ -59,7 +79,7 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.runner \
   --model-dir /path/to/configuration/loso_zero_shot_models \
   --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model \
   --task valence --trials-npz /path/to/valence_trials.npz \
-  --typicality-sequence vc_window_embeddings \
+  --typicality-representation vc_trial_embedding \
   --decoder-mode joint --target-probability 0.8 \
   --typicality-weight 1 --typicality-quantile 0.95 \
   --learning-rate 0.01 --max-steps 200 \
@@ -69,8 +89,7 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.runner \
   --out-dir runs/typicality/valence
 ```
 
-The mapping shown above is an example, not an automatically chosen paper
-protocol. Use the corresponding frozen arousal manifest, arousal labels, and
+Use the corresponding frozen arousal manifest, arousal labels, and
 `--task arousal` for the other task. Set objective weights and other settings
 using source-subject model selection before evaluating held-out subjects.
 
@@ -122,12 +141,24 @@ Concurrent jobs should use separate output directories.
 - The typicality phase also stops after
   `--typicality-improvement-patience` feasible evaluations without a decrease
   of at least `--typicality-min-delta` in `D`.
-- Decoded signals are never passed back through the encoder. Counterfactual
-  success is measured directly by the frozen classifier on the optimized
-  latent state.
-- The results table's typicality success requires latent target success AND
-  `D <= tau`.
-- `d_z` is RMSE between the original and counterfactual VC-space sequences.
+- The original reconstruction and selected decoded counterfactual are each
+  re-encoded as complete trials for evaluation. The saved encoder uses
+  inference mode, all supplied windows retain their order, and decoder outputs
+  enter directly in model-input coordinates without repeated preprocessing.
+  This check does not alter the objective, selected iterate, or stopping rules.
+- The main results table uses decoded target success (target argmax AND
+  confidence), re-encoded `D <= tau`, and their conjunction. The same frozen
+  Gaussian and source threshold score the optimized and re-encoded embeddings.
+  Latent target/typicality success remains a separate diagnostic table.
+  The existing `typicality_success` JSON/CSV field denotes the latent decision;
+  `decoded_typicality_success` denotes the decoded decision.
+- Reconstruction prediction preservation, confidence drops, and cycle RMSE
+  are recorded. A reconstruction that changes the original prediction does
+  not remove that trial from the eligible cohort or success denominators.
+  Round-trip validity establishes consistency with the model, not physiological
+  realism. Physiology outcomes remain separate.
+- `d_z` is RMSE between the original and counterfactual full-trial
+  classification embeddings.
   `decoder_latent_rmse` separately measures the actual optimized decoder
   features and corresponds to the square root of the CFO latent MSE term.
   `delta_dec` is RMSE between decoded counterfactual and decoded original;
@@ -149,15 +180,15 @@ study.json                       protocol, checkpoint/data/code hashes, fold mem
 environment.json                 versions, command, source revision
 subject_<id>/
   fold.json                      threshold, eligibility, recognition metrics, status
-  observations.npz               all held-out predictions, moments, discrepancies
+  observations.npz               all held-out predictions, full-trial embeddings, discrepancies
   calibration/
-    region.json + region.npz      Eq. (7) definition, learned Gaussian, epsilon, tau
-    source_trials.npz            source IDs, labels, moments, scores, learned priors
-    sequence.json                mapping and coordinate-space definition
+    region.json + region.npz      Mahalanobis definition, learned Gaussian, epsilon, tau
+    source_trials.npz            source IDs, labels, full-trial embeddings, scores, learned priors
+    representation.json          full-trial mapping and coordinate-space definition
     vcsc.npz                    held-out R(Z0) VCSC calibration and measurements
     physiology.npz              source descriptors and empirical check bounds
   trial_<id>/
-    observed.npz                original input, decoder latent, VC sequence, predictions
+    observed.npz                original input, decoder latent, classification embedding, predictions
     base/attempt_0001/           same structure for typicality/attempt_0001/
       history.jsonl + history.csv  every finite evaluated step, starting at step 0
       trajectory/step_000000.npz first latent/VC/decoded/gradient/optimizer state
@@ -171,9 +202,27 @@ report/                          CSV tables, distributions, example selection, t
 ```
 
 Step `s` precedes update `s+1`; the Adam slots reflect `s` completed updates.
-History includes all probabilities, loss components and weights, discrepancy,
-threshold, gradient norm, learning rate, decoded outcomes, and displacements.
-The selected best step is distinct from the last evaluated step.
+History includes latent probabilities, loss components and weights, discrepancy,
+threshold, gradient norm, learning rate, decoded distances, and displacements.
+Re-encoded predictions and typicality are endpoint evaluations, not per-step
+optimization losses; they are stored in `result.json` under
+`decoded_trials.<path>.original_reconstruction` and `.counterfactual`.
+The selected best step is distinct from the last evaluated step. `d_z` now
+measures full-trial embedding RMSE; `decoder_latent_rmse` continues to measure
+all optimized encoder coordinates. `observations.npz` and `source_trials.npz`
+store `(N, d)` arrays named `embeddings`. Each trial's `observed.npz` stores
+`classification_embedding` with shape `(1, d)`. Counterfactual endpoints store
+`classification_embedding` and `classification_embedding_prime`, plus
+`classification_embedding_reconstructed_<path>` and
+`classification_embedding_reencoded_<path>` for the decoder–encoder checks.
+No artificial sequence axis or window moments are saved.
+
+New studies declare `round_trip_evaluation=full_trial_decoder_encoder_v1`.
+Resume rejects earlier manifests because their evaluation protocol differs.
+Legacy reports remain readable with unavailable decoded metrics; they cannot
+be pooled with new round-trip studies. Use a new output directory for new runs.
+The separate class-awareness audit and subject probe continue to inspect the
+optimized latent representations; their outcomes are not decoded validity.
 
 Scalars are flushed every step to `history.jsonl` and collected into
 `history.csv` when the attempt closes. Each row includes target probability,
@@ -217,7 +266,7 @@ The audit writes fold, real-trial, counterfactual, and aggregate CSV files plus
 the exact sampling manifest and input hashes. Counterfactual transitions are
 reported as entered, preserved inside, exited, or stayed outside. Plain
 `counterfactuals.runner` archives contain `z` and `z_prime` but not the mapped
-VC sequences or source reference bank; those older runs require one
+classification embeddings or source reference bank; those older runs require one
 checkpoint-backed enrichment pass before this offline command can be used.
 
 ## Rebuild tables and figures without models
@@ -251,10 +300,13 @@ These commands need no TensorFlow or checkpoint inference. Outputs include
 recognition fold means and sample SDs, recalls, AUROC, top-label ECE,
 population percentages and medians/IQRs, per-subject rates, paired percentage
 point changes, and all observed/counterfactual discrepancy distributions.
-The example is the typicality-arm latent-target-and-typical success nearest its task's median
-VC-sequence displacement, with deterministic subject/trial tie breaking.
+The example is a typicality-arm decoded-target-and-reencoded-typical success
+nearest the successful cohort's median full-trial embedding displacement,
+with deterministic subject/trial tie breaking. Latent-only legacy reports
+retain their original example rule.
 
-Figures include probability/discrepancy/displacement trajectories, per-subject
+Figures include latent probability/discrepancy/displacement trajectories with
+re-encoded reconstruction and selected-counterfactual points, per-subject
 rates, discrepancy relative to each fold's threshold, and electrode-band
 power-change maps. Numerical inputs for aggregate scalp maps are also saved.
 Existing counterfactual heatmap and topography commands can read the new
@@ -290,7 +342,7 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.subject_probe \
 ```
 
 It uses the same disjoint whole-trial split for original, base, and constrained
-representations. Scaling is fitted only on training trials. All paired finite
+full-trial classification embeddings (`--representation classification_embedding`). Scaling is fitted only on training trials. All paired finite
 endpoints are included irrespective of class-flip success. Each included
 subject needs at least two paired trials. Fits, scales, split IDs, probabilities,
 confusion matrices, and balanced accuracies are saved; chance uses the actual

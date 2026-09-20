@@ -55,6 +55,7 @@ def tiny_joint_model():
 def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
     inputs = tf.random.normal((1, 2, 4, 42), seed=7)
     weights_before = [value.numpy().copy() for value in tiny_joint_model.weights]
+    trainable_before = [value.trainable for value in tiny_joint_model.weights]
     optimizer = CounterfactualOptimizer(
         tiny_joint_model,
         max_steps=1,
@@ -78,10 +79,22 @@ def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
         "z_prime",
         "x_reconstructed_joint",
         "x_prime_joint",
+        "classification_embedding",
+        "classification_embedding_prime",
+        "classification_embedding_reconstructed_joint",
+        "classification_embedding_reencoded_joint",
     }
     decoded = result["summary"]["decoded_trials"]["joint"]
-    assert "counterfactual" not in decoded
-    assert "original_reconstruction" not in decoded
+    for label, signal_key, embedding_key, reference_key in (
+        ("original_reconstruction", "x_reconstructed_joint", "classification_embedding_reconstructed_joint", "classification_embedding"),
+        ("counterfactual", "x_prime_joint", "classification_embedding_reencoded_joint", "classification_embedding_prime"),
+    ):
+        signal = result["arrays"][signal_key]
+        features = tiny_joint_model.get_encoder_features(signal)
+        np.testing.assert_allclose(decoded[label]["probabilities"], features["probabilities"].numpy()[0], atol=1e-6)
+        np.testing.assert_allclose(result["arrays"][embedding_key], features["classification_embedding"].numpy(), atol=1e-6)
+        assert decoded[label]["embedding_cycle_rmse"] == pytest.approx(float(np.sqrt(np.mean(
+            (result["arrays"][embedding_key] - result["arrays"][reference_key]) ** 2))))
     assert result["history"][0]["decoded"] == pytest.approx(0.0)
     assert decoded["original_reconstruction_mse"] > 0
     assert result["summary"]["selected_losses"]["decoded"] == pytest.approx(
@@ -106,6 +119,7 @@ def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
         np.array_equal(before, after.numpy())
         for before, after in zip(weights_before, tiny_joint_model.weights)
     )
+    assert trainable_before == [value.trainable for value in tiny_joint_model.weights]
 
 
 def test_branch_decoder_mode_remains_backward_compatible(tiny_joint_model):
@@ -123,6 +137,10 @@ def test_branch_decoder_mode_remains_backward_compatible(tiny_joint_model):
     assert result["history"][0]["decoded"] == pytest.approx(0.0)
     assert all(result["history"][0][f"decoded_{branch}"] == pytest.approx(0.0)
                for branch in ("gcn_gru", "bilstm"))
+    for branch in ("gcn_gru", "bilstm"):
+        decoded = result["summary"]["decoded_trials"][branch]
+        expected = tiny_joint_model.get_encoder_features(result["arrays"][f"x_prime_{branch}"])
+        np.testing.assert_allclose(decoded["counterfactual"]["probabilities"], expected["probabilities"].numpy()[0], atol=1e-6)
 
 
 def test_decoded_distance_uses_fixed_reconstruction_and_candidate_gradients():

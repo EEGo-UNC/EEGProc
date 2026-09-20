@@ -1,6 +1,6 @@
 # SIC counterfactuals
 
-For the paired distributional-typicality study using Eq. (7), source-only
+For the paired full-trial Mahalanobis typicality study, source-only
 threshold calibration, complete optimization archives, and offline manuscript
 tables/figures, see [typicality workflow](../typicality/README.md). Its entry point is
 `python -m eegproc.model_explainability.typicality.runner`.
@@ -277,13 +277,25 @@ percentage of the total loss. `--log-every N` reduces the display frequency;
 Joint mode also prints the checkpoint's frozen GCN-GRU `alpha` and BiLSTM
 `1-alpha` weights once before optimization.
 
-Decoded signals are never passed back through the encoder. Counterfactual
-success is the frozen classifier's prediction directly from the optimized
-latent state. Reconstructions are used only for decoded displacement,
-reconstruction error, VCSC, and other signal-domain diagnostics. The final
-report includes VCSC for the reconstructed original, the decoded
-counterfactual, and their difference. These are optimization diagnostics, not
-improved accuracy or causal effects.
+Full-trial decoder–encoder evaluation runs on the original reconstruction
+before optimization and on the selected decoded counterfactual afterward.
+For every selected decoder output, the frozen encoder receives the complete
+`(1,W,T,F)` signal in its saved order. Decoder outputs already occupy the
+model's preprocessed input space; no normalization or filtering is repeated.
+The saved recurrent classifier and VC head evaluate that full re-encoded trial.
+
+Optimization, candidate selection, stopping, and history retain their existing
+latent-space criteria. Predictive validity of the produced signal instead uses
+the re-encoded target argmax and confidence. Results keep both decisions
+separately. Reconstruction prediction preservation, confidence drops, and
+latent/terminal-embedding cycle RMSE are recorded; prediction-changing baseline
+reconstructions are retained, not excluded. If a typicality region is supplied,
+both re-encoded embeddings are scored using its existing frozen Gaussian and
+source-calibrated threshold. No cycle penalty or model-weight update is added.
+
+The report also includes VCSC for the reconstructed original, decoded
+counterfactual, and their difference. Round-trip validity establishes model
+consistency, not physiological realism, improved accuracy, or causal effects.
 
 ## Outputs
 
@@ -294,10 +306,10 @@ overwritten. Completed trials are saved individually.
 | --- | --- |
 | `settings.json` | Arguments, loss weights, model path, input shape, selected trials, environment version. |
 | `subject_<id>_trial_<id>/history.csv` | Step 0 and each finite evaluated step: total/raw/weighted losses, selected reconstruction-path MSEs, probabilities, prediction, success, gradient norm. |
-| `subject_<id>_trial_<id>/result.json` | Original/latent predictions, reconstruction distances, selected losses, VCSC metrics, selected step, update count, runtime, stop reason. |
-| `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, `x_reconstructed_<path>`, `x_prime_<path>`; joint mode uses `<path>=joint`. |
+| `subject_<id>_trial_<id>/result.json` | Original/latent predictions; `decoded_trials.<path>.original_reconstruction` and `.counterfactual` predictions, cycle RMSE, optional typicality; reconstruction fidelity, distances, losses, VCSC, step and timing. |
+| `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, decoded signals, original/optimized classification embeddings, and `classification_embedding_reconstructed_<path>` / `classification_embedding_reencoded_<path>`; joint mode uses `<path>=joint`. |
 | `results.json` | Completed trial summaries, updated after each trial. |
-| `summary.json` | Aggregate latent success, class-flip, distance, probability-change, and VCSC metrics after all trials finish. |
+| `summary.json` | Per-output decoded target success and reconstruction prediction-preservation rates, plus latent success, class-flip, distance, probability-change, and VCSC diagnostics. |
 
 `x_prime_<path>` remains in the model's preprocessed input space. This
 runner does not reconstruct missing raw EEG bands or undo normalization.
