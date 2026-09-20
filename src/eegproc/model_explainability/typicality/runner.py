@@ -201,8 +201,7 @@ def _protocol(args, dataset, folds):
             "physiology_unit": dataset.signal_unit if dataset.normalization_scale is not None else "model_input_units",
             "physiology_families": list(FAMILIES), "band_edges_hz": DEFAULT_BANDS,
             "physiology_reference": "all source classes, empirical per-component central intervals",
-            "vcsc_reference": "all held-out subject initial reconstructions R(Z0)",
-            "vcsc_reference_output": args.report_output,
+            "vcsc_reference": "LOSO complement source subjects' real EEG",
             "vcsc_label_usage": "none",
             "aperiodic_status": "unavailable from band-filtered decoder; never counted as passed"}
 
@@ -264,13 +263,10 @@ def run_fold(args, dataset, entry, out):
               probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
               subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source],
               learned_prior_log_sigma=model.vc_target.prior_log_sigma.numpy(), learned_prior_mu=model.vc_target.prior_mu.numpy())
-    vcsc = vcsc_calibration(_initial_reconstructions(
-        adapter, dataset.features[held_all], args.report_output
-    ))
+    vcsc = vcsc_calibration(dataset.features[source])
     write_npz(directory / "calibration" / "vcsc.npz", **vcsc,
-              subject_ids=dataset.subject_ids[held_all], trial_ids=dataset.trial_ids[held_all],
-              reference=np.asarray("held_out_subject_initial_reconstruction"),
-              decoder_output=np.asarray(args.report_output))
+              subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source],
+              reference=np.asarray("source_subject_real_eeg"))
     source_diagnostics = [_diagnostics(dataset, i, dataset.features[i], args) for i in source]
     physiological = PhysiologicalReference.fit(source_diagnostics, quantile=args.physiology_quantile,
                                                required_fraction=args.physiology_required_fraction)
