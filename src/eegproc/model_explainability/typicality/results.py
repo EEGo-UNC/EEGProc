@@ -328,8 +328,12 @@ def build_report(roots, output, *, probe_results=()):
 
 def _write_latex(path, populations, recognition, probes=(), *, round_trip=False):
     objective_labels = {"target_latent": "Target + latent", "base": "Base CFO",
+<<<<<<< HEAD
                         "typicality": r"$+\mathcal{L}_{typ}$",
                         "typicality_no_physiology": "Typicality, no physiology"}
+=======
+                        "typicality": r"$+\mathcal{L}_{typ}$"}
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     def fmt(value, percent=False):
         return "--" if value is None else f"{value * (100 if percent else 1):.2f}"
     def distance(row, name):

@@ -13,11 +13,18 @@
 
 set -euo pipefail
 
+<<<<<<< HEAD
 # One GPU per subject; four matched arms run sequentially in one study:
 #   target_latent: target + latent
 #   base:          target + latent + decoded + physiology
 #   typicality:    target + latent + decoded + physiology + typicality
 #   typicality_no_physiology: target + latent + decoded + typicality
+=======
+# One GPU per subject; three matched arms run sequentially in one study:
+#   target_latent: target + latent
+#   base:          target + latent + decoded + physiology
+#   typicality:    target + latent + decoded + physiology + typicality
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
 # All arms receive the same diagnostics, references, and eligible trials.
 # Default: subject 0, all eligible trials. After validating that user:
 #   sbatch --array=0-22%4 src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
@@ -138,7 +145,11 @@ COMMAND=("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runne
     --models-json "$MODELS_JSON" --model-dir "$MODEL_DIR"
     --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model
     "${DATA_ARGUMENTS[@]}" --task arousal --subjects "$SUBJECT_ID"
+<<<<<<< HEAD
     --include-target-latent --include-typicality-no-physiology --decoder-mode joint
+=======
+    --include-target-latent --decoder-mode joint
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     --typicality-representation vc_trial_embedding
     --target-loss-component "${TARGET_LOSS_COMPONENT:-confidence}"
     --target-probability "${TARGET_PROBABILITY:-0.80}"
@@ -173,7 +184,11 @@ fi
 if [[ "$RESUME" == 1 ]]; then COMMAND+=(--resume); fi
 
 echo "Suite 1599318 / configuration 0001 / arousal / subject $SUBJECT_ID"
+<<<<<<< HEAD
 echo "Arms: target_latent, base (full without typicality), typicality (full), typicality_no_physiology"
+=======
+echo "Arms: target_latent, base (full without typicality), typicality (full)"
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
 echo "Output: $OUT_DIR"
 if [[ "$DRY_RUN" == 1 ]]; then
     printf 'Command: '; printf '%q ' "${COMMAND[@]}"; printf '\n'
@@ -204,14 +219,23 @@ export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_cuda_data_dir=${LIBDEVICE_P
 "$VENV_DIR/bin/python" - <<'PY'
 import tensorflow as tf
 from eegproc.model_explainability.typicality.runner import build_parser
+<<<<<<< HEAD
 required = {"include_target_latent", "include_typicality_no_physiology"}
 if not required.issubset({action.dest for action in build_parser()._actions}):
     raise SystemExit("ERROR: sync the runner and results updates for the four-arm ablation before submitting")
+=======
+if "include_target_latent" not in {action.dest for action in build_parser()._actions}:
+    raise SystemExit("ERROR: sync the runner and results updates for the three-arm ablation before submitting")
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
 if len(tf.config.list_physical_devices("GPU")) != 1:
     raise SystemExit("ERROR: expected exactly one visible GPU")
 with tf.device("/GPU:0"):
     assert tf.sign(tf.constant([-1.0, 0.0, 1.0])).numpy().tolist() == [-1.0, 0.0, 1.0]
+<<<<<<< HEAD
 print("GPU and four-arm runner preflight passed", flush=True)
+=======
+print("GPU and three-arm runner preflight passed", flush=True)
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
 PY
 
 "${COMMAND[@]}"
@@ -225,15 +249,24 @@ from eegproc.model_explainability.typicality.artifacts import completed_attempt
 root, subject = Path(sys.argv[1]), int(sys.argv[2])
 study = json.loads((root / "study.json").read_text())
 fold = json.loads((root / f"subject_{subject}/fold.json").read_text())
+<<<<<<< HEAD
 if study["objectives"] != ["target_latent", "base", "typicality", "typicality_no_physiology"]:
     raise SystemExit("ERROR: expected all four ablation arms")
+=======
+if study["objectives"] != ["target_latent", "base", "typicality"]:
+    raise SystemExit("ERROR: expected all three ablation arms")
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
 if fold["status"] != "completed" or fold.get("n_optimization_errors"):
     raise SystemExit("ERROR: fold has incomplete or failed optimization attempts")
 for trial in fold["eligible_trial_ids"]:
     for objective in study["objectives"]:
         if not completed_attempt(root / f"subject_{subject}/trial_{trial}" / objective):
             raise SystemExit(f"ERROR: missing completed trial {trial}, arm {objective}")
+<<<<<<< HEAD
 print(f"Completed {len(fold['eligible_trial_ids'])} eligible trials in each of four arms")
+=======
+print(f"Completed {len(fold['eligible_trial_ids'])} eligible trials in each of three arms")
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
 if not fold["eligible_trial_ids"]:
     print("No eligible trials: no counterfactual optimization was performed for this subject")
 print(f"Comparison tables: {root / 'report'}")

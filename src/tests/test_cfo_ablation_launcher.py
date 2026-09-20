@@ -51,7 +51,10 @@ def test_ablation_launcher_matches_subject_manifest_and_parser(launcher_env, sub
     assert args.subjects == [subject]
     assert args.task == "arousal"
     assert args.include_target_latent
+<<<<<<< HEAD
     assert args.include_typicality_no_physiology
+=======
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     assert args.trial_ids == [8, 10]
     assert args.physiological_weight > 0
     assert args.typicality_weight > 0

@@ -44,8 +44,11 @@ def build_parser():
     parser.add_argument("--subjects", type=int, nargs="+", help="Optional fold shard; all eligible trials remain included within each fold.")
     parser.add_argument("--include-target-latent", action="store_true",
                         help="Add a matched target+latent-only arm, with decoded, physiological, and typicality optimization weights zero. All diagnostics remain enabled.")
+<<<<<<< HEAD
     parser.add_argument("--include-typicality-no-physiology", action="store_true",
                         help="Add a matched full-CFO typicality arm with physiological weight zero. Target, latent, decoded, and typicality settings and all diagnostics are retained.")
+=======
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     parser.add_argument("--trial-ids", type=int, nargs="+", help="Optional optimization filter for selected held-out fold(s); source calibration and held-out VCSC calibration still use their complete trial sets.")
     parser.add_argument("--typicality-representation", "--typicality-sequence", dest="typicality_representation",
                         default=REPRESENTATION, choices=(REPRESENTATION,),
@@ -158,6 +161,7 @@ def _diagnostics(dataset, index, values, args):
                               feature_order=dataset.feature_order or "channel-major")
 
 
+<<<<<<< HEAD
 def _objective_names(args):
     names = ["base", "typicality"]
     if args.include_target_latent:
@@ -167,6 +171,8 @@ def _objective_names(args):
     return names
 
 
+=======
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
 def _protocol(args, dataset, folds):
     arguments = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
                  if key not in ("resume", "out_dir", "log_every")}
@@ -188,7 +194,11 @@ def _protocol(args, dataset, folds):
         package_dir / "model_agnostic" / "sic_adapter.py",
     ]
     return {"schema_version": SCHEMA_VERSION, "task": args.task, "arguments": arguments, "folds": folds,
+<<<<<<< HEAD
             "objectives": _objective_names(args),
+=======
+            "objectives": ["target_latent", "base", "typicality"] if args.include_target_latent else ["base", "typicality"],
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
             "dataset_sha256": {name: array_sha256(value) for name, value in arrays.items()},
             "source_sha256": {
                 p.relative_to(package_dir).as_posix(): file_sha256(p)
@@ -316,6 +326,7 @@ def run_fold(args, dataset, entry, out):
             **{**common, "loss": replace(loss, decoded_weight=0.0, physiological_weight=0.0)},
         )
         optimizers = {"target_latent": target_latent, **optimizers}
+<<<<<<< HEAD
     if args.include_typicality_no_physiology:
         optimizers["typicality_no_physiology"] = CounterfactualOptimizer(
             model, typicality_weight=args.typicality_weight,
@@ -324,6 +335,8 @@ def run_fold(args, dataset, entry, out):
             typicality_min_delta=args.typicality_min_delta,
             **{**common, "loss": replace(loss, physiological_weight=0.0)},
         )
+=======
+>>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     if args.report_output not in optimizers["base"].decoded_names:
         raise ValueError("The selected report output is not present in this checkpoint")
     predictions, discrepancies, embeddings, eligible = [], [], [], []
