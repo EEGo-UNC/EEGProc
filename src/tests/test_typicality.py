@@ -347,12 +347,12 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     assert len(result["population"]) == 2
     assert all(row["n_eligible"] == row["n_completed"] == 1 for row in result["population"])
     with np.load(out / "subject_0/calibration/vcsc.npz", allow_pickle=False) as data:
-        assert data["reference"].item() == "held_out_subject_initial_reconstruction"
-        assert data["decoder_output"].item() == "joint"
-        np.testing.assert_array_equal(data["subject_ids"], [0, 0])
-        np.testing.assert_array_equal(data["trial_ids"], [0, 1])
+        assert data["reference"].item() == "source_subject_real_eeg"
+        assert "decoder_output" not in data.files
+        np.testing.assert_array_equal(data["subject_ids"], [1, 1, 2, 2])
+        np.testing.assert_array_equal(data["trial_ids"], [0, 1, 0, 1])
         assert "labels" not in data.files
-        assert data["reference_coherence"].shape[0] == 2
+        assert data["reference_coherence"].shape[0] == 4
     for objective in ("base", "typicality"):
         attempt = completed_attempt(out / "subject_0/trial_0" / objective)
         assert attempt is not None
