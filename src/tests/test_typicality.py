@@ -319,15 +319,10 @@ def test_typicality_runner_enables_stopping_defaults():
     assert actions["physiological_weight"].default == pytest.approx(1.0)
 
 
-<<<<<<< HEAD
 @pytest.mark.parametrize("include_target_latent,include_typicality_no_physiology",
                          [(False, False), (True, False), (False, True), (True, True)])
 def test_end_to_end_saved_study_and_resume_without_model(
         tmp_path, monkeypatch, include_target_latent, include_typicality_no_physiology):
-=======
-@pytest.mark.parametrize("include_target_latent", [False, True])
-def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, include_target_latent):
->>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
     from eegproc.model_explainability.typicality import runner as study
@@ -351,14 +346,10 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, 
                             "--out-dir", str(out),
                             "--trial-ids", "0", "--max-steps", "1", "--log-every", "0"])
     args.include_target_latent = include_target_latent
-<<<<<<< HEAD
     args.include_typicality_no_physiology = include_typicality_no_physiology
     objectives = ["target_latent", "base", "typicality"] if include_target_latent else ["base", "typicality"]
     if include_typicality_no_physiology:
         objectives.append("typicality_no_physiology")
-=======
-    objectives = ["target_latent", "base", "typicality"] if include_target_latent else ["base", "typicality"]
->>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     result = study.run(args)
     assert result["complete"]
     assert [row["objective"] for row in result["population"]] == objectives
@@ -370,25 +361,18 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, 
         assert fold["objective_losses"]["base"]["decoded_weight"] == args.decoded_weight
         assert fold["objective_losses"]["base"]["physiological_weight"] == args.physiological_weight
         assert "Target + latent" in (out / "report/tables.tex").read_text()
-<<<<<<< HEAD
     if include_typicality_no_physiology:
         expected_loss = {**fold["objective_losses"]["typicality"], "physiological_weight": 0.0}
         assert fold["objective_losses"]["typicality_no_physiology"] == expected_loss
         assert fold["objective_losses"]["typicality"]["physiological_weight"] > 0
         assert "Typicality, no physiology" in (out / "report/tables.tex").read_text()
-=======
->>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     with np.load(out / "subject_0/calibration/vcsc.npz", allow_pickle=False) as data:
         assert data["reference"].item() == "source_subject_real_eeg"
         assert "decoder_output" not in data.files
         np.testing.assert_array_equal(data["subject_ids"], [1, 1, 2, 2])
         np.testing.assert_array_equal(data["trial_ids"], [0, 1, 0, 1])
         assert "labels" not in data.files
-<<<<<<< HEAD
         assert data["reference_coherence"].shape[0] == 4
-=======
-        assert data["reference_coherence"].shape[0] == 2
->>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
     for objective in objectives:
         attempt = completed_attempt(out / "subject_0/trial_0" / objective)
         assert attempt is not None
@@ -403,7 +387,6 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, 
                     assert summary["selected_losses"][term] == 0
                 assert summary["selected_losses"]["weighted_latent"] == pytest.approx(
                     args.latent_weight * summary["selected_losses"]["latent"])
-<<<<<<< HEAD
             if objective == "typicality_no_physiology":
                 assert summary["selected_losses"]["weighted_physiological"] == 0
                 assert summary["physiological_constraint_enforced"] is False
@@ -411,8 +394,6 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, 
                 assert summary["selected_losses"]["weighted_decoded"] == pytest.approx(
                     args.decoded_weight * summary["selected_losses"]["decoded"])
                 assert np.isfinite(summary["decoded_trials"]["joint"]["vcsc_counterfactual"])
-=======
->>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
             assert summary["typicality"]["counterfactual_discrepancy"] == pytest.approx(
                 region.score(data["classification_embedding_prime"])[0], rel=1e-5)
             assert summary["d_z"] == pytest.approx(float(np.sqrt(np.mean(
@@ -461,7 +442,6 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, 
     monkeypatch.setattr(study, "create_sic_adapter", forbidden_model_load)
     args.resume = True
     assert study.run(args) == result
-<<<<<<< HEAD
     extra_objectives = [name for name in objectives if name not in ("base", "typicality")]
     if extra_objectives:
         for objective in extra_objectives:
@@ -473,17 +453,6 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, 
                     study.run(args)
             finally:
                 backup.rename(marker)
-=======
-    if include_target_latent:
-        marker = completed_attempt(out / "subject_0/trial_0/target_latent") / "complete.json"
-        backup = marker.with_suffix(".saved")
-        marker.rename(backup)
-        try:
-            with pytest.raises(AssertionError, match="Resume loaded"):
-                study.run(args)
-        finally:
-            backup.rename(marker)
->>>>>>> 133379d27a7a807b622d6bb33f5e823136ba7493
         mismatch = tmp_path / "two_arm_study"
         mismatch.mkdir()
         other_protocol = json.loads((out / "study.json").read_text())
