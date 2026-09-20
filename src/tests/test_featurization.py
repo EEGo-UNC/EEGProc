@@ -6,7 +6,7 @@ import math
 import pytest
 from .utils import *
 
-from eegproc.featurization import psd_bandpowers, shannons_entropy, hjorth_params
+from eegproc.featurization import psd_bandpowers, shannons_entropy, hjorth_params, feature_grouped_by_metadata
 from eegproc.preprocessing import FREQUENCY_BANDS
 
 
@@ -259,3 +259,174 @@ def test_activity_scales_with_amplitude_mobility_complexity_invariant():
     # Mobility and complexity amplitude-invariant
     assert abs(m1 - m2) < 0.05, f"Mobility changed with amplitude: {m1:.3f} vs {m2:.3f}"
     assert abs(c1 - c2) < 0.05, f"Complexity changed with amplitude: {c1:.3f} vs {c2:.3f}"
+
+
+
+FS = 128
+
+def make_series(n=256, seed=0):
+    rng = np.random.default_rng(seed)
+    return pd.Series(rng.normal(size=n))
+
+def spy_target_factory(capture):
+    """
+    Returns a dummy target_function that:
+      - records the incoming df.columns into `capture["seen"].append([...])`
+      - returns a one-row DataFrame with the same columns (so shapes stay consistent).
+    """
+    def _spy(df: pd.DataFrame, fs: int = 0, bands=None, **kwargs) -> pd.DataFrame:
+        capture.setdefault("seen", []).append(list(df.columns))
+        # Return 1-row with the same columns to make downstream logic easy to check
+        return pd.DataFrame([{c: 1.0 for c in df.columns}])
+    return _spy
+
+
+def test_filters_to_requested_channel_band_columns_and_preserves_meta_order():
+    # DataFrame has meta + a handful of channel_band columns (some missing on purpose)
+    df = pd.DataFrame({
+        "patient_index": [1]*10 + [2]*10,
+        "video_index":   [7]*10 + [8]*10,
+        "AF3_alpha":     make_series(20, seed=1),
+        "AF3_beta":      make_series(20, seed=2),
+        "F7_alpha":      make_series(20, seed=3),
+        "Pz_gamma":      make_series(20, seed=4),  # should be filtered out by `channels`
+    })
+
+    channels = ["AF3", "F7"]
+    # must be a dict for the real features; keys are used for suffix matching
+    bands = {"alpha": (8, 12), "beta": (12, 30)}
+
+    capture = {}
+    spy = spy_target_factory(capture)
+
+    out = feature_grouped_by_metadata(
+        eeg_df=df,
+        target_function=spy,
+        fs=FS,
+        bands=bands,
+        channels=channels,
+        group_by_metadata_columns=["patient_index", "video_index"],
+        drop_metadata_for_fn=True,
+    )
+
+    # The iterator should see only AF3_alpha, AF3_beta, F7_alpha (F7_beta absent; Pz_* excluded)
+    expected_seen = set(["AF3_alpha", "AF3_beta", "F7_alpha"])
+    assert len(capture["seen"]) == 2  # two groups
+    for seen_cols in capture["seen"]:
+        assert set(seen_cols) == expected_seen
+
+    # Output should prepend metadata and keep them leading
+    lead = ["patient_index", "video_index"]
+    assert list(out.columns[:2]) == lead
+    assert set(out.columns[2:]) == expected_seen
+    # Two groups, spy returns one row per group → 2 rows total
+    assert len(out) == 2
+
+
+def test_drop_metadata_for_fn_true_means_meta_not_in_block():
+    df = pd.DataFrame({
+        "patient_index": [1]*8 + [1]*8,
+        "video_index":   [5]*8 + [6]*8,
+        "AF3_alpha":     make_series(16, seed=10),
+        "F7_beta":       make_series(16, seed=11),
+    })
+
+    channels = ["AF3", "F7"]
+    bands = {"alpha": (8, 12), "beta": (12, 30)}
+
+    capture = {}
+    spy = spy_target_factory(capture)
+
+    _ = feature_grouped_by_metadata(
+        eeg_df=df,
+        target_function=spy,
+        fs=FS,
+        bands=bands,
+        channels=channels,
+        group_by_metadata_columns=["patient_index", "video_index"],
+        drop_metadata_for_fn=True,
+    )
+
+    for seen_cols in capture["seen"]:
+        assert "patient_index" not in seen_cols
+        assert "video_index" not in seen_cols
+        # Only the requested intersections should appear
+        assert set(seen_cols).issubset({"AF3_alpha", "F7_beta"})
+
+
+def test_no_grouping_processes_once_and_returns_no_meta_columns():
+    df = pd.DataFrame({
+        "AF3_alpha": make_series(16, seed=21),
+        "F7_alpha":  make_series(16, seed=22),
+    })
+    channels = ["AF3", "F7"]
+    bands = {"alpha": (8, 12)}
+
+    capture = {}
+    spy = spy_target_factory(capture)
+
+    out = feature_grouped_by_metadata(
+        eeg_df=df,
+        target_function=spy,
+        fs=FS,
+        bands=bands,
+        channels=channels,
+        group_by_metadata_columns=None,   # <- no meta grouping
+        drop_metadata_for_fn=True,
+    )
+
+    # Called exactly once
+    assert len(capture["seen"]) == 1
+    assert set(capture["seen"][0]) == {"AF3_alpha", "F7_alpha"}
+    # No meta → output should also have only EEG columns
+    assert set(out.columns) == {"AF3_alpha", "F7_alpha"}
+    assert len(out) == 1
+
+
+def test_returns_empty_when_no_channel_band_matches_with_meta():
+    df = pd.DataFrame({
+        "patient_index": [1, 1, 2, 2],
+        "video_index":   [5, 6, 5, 6],
+        "Pz_gamma":      make_series(4, seed=33),  # does not match requested channels
+    })
+
+    channels = ["AF3", "F7"]                  # no AF3_* or F7_* present
+    bands = {"alpha": (8, 12), "beta": (12, 30)}
+
+    # Expect an empty frame but with the meta columns present
+    out = feature_grouped_by_metadata(
+        eeg_df=df,
+        target_function=lambda d, **k: pd.DataFrame(),
+        fs=FS,
+        bands=bands,
+        channels=channels,
+        group_by_metadata_columns=["patient_index", "video_index"],
+        drop_metadata_for_fn=True,
+    )
+
+    assert out.empty
+    assert list(out.columns) == ["patient_index", "video_index"]
+
+
+def test_returns_empty_when_no_channel_band_matches_and_no_meta():
+    df = pd.DataFrame({
+        "Pz_gamma": make_series(4, seed=44)
+    })
+
+    channels = ["AF3"]
+    bands = {"alpha": (8, 12)}
+
+    out = feature_grouped_by_metadata(
+        eeg_df=df,
+        target_function=lambda d, **k: pd.DataFrame(),
+        fs=FS,
+        bands=bands,
+        channels=channels,
+        group_by_metadata_columns=None,
+        drop_metadata_for_fn=True,
+    )
+
+    # Should be empty; columns ideally [].
+    # If your current impl returns columns=None, this test will fail (and should—fix to []).
+    assert out.empty
+    assert list(out.columns) == []
