@@ -1,0 +1,2 @@
+task,n_expected_folds,balanced_accuracy_mean,balanced_accuracy_std,balanced_accuracy_n,recall_0_mean,recall_0_std,recall_0_n,recall_1_mean,recall_1_std,recall_1_n,auroc_mean,auroc_std,auroc_n,ece_mean,ece_std,ece_n
+arousal,1,0.6753246753246753,,1,0.7142857142857143,,1,0.6363636363636364,,1,0.6103896103896104,,1,0.1838943428463406,,1

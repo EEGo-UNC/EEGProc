@@ -1,0 +1,9 @@
+{
+  "representation": "vc_trial_embedding",
+  "dimension": 128,
+  "input_axes": "one trial, all windows, all timesteps, encoder coordinates",
+  "sequence_order": "chronological windows and timesteps flattened together",
+  "recurrent_reset": "once per complete supplied trial",
+  "classification": "same terminal embedding passed to the frozen VC head",
+  "prior_training_support": "full-trial terminal embeddings"
+}

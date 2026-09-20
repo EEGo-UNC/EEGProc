@@ -1,0 +1,2 @@
+task,n_expected_subjects,n_evaluable_subjects,typicality_space,n_improved,base_median,base_q25,base_q75,base_n,typicality_median,typicality_q25,typicality_q75,typicality_n,latent_target_success_change_percentage_points,typical_change_percentage_points,typicality_success_change_percentage_points,decoded_target_success_change_percentage_points,decoded_typical_change_percentage_points,decoded_typicality_success_change_percentage_points
+arousal,1,1,decoded_then_reencoded,0,100.0,100.0,100.0,1,100.0,100.0,100.0,1,0.0,0.0,0.0,0.0,0.0,0.0

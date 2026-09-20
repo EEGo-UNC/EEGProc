@@ -319,7 +319,8 @@ def test_typicality_runner_enables_stopping_defaults():
     assert actions["physiological_weight"].default == pytest.approx(1.0)
 
 
-def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
+@pytest.mark.parametrize("include_target_latent", [False, True])
+def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch, include_target_latent):
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
     from eegproc.model_explainability.typicality import runner as study
@@ -342,10 +343,19 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     args = study.parse_args(["--models-json", str(manifest), "--task", "valence", "--trials-npz", str(data_path),
                             "--out-dir", str(out),
                             "--trial-ids", "0", "--max-steps", "1", "--log-every", "0"])
+    args.include_target_latent = include_target_latent
+    objectives = ["target_latent", "base", "typicality"] if include_target_latent else ["base", "typicality"]
     result = study.run(args)
     assert result["complete"]
-    assert len(result["population"]) == 2
+    assert [row["objective"] for row in result["population"]] == objectives
     assert all(row["n_eligible"] == row["n_completed"] == 1 for row in result["population"])
+    fold = json.loads((out / "subject_0/fold.json").read_text())
+    if include_target_latent:
+        assert fold["objective_losses"]["target_latent"]["decoded_weight"] == 0
+        assert fold["objective_losses"]["target_latent"]["physiological_weight"] == 0
+        assert fold["objective_losses"]["base"]["decoded_weight"] == args.decoded_weight
+        assert fold["objective_losses"]["base"]["physiological_weight"] == args.physiological_weight
+        assert "Target + latent" in (out / "report/tables.tex").read_text()
     with np.load(out / "subject_0/calibration/vcsc.npz", allow_pickle=False) as data:
         assert data["reference"].item() == "held_out_subject_initial_reconstruction"
         assert data["decoder_output"].item() == "joint"
@@ -353,7 +363,7 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
         np.testing.assert_array_equal(data["trial_ids"], [0, 1])
         assert "labels" not in data.files
         assert data["reference_coherence"].shape[0] == 2
-    for objective in ("base", "typicality"):
+    for objective in objectives:
         attempt = completed_attempt(out / "subject_0/trial_0" / objective)
         assert attempt is not None
         with np.load(attempt / "counterfactual.npz", allow_pickle=False) as data:
@@ -362,6 +372,11 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
             assert "typicality_sequence_prime" not in data.files
             region = TypicalityRegion.load(out / "subject_0/calibration")
             summary = json.loads((attempt / "result.json").read_text())
+            if objective == "target_latent":
+                for term in ("weighted_decoded", "weighted_physiological", "weighted_typicality"):
+                    assert summary["selected_losses"][term] == 0
+                assert summary["selected_losses"]["weighted_latent"] == pytest.approx(
+                    args.latent_weight * summary["selected_losses"]["latent"])
             assert summary["typicality"]["counterfactual_discrepancy"] == pytest.approx(
                 region.score(data["classification_embedding_prime"])[0], rel=1e-5)
             assert summary["d_z"] == pytest.approx(float(np.sqrt(np.mean(
@@ -410,6 +425,22 @@ def test_end_to_end_saved_study_and_resume_without_model(tmp_path, monkeypatch):
     monkeypatch.setattr(study, "create_sic_adapter", forbidden_model_load)
     args.resume = True
     assert study.run(args) == result
+    if include_target_latent:
+        marker = completed_attempt(out / "subject_0/trial_0/target_latent") / "complete.json"
+        backup = marker.with_suffix(".saved")
+        marker.rename(backup)
+        try:
+            with pytest.raises(AssertionError, match="Resume loaded"):
+                study.run(args)
+        finally:
+            backup.rename(marker)
+        mismatch = tmp_path / "two_arm_study"
+        mismatch.mkdir()
+        other_protocol = json.loads((out / "study.json").read_text())
+        other_protocol["objectives"] = ["base", "typicality"]
+        (mismatch / "study.json").write_text(json.dumps(other_protocol))
+        with pytest.raises(ValueError, match="different objective sets"):
+            build_report([out, mismatch], tmp_path / "mixed_report")
     saved_protocol = (out / "study.json").read_text()
     legacy_protocol = json.loads(saved_protocol)
     legacy_protocol.pop("round_trip_evaluation")

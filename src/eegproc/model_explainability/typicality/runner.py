@@ -6,7 +6,7 @@ source data before the final study. Reports can be rebuilt independently.
 """
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -42,6 +42,8 @@ def build_parser():
     data.add_argument("--data-loader", help="Existing TrialDataset loader as package.module:function.")
     parser.add_argument("--data-config", help="Inline JSON or JSON file passed to the data loader.")
     parser.add_argument("--subjects", type=int, nargs="+", help="Optional fold shard; all eligible trials remain included within each fold.")
+    parser.add_argument("--include-target-latent", action="store_true",
+                        help="Add a matched target+latent-only arm, with decoded, physiological, and typicality optimization weights zero. All diagnostics remain enabled.")
     parser.add_argument("--trial-ids", type=int, nargs="+", help="Optional optimization filter for selected held-out fold(s); source calibration and held-out VCSC calibration still use their complete trial sets.")
     parser.add_argument("--typicality-representation", "--typicality-sequence", dest="typicality_representation",
                         default=REPRESENTATION, choices=(REPRESENTATION,),
@@ -175,6 +177,7 @@ def _protocol(args, dataset, folds):
         package_dir / "model_agnostic" / "sic_adapter.py",
     ]
     return {"schema_version": SCHEMA_VERSION, "task": args.task, "arguments": arguments, "folds": folds,
+            "objectives": ["target_latent", "base", "typicality"] if args.include_target_latent else ["base", "typicality"],
             "dataset_sha256": {name: array_sha256(value) for name, value in arrays.items()},
             "source_sha256": {
                 p.relative_to(package_dir).as_posix(): file_sha256(p)
@@ -298,6 +301,14 @@ def run_fold(args, dataset, entry, out):
             **common,
         ),
     }
+    if args.include_target_latent:
+        # Preserve the calibrated diagnostic while removing its gradient
+        # contribution and the decoded proximity term for this arm only.
+        target_latent = CounterfactualOptimizer(
+            model, typicality_weight=0.0, stop_on_success=args.stop_on_success,
+            **{**common, "loss": replace(loss, decoded_weight=0.0, physiological_weight=0.0)},
+        )
+        optimizers = {"target_latent": target_latent, **optimizers}
     if args.report_output not in optimizers["base"].decoded_names:
         raise ValueError("The selected report output is not present in this checkpoint")
     predictions, discrepancies, embeddings, eligible = [], [], [], []
@@ -328,9 +339,10 @@ def run_fold(args, dataset, entry, out):
                  "typicality_definition": SCORE_DEFINITION,
                  "eligible_trial_ids": dataset.trial_ids[eligible].tolist(),
                  "all_trial_ids": dataset.trial_ids[held].tolist(), "loss": asdict(loss),
+                 "objective_losses": {name: asdict(optimizer.loss) for name, optimizer in optimizers.items()},
                  "recognition": recognition_metrics(dataset.labels[held], np.stack(predictions), ece_bins=args.ece_bins)}
     write_json(directory / "fold.json", fold_info)
-    print(f"Subject {subject}: tau={region.tau:.6g}; {len(eligible)} eligible trials, both objectives", flush=True)
+    print(f"Subject {subject}: tau={region.tau:.6g}; {len(eligible)} eligible trials, objectives={','.join(optimizers)}", flush=True)
     errors = 0
     for index in eligible:
         trial = int(dataset.trial_ids[index])
@@ -441,7 +453,7 @@ def run(args):
             previous = json.loads(info.read_text())
             if previous["status"] == "completed" and all(
                 completed_attempt(info.parent / f"trial_{trial}" / objective)
-                for trial in previous["eligible_trial_ids"] for objective in ("base", "typicality")
+                for trial in previous["eligible_trial_ids"] for objective in protocol["objectives"]
             ):
                 print(f"Subject {fold['subject_id']}: verified cached fold", flush=True)
                 continue

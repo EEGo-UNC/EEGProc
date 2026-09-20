@@ -37,6 +37,8 @@ def prepare_probe(studies, *, representation="classification_embedding"):
         task = manifest["task"]
         expected_subjects.update(fold["subject_id"] for fold in manifest["folds"])
         for row in collect_study(root)[0]:
+            if row["objective"] not in ("base", "typicality"):
+                continue
             key = (row["subject_id"], row["trial_id"])
             pair = groups.setdefault(key, {})
             if row["objective"] in pair:

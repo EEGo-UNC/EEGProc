@@ -140,7 +140,7 @@ def collect_study(root):
                                  "threshold": fold["threshold"],
                                  "correct": bool(data["probabilities"][i].argmax() == data["labels"][i])})
         for trial in fold["eligible_trial_ids"]:
-            for objective in ("base", "typicality"):
+            for objective in study.get("objectives", ["base", "typicality"]):
                 record = {"task": task, "subject_id": subject, "trial_id": trial,
                           "objective": objective, "status": "pending", "threshold": fold["threshold"],
                           "typical": False, "latent_target_success": False,
@@ -209,6 +209,11 @@ def collect_study(root):
 def build_report(roots, output, *, probe_results=()):
     roots = list(roots)
     definition = compatible_typicality_definition(roots)
+    objective_sets = {tuple(json.loads((Path(root) / "study.json").read_text()).get(
+        "objectives", ["base", "typicality"])) for root in roots}
+    if len(objective_sets) != 1:
+        raise ValueError("Cannot combine studies with different objective sets")
+    objectives = objective_sets.pop()
     evaluation_protocols = {json.loads((Path(root) / "study.json").read_text()).get(
         "round_trip_evaluation", "latent_only") for root in roots}
     if len(evaluation_protocols) != 1:
@@ -232,7 +237,7 @@ def build_report(roots, output, *, probe_results=()):
     populations, subject_rows, recognition_rows, subject_changes, examples = [], [], [], [], []
     for task in tasks:
         task_folds = [f for f in folds if f["task"] == task]
-        for objective in ("base", "typicality"):
+        for objective in objectives:
             group = [r for r in rows if r["task"] == task and r["objective"] == objective]
             pending_folds = sum(f["status"] == "pending" for f in task_folds)
             group_summary = population_summary(group)
@@ -257,7 +262,8 @@ def build_report(roots, output, *, probe_results=()):
         paired_rates = []
         rate_field = "decoded_typical_percent" if has_round_trip else "typical_percent"
         for subject in subjects:
-            pair = [r for r in subject_rows if r["task"] == task and r["subject_id"] == subject]
+            pair = [r for r in subject_rows if r["task"] == task and r["subject_id"] == subject
+                    and r["objective"] in ("base", "typicality")]
             if len(pair) == 2 and all(r["n_eligible"] and not r["provisional"] and r["fold_status"] == "completed"
                                       and r[rate_field] is not None for r in pair):
                 paired_rates.append([r[rate_field] for r in pair])
@@ -266,7 +272,7 @@ def build_report(roots, output, *, probe_results=()):
                    "n_improved": sum(p[1] > p[0] for p in paired_rates)}
         for index, objective in enumerate(("base", "typicality")):
             changes.update({f"{objective}_{key}": val for key, val in _quantiles([p[index] for p in paired_rates]).items()})
-        pop = [p for p in populations if p["task"] == task]
+        pop = [p for p in populations if p["task"] == task and p["objective"] in ("base", "typicality")]
         for metric in ("latent_target_success", "typical", "typicality_success",
                        "decoded_target_success", "decoded_typical", "decoded_typicality_success"):
             a, b = [p[f"{metric}_percent"] for p in pop]
@@ -321,6 +327,8 @@ def build_report(roots, output, *, probe_results=()):
 
 
 def _write_latex(path, populations, recognition, probes=(), *, round_trip=False):
+    objective_labels = {"target_latent": "Target + latent", "base": "Base CFO",
+                        "typicality": r"$+\mathcal{L}_{typ}$"}
     def fmt(value, percent=False):
         return "--" if value is None else f"{value * (100 if percent else 1):.2f}"
     def distance(row, name):
@@ -337,7 +345,7 @@ def _write_latex(path, populations, recognition, probes=(), *, round_trip=False)
     success_fields = (("decoded_target_success_percent", "decoded_typical_percent", "decoded_typicality_success_percent")
                       if round_trip else ("latent_target_success_percent", "typical_percent", "typicality_success_percent"))
     for row in populations:
-        entries = [row["task"].title(), "Base CFO" if row["objective"] == "base" else r"$+\mathcal{L}_{typ}$",
+        entries = [row["task"].title(), objective_labels[row["objective"]],
                    *[fmt(row[field]) for field in success_fields],
                    distance(row, "d_z"), distance(row, "delta_dec"), fmt(row["physiological_pass_percent"])]
         lines.append(" & ".join(entries) + r" \\")
@@ -347,7 +355,7 @@ def _write_latex(path, populations, recognition, probes=(), *, round_trip=False)
                       r"\begin{tabular}{llcccc}",
                       r"Task & Objective & Latent (\%) & Latent typ. (\%) & Both (\%) & Reconstruction preserves class (\%) \\ \hline"])
         for row in populations:
-            entries = [row["task"].title(), "Base CFO" if row["objective"] == "base" else r"$+\mathcal{L}_{typ}$",
+            entries = [row["task"].title(), objective_labels[row["objective"]],
                        *[fmt(row[field]) for field in ("latent_target_success_percent", "typical_percent",
                                                        "typicality_success_percent", "reconstruction_preserves_prediction_percent")]]
             lines.append(" & ".join(entries) + r" \\")

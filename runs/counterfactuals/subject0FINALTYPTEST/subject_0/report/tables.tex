@@ -1,0 +1,18 @@
+% Generated from archived trials. -- means unavailable; inspect results.json for completeness.
+\begin{tabular}{lccccc}
+Task & Bal. acc. (\%) & Recall 0 (\%) & Recall 1 (\%) & AUROC & ECE \\ \hline
+Arousal & 67.53 $\pm$ -- & 71.43 $\pm$ -- & 63.64 $\pm$ -- & 0.61 $\pm$ -- & 0.18 $\pm$ -- \\
+\end{tabular}
+
+\begin{tabular}{llcccccc}
+Task & Objective & Decoded (\%) & Re-enc. typ. (\%) & Both (\%) & $d_z$ & $\Delta_{dec}$ & Phys. (\%) \\ \hline
+Arousal & Base CFO & 0.00 & 100.00 & 0.00 & 0.53 [0.52, 0.56] & 0.32 [0.31, 0.33] & -- \\
+Arousal & $+\mathcal{L}_{typ}$ & 0.00 & 100.00 & 0.00 & 1.36 [1.31, 1.39] & 0.32 [0.32, 0.33] & -- \\
+\end{tabular}
+
+% Latent optimization diagnostics; reconstruction failures remain in the cohort.
+\begin{tabular}{llcccc}
+Task & Objective & Latent (\%) & Latent typ. (\%) & Both (\%) & Reconstruction preserves class (\%) \\ \hline
+Arousal & Base CFO & 100.00 & 100.00 & 100.00 & 80.00 \\
+Arousal & $+\mathcal{L}_{typ}$ & 100.00 & 100.00 & 100.00 & 80.00 \\
+\end{tabular}

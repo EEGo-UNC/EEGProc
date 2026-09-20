@@ -1,0 +1,45 @@
+[
+  {
+    "task": "arousal",
+    "subject_id": 0,
+    "n_trials": 18,
+    "balanced_accuracy": 0.6753246753246753,
+    "recall_0": 0.7142857142857143,
+    "recall_1": 0.6363636363636364,
+    "auroc": 0.6103896103896104,
+    "ece": 0.1838943428463406,
+    "ece_bins": 15,
+    "calibration_bins": [
+      {
+        "bin": 8,
+        "n": 3,
+        "accuracy": 1.0,
+        "confidence": 0.5636744101842245
+      },
+      {
+        "bin": 9,
+        "n": 6,
+        "accuracy": 0.5,
+        "confidence": 0.6353544394175211
+      },
+      {
+        "bin": 10,
+        "n": 3,
+        "accuracy": 0.6666666666666666,
+        "confidence": 0.6953092416127523
+      },
+      {
+        "bin": 11,
+        "n": 5,
+        "accuracy": 0.8,
+        "confidence": 0.7429265141487121
+      },
+      {
+        "bin": 12,
+        "n": 1,
+        "accuracy": 0.0,
+        "confidence": 0.8176996111869812
+      }
+    ]
+  }
+]
