@@ -50,7 +50,7 @@ fi
 cd "$PROJECT_DIR"
 
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
-CONFIG_DIR="${CONFIG_DIR:-$PROJECT_DIR/runs/full/sic_v15_arousal_scale64/DREAMER/arousal/suite_1599318/all_subjects/full_run_v15_arousal_scale64_20260918_155429/configuration_0001}"
+CONFIG_DIR="${CONFIG_DIR:-$PROJECT_DIR/runs/full/sic_v15_arousal_scale64/DREAMER/arousal/suite_1599318.before_pull/all_subjects/full_run_v15_arousal_scale64_20260918_155429/configuration_0001}"
 MODELS_JSON="${MODELS_JSON:-$CONFIG_DIR/loso_zero_shot_models.json}"
 MODEL_DIR="${MODEL_DIR:-$(dirname -- "$MODELS_JSON")/loso_zero_shot_models}"
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
