@@ -44,6 +44,10 @@ _VCSC_CHANNELS = (
     "O2", "P8", "T8", "FC6", "F4", "F8", "AF4",
 )
 _VCSC_BANDS = ("theta", "alpha", "beta")
+#Must match the Butterworth passbands used in preprocessing. If those change
+#and these do not, the mask below silently selects the wrong bins.
+_VCSC_BAND_EDGES_HZ = ((4.0, 8.0), (8.0, 13.0), (13.0, 30.0))
+_VCSC_DEFAULT_FS = 128.0
 
 _VCSC_POSITIONS_CM = {
     "AF3": (-2.8952, 7.3870, 4.7564), "AF4": (2.8952, 7.3870, 4.7564),
@@ -55,6 +59,79 @@ _VCSC_POSITIONS_CM = {
     "O1": (-2.7186, -8.3666, 2.8582), "O2": (2.7186, -8.3666, 2.8582),
 }
 _VCSC_PAIRS = list(itertools.combinations(range(len(_VCSC_CHANNELS)), 2))
+
+@functools.lru_cache(maxsize=8)
+def _vcsc_band_bin_mask(n_bins, fs):
+    """Boolean (n_bands, n_bins) mask selecting in-passband rfft bins per band.
+
+    x_prime arrives already bandpass filtered per band, so the rfft of a theta
+    channel carries real power in roughly 5 of 65 bins and filter stopband in
+    the other 60. Averaging coherence over every bin therefore mixes those 5
+    with 60 bins whose numerator and denominator are both near zero, where the
+    ratio is numerical noise rather than coherence.
+
+    This does not bias the z-scores, because the calibration reference is
+    diluted identically -- it compresses the dynamic range, which costs
+    discrimination. Restricting the average to in-band bins removes it.
+
+    For an rfft of T real samples, n_bins = T//2 + 1 and bin k sits at
+    k*fs/T Hz, so the spacing is fs / (2*(n_bins-1)).
+    """
+    if n_bins < 2:
+        raise ValueError(f"Need at least two rfft bins to build a band mask, got {n_bins}")
+    frequencies = np.arange(n_bins, dtype=np.float64) * (fs / (2.0 * (n_bins - 1)))
+    mask = np.stack([
+        (frequencies >= low) & (frequencies < high)
+        for low, high in _VCSC_BAND_EDGES_HZ
+    ])
+    #A window too short to resolve a band leaves its row empty, which would
+    #divide by zero. Short synthetic windows in the tests hit this: T=4 gives
+    #3 bins at 32 Hz spacing, so no bin lands in 4-30 Hz. Fall back to every
+    #bin for that band, reproducing the pre-mask behaviour exactly rather
+    #than failing, and warn since the result is not band-resolved.
+    empty = [name for name, row in zip(_VCSC_BANDS, mask) if not row.any()]
+    if empty:
+        warnings.warn(
+            f"No rfft bin falls inside band(s) {empty} at fs={fs} with {n_bins} "
+            f"bins ({fs / (2.0 * (n_bins - 1)):.3g} Hz spacing); averaging those "
+            "bands over all bins instead. Expected only for windows too short "
+            "to resolve the band -- at fs=128 with 1 s windows every band "
+            "resolves. If this fires on real data, fs does not match the "
+            "preprocessing rate.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        mask[[not row.any() for row in mask]] = True
+    return tf.constant(mask, dtype=tf.float32)
+
+
+def _vcsc_band_mean(values, mask):
+    """Mean of (n_bands, n_bins) values over that band's in-passband bins."""
+    return tf.reduce_sum(values * mask, axis=-1) / tf.reduce_sum(mask, axis=-1)
+
+
+def _vcsc_pair_penalty(z_pair, z0, z_max):
+    """phi(Z): flat below z0, exponential to z_max, then linear beyond it.
+
+    A hard clip at z_max bounds exp() against float32 overflow (z_pair=198 on
+    a phase-lag violation produced inf, which poisons the total loss and every
+    gradient through it) but its derivative above the cap is exactly zero. A
+    pair at 20 sigma and a pair at 200 sigma then score identically and
+    neither receives gradient, so the constraint stops resisting precisely in
+    the implausible regime it exists to penalize.
+
+    Past z_max we therefore continue along the tangent instead of flattening.
+    Writing s = exp((z_max - z0)^+), the penalty is s - 1 + s*(Z - z_max) for
+    Z > z_max, which matches the exponential branch in both value and first
+    derivative at z_max, so phi stays C^1 and the gradient above the cap is
+    the constant s rather than 0. exp() is still only ever evaluated on a
+    bounded argument, so the overflow guard is preserved.
+    """
+    capped = tf.minimum(z_pair, z_max)
+    excess = tf.nn.relu(z_pair - z_max)
+    saturated = tf.exp(tf.nn.relu(capped - z0))
+    return saturated - 1.0 + saturated * excess
+
 
 def _vcsc_pairwise_distances():
     """3D chord distances between all 14 electrodes, in centimeters."""
@@ -150,12 +227,16 @@ def _vcsc_calibration_curves(n_windows):
         curves["sigma_spec"],
     )
 
-def _vcsc_band_coherence_wpli(x_prime):
+def _vcsc_band_coherence_wpli(x_prime, fs=_VCSC_DEFAULT_FS):
     """
     x_prime is (1, W, T, 42): 14 channels x 3 bands (theta, alpha, beta),
     channel-major then band-minor. Each of the W windows is treated as one
     repeated observation/epoch, following the standard convention of
     averaging cross-spectra over trials before forming coherence and wPLI
+
+    The frequency average runs over each band's passband bins only, not every
+    rfft bin -- see _vcsc_band_bin_mask. fs must match the preprocessing rate
+    or the mask selects the wrong bins.
     """
     n_channels, n_bands = len(_VCSC_CHANNELS), len(_VCSC_BANDS)
     shape = x_prime.shape
@@ -167,6 +248,7 @@ def _vcsc_band_coherence_wpli(x_prime):
     reshaped = tf.reshape(x_prime, (shape[1], shape[2], n_channels, n_bands))
     signal = tf.transpose(reshaped, [2, 3, 0, 1])
     spectrum = tf.signal.rfft(signal) #(C,B,W,F_bins)
+    mask = _vcsc_band_bin_mask(int(spectrum.shape[-1]), float(fs))  # (B, F_bins)
 
     coherences, wplis = [], []
     for i, j in _VCSC_PAIRS:
@@ -177,8 +259,11 @@ def _vcsc_band_coherence_wpli(x_prime):
         mean_cross = tf.reduce_mean(cross, axis=1)
         mean_power_i = tf.reduce_mean(power_i, axis=1)
         mean_power_j = tf.reduce_mean(power_j, axis=1)
-        coherence = tf.abs(mean_cross) ** 2 / (mean_power_i * mean_power_j + 1e-12)
-        coherences.append(tf.reduce_mean(coherence, axis=1))
+        #real(z*conj(z)), not abs(z)**2: identical value, but the gradient of
+        #complex abs is z/|z|, which is NaN at exactly z=0.
+        magnitude_squared = tf.math.real(mean_cross * tf.math.conj(mean_cross))
+        coherence = magnitude_squared / (mean_power_i * mean_power_j + 1e-12)
+        coherences.append(_vcsc_band_mean(coherence, mask))
 
         #Debiased wPLI^2 (Vinck et al. 2011). The naive |E{imag}|/E{|imag|}
         #form is biased upward at finite sample size -- it read ~0.14 at
@@ -191,7 +276,7 @@ def _vcsc_band_coherence_wpli(x_prime):
         wpli = (tf.square(sum_imag) - sum_sq) / (
             tf.square(sum_abs) - sum_sq + 1e-12
         )
-        wplis.append(tf.reduce_mean(wpli, axis=-1))
+        wplis.append(_vcsc_band_mean(wpli, mask))
 
     return tf.stack(coherences, axis=0), tf.stack(wplis, axis=0)  # each (n_pairs, n_bands)
 
@@ -343,17 +428,11 @@ class CounterfactualLoss:
         z_pair = tf.sqrt(
             tf.reduce_sum(tf.square(z_raw) + tf.square(z_spec), axis=-1) + 1e-12
         )
-        #Bound the deviation before it is exponentiated. Past vcsc_z_max the
-        #pair is already unambiguously rejected, so distinguishing 20 sigma
-        #from 200 adds no decision value -- but exp() of the latter overflows
-        #float32 to inf (seen at z_pair=198 on a phase-lag violation), which
-        #would poison the total loss and every gradient through it.
-        z_pair = tf.minimum(z_pair, self.vcsc_z_max)
         distance = tf.constant(_VCSC_DISTANCES_CM, dtype=tf.float32)
         weight = tf.exp(
             tf.nn.relu(self.vcsc_distance_cm - distance) / self.vcsc_tau_cm
         )
-        penalty = tf.exp(tf.nn.relu(z_pair - self.vcsc_z0)) - 1.0
+        penalty = _vcsc_pair_penalty(z_pair, self.vcsc_z0, self.vcsc_z_max)
         #Mean, not sum, over the 91 pairs: keeps the penalty's scale comparable
         #to the target/latent/decoded terms instead of growing with pair count.
         return tf.cast(tf.reduce_mean(weight * penalty), x_prime.dtype)

@@ -159,16 +159,21 @@ def source_vcsc_calibration(source_features):
 def make_vcsc_loss(calibration, **weights):
     """Use the existing CFO objective with fixed VCSC reference constants."""
     import tensorflow as tf
-    from ..counterfactuals.loss import CounterfactualLoss, _vcsc_band_coherence_wpli, _VCSC_DISTANCES_CM
+    from ..counterfactuals.loss import (CounterfactualLoss, _vcsc_band_coherence_wpli,
+                                        _vcsc_pair_penalty, _VCSC_DISTANCES_CM)
 
     class CalibratedVCSCLoss(CounterfactualLoss):
         def physiological_validity(self, x_prime):
             c, w = _vcsc_band_coherence_wpli(x_prime)
             zc = (c - tf.constant(calibration["c_hat"], tf.float32)) / tf.constant(calibration["sigma_raw"], tf.float32)
             zw = (w - tf.constant(calibration["w_hat"], tf.float32)) / tf.constant(calibration["sigma_spec"], tf.float32)
-            z = tf.minimum(tf.sqrt(tf.reduce_sum(zc ** 2 + zw ** 2, axis=-1) + 1e-12), self.vcsc_z_max)
+            z = tf.sqrt(tf.reduce_sum(zc ** 2 + zw ** 2, axis=-1) + 1e-12)
             weight = tf.exp(tf.nn.relu(self.vcsc_distance_cm - tf.constant(_VCSC_DISTANCES_CM, tf.float32)) / self.vcsc_tau_cm)
-            return tf.cast(tf.reduce_mean(weight * tf.math.expm1(tf.nn.relu(z - self.vcsc_z0))), x_prime.dtype)
+            #Shared with CounterfactualLoss.physiological_validity so both
+            #paths use the same phi, including the linear tail past z_max.
+            #This branch previously had no cap at all and would overflow.
+            penalty = _vcsc_pair_penalty(z, self.vcsc_z0, self.vcsc_z_max)
+            return tf.cast(tf.reduce_mean(weight * penalty), x_prime.dtype)
 
     return CalibratedVCSCLoss(**weights)
 

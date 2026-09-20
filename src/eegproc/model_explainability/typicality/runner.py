@@ -260,6 +260,12 @@ def run_fold(args, dataset, entry, out):
               probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
               subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source],
               learned_prior_log_sigma=model.vc_target.prior_log_sigma.numpy(), learned_prior_mu=model.vc_target.prior_mu.numpy())
+    #Real source-subject EEG, matching the typicality region and the physiology
+    #reference above. Calibrating on the held-out subject's own decoder
+    #reconstructions instead leaks that subject into a reference the paper
+    #describes as source-derived, and is circular: any decoder output scores
+    #near zero against a decoder-output reference, which is why VCSC read
+    #0.000 on every counterfactual while the independent checks all failed.
     vcsc = vcsc_calibration(dataset.features[source])
     write_npz(directory / "calibration" / "vcsc.npz", **vcsc,
               subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source],
