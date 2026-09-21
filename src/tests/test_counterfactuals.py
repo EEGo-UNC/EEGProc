@@ -52,7 +52,7 @@ def tiny_joint_model():
     )
 
 
-def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
+def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model, monkeypatch):
     inputs = tf.random.normal((1, 2, 4, 42), seed=7)
     weights_before = [value.numpy().copy() for value in tiny_joint_model.weights]
     trainable_before = [value.trainable for value in tiny_joint_model.weights]
@@ -62,7 +62,17 @@ def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
         decoder_mode="joint",
     )
 
-    result = optimizer.optimize(inputs)
+    encode = tiny_joint_model.get_encoder_features
+    calls = []
+    def encode_original(signal):
+        assert not calls, "Decoded signals must not reach the encoder"
+        calls.append(signal.numpy().copy())
+        return encode(signal)
+    with monkeypatch.context() as patch:
+        patch.setattr(tiny_joint_model, "get_encoder_features", encode_original)
+        result = optimizer.optimize(inputs)
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0], inputs.numpy())
 
     assert optimizer.decoded_names == ("joint",)
     assert result["summary"]["decoder_mode"] == "joint"
@@ -81,20 +91,10 @@ def test_joint_decoder_mode_uses_only_fused_reconstruction(tiny_joint_model):
         "x_prime_joint",
         "classification_embedding",
         "classification_embedding_prime",
-        "classification_embedding_reconstructed_joint",
-        "classification_embedding_reencoded_joint",
     }
     decoded = result["summary"]["decoded_trials"]["joint"]
-    for label, signal_key, embedding_key, reference_key in (
-        ("original_reconstruction", "x_reconstructed_joint", "classification_embedding_reconstructed_joint", "classification_embedding"),
-        ("counterfactual", "x_prime_joint", "classification_embedding_reencoded_joint", "classification_embedding_prime"),
-    ):
-        signal = result["arrays"][signal_key]
-        features = tiny_joint_model.get_encoder_features(signal)
-        np.testing.assert_allclose(decoded[label]["probabilities"], features["probabilities"].numpy()[0], atol=1e-6)
-        np.testing.assert_allclose(result["arrays"][embedding_key], features["classification_embedding"].numpy(), atol=1e-6)
-        assert decoded[label]["embedding_cycle_rmse"] == pytest.approx(float(np.sqrt(np.mean(
-            (result["arrays"][embedding_key] - result["arrays"][reference_key]) ** 2))))
+    assert "counterfactual" not in decoded
+    assert "original_reconstruction" not in decoded
     assert result["history"][0]["decoded"] == pytest.approx(0.0)
     assert decoded["original_reconstruction_mse"] > 0
     assert result["summary"]["selected_losses"]["decoded"] == pytest.approx(
@@ -139,8 +139,9 @@ def test_branch_decoder_mode_remains_backward_compatible(tiny_joint_model):
                for branch in ("gcn_gru", "bilstm"))
     for branch in ("gcn_gru", "bilstm"):
         decoded = result["summary"]["decoded_trials"][branch]
-        expected = tiny_joint_model.get_encoder_features(result["arrays"][f"x_prime_{branch}"])
-        np.testing.assert_allclose(decoded["counterfactual"]["probabilities"], expected["probabilities"].numpy()[0], atol=1e-6)
+        assert "counterfactual" not in decoded
+        assert "original_reconstruction" not in decoded
+        assert np.isfinite(decoded["decoded_change_mse"])
 
 
 def test_decoded_distance_uses_fixed_reconstruction_and_candidate_gradients():
@@ -355,3 +356,37 @@ def test_plot_loader_accepts_joint_reconstruction(tmp_path):
     assert names is None
     np.testing.assert_array_equal(reference, original[0])
     np.testing.assert_array_equal(loaded, counterfactual[0])
+
+
+@pytest.mark.parametrize("decoder_mode", ["branches", "joint"])
+def test_runner_saves_latent_success_without_decoded_predictions(tiny_joint_model, tmp_path, monkeypatch, decoder_mode):
+    import json
+    from eegproc.model_explainability.counterfactuals import runner
+
+    inputs = np.zeros((1, 2, 4, 42), dtype=np.float32)
+    trials = tmp_path / "trials.npz"
+    np.savez(trials, features=inputs, subject_ids=[0], trial_ids=[0])
+    monkeypatch.setattr(runner, "load_model", lambda *args: tiny_joint_model)
+    encode = tiny_joint_model.get_encoder_features
+    calls = []
+    def encode_original(signal):
+        assert not calls, "Runner must not re-encode decoded signals"
+        calls.append(signal.numpy().copy())
+        return encode(signal)
+    monkeypatch.setattr(tiny_joint_model, "get_encoder_features", encode_original)
+    out = tmp_path / "out"
+    args = runner.parse_args(["--model", "unused.keras", "--trials-npz", str(trials),
+                              "--subject-id", "0", "--out-dir", str(out),
+                              "--max-steps", "1", "--decoder-mode", decoder_mode, "--log-every", "0"])
+    aggregate = runner.run(args)
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0], inputs)
+    saved = json.loads((out / "subject_0_trial_0/result.json").read_text())
+    assert aggregate["round_trip_evaluation"] == "latent_only"
+    assert aggregate["latent_success_rate"] == float(saved["latent_counterfactual"]["success"])
+    assert "decoded_success_rate" not in aggregate
+    assert all("counterfactual" not in path for path in saved["decoded_trials"].values())
+    assert saved["steps_completed"] == 1
+    assert (out / "subject_0_trial_0/counterfactual.npz").is_file()
+    settings = json.loads((out / "settings.json").read_text())
+    assert settings["counterfactual_validity_prediction_space"] == "latent"

@@ -312,9 +312,11 @@ def build_report(roots, output, *, probe_results=()):
                "subject_identifiability": probes,
                "complete": all(f["status"] == "completed" for f in folds) and all(r["status"] != "pending" for r in rows),
                "notes": ["Distances are RMSE in latent/input coordinates; IQR is Q25,Q75 over all finite selected endpoints, including failures.",
-                         "Decoded validity uses target argmax and confidence after full-trial re-encoding. Latent success remains a diagnostic.",
-                         "Decoded typicality uses the same frozen class distribution and source threshold as latent typicality.",
-                         "Reconstruction failures are retained; all eligible attempts remain in success-rate denominators. Legacy round-trip metrics are unavailable.",
+                         ("Historical decoded validity uses target argmax and confidence after full-trial re-encoding."
+                          if has_round_trip else "Target success uses argmax and confidence on the optimized full-trial classification embedding."),
+                         ("Historical decoded typicality uses the frozen class distribution and source threshold."
+                          if has_round_trip else "Typicality uses D <= tau on the optimized full-trial classification embedding; decoded signals are not re-encoded."),
+                         "All eligible attempts remain in success-rate denominators. Unmeasured decoded validity is unavailable, not a success or failure.",
                          "Unknown physiological checks are NA, never silently passed.",
                          "ECE uses equal-width top-label confidence bins; fold SD uses ddof=1.",
                          "Subject probe must be run explicitly with a declared coordinate policy."]}

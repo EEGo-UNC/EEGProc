@@ -277,25 +277,22 @@ percentage of the total loss. `--log-every N` reduces the display frequency;
 Joint mode also prints the checkpoint's frozen GCN-GRU `alpha` and BiLSTM
 `1-alpha` weights once before optimization.
 
-Full-trial decoder–encoder evaluation runs on the original reconstruction
-before optimization and on the selected decoded counterfactual afterward.
-For every selected decoder output, the frozen encoder receives the complete
-`(1,W,T,F)` signal in its saved order. Decoder outputs already occupy the
-model's preprocessed input space; no normalization or filtering is repeated.
-The saved recurrent classifier and VC head evaluate that full re-encoded trial.
+Target success requires the target argmax and requested confidence on the
+optimized full-trial classification embedding. If a typicality region is
+supplied, it scores that same embedding against the frozen Gaussian and
+source-calibrated threshold. The encoder processes the original trial once;
+baseline reconstructions and decoded counterfactuals are never re-encoded.
 
-Optimization, candidate selection, stopping, and history retain their existing
-latent-space criteria. Predictive validity of the produced signal instead uses
-the re-encoded target argmax and confidence. Results keep both decisions
-separately. Reconstruction prediction preservation, confidence drops, and
-latent/terminal-embedding cycle RMSE are recorded; prediction-changing baseline
-reconstructions are retained, not excluded. If a typicality region is supplied,
-both re-encoded embeddings are scored using its existing frozen Gaussian and
-source-calibrated threshold. No cycle penalty or model-weight update is added.
+Decoding provides feature-space reconstructions, displacement, and VCSC
+measurements. Compare `R(z_prime)` with the fixed `R(z)` to isolate the decoded
+change associated with the latent intervention. Reconstruction error relative
+to the original input remains a separate diagnostic. Latent target success
+makes no claim that a decoded signal would flip the full input-to-output model.
+It also does not establish physiological realism or a causal effect.
 
-The report also includes VCSC for the reconstructed original, decoded
-counterfactual, and their difference. Round-trip validity establishes model
-consistency, not physiological realism, improved accuracy, or causal effects.
+New records declare `round_trip_evaluation=latent_only` and
+`counterfactual_validity_prediction_space=latent`. Use a new output directory;
+historical decoder–encoder results retain their original interpretation.
 
 ## Outputs
 
@@ -306,10 +303,10 @@ overwritten. Completed trials are saved individually.
 | --- | --- |
 | `settings.json` | Arguments, loss weights, model path, input shape, selected trials, environment version. |
 | `subject_<id>_trial_<id>/history.csv` | Step 0 and each finite evaluated step: total/raw/weighted losses, selected reconstruction-path MSEs, probabilities, prediction, success, gradient norm. |
-| `subject_<id>_trial_<id>/result.json` | Original/latent predictions; `decoded_trials.<path>.original_reconstruction` and `.counterfactual` predictions, cycle RMSE, optional typicality; reconstruction fidelity, distances, losses, VCSC, step and timing. |
-| `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, decoded signals, original/optimized classification embeddings, and `classification_embedding_reconstructed_<path>` / `classification_embedding_reencoded_<path>`; joint mode uses `<path>=joint`. |
+| `subject_<id>_trial_<id>/result.json` | Original and optimized latent predictions, optional latent typicality; reconstruction fidelity, distances, losses, VCSC, step and timing. |
+| `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, decoded baseline/counterfactual signals, and original/optimized classification embeddings; joint mode uses `<path>=joint`. |
 | `results.json` | Completed trial summaries, updated after each trial. |
-| `summary.json` | Per-output decoded target success and reconstruction prediction-preservation rates, plus latent success, class-flip, distance, probability-change, and VCSC diagnostics. |
+| `summary.json` | Latent success, class-flip, distance, probability-change, and per-output VCSC diagnostics. |
 
 `x_prime_<path>` remains in the model's preprocessed input space. This
 runner does not reconstruct missing raw EEG bands or undo normalization.

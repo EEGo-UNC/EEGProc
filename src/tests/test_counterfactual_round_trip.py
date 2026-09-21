@@ -1,4 +1,4 @@
-"""Round-trip evaluation must expose decoder failures without changing CFO."""
+"""Latent-only CFO plus read compatibility for historical round-trip reports."""
 
 import json
 
@@ -8,7 +8,7 @@ import pytest
 from eegproc.model_explainability.typicality.results import build_report, population_summary
 
 
-def test_decoded_failure_is_distinct_from_latent_success_and_does_not_change_optimization():
+def test_counterfactuals_never_reencode_reconstructions_or_candidates():
     tf = pytest.importorskip("tensorflow")
     from eegproc.model_explainability.counterfactuals.loss import CounterfactualLoss
     from eegproc.model_explainability.counterfactuals.optimizer import CounterfactualOptimizer
@@ -47,6 +47,8 @@ def test_decoded_failure_is_distinct_from_latent_success_and_does_not_change_opt
             return tf.reduce_sum(sequence * weights, axis=1) / tf.reduce_sum(weights)
 
         def get_encoder_features(self, signal):
+            if self.encoder_inputs:
+                raise AssertionError("CFO must encode only the original trial")
             self.encoder_inputs.append(signal.numpy().copy())
             embedding = self.trial_recurrent_classifier(tf.reshape(signal, [1, -1, 1]))
             return {"window_features": signal, "classification_embedding": embedding,
@@ -70,18 +72,18 @@ def test_decoded_failure_is_distinct_from_latent_success_and_does_not_change_opt
         decoded = summary["decoded_trials"]["gcn_gru"]
         assert summary["latent_counterfactual"]["success"]
         assert summary["typicality"]["typicality_success"]
-        assert decoded["reconstruction_preserves_prediction"] is (sign == 1)
-        assert decoded["counterfactual"]["success"] is (sign == 1)
-        assert decoded["counterfactual"]["typicality_success"] is (sign == 1)
-        assert len(model.encoder_inputs) == 3  # Original, baseline, selected endpoint only.
-        for actual, key in zip(model.encoder_inputs, ("x", "x_reconstructed_gcn_gru", "x_prime_gcn_gru")):
-            assert actual.shape == (1, 3, 4, 1)
-            np.testing.assert_array_equal(actual, arrays[key])  # No reordering or renormalization.
-        if sign == 1:
-            assert decoded["counterfactual"]["latent_cycle_rmse"] == 0
-        else:
-            assert decoded["counterfactual"]["embedding_cycle_rmse"] > 1
-            assert decoded["counterfactual_target_probability_drop"] > 0.5
+        assert summary["round_trip_evaluation"] == "latent_only"
+        assert summary["counterfactual_validity_prediction_space"] == "latent"
+        assert len(model.encoder_inputs) == 1
+        np.testing.assert_array_equal(model.encoder_inputs[0], arrays["x"])
+        assert model.encoder_inputs[0].shape == (1, 3, 4, 1)
+        assert "counterfactual" not in decoded
+        assert "original_reconstruction" not in decoded
+        assert not any("reencoded" in key or "embedding_reconstructed" in key for key in arrays)
+        assert np.isfinite(decoded["original_reconstruction_mse"])
+        assert np.isfinite(decoded["decoded_change_mse"])
+        np.testing.assert_array_equal(arrays["x_prime_gcn_gru"], sign * arrays["z_prime"])
+        json.dumps(summary, allow_nan=False)
         np.testing.assert_array_equal(region.prior_mean, prior_before[0])
         np.testing.assert_array_equal(region.prior_variance, prior_before[1])
         assert region.tau == prior_before[2]

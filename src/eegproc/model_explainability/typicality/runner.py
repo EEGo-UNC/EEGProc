@@ -18,7 +18,7 @@ import tensorflow as tf
 
 from ..model_agnostic.adapter import load_trial_dataset, load_json_mapping
 from ..counterfactuals.arguments import _positive_float, _nonnegative_float, _nonnegative_int, _decay_float
-from ..counterfactuals.optimizer import CounterfactualOptimizer, ROUND_TRIP_EVALUATION
+from ..counterfactuals.optimizer import CounterfactualOptimizer, EVALUATION_PROTOCOL
 from ..counterfactuals.fusion import validate_fixed_joint_alpha
 from ..counterfactuals.loss import _VCSC_CHANNELS
 from ..model_agnostic.runner import _metadata_arrays
@@ -205,10 +205,10 @@ def _protocol(args, dataset, folds):
             "dataset_metadata": dataset.metadata,
             "eligibility": "true_class == 0 and original argmax prediction == 0",
             "target_class": 1, "prediction_rule": "argmax; confidence threshold separately recorded",
-            "round_trip_evaluation": ROUND_TRIP_EVALUATION,
-            "counterfactual_validity": "target argmax and confidence on E(R(Zcf)); all eligible trials retained",
-            "round_trip_typicality": "same frozen VC distribution and source threshold, evaluated on E(R(Zcf))",
-            "round_trip_input": "all supplied windows in order, already in model input space; no repeated preprocessing",
+            "round_trip_evaluation": EVALUATION_PROTOCOL,
+            "counterfactual_validity": "target argmax and confidence on the optimized full-trial classification embedding; all eligible trials retained",
+            "counterfactual_validity_prediction_space": "latent",
+            "decoded_evaluation": "reconstruction displacement, feature analysis, and physiology only",
             "typicality_definition": SCORE_DEFINITION,
             "typicality_representation": REPRESENTATION,
             "typicality_formula": "mean((classification_embedding - prior_mean)^2 / max(prior_variance, variance_floor))",
@@ -388,7 +388,7 @@ def run_fold(args, dataset, entry, out):
                         "true_class": 0, "objective": objective, "seed": seed, "report_output": args.report_output,
                         "checkpoint_sha256": entry["sha256"], "typicality_definition": SCORE_DEFINITION,
                         "typicality_representation": REPRESENTATION,
-                        "round_trip_evaluation": ROUND_TRIP_EVALUATION}
+                        "round_trip_evaluation": EVALUATION_PROTOCOL}
 
             def progress(row):
                 if args.log_every and row["step"] % args.log_every == 0:

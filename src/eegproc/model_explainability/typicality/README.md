@@ -141,22 +141,16 @@ Concurrent jobs should use separate output directories.
 - The typicality phase also stops after
   `--typicality-improvement-patience` feasible evaluations without a decrease
   of at least `--typicality-min-delta` in `D`.
-- The original reconstruction and selected decoded counterfactual are each
-  re-encoded as complete trials for evaluation. The saved encoder uses
-  inference mode, all supplied windows retain their order, and decoder outputs
-  enter directly in model-input coordinates without repeated preprocessing.
-  This check does not alter the objective, selected iterate, or stopping rules.
-- The main results table uses decoded target success (target argmax AND
-  confidence), re-encoded `D <= tau`, and their conjunction. The same frozen
-  Gaussian and source threshold score the optimized and re-encoded embeddings.
-  Latent target/typicality success remains a separate diagnostic table.
-  The existing `typicality_success` JSON/CSV field denotes the latent decision;
-  `decoded_typicality_success` denotes the decoded decision.
-- Reconstruction prediction preservation, confidence drops, and cycle RMSE
-  are recorded. A reconstruction that changes the original prediction does
-  not remove that trial from the eligible cohort or success denominators.
-  Round-trip validity establishes consistency with the model, not physiological
-  realism. Physiology outcomes remain separate.
+- The encoder processes the original trial once during CFO. Baseline
+  reconstructions and decoded counterfactuals are never re-encoded.
+- The main table reports latent target success (target argmax AND confidence),
+  typicality (`D <= tau`) on the optimized full-trial classification embedding,
+  and their conjunction. The frozen Gaussian and source threshold are unchanged.
+  `typicality_success` denotes this latent target-and-typicality decision.
+- Decoded signals provide reconstruction error, displacement, feature analysis,
+  and physiological diagnostics. Latent success does not establish a class flip
+  for a decoded signal passed through the full model. All eligible attempts
+  remain in the success denominators. Physiology outcomes remain separate.
 - `d_z` is RMSE between the original and counterfactual full-trial
   classification embeddings.
   `decoder_latent_rmse` separately measures the actual optimized decoder
@@ -204,30 +198,27 @@ report/                          CSV tables, distributions, example selection, t
 Step `s` precedes update `s+1`; the Adam slots reflect `s` completed updates.
 History includes latent probabilities, loss components and weights, discrepancy,
 threshold, gradient norm, learning rate, decoded distances, and displacements.
-Re-encoded predictions and typicality are endpoint evaluations, not per-step
-optimization losses; they are stored in `result.json` under
-`decoded_trials.<path>.original_reconstruction` and `.counterfactual`.
+Endpoint predictions and typicality use the optimized classification embedding.
+`decoded_trials.<path>` stores signal-distance and physiology diagnostics only.
 The selected best step is distinct from the last evaluated step. `d_z` now
 measures full-trial embedding RMSE; `decoder_latent_rmse` continues to measure
 all optimized encoder coordinates. `observations.npz` and `source_trials.npz`
 store `(N, d)` arrays named `embeddings`. Each trial's `observed.npz` stores
 `classification_embedding` with shape `(1, d)`. Counterfactual endpoints store
-`classification_embedding` and `classification_embedding_prime`, plus
-`classification_embedding_reconstructed_<path>` and
-`classification_embedding_reencoded_<path>` for the decoder–encoder checks.
+`classification_embedding` and `classification_embedding_prime`, alongside
+baseline reconstructions and decoded counterfactual signals.
 No artificial sequence axis or window moments are saved.
 
-New studies declare `round_trip_evaluation=full_trial_decoder_encoder_v1`.
-Resume rejects earlier manifests because their evaluation protocol differs.
-Legacy reports remain readable with unavailable decoded metrics; they cannot
-be pooled with new round-trip studies. Use a new output directory for new runs.
-The separate class-awareness audit and subject probe continue to inspect the
-optimized latent representations; their outcomes are not decoded validity.
+New studies declare `round_trip_evaluation=latent_only`. Resume rejects earlier
+round-trip manifests because their evaluation protocol differs. Historical
+reports remain readable under their recorded protocol and cannot be pooled
+with new latent-only studies. Use a new output directory for new runs.
+The class-awareness audit and subject probe inspect optimized latent representations.
 
 Scalars are flushed every step to `history.jsonl` and collected into
 `history.csv` when the attempt closes. Each row includes target probability,
 every raw and weighted loss component, total loss, discrepancy, learning rate,
-gradient norm, decoded probabilities, and displacement metrics. Full tensor
+gradient norm, latent probabilities, and displacement metrics. Full tensor
 snapshots are saved only for step 0 and the last finite step. The selected
 endpoint is saved separately in `counterfactual.npz`. Files remain readable
 with `np.load(..., allow_pickle=False)`.
@@ -300,13 +291,13 @@ These commands need no TensorFlow or checkpoint inference. Outputs include
 recognition fold means and sample SDs, recalls, AUROC, top-label ECE,
 population percentages and medians/IQRs, per-subject rates, paired percentage
 point changes, and all observed/counterfactual discrepancy distributions.
-The example is a typicality-arm decoded-target-and-reencoded-typical success
+The example is a typicality-arm latent-target-and-typical success
 nearest the successful cohort's median full-trial embedding displacement,
 with deterministic subject/trial tie breaking. Latent-only legacy reports
 retain their original example rule.
 
 Figures include latent probability/discrepancy/displacement trajectories with
-re-encoded reconstruction and selected-counterfactual points, per-subject
+original and optimized latent typicality, per-subject
 rates, discrepancy relative to each fold's threshold, and electrode-band
 power-change maps. Numerical inputs for aggregate scalp maps are also saved.
 Existing counterfactual heatmap and topography commands can read the new

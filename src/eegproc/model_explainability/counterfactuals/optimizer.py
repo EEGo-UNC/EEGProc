@@ -19,7 +19,7 @@ else:
     from fusion import FrozenJointFusion, validate_fixed_joint_alpha
 
 
-ROUND_TRIP_EVALUATION = "full_trial_decoder_encoder_v1"
+EVALUATION_PROTOCOL = "latent_only"
 
 
 class CounterfactualOptimizer:
@@ -262,41 +262,6 @@ class CounterfactualOptimizer:
             ),
         }
 
-    def _evaluate_reconstruction(self, signal, latent, embedding, target):
-        """Evaluate E(R(Z)) once outside optimization, at the model input boundary.
-
-        SIC's get_encoder_features uses training=False. The signal already has
-        the model's preprocessing, channel/band order, and complete trial axes;
-        applying preprocessing again would change the evaluated counterfactual.
-        """
-        features = self.model.get_encoder_features(signal)
-        encoded = tf.cast(features["window_features"], tf.float32)
-        tf.debugging.assert_equal(
-            tf.shape(encoded), tf.shape(latent),
-            message="Round-trip encoding must preserve the complete trial shape.",
-        )
-        tf.debugging.assert_all_finite(encoded, "Round-trip features must be finite.")
-        reencoded_embedding = tf.cast(features["classification_embedding"], tf.float32)
-        tf.debugging.assert_equal(tf.shape(reencoded_embedding), tf.shape(embedding))
-        tf.debugging.assert_all_finite(reencoded_embedding, "Round-trip embedding must be finite.")
-        logits = tf.cast(self.model.vc_target(reencoded_embedding, training=False), tf.float32)
-        tf.debugging.assert_near(
-            tf.nn.softmax(logits), tf.cast(features["probabilities"], tf.float32),
-            atol=1e-5, rtol=1e-4,
-            message="Round-trip prediction must match the full SIC forward pass.",
-        )
-        result = {
-            **self._prediction(logits, target),
-            "latent_cycle_rmse": float(tf.sqrt(tf.reduce_mean(tf.square(encoded - latent))).numpy()),
-            "embedding_cycle_rmse": float(tf.sqrt(tf.reduce_mean(tf.square(reencoded_embedding - embedding))).numpy()),
-        }
-        if self.typicality is not None:
-            discrepancy = float(self.typicality.discrepancy(reencoded_embedding).numpy())
-            result.update(discrepancy=discrepancy,
-                          typical=bool(discrepancy <= self.typicality.tau),
-                          typicality_success=bool(result["success"] and discrepancy <= self.typicality.tau))
-        return result, reencoded_embedding.numpy()
-
     def _objective(self, *, classification_embedding, typicality_active=True, **kwargs):
         terms, decoded = self.loss.central_loss(**kwargs)
         if self.typicality is not None:
@@ -330,10 +295,10 @@ class CounterfactualOptimizer:
         state_progress(row, arrays) optionally receives every finite iterate,
         full decoded arrays, raw gradient and Adam state for streamed archival.
         The typicality arm first reaches target and physiological feasibility,
-        then minimizes normalized D while retaining those constraints. Baseline
-        reconstructions and the selected decoded counterfactual are re-encoded
-        as complete trials for evaluation only. History, stopping, and candidate
-        selection retain their latent-space target and typicality criteria.
+        then minimizes normalized D while retaining those constraints. Target
+        success and typicality are evaluated on the optimized latent features.
+        Decoded signals provide reconstruction and physiology diagnostics;
+        they are never passed back through the encoder.
         """
         started = time.perf_counter()
         x = tf.cast(tf.convert_to_tensor(inputs), tf.float32)
@@ -388,10 +353,6 @@ class CounterfactualOptimizer:
         original_prediction = self._prediction(original_logits, target_class)
         original_decoded = {
             name: tf.stop_gradient(value) for name, value in self._decode(z, x).items()
-        }
-        reconstruction_evaluations = {
-            name: self._evaluate_reconstruction(value, z, original_embedding, target_class)
-            for name, value in original_decoded.items()
         }
         variable = tf.Variable(z, name="counterfactual_trial_features")
         learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -604,24 +565,9 @@ class CounterfactualOptimizer:
         decoded_results = {}
         for name, reconstruction in decoded.items():
             baseline = original_decoded[name]
-            baseline_prediction, baseline_embedding = reconstruction_evaluations[name]
-            decoded_prediction, decoded_embedding = self._evaluate_reconstruction(
-                reconstruction, best_latent, final_embedding, target_class
-            )
             arrays[f"x_reconstructed_{name}"] = baseline.numpy()
             arrays[f"x_prime_{name}"] = reconstruction.numpy()
-            arrays[f"classification_embedding_reconstructed_{name}"] = baseline_embedding
-            arrays[f"classification_embedding_reencoded_{name}"] = decoded_embedding
             decoded_results[name] = {
-                "original_reconstruction": baseline_prediction,
-                "counterfactual": decoded_prediction,
-                "reconstruction_preserves_prediction": bool(baseline_prediction["predicted_class"] == original_class),
-                "reconstruction_confidence_drop": float(original_prediction["probabilities"][original_class]
-                                                        - baseline_prediction["probabilities"][original_class]),
-                "counterfactual_preserves_latent_prediction": bool(decoded_prediction["predicted_class"]
-                                                                  == latent_prediction["predicted_class"]),
-                "counterfactual_target_probability_drop": float(latent_prediction["target_probability"]
-                                                                - decoded_prediction["target_probability"]),
                 "original_reconstruction_mse": float(
                     self.loss.latent_distance(baseline, x).numpy()
                 ),
@@ -671,9 +617,9 @@ class CounterfactualOptimizer:
                    else {"joint_reconstruction_alpha": None}),
                 "required_target_probability": self.loss.target_probability,
                 "prediction_rule": "argmax",
-                "round_trip_evaluation": ROUND_TRIP_EVALUATION,
+                "round_trip_evaluation": EVALUATION_PROTOCOL,
                 "optimization_prediction_space": "latent",
-                "counterfactual_validity_prediction_space": "decoded_then_reencoded",
+                "counterfactual_validity_prediction_space": "latent",
                 "original": original_prediction,
                 "latent_counterfactual": latent_prediction,
                 "selected_feasible": bool(latent_prediction["success"] and final_physiological_valid),

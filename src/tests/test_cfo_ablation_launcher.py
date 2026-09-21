@@ -93,3 +93,34 @@ def test_valence_launcher_uses_matching_raw_loader(launcher_env):
     assert args.data_config["model_module"] == args.model_module
     assert args.data_config["window_normalization"] == "global_rms"
     assert "#SBATCH --array=0-22%4\n" in VALENCE_SCRIPT.read_text()
+
+
+def test_valence_missing_manifest_fails_before_cluster_modules(launcher_env):
+    launcher_env["MODELS_JSON"] = str(Path(launcher_env["PROJECT_DIR"]) / "missing.json")
+    launcher_env["DRY_RUN"] = "0"
+    result = subprocess.run(["bash", str(VALENCE_SCRIPT)], env=launcher_env, text=True, capture_output=True)
+    assert result.returncode == 2
+    assert "checkpoint manifest not found" in result.stderr
+    assert "CONFIG_DIR" in result.stderr
+    assert "*65452590*" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "module: command not found" not in result.stderr
+    assert not Path(launcher_env["OUT_ROOT"]).exists()
+
+
+def test_valence_config_dir_override_resolves_relocated_manifest(launcher_env):
+    project = Path(launcher_env["PROJECT_DIR"])
+    config = project / "suite_65452590.before-pull/full/relocated_run/configuration_0001"
+    config.mkdir(parents=True)
+    Path(launcher_env.pop("MODELS_JSON")).rename(config / "loso_zero_shot_models.json")
+    Path(launcher_env.pop("MODEL_DIR")).rename(config / "loso_zero_shot_models")
+    launcher_env["CONFIG_DIR"] = str(config)
+    result = subprocess.run(["bash", str(VALENCE_SCRIPT)], env=launcher_env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert str(config / "loso_zero_shot_models/heldout_0.keras") in result.stdout
+    command = shlex.split(next(line.removeprefix("Command: ") for line in result.stdout.splitlines()
+                              if line.startswith("Command: ")))
+    assert command[command.index("--models-json") + 1] == str(config / "loso_zero_shot_models.json")
+    assert command[command.index("--model-dir") + 1] == str(config / "loso_zero_shot_models")
+    assert command[command.index("--fixed-joint-alpha") + 1] == "0.49751"
+    assert not Path(launcher_env["OUT_ROOT"]).exists()

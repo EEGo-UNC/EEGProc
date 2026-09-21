@@ -72,6 +72,16 @@ for boolean in "$DRY_RUN" "$RESUME"; do
         exit 2
     fi
 done
+if [[ ! -f "$MODELS_JSON" ]]; then
+    echo "ERROR: valence checkpoint manifest not found: $MODELS_JSON" >&2
+    echo "The default run path must exist on this cluster; a local copy does not supply cluster data." >&2
+    echo "Locate the manifest from the EEGProc repository root:" >&2
+    echo "  find \"\$PWD/runs/full\" -type f -path '*65452590*' -name loso_zero_shot_models.json -print" >&2
+    echo "Then set CONFIG_DIR to its configuration_0001 directory, or MODELS_JSON to the manifest itself." >&2
+    echo "If checkpoints are stored elsewhere, also set MODEL_DIR to their directory." >&2
+    echo "Use DRY_RUN=1 VENV_DIR=venv312 bash $SCRIPT_DIR/run_cfo_ablations_valence_65452590.sh to verify paths before resubmitting." >&2
+    exit 2
+fi
 if [[ "$DRY_RUN" != 1 ]]; then
     module purge
     module load python/3.12.4

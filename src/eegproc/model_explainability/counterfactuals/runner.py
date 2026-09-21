@@ -204,6 +204,8 @@ def run(args):
     _write_json(
         out / "settings.json",
         {
+            "round_trip_evaluation": "latent_only",
+            "counterfactual_validity_prediction_space": "latent",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "arguments": {
                 k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
@@ -287,14 +289,9 @@ def run(args):
             flush=True,
         )
         for branch, details in summary["decoded_trials"].items():
-            decoded_prediction = details["counterfactual"]
             print(
                 f"Decoded {branch}: MSE_to_x={details['counterfactual_to_original_mse']:.6g} "
-                f"change_MSE={details['decoded_change_mse']:.6g} "
-                f"class={decoded_prediction['predicted_class']} "
-                f"target_p={decoded_prediction['target_probability']:.4f} "
-                f"success={decoded_prediction['success']} "
-                f"reconstruction_preserves_prediction={details['reconstruction_preserves_prediction']}",
+                f"change_MSE={details['decoded_change_mse']:.6g}",
                 flush=True,
             )
             print(
@@ -307,14 +304,6 @@ def run(args):
     aggregate = {
         "n_trials": len(summaries),
         "round_trip_evaluation": summaries[0]["round_trip_evaluation"],
-        "decoded_success_rate": {
-            name: float(np.mean([s["decoded_trials"][name]["counterfactual"]["success"] for s in summaries]))
-            for name in optimizer.decoded_names
-        },
-        "reconstruction_prediction_preservation_rate": {
-            name: float(np.mean([s["decoded_trials"][name]["reconstruction_preserves_prediction"] for s in summaries]))
-            for name in optimizer.decoded_names
-        },
         "latent_success_rate": float(
             np.mean([s["latent_counterfactual"]["success"] for s in summaries])
         ),

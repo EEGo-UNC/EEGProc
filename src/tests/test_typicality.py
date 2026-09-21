@@ -418,10 +418,10 @@ def test_end_to_end_saved_study_and_resume_without_model(
             assert summary["d_z"] == pytest.approx(float(np.sqrt(np.mean(
                 (data["classification_embedding_prime"] - data["classification_embedding"]) ** 2))))
             decoded = summary["decoded_trials"]["joint"]
-            for label, array_name in (("counterfactual", "classification_embedding_reencoded_joint"),
-                                      ("original_reconstruction", "classification_embedding_reconstructed_joint")):
-                assert decoded[label]["discrepancy"] == pytest.approx(region.score(data[array_name])[0], rel=1e-5)
-                assert decoded[label]["typicality_success"] == (decoded[label]["success"] and decoded[label]["typical"])
+            assert "counterfactual" not in decoded
+            assert "original_reconstruction" not in decoded
+            assert not any("reencoded" in key or "embedding_reconstructed" in key for key in data.files)
+            assert summary["counterfactual_validity_prediction_space"] == "latent"
             assert "x_prime_joint" in data.files
         assert (attempt / "trajectory/step_000000.npz").exists()
         assert (attempt / "physiology_counterfactual.npz").exists()
@@ -430,10 +430,13 @@ def test_end_to_end_saved_study_and_resume_without_model(
         assert "moments" not in data.files
         np.testing.assert_allclose(region.score(data["embeddings"]), data["discrepancy"])
     assert result["typicality_definition"] == {"score": SCORE_DEFINITION, "representation": REPRESENTATION}
-    assert result["round_trip_evaluation"] == "full_trial_decoder_encoder_v1"
-    assert all(row["n_round_trip_evaluated"] == 1 for row in result["population"])
-    assert all(row["decoded_target_success_percent"] is not None for row in result["population"])
-    assert "Decoded (\\%)" in (out / "report/tables.tex").read_text()
+    assert result["round_trip_evaluation"] == "latent_only"
+    assert all(row["n_round_trip_evaluated"] == 0 for row in result["population"])
+    assert all(row["decoded_target_success_percent"] is None for row in result["population"])
+    table = (out / "report/tables.tex").read_text()
+    assert "Latent (\\%)" in table
+    assert "Decoded (\\%)" not in table
+    assert all(row["typicality_space"] == "latent" for row in result["subject_typicality"])
     from eegproc.model_explainability.typicality.subject_probe import prepare_probe
     keys, representations, probe_metadata = prepare_probe([out])
     np.testing.assert_array_equal(keys, [[0, 0]])
@@ -486,7 +489,7 @@ def test_end_to_end_saved_study_and_resume_without_model(
             build_report([out, mismatch], tmp_path / "mixed_report")
     saved_protocol = (out / "study.json").read_text()
     legacy_protocol = json.loads(saved_protocol)
-    legacy_protocol.pop("round_trip_evaluation")
+    legacy_protocol["round_trip_evaluation"] = "full_trial_decoder_encoder_v1"
     (out / "study.json").write_text(json.dumps(legacy_protocol))
     with pytest.raises(ValueError, match="protocol changed"):
         study.run(args)
