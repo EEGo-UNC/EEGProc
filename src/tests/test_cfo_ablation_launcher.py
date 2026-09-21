@@ -11,6 +11,7 @@ import pytest
 
 
 SCRIPT = Path(__file__).parents[1] / "eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh"
+VALENCE_SCRIPT = SCRIPT.with_name("run_cfo_ablations_valence_65452590.sh")
 
 
 @pytest.fixture
@@ -38,18 +39,21 @@ def launcher_env(tmp_path):
 
 
 @pytest.mark.parametrize("subject", [0, 22])
-def test_ablation_launcher_matches_subject_manifest_and_parser(launcher_env, subject):
+@pytest.mark.parametrize("script,task,alpha", [(SCRIPT, "arousal", None), (VALENCE_SCRIPT, "valence", 0.49751)])
+def test_ablation_launcher_matches_subject_manifest_and_parser(launcher_env, subject, script, task, alpha):
     from eegproc.model_explainability.typicality.runner import parse_args
 
     launcher_env["SLURM_ARRAY_TASK_ID"] = str(subject)
-    result = subprocess.run(["bash", str(SCRIPT)], env=launcher_env, text=True, capture_output=True)
+    result = subprocess.run(["bash", str(script)], env=launcher_env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert f"heldout_{subject}.keras" in result.stdout
     command = shlex.split(next(line.removeprefix("Command: ") for line in result.stdout.splitlines()
                               if line.startswith("Command: ")))
     args = parse_args(command[3:])
     assert args.subjects == [subject]
-    assert args.task == "arousal"
+    assert args.task == task
+    assert args.fixed_joint_alpha == alpha
+    assert args.model_module.endswith(("SICModelv11" if task == "valence" else "SICModelv15") + ".sic_model")
     assert args.include_target_latent
     assert args.include_typicality_no_physiology
     assert args.trial_ids == [8, 10]
@@ -59,15 +63,33 @@ def test_ablation_launcher_matches_subject_manifest_and_parser(launcher_env, sub
     assert not Path(launcher_env["OUT_ROOT"]).exists()
 
 
-def test_ablation_launcher_rejects_out_of_range_subject(launcher_env):
+@pytest.mark.parametrize("script", [SCRIPT, VALENCE_SCRIPT])
+def test_ablation_launcher_rejects_out_of_range_subject(launcher_env, script):
     launcher_env["SLURM_ARRAY_TASK_ID"] = "23"
-    result = subprocess.run(["bash", str(SCRIPT)], env=launcher_env, text=True, capture_output=True)
+    result = subprocess.run(["bash", str(script)], env=launcher_env, text=True, capture_output=True)
     assert result.returncode == 2
     assert "0-22" in result.stderr
 
 
-def test_ablation_launcher_does_not_overwrite_results(launcher_env):
+@pytest.mark.parametrize("script", [SCRIPT, VALENCE_SCRIPT])
+def test_ablation_launcher_does_not_overwrite_results(launcher_env, script):
     (Path(launcher_env["OUT_ROOT"]) / "fold_00").mkdir(parents=True)
-    result = subprocess.run(["bash", str(SCRIPT)], env=launcher_env, text=True, capture_output=True)
+    result = subprocess.run(["bash", str(script)], env=launcher_env, text=True, capture_output=True)
     assert result.returncode == 2
     assert "output exists" in result.stderr
+
+
+def test_valence_launcher_uses_matching_raw_loader(launcher_env):
+    from eegproc.model_explainability.typicality.runner import parse_args
+
+    raw = Path(launcher_env.pop("TRIALS_NPZ"))
+    launcher_env.update(EEG_PATH=str(raw), LABELS_PATH=str(raw))
+    result = subprocess.run(["bash", str(VALENCE_SCRIPT)], env=launcher_env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    command = shlex.split(next(line.removeprefix("Command: ") for line in result.stdout.splitlines()
+                              if line.startswith("Command: ")))
+    args = parse_args(command[3:])
+    assert args.data_config["label_dimension"] == "valence"
+    assert args.data_config["model_module"] == args.model_module
+    assert args.data_config["window_normalization"] == "global_rms"
+    assert "#SBATCH --array=0-22%4\n" in VALENCE_SCRIPT.read_text()

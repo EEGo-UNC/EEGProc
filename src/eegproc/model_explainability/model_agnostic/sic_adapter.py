@@ -10,6 +10,7 @@ import tensorflow as tf
 
 from .adapter import CounterfactualAdapter, TrialDataset
 from ..counterfactuals.loss import CounterfactualLoss
+from ..counterfactuals.fusion import FrozenJointFusion, validate_fixed_joint_alpha
 
 
 class SICCounterfactualAdapter(CounterfactualAdapter):
@@ -20,11 +21,12 @@ class SICCounterfactualAdapter(CounterfactualAdapter):
     default_state_weight = 0.1
     default_signal_weight = 0.1
 
-    def __init__(self, model, *, decoder_mode: str):
+    def __init__(self, model, *, decoder_mode: str, fixed_joint_alpha=None):
         self.model = model
         self.decoder_mode = str(decoder_mode)
         if self.decoder_mode not in {"branches", "joint"}:
             raise ValueError("decoder_mode must be 'branches' or 'joint'.")
+        self.fixed_joint_alpha = validate_fixed_joint_alpha(fixed_joint_alpha, self.decoder_mode)
         if getattr(model, "classification_level", None) != "trial":
             raise ValueError("The SIC adapter requires a trial-level checkpoint.")
         if not getattr(model, "use_decoder", False):
@@ -38,19 +40,16 @@ class SICCounterfactualAdapter(CounterfactualAdapter):
                 self.branches.append((name, int(getattr(model, f"{name}_feature_dim"))))
         if not self.branches:
             raise ValueError("The SIC checkpoint has no active encoder branches.")
-        if self.decoder_mode == "joint":
-            if {name for name, _ in self.branches} != {"gcn_gru", "bilstm"}:
-                raise ValueError("Joint reconstruction requires both SIC branches.")
-            if not getattr(model, "use_joint_reconstruction", False):
-                raise ValueError("This SIC checkpoint has no joint reconstruction.")
-            if getattr(model, "joint_reconstruction_fusion", None) is None:
-                raise ValueError("The SIC checkpoint is missing its fusion layer.")
+        self.joint_fusion = (
+            FrozenJointFusion(model, [name for name, _ in self.branches], fixed_alpha=self.fixed_joint_alpha)
+            if self.decoder_mode == "joint" else None
+        )
         self._vcsc = CounterfactualLoss()
 
     def restore_lazy_weights(self, model_path: Path, sample_input: np.ndarray) -> None:
         """Build lazy fusion state, then reload so its saved scalar is restored."""
 
-        if self.decoder_mode != "joint":
+        if self.decoder_mode != "joint" or self.fixed_joint_alpha is not None:
             return
         fusion = self.model.joint_reconstruction_fusion
         if fusion.built:
@@ -94,9 +93,7 @@ class SICCounterfactualAdapter(CounterfactualAdapter):
         branches = self._branch_reconstructions(state, reference_input)
         if self.decoder_mode == "branches":
             return branches
-        joint = self.model.joint_reconstruction_fusion(
-            [branches["gcn_gru"], branches["bilstm"]]
-        )
+        joint = self.joint_fusion(branches)
         return {"joint": tf.cast(joint, tf.float32)}
 
     def constraint(self, name, signal):
@@ -114,9 +111,8 @@ class SICCounterfactualAdapter(CounterfactualAdapter):
                 else [name for name, _ in self.branches]
             ),
         }
-        fusion = getattr(self.model, "joint_reconstruction_fusion", None)
-        if fusion is not None and fusion.built:
-            metadata["joint_reconstruction_alpha"] = float(fusion.alpha.numpy())
+        if self.joint_fusion is not None:
+            metadata.update(self.joint_fusion.metadata())
         return metadata
 
 
@@ -129,11 +125,15 @@ def create_sic_adapter(*, model_path, config, sample_input):
             "eegproc.deep_learning.joint_architectures.SICModelv15.sic_model",
         )
     )
-    importlib.import_module(model_module)
-    model = tf.keras.models.load_model(Path(model_path), compile=False, safe_mode=True)
+    module = importlib.import_module(model_module)
+    # v11 and v15 share a registered class name. Honor the requested version
+    # even when both modules have already been imported in this process.
+    with tf.keras.utils.custom_object_scope({"EEGProc>SICModel": module.SICModel}):
+        model = tf.keras.models.load_model(Path(model_path), compile=False, safe_mode=True)
     adapter = SICCounterfactualAdapter(
         model,
         decoder_mode=str(config.get("decoder_mode", "joint")),
+        fixed_joint_alpha=config.get("fixed_joint_alpha"),
     )
     adapter.restore_lazy_weights(Path(model_path), sample_input)
     return adapter

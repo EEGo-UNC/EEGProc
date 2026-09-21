@@ -1,7 +1,8 @@
 # Four CFO ablations: DREAMER arousal, suite 1599318
 
 `run_cfo_ablations_arousal_1599318.sh` uses the suite's saved winner,
-`all_subjects/full_run_v15_arousal_scale64_20260918_155429/configuration_0001`.
+`suite_1599318.before-pull/all_subjects/full_run_v15_arousal_scale64_20260918_155429/configuration_0001`.
+The preserved suite directory uses `.before-pull` (hyphen), not `.before_pull`.
 It loads zero-shot LOSO checkpoints from the manifest and runs these arms in
 one study per subject:
 

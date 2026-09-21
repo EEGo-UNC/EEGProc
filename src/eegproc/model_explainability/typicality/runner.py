@@ -19,6 +19,7 @@ import tensorflow as tf
 from ..model_agnostic.adapter import load_trial_dataset, load_json_mapping
 from ..counterfactuals.arguments import _positive_float, _nonnegative_float, _nonnegative_int, _decay_float
 from ..counterfactuals.optimizer import CounterfactualOptimizer, ROUND_TRIP_EVALUATION
+from ..counterfactuals.fusion import validate_fixed_joint_alpha
 from ..counterfactuals.loss import _VCSC_CHANNELS
 from ..model_agnostic.runner import _metadata_arrays
 from ..model_agnostic.sic_adapter import create_sic_adapter
@@ -54,6 +55,8 @@ def build_parser():
     parser.add_argument("--typicality-quantile", type=_positive_float, default=0.95)
     parser.add_argument("--variance-floor", type=_positive_float, default=1e-6)
     parser.add_argument("--decoder-mode", choices=("branches", "joint"), default="joint")
+    parser.add_argument("--fixed-joint-alpha", type=float,
+                        help="Fixed GCN-GRU reconstruction weight in [0,1]; BiLSTM gets 1-alpha. Joint mode only. Omit to use the saved learned mixer.")
     parser.add_argument("--report-output", choices=("joint", "gcn_gru", "bilstm"), help="Mandatory in branch mode; joint is the default in joint mode.")
     parser.add_argument("--target-probability", type=_positive_float, default=0.8)
     parser.add_argument("--target-loss-component", choices=("confidence", "focal", "vc", "focal_vc"), default="confidence")
@@ -92,6 +95,10 @@ def build_parser():
 def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        args.fixed_joint_alpha = validate_fixed_joint_alpha(args.fixed_joint_alpha, args.decoder_mode)
+    except ValueError as error:
+        parser.error(str(error))
     for name in ("target_probability", "typicality_quantile", "physiology_quantile"):
         if getattr(args, name) >= 1:
             parser.error(f"--{name.replace('_', '-')} must be below 1")
@@ -182,6 +189,7 @@ def _protocol(args, dataset, folds):
     code_files = [
         *code_dir.glob("*.py"),
         package_dir / "counterfactuals" / "optimizer.py",
+        package_dir / "counterfactuals" / "fusion.py",
         package_dir / "counterfactuals" / "loss.py",
         package_dir / "model_agnostic" / "adapter.py",
         package_dir / "model_agnostic" / "runner.py",
@@ -250,7 +258,8 @@ def run_fold(args, dataset, entry, out):
             raise ValueError(f"Requested trial IDs {sorted(set(args.trial_ids))} are absent for subject {subject}")
     source = np.flatnonzero(np.isin(dataset.subject_ids, entry["source_subject_ids"]))
     adapter = create_sic_adapter(model_path=Path(entry["path"]),
-                                 config={"model_module": args.model_module, "decoder_mode": args.decoder_mode},
+                                 config={"model_module": args.model_module, "decoder_mode": args.decoder_mode,
+                                         "fixed_joint_alpha": args.fixed_joint_alpha},
                                  sample_input=dataset.features[held[0]])
     model = adapter.model
     embedding_map = SICTrialEmbedding(model)
@@ -298,7 +307,7 @@ def run_fold(args, dataset, entry, out):
                   min_gradient_norm=args.min_gradient_norm,
                   low_gradient_patience=args.low_gradient_patience,
                   physiological_tolerance=args.physiological_tolerance,
-                  decoder_mode=args.decoder_mode, typicality=region)
+                  decoder_mode=args.decoder_mode, fixed_joint_alpha=args.fixed_joint_alpha, typicality=region)
     # Both arms use identical seeds, frozen models, starts, budgets, and central
     # losses. Base stops at first feasible success; typicality then minimizes D.
     optimizers = {
@@ -356,6 +365,7 @@ def run_fold(args, dataset, entry, out):
                         probabilities=np.stack(predictions), discrepancy=np.asarray(discrepancies), embeddings=np.stack(embeddings))
     write_npz(directory / "observations.npz", **observations)
     fold_info = {"subject_id": subject, "status": "running", "checkpoint": entry,
+                 "reconstruction": adapter.metadata(),
                  "threshold": region.tau, "representation": embedding_map.metadata(),
                  "typicality_definition": SCORE_DEFINITION,
                  "eligible_trial_ids": dataset.trial_ids[eligible].tolist(),

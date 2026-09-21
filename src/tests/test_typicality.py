@@ -319,13 +319,16 @@ def test_typicality_runner_enables_stopping_defaults():
     assert actions["physiological_weight"].default == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("include_target_latent,include_typicality_no_physiology",
-                         [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("include_target_latent,include_typicality_no_physiology,fixed_alpha",
+                         [(False, False, None), (True, False, None), (False, True, None),
+                          (True, True, None), (True, True, 0.49751)])
 def test_end_to_end_saved_study_and_resume_without_model(
-        tmp_path, monkeypatch, include_target_latent, include_typicality_no_physiology):
+        tmp_path, monkeypatch, include_target_latent, include_typicality_no_physiology, fixed_alpha):
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
     from eegproc.model_explainability.typicality import runner as study
+    if fixed_alpha is not None:
+        from eegproc.deep_learning.joint_architectures.SICModelv11.sic_model import build_sic_model
     tf.keras.utils.set_random_seed(17)
     model = build_sic_model(input_shape=(3, 32, 42), adjacency=np.eye(14, dtype=np.float32),
                             classification_level="trial", n_channels=14, n_bands=3, gcn_units=(4,),
@@ -347,6 +350,9 @@ def test_end_to_end_saved_study_and_resume_without_model(
                             "--trial-ids", "0", "--max-steps", "1", "--log-every", "0"])
     args.include_target_latent = include_target_latent
     args.include_typicality_no_physiology = include_typicality_no_physiology
+    if fixed_alpha is not None:
+        args.fixed_joint_alpha = fixed_alpha
+        args.model_module = "eegproc.deep_learning.joint_architectures.SICModelv11.sic_model"
     objectives = ["target_latent", "base", "typicality"] if include_target_latent else ["base", "typicality"]
     if include_typicality_no_physiology:
         objectives.append("typicality_no_physiology")
@@ -355,6 +361,10 @@ def test_end_to_end_saved_study_and_resume_without_model(
     assert [row["objective"] for row in result["population"]] == objectives
     assert all(row["n_eligible"] == row["n_completed"] == 1 for row in result["population"])
     fold = json.loads((out / "subject_0/fold.json").read_text())
+    if fixed_alpha is not None:
+        assert fold["reconstruction"]["joint_reconstruction_alpha"] == fixed_alpha
+        assert fold["reconstruction"]["joint_reconstruction_weight_source"] == "fixed_override"
+        assert json.loads((out / "study.json").read_text())["arguments"]["fixed_joint_alpha"] == fixed_alpha
     if include_target_latent:
         assert fold["objective_losses"]["target_latent"]["decoded_weight"] == 0
         assert fold["objective_losses"]["target_latent"]["physiological_weight"] == 0
@@ -382,6 +392,15 @@ def test_end_to_end_saved_study_and_resume_without_model(
             assert "typicality_sequence_prime" not in data.files
             region = TypicalityRegion.load(out / "subject_0/calibration")
             summary = json.loads((attempt / "result.json").read_text())
+            if fixed_alpha is not None:
+                assert summary["joint_reconstruction_alpha"] == fixed_alpha
+                assert summary["joint_reconstruction_weight_source"] == "fixed_override"
+                from eegproc.model_explainability.counterfactuals.optimizer import CounterfactualOptimizer
+                branch_decoder = CounterfactualOptimizer(model, decoder_mode="branches")
+                for latent_key, output_key in (("z", "x_reconstructed_joint"), ("z_prime", "x_prime_joint")):
+                    branches = branch_decoder._decode(tf.constant(data[latent_key]), tf.constant(data["x"]))
+                    expected = fixed_alpha * branches["gcn_gru"] + (1 - fixed_alpha) * branches["bilstm"]
+                    np.testing.assert_allclose(data[output_key], expected.numpy(), rtol=1e-5, atol=1e-6)
             if objective == "target_latent":
                 for term in ("weighted_decoded", "weighted_physiological", "weighted_typicality"):
                     assert summary["selected_losses"][term] == 0
@@ -442,6 +461,11 @@ def test_end_to_end_saved_study_and_resume_without_model(
     monkeypatch.setattr(study, "create_sic_adapter", forbidden_model_load)
     args.resume = True
     assert study.run(args) == result
+    if fixed_alpha is not None:
+        args.fixed_joint_alpha = 0.4
+        with pytest.raises(ValueError, match="protocol changed"):
+            study.run(args)
+        args.fixed_joint_alpha = fixed_alpha
     extra_objectives = [name for name in objectives if name not in ("base", "typicality")]
     if extra_objectives:
         for objective in extra_objectives:

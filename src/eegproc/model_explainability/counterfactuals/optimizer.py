@@ -13,8 +13,10 @@ import tensorflow as tf
 
 if __package__:
     from .loss import CounterfactualLoss
+    from .fusion import FrozenJointFusion, validate_fixed_joint_alpha
 else:
     from loss import CounterfactualLoss
+    from fusion import FrozenJointFusion, validate_fixed_joint_alpha
 
 
 ROUND_TRIP_EVALUATION = "full_trial_decoder_encoder_v1"
@@ -27,7 +29,7 @@ class CounterfactualOptimizer:
     Its recurrent classifier consumes every timestep of every window, in
     chronological order, followed by its existing VC logits head. In branch
     mode, the two feature sequences are decoded independently. In joint mode,
-    both branch decoders run and the saved model's learned convex fusion
+    both branch decoders run and a frozen learned or explicitly fixed fusion
     produces the sole decoded reconstruction used by the objective.
 
     Adam performs gradient-based updates to z_prime only. Each optimize()
@@ -55,6 +57,7 @@ class CounterfactualOptimizer:
         typicality_improvement_patience=0,
         typicality_min_delta=0.0,
         decoder_mode="branches",
+        fixed_joint_alpha=None,
         typicality=None,
         typicality_weight=0.0,
     ):
@@ -107,6 +110,7 @@ class CounterfactualOptimizer:
         decoder_mode = str(decoder_mode).strip().lower()
         if decoder_mode not in {"branches", "joint"}:
             raise ValueError("decoder_mode must be 'branches' or 'joint'.")
+        self.fixed_joint_alpha = validate_fixed_joint_alpha(fixed_joint_alpha, decoder_mode)
         if getattr(model, "classification_level", None) != "trial":
             raise ValueError(
                 "A full-trial SIC model is required; window/VAE models are not supported."
@@ -123,17 +127,10 @@ class CounterfactualOptimizer:
                 self.branches.append((name, int(getattr(model, f"{name}_feature_dim"))))
         if not self.branches:
             raise ValueError("At least one active encoder/decoder branch is required.")
-        if decoder_mode == "joint":
-            if {name for name, _ in self.branches} != {"gcn_gru", "bilstm"}:
-                raise ValueError(
-                    "Joint decoder mode requires active GCN-GRU and BiLSTM branches."
-                )
-            if not getattr(model, "use_joint_reconstruction", False):
-                raise ValueError(
-                    "Joint decoder mode requires a model trained with joint reconstruction."
-                )
-            if getattr(model, "joint_reconstruction_fusion", None) is None:
-                raise ValueError("Missing joint reconstruction fusion layer.")
+        self.joint_fusion = (
+            FrozenJointFusion(model, [name for name, _ in self.branches], fixed_alpha=self.fixed_joint_alpha)
+            if decoder_mode == "joint" else None
+        )
         if not math.isfinite(typicality_weight) or typicality_weight < 0:
             raise ValueError("typicality_weight must be finite and nonnegative.")
         if typicality_weight > 0 and typicality is None:
@@ -234,16 +231,14 @@ class CounterfactualOptimizer:
         """Return the reconstruction paths selected for the objective.
 
         Joint mode still evaluates both independent decoders, then applies the
-        checkpoint's frozen learned fusion weight. Because the gradient tape
+        frozen learned or explicitly fixed fusion weight. Because the gradient tape
         watches only the counterfactual latent variable, gradients flow through
         the fusion to both latent branches without changing model parameters.
         """
         branches = self._decode_branches(latent, x)
         if self.decoder_mode == "branches":
             return branches
-        joint = self.model.joint_reconstruction_fusion(
-            [branches["gcn_gru"], branches["bilstm"]]
-        )
+        joint = self.joint_fusion(branches)
         tf.debugging.assert_equal(
             tf.shape(joint),
             tf.shape(x),
@@ -672,11 +667,8 @@ class CounterfactualOptimizer:
                 "target_loss_component": self.target_loss_component,
                 "decoder_mode": self.decoder_mode,
                 "decoded_distance_reference": "original_reconstruction",
-                "joint_reconstruction_alpha": (
-                    float(self.model.joint_reconstruction_fusion.alpha.numpy())
-                    if self.decoder_mode == "joint"
-                    else None
-                ),
+                **(self.joint_fusion.metadata() if self.joint_fusion is not None
+                   else {"joint_reconstruction_alpha": None}),
                 "required_target_probability": self.loss.target_probability,
                 "prediction_rule": "argmax",
                 "round_trip_evaluation": ROUND_TRIP_EVALUATION,
