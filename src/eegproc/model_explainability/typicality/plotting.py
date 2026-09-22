@@ -126,12 +126,16 @@ def _power_maps(rows, path, title):
     names, bands = None, None
     for row in rows:
         directory = Path(row["artifact_directory"])
-        with np.load(directory / "physiology_counterfactual.npz", allow_pickle=False) as data:
-            after = data["spectral_power"]
-        with np.load(directory / "physiology_reconstruction.npz", allow_pickle=False) as data:
-            before = data["spectral_power"]
         with np.load(directory / "counterfactual.npz", allow_pickle=False) as data:
             current_names, current_bands = data["channel_names"].tolist(), data["band_names"].tolist()
+            if "physiology_counterfactual_spectral_power" in data.files:
+                after = data["physiology_counterfactual_spectral_power"]
+                before = data["physiology_reconstruction_spectral_power"]
+            else:
+                with np.load(directory / "physiology_counterfactual.npz", allow_pickle=False) as diagnostics:
+                    after = diagnostics["spectral_power"]
+                with np.load(directory / "physiology_reconstruction.npz", allow_pickle=False) as diagnostics:
+                    before = diagnostics["spectral_power"]
         if names is not None and (names != current_names or bands != current_bands):
             raise ValueError("Cannot combine topographies with different channel/band orders")
         names, bands = current_names, current_bands

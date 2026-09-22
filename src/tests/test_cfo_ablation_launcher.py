@@ -34,7 +34,7 @@ def launcher_env(tmp_path):
     env = {key: value for key, value in os.environ.items() if not key.startswith("SLURM_")}
     env.update(PROJECT_DIR=str(project), VENV_DIR=str(venv), MODELS_JSON=str(manifest),
                MODEL_DIR=str(models), TRIALS_NPZ=str(prepared), DRY_RUN="1", RESUME="0",
-               RUN_ID="fixture", OUT_ROOT=str(project / "results"), TRIAL_IDS="8 10")
+               ARTIFACT_MODE="paper", RUN_ID="fixture", OUT_ROOT=str(project / "results"), TRIAL_IDS="8 10")
     return env
 
 
@@ -55,6 +55,7 @@ def test_ablation_launcher_matches_subject_manifest_and_parser(launcher_env, sub
     assert args.fixed_joint_alpha == alpha
     assert args.model_module.endswith(("SICModelv11" if task == "valence" else "SICModelv15") + ".sic_model")
     assert args.include_target_latent
+    assert args.artifact_mode == "paper"
     assert args.include_typicality_no_physiology
     assert args.trial_ids == [8, 10]
     assert args.physiological_weight > 0
@@ -124,3 +125,14 @@ def test_valence_config_dir_override_resolves_relocated_manifest(launcher_env):
     assert command[command.index("--model-dir") + 1] == str(config / "loso_zero_shot_models")
     assert command[command.index("--fixed-joint-alpha") + 1] == "0.49751"
     assert not Path(launcher_env["OUT_ROOT"]).exists()
+
+
+@pytest.mark.parametrize("script", [SCRIPT, VALENCE_SCRIPT])
+def test_ablation_launcher_allows_explicit_full_artifacts(launcher_env, script):
+    from eegproc.model_explainability.typicality.runner import parse_args
+    launcher_env["ARTIFACT_MODE"] = "full"
+    result = subprocess.run(["bash", str(script)], env=launcher_env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    command = shlex.split(next(line.removeprefix("Command: ") for line in result.stdout.splitlines()
+                              if line.startswith("Command: ")))
+    assert parse_args(command[3:]).artifact_mode == "full"

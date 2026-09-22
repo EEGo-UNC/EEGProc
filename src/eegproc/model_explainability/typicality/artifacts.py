@@ -81,9 +81,14 @@ class TrialRecorder:
     variables. Every finite step is still written to the scalar history.
     Completed trials can be reused; unfinished trials retain all attempts.
     Snapshots support analysis, not an automatic mid-trial restart API.
+    Paper mode saves scalar histories and selected trial embeddings, with no
+    snapshots or EEG/full-latent arrays. Full mode preserves the debug archive.
     """
 
-    def __init__(self, directory):
+    def __init__(self, directory, *, artifact_mode="full"):
+        if artifact_mode not in ("paper", "full"):
+            raise ValueError("artifact_mode must be paper or full")
+        self.artifact_mode = artifact_mode
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=False)
         self.handle = (self.directory / "history.jsonl").open("x", encoding="utf-8")
@@ -96,9 +101,10 @@ class TrialRecorder:
         os.fsync(self.handle.fileno())
         self.rows.append(dict(row))
         step = int(row["step"])
-        self.last_snapshot = (step, arrays)
-        if step == 0:
-            self._snapshot(step, arrays)
+        if self.artifact_mode == "full":
+            self.last_snapshot = (step, arrays)
+            if step == 0:
+                self._snapshot(step, arrays)
 
     def _snapshot(self, step, arrays):
         write_npz(self.directory / "trajectory" / f"step_{step:06d}.npz", **arrays)
@@ -113,7 +119,13 @@ class TrialRecorder:
 
     def finish(self, result, metadata, extra_arrays=None):
         self.close()
-        write_npz(self.directory / "counterfactual.npz", **result["arrays"], **(extra_arrays or {}))
+        arrays = result["arrays"]
+        if self.artifact_mode == "paper":
+            # Trial-level embeddings support subject probes without retaining
+            # the much larger window-by-time decoder latents or EEG tensors.
+            arrays = {key: arrays[key] for key in
+                      ("classification_embedding", "classification_embedding_prime")}
+        write_npz(self.directory / "counterfactual.npz", **arrays, **(extra_arrays or {}))
         summary = {**metadata, **result["summary"], "status": "completed"}
         write_json(self.directory / "result.json", summary)
         # The commit marker comes last, after every required artifact is durable.

@@ -278,7 +278,8 @@ class CounterfactualOptimizer:
             terms["total"] = terms["total"] + terms["weighted_typicality"]
         return terms, decoded
 
-    def optimize(self, inputs, *, target_class=None, progress=None, state_progress=None):
+    def optimize(self, inputs, *, target_class=None, progress=None, state_progress=None,
+                 record_state_arrays=True):
         """Return scalar history, a summary, and original/counterfactual arrays.
 
         inputs is one preprocessed trial: (W,T,F) or (1,W,T,F), not a batch
@@ -294,6 +295,8 @@ class CounterfactualOptimizer:
 
         state_progress(row, arrays) optionally receives every finite iterate,
         full decoded arrays, raw gradient and Adam state for streamed archival.
+        With record_state_arrays=False it receives the same scalars and an
+        empty array mapping; tensor snapshots are not copied to host memory.
         The typicality arm first reaches target and physiological feasibility,
         then minimizes normalized D while retaining those constraints. Target
         success and typicality are evaluated on the optimized latent features.
@@ -494,7 +497,7 @@ class CounterfactualOptimizer:
                     **{f"x_prime_{name}": value.numpy() for name, value in current_decoded.items()},
                     "optimizer_variable_names": np.asarray([v.name for v in descent.variables]),
                     **{f"optimizer_{i}": value.numpy() for i, value in enumerate(descent.variables)},
-                })
+                } if record_state_arrays else {})
             if not finite_gradient:
                 stop_reason = "non_finite_gradient"
                 break

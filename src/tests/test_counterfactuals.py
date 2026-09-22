@@ -390,3 +390,20 @@ def test_runner_saves_latent_success_without_decoded_predictions(tiny_joint_mode
     assert (out / "subject_0_trial_0/counterfactual.npz").is_file()
     settings = json.loads((out / "settings.json").read_text())
     assert settings["counterfactual_validity_prediction_space"] == "latent"
+
+
+def test_scalar_only_recording_preserves_optimizer_result(tiny_joint_model):
+    inputs = tf.constant(np.random.default_rng(31).normal(size=(1, 2, 4, 42)), tf.float32)
+    optimizer = CounterfactualOptimizer(tiny_joint_model, max_steps=2, decoder_mode="joint")
+    full_states, paper_states = [], []
+    full = optimizer.optimize(inputs, state_progress=lambda row, arrays: full_states.append((row, arrays)))
+    paper = optimizer.optimize(inputs, record_state_arrays=False,
+                               state_progress=lambda row, arrays: paper_states.append((row, arrays)))
+    assert full_states and all(arrays for _, arrays in full_states)
+    assert paper_states and all(arrays == {} for _, arrays in paper_states)
+    assert [row for row, _ in full_states] == [row for row, _ in paper_states]
+    assert full["history"] == paper["history"]
+    assert {k: v for k, v in full["summary"].items() if k != "elapsed_seconds"} == {
+        k: v for k, v in paper["summary"].items() if k != "elapsed_seconds"}
+    for name, array in full["arrays"].items():
+        np.testing.assert_array_equal(array, paper["arrays"][name])

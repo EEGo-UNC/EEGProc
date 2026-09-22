@@ -312,6 +312,7 @@ def test_typicality_runner_enables_stopping_defaults():
     assert actions["typicality_representation"].default == REPRESENTATION
     assert actions["typicality_representation"].choices == (REPRESENTATION,)
     assert actions["stop_on_success"].default is True
+    assert actions["artifact_mode"].default == "paper"
     assert actions["min_gradient_norm"].default == pytest.approx(1e-6)
     assert actions["low_gradient_patience"].default == 5
     assert actions["typicality_improvement_patience"].default == 10
@@ -319,11 +320,12 @@ def test_typicality_runner_enables_stopping_defaults():
     assert actions["physiological_weight"].default == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("include_target_latent,include_typicality_no_physiology,fixed_alpha",
-                         [(False, False, None), (True, False, None), (False, True, None),
-                          (True, True, None), (True, True, 0.49751)])
+@pytest.mark.parametrize("include_target_latent,include_typicality_no_physiology,fixed_alpha,artifact_mode",
+                         [(False, False, None, "full"), (True, False, None, "full"), (False, True, None, "full"),
+                          (True, True, None, "full"), (True, True, 0.49751, "full"),
+                          (True, True, None, "paper"), (True, True, 0.49751, "paper")])
 def test_end_to_end_saved_study_and_resume_without_model(
-        tmp_path, monkeypatch, include_target_latent, include_typicality_no_physiology, fixed_alpha):
+        tmp_path, monkeypatch, include_target_latent, include_typicality_no_physiology, fixed_alpha, artifact_mode):
     tf = pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
     from eegproc.model_explainability.typicality import runner as study
@@ -346,7 +348,7 @@ def test_end_to_end_saved_study_and_resume_without_model(
                         trial_ids=[0, 1, 0, 1, 0, 1], labels=[0, 0, 1, 1, 1, 1])
     out = tmp_path / "study"
     args = study.parse_args(["--models-json", str(manifest), "--task", "valence", "--trials-npz", str(data_path),
-                            "--out-dir", str(out),
+                            "--out-dir", str(out), "--artifact-mode", artifact_mode,
                             "--trial-ids", "0", "--max-steps", "1", "--log-every", "0"])
     args.include_target_latent = include_target_latent
     args.include_typicality_no_physiology = include_typicality_no_physiology
@@ -382,7 +384,11 @@ def test_end_to_end_saved_study_and_resume_without_model(
         np.testing.assert_array_equal(data["subject_ids"], [1, 1, 2, 2])
         np.testing.assert_array_equal(data["trial_ids"], [0, 1, 0, 1])
         assert "labels" not in data.files
-        assert data["reference_coherence"].shape[0] == 4
+        if artifact_mode == "full":
+            assert data["reference_coherence"].shape[0] == 4
+        else:
+            assert "reference_coherence" not in data.files
+            assert "reference_dwpli_squared" not in data.files
     for objective in objectives:
         attempt = completed_attempt(out / "subject_0/trial_0" / objective)
         assert attempt is not None
@@ -395,12 +401,13 @@ def test_end_to_end_saved_study_and_resume_without_model(
             if fixed_alpha is not None:
                 assert summary["joint_reconstruction_alpha"] == fixed_alpha
                 assert summary["joint_reconstruction_weight_source"] == "fixed_override"
-                from eegproc.model_explainability.counterfactuals.optimizer import CounterfactualOptimizer
-                branch_decoder = CounterfactualOptimizer(model, decoder_mode="branches")
-                for latent_key, output_key in (("z", "x_reconstructed_joint"), ("z_prime", "x_prime_joint")):
-                    branches = branch_decoder._decode(tf.constant(data[latent_key]), tf.constant(data["x"]))
-                    expected = fixed_alpha * branches["gcn_gru"] + (1 - fixed_alpha) * branches["bilstm"]
-                    np.testing.assert_allclose(data[output_key], expected.numpy(), rtol=1e-5, atol=1e-6)
+                if artifact_mode == "full":
+                    from eegproc.model_explainability.counterfactuals.optimizer import CounterfactualOptimizer
+                    branch_decoder = CounterfactualOptimizer(model, decoder_mode="branches")
+                    for latent_key, output_key in (("z", "x_reconstructed_joint"), ("z_prime", "x_prime_joint")):
+                        branches = branch_decoder._decode(tf.constant(data[latent_key]), tf.constant(data["x"]))
+                        expected = fixed_alpha * branches["gcn_gru"] + (1 - fixed_alpha) * branches["bilstm"]
+                        np.testing.assert_allclose(data[output_key], expected.numpy(), rtol=1e-5, atol=1e-6)
             if objective == "target_latent":
                 for term in ("weighted_decoded", "weighted_physiological", "weighted_typicality"):
                     assert summary["selected_losses"][term] == 0
@@ -422,13 +429,26 @@ def test_end_to_end_saved_study_and_resume_without_model(
             assert "original_reconstruction" not in decoded
             assert not any("reencoded" in key or "embedding_reconstructed" in key for key in data.files)
             assert summary["counterfactual_validity_prediction_space"] == "latent"
-            assert "x_prime_joint" in data.files
-        assert (attempt / "trajectory/step_000000.npz").exists()
-        assert (attempt / "physiology_counterfactual.npz").exists()
+            assert ("x_prime_joint" in data.files) == (artifact_mode == "full")
+            if artifact_mode == "paper":
+                assert not {"x", "z", "z_prime", "x_reconstructed_joint"}.intersection(data.files)
+                assert not any(key.endswith("_psd") or key.startswith("optimizer_") for key in data.files)
+                assert data["physiology_counterfactual_spectral_power"].shape == (14, 3)
+        assert (attempt / "trajectory/step_000000.npz").exists() == (artifact_mode == "full")
+        assert (attempt / "physiology_counterfactual.npz").exists() == (artifact_mode == "full")
+        if artifact_mode == "paper":
+            assert list(attempt.rglob("*.npz")) == [attempt / "counterfactual.npz"]
     with np.load(out / "subject_0/calibration/source_trials.npz", allow_pickle=False) as data:
-        assert data["embeddings"].shape == (4, 8)
         assert "moments" not in data.files
-        np.testing.assert_allclose(region.score(data["embeddings"]), data["discrepancy"])
+        if artifact_mode == "full":
+            assert data["embeddings"].shape == (4, 8)
+            np.testing.assert_allclose(region.score(data["embeddings"]), data["discrepancy"])
+        else:
+            assert "embeddings" not in data.files
+    if artifact_mode == "paper":
+        assert not list(out.rglob("observed.npz"))
+        with np.load(out / "subject_0/calibration/physiology.npz", allow_pickle=False) as data:
+            assert not any(key.startswith("source_") for key in data.files)
     assert result["typicality_definition"] == {"score": SCORE_DEFINITION, "representation": REPRESENTATION}
     assert result["round_trip_evaluation"] == "latent_only"
     assert all(row["n_round_trip_evaluated"] == 0 for row in result["population"])
@@ -555,3 +575,33 @@ def test_reports_reject_mixing_legacy_kl_and_mahalanobis(tmp_path):
     for builder in (build_report, build_class_typicality_audit):
         with pytest.raises(ValueError, match="incompatible typicality"):
             builder([old, new], tmp_path / "report")
+
+
+def test_paper_recorder_keeps_only_small_endpoints_and_verifies_resume(tmp_path):
+    result = {"summary": {"selected_step": 0}, "arrays": {
+        "x": np.ones((1, 60, 128, 42), dtype=np.float32),
+        "z": np.ones((1, 60, 128, 64), dtype=np.float32),
+        "z_prime": np.ones((1, 60, 128, 64), dtype=np.float32),
+        "classification_embedding": np.zeros((1, 8)),
+        "classification_embedding_prime": np.ones((1, 8)),
+    }}
+    arm = tmp_path / "arm"
+    recorder = TrialRecorder(arm / "attempt_0001", artifact_mode="paper")
+    recorder.record({"step": 0, "target_probability": 0.3}, result["arrays"])
+    recorder.fail(ValueError("interrupted"), {})
+    assert completed_attempt(arm) is None
+    assert not list(recorder.directory.rglob("*.npz"))
+    recorder = TrialRecorder(arm / "attempt_0002", artifact_mode="paper")
+    for step in range(2):
+        recorder.record({"step": step, "target_probability": 0.3}, result["arrays"])
+    recorder.finish(result, {"artifact_mode": "paper"})
+    assert not (recorder.directory / "trajectory").exists()
+    assert completed_attempt(arm) == recorder.directory
+    path = recorder.directory / "counterfactual.npz"
+    with np.load(path, allow_pickle=False) as data:
+        assert set(data.files) == {"classification_embedding", "classification_embedding_prime"}
+        np.testing.assert_array_equal(data["classification_embedding_prime"], result["arrays"]["classification_embedding_prime"])
+    assert path.stat().st_size < 4096
+    path.write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="changed"):
+        completed_attempt(arm)

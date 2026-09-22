@@ -169,66 +169,78 @@ Concurrent jobs should use separate output directories.
 
 ## What is saved
 
+The default `--artifact-mode paper` preserves paper results without saving
+large EEG tensors, decoder latent sequences, gradients, Adam state, PSDs, or
+per-source connectivity/physiology arrays. Optimization, candidate selection,
+calibration, and numerical precision are identical to `--artifact-mode full`.
+Both four-arm Slurm launchers default to paper mode; `ARTIFACT_MODE=full`
+explicitly restores the debugging archive.
+
 ```text
-study.json                       protocol, checkpoint/data/code hashes, fold membership
-environment.json                 versions, command, source revision
+study.json                       protocol, checkpoint/data/code hashes, artifact mode
+environment.json                versions, command, source revision
 subject_<id>/
   fold.json                      threshold, eligibility, recognition metrics, status
-  observations.npz               all held-out predictions, full-trial embeddings, discrepancies
+  observations.npz               held-out predictions, trial embeddings, discrepancies
   calibration/
-    region.json + region.npz      Mahalanobis definition, learned Gaussian, epsilon, tau
-    source_trials.npz            source IDs, labels, full-trial embeddings, scores, learned priors
-    representation.json          full-trial mapping and coordinate-space definition
-    vcsc.npz                    held-out R(Z0) VCSC calibration and measurements
-    physiology.npz              source descriptors and empirical check bounds
-  trial_<id>/
-    observed.npz                original input, decoder latent, classification embedding, predictions
-    base/attempt_0001/           same structure for typicality/attempt_0001/
-      history.jsonl + history.csv  every finite evaluated step, starting at step 0
-      trajectory/step_000000.npz first latent/VC/decoded/gradient/optimizer state
-      trajectory/step_<final>.npz final latent/VC/decoded/gradient/optimizer state
-      counterfactual.npz         original and selected endpoint arrays + metadata
-      result.json               outcomes, selected step, losses, errors, timing
-      physiology_*.npz          original/reconstruction/counterfactual PSDs and checks
-      physiology.json           per-family checks and missing-check reasons
-      complete.json             hashes of committed trial artifacts
-report/                          CSV tables, distributions, example selection, tables.tex
+    region.json + region.npz     learned target prior, threshold, source provenance
+    source_trials.npz            source IDs, labels, probabilities, discrepancies
+    representation.json         full-trial coordinate-space definition
+    vcsc.npz                    source-real-EEG calibration means/scales and trial IDs
+    physiology.npz              empirical per-component lower/upper bounds
+    storage.json                calibration storage mode, source IDs, check settings
+  trial_<id>/<objective>/attempt_0001/
+    history.jsonl + history.csv  scalar history at every finite evaluated step
+    counterfactual.npz           SMALL trial embeddings, physiology features, metadata
+    result.json                 selected endpoint outcomes, losses, errors, timing
+    physiology.json             per-family checks and missing-check reasons
+    complete.json               hashes of committed attempt artifacts
+report/                          all-arm CSV tables, distributions, tables.tex, results.json
 ```
 
-Step `s` precedes update `s+1`; the Adam slots reflect `s` completed updates.
-History includes latent probabilities, loss components and weights, discrepancy,
-threshold, gradient norm, learning rate, decoded distances, and displacements.
-Endpoint predictions and typicality use the optimized classification embedding.
-`decoded_trials.<path>` stores signal-distance and physiology diagnostics only.
-The selected best step is distinct from the last evaluated step. `d_z` now
-measures full-trial embedding RMSE; `decoder_latent_rmse` continues to measure
-all optimized encoder coordinates. `observations.npz` and `source_trials.npz`
-store `(N, d)` arrays named `embeddings`. Each trial's `observed.npz` stores
-`classification_embedding` with shape `(1, d)`. Counterfactual endpoints store
-`classification_embedding` and `classification_embedding_prime`, alongside
-baseline reconstructions and decoded counterfactual signals.
-No artificial sequence axis or window moments are saved.
+Each `counterfactual.npz` belongs to **one subject/trial/ablation arm**.
+It retains `classification_embedding` and `classification_embedding_prime`
+for subject probes, plus channel/band metadata and the original, baseline,
+and selected-counterfactual amplitude, spectral power, RMS, coherence, and
+signed debiased-wPLI-squared features. Diagnostic keys have the form
+`physiology_<original|reconstruction|counterfactual>_<feature>`; unavailable
+aperiodic components remain NaN, never converted into passing values.
+The source score archive retains the inputs used by the class-awareness audit.
+No source embeddings are needed for that audit.
 
-New studies declare `round_trip_evaluation=latent_only`. Resume rejects earlier
-round-trip manifests because their evaluation protocol differs. Historical
-reports remain readable under their recorded protocol and cannot be pooled
-with new latent-only studies. Use a new output directory for new runs.
-The class-awareness audit and subject probe inspect optimized latent representations.
+Paper mode writes one small NPZ per completed arm (four per eligible trial)
+and five compact NPZs per fold. The aggregate `trial_metrics.csv`,
+`population_counterfactuals.csv`, and `subject_counterfactuals.csv` distinguish
+all arms using their `objective` column. The existing typicality plotting,
+subject probe, and class-awareness tools accept these compact archives.
+Scalp power maps use saved endpoint features; trajectories use scalar history.
 
-Scalars are flushed every step to `history.jsonl` and collected into
-`history.csv` when the attempt closes. Each row includes target probability,
-every raw and weighted loss component, total loss, discrepancy, learning rate,
-gradient norm, latent probabilities, and displacement metrics. Full tensor
-snapshots are saved only for step 0 and the last finite step. The selected
-endpoint is saved separately in `counterfactual.npz`. Files remain readable
-with `np.load(..., allow_pickle=False)`.
+`full` additionally saves `trial_<id>/observed.npz`, source embeddings and
+per-source descriptors, the initial/final tensor snapshots in `trajectory/`,
+three separate `physiology_*.npz` files including PSDs, and input/decoded EEG
+and full latents in each endpoint NPZ. Those data are unnecessary for the
+standard report. Paper mode cannot support arbitrary new waveform, PSD, or
+full-latent analyses; regenerate selected trials in full mode if needed.
 
-`--resume` verifies completed trial artifacts and reuses them. A fully completed
-fold skips model loading. Interrupted/error trials receive new attempt
-directories. Partial folds may repeat their calibration/observation inference;
-there is no automatic mid-trial restart from Adam snapshots. Changes to data,
-checkpoint, protocol, or recorded source hashes cause resume to refuse mixing
-incompatible results.
+Step `s` precedes update `s+1`. Histories retain probabilities, every raw and
+weighted loss, discrepancy, threshold, gradient norm, learning rate, and
+displacements. Endpoint features always describe the **selected best step**,
+which can precede the final evaluated step. `d_z` is full-trial embedding
+RMSE; `decoder_latent_rmse` measures all optimized encoder coordinates.
+No automatic restart from Adam snapshots is implemented in either mode.
+
+`--resume` verifies and skips completed attempts; incomplete attempts restart
+in new directories. A completed fold skips model loading. Use the same code,
+data, checkpoint, options, and output root for resume. Changing artifact mode
+or installing this change alters the recorded protocol/code hashes, so start
+updated runs in new output directories. Existing archives are not deleted or
+converted automatically; their reports remain readable. Keep the old code
+if you need to finish an old archive in place.
+
+New studies retain `round_trip_evaluation=latent_only`: target success and
+typicality use the optimized classification embedding. Decoded signals supply
+distance and physiology measurements and are never re-encoded. Historical
+round-trip studies remain readable and must be reported separately.
 
 ## Offline class-1 awareness and subject-invariance audit
 

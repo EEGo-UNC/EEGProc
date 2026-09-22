@@ -135,6 +135,7 @@ PY
 fi
 
 COMMAND=("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runner
+    --artifact-mode "${ARTIFACT_MODE:-paper}"
     --models-json "$MODELS_JSON" --model-dir "$MODEL_DIR"
     --model-module eegproc.deep_learning.joint_architectures.SICModelv15.sic_model
     "${DATA_ARGUMENTS[@]}" --task arousal --subjects "$SUBJECT_ID"
@@ -175,6 +176,7 @@ if [[ "$RESUME" == 1 ]]; then COMMAND+=(--resume); fi
 echo "Suite 1599318 / configuration 0001 / arousal / subject $SUBJECT_ID"
 echo "Arms: target_latent, base (full without typicality), typicality (full), typicality_no_physiology"
 echo "Output: $OUT_DIR"
+echo "Artifacts: ${ARTIFACT_MODE:-paper} (paper omits EEG, full latents, PSDs and optimizer snapshots)"
 if [[ "$DRY_RUN" == 1 ]]; then
     printf 'Command: '; printf '%q ' "${COMMAND[@]}"; printf '\n'
     exit 0
@@ -204,9 +206,9 @@ export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_cuda_data_dir=${LIBDEVICE_P
 "$VENV_DIR/bin/python" - <<'PY'
 import tensorflow as tf
 from eegproc.model_explainability.typicality.runner import build_parser
-required = {"include_target_latent", "include_typicality_no_physiology"}
+required = {"include_target_latent", "include_typicality_no_physiology", "artifact_mode"}
 if not required.issubset({action.dest for action in build_parser()._actions}):
-    raise SystemExit("ERROR: sync the runner and results updates for the four-arm ablation before submitting")
+    raise SystemExit("ERROR: sync the paper-artifact runner updates before submitting")
 if len(tf.config.list_physical_devices("GPU")) != 1:
     raise SystemExit("ERROR: expected exactly one visible GPU")
 with tf.device("/GPU:0"):

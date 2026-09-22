@@ -147,6 +147,7 @@ PY
 fi
 
 COMMAND=("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runner
+    --artifact-mode "${ARTIFACT_MODE:-paper}"
     --models-json "$MODELS_JSON" --model-dir "$MODEL_DIR"
     --model-module eegproc.deep_learning.joint_architectures.SICModelv11.sic_model
     "${DATA_ARGUMENTS[@]}" --task valence --subjects "$SUBJECT_ID"
@@ -189,6 +190,7 @@ echo "Suite 65452590 / configuration 0001 / valence / subject $SUBJECT_ID"
 echo "Arms: target_latent, base (full without typicality), typicality (full), typicality_no_physiology"
 echo "Fixed reconstruction weights from arousal suite 1599318: GCN-GRU=0.49751, BiLSTM=0.50249"
 echo "Output: $OUT_DIR"
+echo "Artifacts: ${ARTIFACT_MODE:-paper} (paper omits EEG, full latents, PSDs and optimizer snapshots)"
 if [[ "$DRY_RUN" == 1 ]]; then
     printf 'Command: '; printf '%q ' "${COMMAND[@]}"; printf '\n'
     exit 0

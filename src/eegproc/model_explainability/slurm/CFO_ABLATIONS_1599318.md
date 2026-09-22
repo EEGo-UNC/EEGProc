@@ -115,3 +115,24 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.results \
 Set `OUT_ROOT` to the completed array's directory first. Confirm all requested
 folds are present before combining; the reporting command only knows about
 the fold directories supplied to it.
+
+## Storage for paper runs
+
+Both arousal and valence launchers now use `ARTIFACT_MODE=paper` by default.
+The optimizer still evaluates all four arms and every diagnostic. It saves
+scalar histories, complete JSON summaries, compact endpoint features and
+trial embeddings, calibration parameters, and source score metadata. It does
+not save raw/decoded EEG, window-by-time latents, gradients, Adam snapshots,
+PSDs, or per-source connectivity arrays. There is one small endpoint NPZ per
+trial/arm, not a single NPZ containing all ablations. All-arm comparisons are
+in the report CSVs and `tables.tex`.
+
+Use a **new OUT_ROOT** after installing this change. Old archives retain code
+and protocol hashes and cannot be resumed by the changed runner. No existing
+outputs are automatically removed. Completed results remain readable by the
+reporting tools. `ARTIFACT_MODE=full` is available for selected trials requiring
+waveform or other signal-based follow-up analyses.
+
+Within a paper-mode run, `RESUME=1 OUT_ROOT=...` still verifies/skips completed
+attempts and restarts incomplete attempts. Changing storage mode does not
+change optimization settings, selected candidates, or numerical precision.
