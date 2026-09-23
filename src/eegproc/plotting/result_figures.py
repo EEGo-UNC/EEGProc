@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, roc_auc_score
+from sklearn.metrics import confusion_matrix
 
 from .results_io import class_probability_columns
 
@@ -233,16 +233,11 @@ def plot_per_subject_accuracy(
     metric: str = "accuracy",
     subject_labels: dict | None = None,
     ax=None,
-    *,
-    predictions: pd.DataFrame | None = None,
 ):
     """Per-subject score as a line, ordered by subject, with the cohort mean drawn.
 
     Subjects are plotted in subject-id order (not sorted by score) so the x-axis is
     stable and comparable across models/metrics.
-    When predictions with ``p_class_1`` are supplied, overlay binary AUROC
-    from the class-1 probabilities for each subject. AUROC is undefined
-    without both classes; undefined values appear as gaps.
     """
     user_metrics = _filter_model(user_metrics, model)
 
@@ -258,43 +253,23 @@ def plot_per_subject_accuracy(
 
     fig, ax = _resolve_ax(ax)
     x = np.arange(len(per_subject))
-    ax.plot(
-        x, per_subject.to_numpy(), marker="o", color="#55A868", linewidth=1.5,
-        alpha=1.0, zorder=3,
-        label=_metric_label(metric),
-    )
-
-    score_values = [per_subject.to_numpy()]
-    if predictions is not None:
-        predictions = _filter_model(predictions, model)
-    has_predictions = predictions is not None and not predictions.empty
-    if has_predictions:
-        if "p_class_1" in predictions:
-            auroc = pd.Series(np.nan, index=per_subject.index, dtype=float)
-            for subject_id, group in predictions.groupby("subject_id"):
-                group = group.dropna(subset=["y_true", "p_class_1"])
-                if subject_id in auroc.index and set(group["y_true"].unique()) == {0, 1}:
-                    auroc.loc[subject_id] = roc_auc_score(group["y_true"], group["p_class_1"])
-            ax.plot(
-                x, auroc.to_numpy(), marker="o", color="#778493", alpha=0.5,
-                linewidth=1.5, label="AUROC",
-            )
-            score_values.append(auroc.to_numpy())
+    ax.plot(x, per_subject.to_numpy(), marker="o", color="#55A868", linewidth=1.5)
 
     mean_value = float(per_subject.mean())
     ax.axhline(
         mean_value,
-        color="#666666",
+        color="#C44E52",
         linestyle="--",
         linewidth=1.5,
-        label=f"Mean {metric.replace('_', ' ')} = {mean_value:.4f}",
+        label=f"mean = {mean_value:.4f}",
     )
 
     ax.set_xticks(x)
     ax.set_xticklabels(index, rotation=45, ha="right")
-    _score_limits(ax, np.concatenate(score_values))
+    _score_limits(ax, per_subject.to_numpy())
     ax.set_xlabel("Subject")
-    ax.set_ylabel("Score" if has_predictions else _metric_label(metric))
+    ax.set_ylabel(_metric_label(metric))
+    ax.set_title(f"Per-subject {metric.replace('_', ' ')}")
     ax.legend(loc="lower left", fontsize=9)
     ax.grid(True, linewidth=0.5, alpha=0.4)
     return fig

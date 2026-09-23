@@ -4,8 +4,7 @@ This is the deliverable entry point. Given a result JSON written by
 legacy CV or SIC calibration runs, it produces, per model:
 
 * **Fig 1 - Headline**: confusion matrix | outer-fold metric summary.
-* **Fig 2 - Subjects**: per-subject primary metric and AUROC |
-  per-subject/per-task heatmap
+* **Fig 2 - Subjects**: per-subject accuracy | per-subject/per-task heatmap
   (the heatmap is included only when ``task_id`` was logged).
 * **Fig 3 - Hyperparameters**: an inner-CV sweep over the hyperparameter(s) that
   actually varied (auto-detected, or chosen with ``--hyperparams``).
@@ -16,8 +15,6 @@ When the JSON holds more than one model, an extra **model_comparison** figure
 compares the models' accuracies (or ``--compare-metrics``) side by side.
 
 plus a paper-ready mean +/- std metrics table (CSV, LaTeX, Markdown).
-Use ``--subjects-only`` to write only the participant-breakdown figures.
-Add ``--metric balanced_accuracy`` for balanced accuracy and AUROC.
 
 SIC defaults to strict zero-shot on all trials. Use ``--stage post_calibration
 --calibration-shots 6`` for a calibrated report or ``--stage zero_shot_paired
@@ -133,12 +130,12 @@ def _subject_figure(tables: ResultsTables, model: str, metric: str):
     axes = axes if include_tasks else [axes]
 
     rf.plot_per_subject_accuracy(
-        tables.user_metrics, model=model, metric=metric, subject_labels=subject_labels, ax=axes[0],
-        predictions=model_predictions,
+        tables.user_metrics, model=model, metric=metric, subject_labels=subject_labels, ax=axes[0]
     )
     if include_tasks:
         rf.plot_subject_task_heatmap(tables.predictions, model=model, ax=axes[1])
 
+    fig.suptitle(f"{model} - subject breakdown\n{_evaluation_label(tables)}", fontsize=13)
     return fig
 
 
@@ -277,7 +274,6 @@ def build_report(
     dpi: int = 300,
     stage: str = "zero_shot_all_trials",
     calibration_shots: int | None = None,
-    subjects_only: bool = False,
 ) -> list[Path]:
     """Generate the figure set + metrics table for every model in a result JSON.
 
@@ -287,7 +283,6 @@ def build_report(
     SIC reports select strict zero-shot by default; calibration stages require
     an explicit shot count. Each SIC evaluation gets its own output subfolder.
     Headline means/stds use the saved summaries, never pooled predictions.
-    With ``subjects_only=True``, write only Fig 2, without tables or metadata.
     Returns every figure path written, including all requested formats.
     """
     tables = load_results(results_path, stage=stage, calibration_shots=calibration_shots)
@@ -326,7 +321,7 @@ def build_report(
             if not selected.empty:
                 print(f"[{model}] saved {tables.aggregation_unit}-mean {metric}={selected.iloc[0]['mean']:.8f}")
 
-        if not subjects_only and (not predictions.empty or not folds.empty or not summary.empty):
+        if not predictions.empty or not folds.empty or not summary.empty:
             fig = _headline_figure(tables, model, class_names, metric)
             written.extend(_save(fig, out_dir, f"{prefix}_fig1_headline", formats, dpi))
 
@@ -335,9 +330,6 @@ def build_report(
             written.extend(_save(fig, out_dir, f"{prefix}_fig2_subjects", formats, dpi))
         else:
             print(f"[{model}] no per-subject {metric} values; skipping Fig 2.")
-
-        if subjects_only:
-            continue
 
         model_inner = tables.inner_cv[tables.inner_cv["model"] == model] if not tables.inner_cv.empty else tables.inner_cv
         params = hyperparams or _varying_hyperparameters(model_inner)
@@ -351,10 +343,6 @@ def build_report(
         if not predictions.empty and has_probabilities:
             fig = _reliability_figure(tables, model)
             written.extend(_save(fig, out_dir, f"{prefix}_fig4_reliability", formats, dpi))
-
-    if subjects_only:
-        print(f"Wrote {len(written)} participant-breakdown figure files to {out_dir}/")
-        return written
 
     if len(tables.models) > 1 and not tables.fold_metrics.empty:
         fig = rf.plot_model_comparison(tables.fold_metrics, metrics=compare_metrics or (metric,))
@@ -397,8 +385,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Turn CV result JSON into report figures + table.")
     parser.add_argument("--results", required=True, help="Path to the CV result JSON.")
     parser.add_argument("--out", default="figures", help="Output directory for figures/tables.")
-    parser.add_argument("--subjects-only", action="store_true",
-                        help="Write only participant-breakdown figures, without other figures or tables.")
     parser.add_argument("--class-names", default=None, help="Comma-separated class display names.")
     parser.add_argument(
         "--hyperparams",
@@ -431,7 +417,6 @@ def main() -> None:
         dpi=args.dpi,
         stage=args.stage,
         calibration_shots=args.calibration_shots,
-        subjects_only=args.subjects_only,
     )
 
 
