@@ -176,7 +176,7 @@ echo "CUDA XLA root: $CUDA_XLA_ROOT"
 echo "CUDA libdevice: $LIBDEVICE_PATH"
 
 # Exercise the exact GPU operation that failed during Keras deserialization,
-# before the runner writes its large input archive.
+# before the runner starts optimization.
 "$VENV_DIR/bin/python" - <<'PY'
 import tensorflow as tf
 

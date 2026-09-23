@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import roc_auc_score
 
-from .artifacts import write_json, write_csv, write_npz
+from .artifacts import write_json, write_csv, read_summary
 
 
 def compatible_typicality_definition(roots):
@@ -132,13 +132,13 @@ def collect_study(root):
         folds.append({"task": task, "subject_id": subject, "status": fold["status"],
                       "n_eligible": len(fold["eligible_trial_ids"]), "threshold": fold["threshold"]})
         recognition.append({"task": task, "subject_id": subject, **fold["recognition"]})
-        with np.load(fold_dir / "observations.npz", allow_pickle=False) as data:
-            for i, trial in enumerate(data["trial_ids"]):
-                observed.append({"task": task, "subject_id": subject, "trial_id": int(trial),
-                                 "representation": f"observed_class_{data['labels'][i]}",
-                                 "discrepancy": float(data["discrepancy"][i]),
-                                 "threshold": fold["threshold"],
-                                 "correct": bool(data["probabilities"][i].argmax() == data["labels"][i])})
+        data = read_summary(fold_dir / "observations.json")
+        for i, trial in enumerate(data["trial_ids"]):
+            observed.append({"task": task, "subject_id": subject, "trial_id": int(trial),
+                             "representation": f"observed_class_{data['labels'][i]}",
+                             "discrepancy": float(data["discrepancy"][i]),
+                             "threshold": fold["threshold"],
+                             "correct": bool(data["probabilities"][i].argmax() == data["labels"][i])})
         for trial in fold["eligible_trial_ids"]:
             for objective in study.get("objectives", ["base", "typicality"]):
                 record = {"task": task, "subject_id": subject, "trial_id": trial,

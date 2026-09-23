@@ -1,4 +1,4 @@
-"""Offline subject probe with matched, disjoint trial splits and saved fits.
+"""Historical-archive subject probe with matched, disjoint trial splits.
 
 Each LOSO fold can learn a different coordinate basis. A probe across those
 folds may identify the checkpoint instead of the subject. The CLI therefore
@@ -12,10 +12,10 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import balanced_accuracy_score, confusion_matrix
+from sklearn.metrics import balanced_accuracy_score
 from sklearn.preprocessing import StandardScaler
 
-from .artifacts import write_json, write_npz, write_csv
+from .artifacts import write_json, write_csv
 from .results import collect_study, compatible_typicality_definition
 from .core import SCORE_DEFINITION
 
@@ -35,6 +35,9 @@ def prepare_probe(studies, *, representation="classification_embedding"):
         if task is not None and task != manifest["task"]:
             raise ValueError("Probe one emotion task at a time")
         task = manifest["task"]
+        if manifest.get("artifact_format") == "json_csv_summaries":
+            raise ValueError("Subject probes require saved classification embeddings, which summary-only "
+                             "runs do not retain. Use a historical array archive or recompute embeddings.")
         expected_subjects.update(fold["subject_id"] for fold in manifest["folds"])
         for row in collect_study(root)[0]:
             if row["objective"] not in ("base", "typicality"):
@@ -103,7 +106,6 @@ def fit_subject_probe(keys, representations, output, *, coordinate_policy, coord
     train, test = np.asarray(sorted(train)), np.asarray(sorted(test))
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    write_npz(output / "probe_inputs.npz", trial_keys=keys, train_indices=train, test_indices=test, **representations)
     write_csv(output / "probe_splits.csv", [{"subject_id": int(subject), "trial_id": int(trial),
                "split": "train" if index in train else "test"} for index, (subject, trial) in enumerate(keys)])
     rows, predictions = [], []
@@ -120,10 +122,6 @@ def fit_subject_probe(keys, representations, output, *, coordinate_policy, coord
                "chance_percent": 100 / len(subjects), "n_subjects": len(subjects), "n_train": len(train), "n_test": len(test),
                "converged": bool(np.all(classifier.n_iter_ < classifier.max_iter))}
         rows.append(row)
-        write_npz(output / f"probe_{name}.npz", classes=classifier.classes_, coefficients=classifier.coef_,
-                  intercept=classifier.intercept_, scaler_mean=scaler.mean_, scaler_scale=scaler.scale_,
-                  probabilities=probabilities, predictions=predicted, test_trial_keys=keys[test],
-                  confusion_matrix=confusion_matrix(keys[test, 0], predicted, labels=subjects))
         predictions.extend({"representation": name, "subject_id": int(keys[index, 0]),
                             "trial_id": int(keys[index, 1]), "predicted_subject": int(predicted[j])}
                            for j, index in enumerate(test))

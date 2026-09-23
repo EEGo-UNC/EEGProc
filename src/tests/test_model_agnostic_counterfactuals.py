@@ -74,6 +74,30 @@ def test_input_adapter_improves_target_without_a_decoder():
     }
 
 
+def test_runner_reports_results_without_npz(tmp_path, monkeypatch):
+    import json
+    from eegproc.model_explainability.model_agnostic import runner
+
+    trials = tmp_path / "trials.npz"
+    np.savez(trials, features=np.zeros((1, 2, 3), dtype=np.float32),
+             subject_ids=[0], trial_ids=[0], labels=[0])
+    monkeypatch.setattr(runner, "create_adapter", lambda *args, **kwargs: TinyInputAdapter())
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Counterfactual runs must not save NPZ files")
+    monkeypatch.setattr(np, "savez", forbidden)
+    monkeypatch.setattr(np, "savez_compressed", forbidden)
+    out = tmp_path / "out"
+    args = runner.parse_args(["--model", "unused.keras", "--adapter", "unused:adapter",
+                              "--trials-npz", str(trials), "--subject-id", "0",
+                              "--out-dir", str(out), "--max-steps", "1", "--log-every", "0"])
+    aggregate = runner.run(args)
+    saved = json.loads((out / "subject_0_trial_0/result.json").read_text())
+    assert aggregate["n_trials"] == 1
+    assert aggregate["counterfactual_success_rate"] == float(saved["counterfactual"]["success"])
+    assert (out / "subject_0_trial_0/history.csv").is_file()
+    assert not list(out.rglob("*.npz"))
+
+
 def test_report_only_constraint_is_not_computed_during_steps():
     adapter = TinyInputAdapter()
     result = ModelAgnosticCounterfactualOptimizer(

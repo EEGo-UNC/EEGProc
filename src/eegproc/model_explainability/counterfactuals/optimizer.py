@@ -477,7 +477,7 @@ class CounterfactualOptimizer:
             if self.typicality is not None:
                 row.update(typicality_threshold=self.typicality.tau,
                            typical=bool(typical), optimization_success=bool(optimization_success))
-            if state_progress is not None:
+            if progress is not None or state_progress is not None:
                 row.update(optimization_success=bool(optimization_success))
                 row["decoder_latent_rmse"] = float(tf.sqrt(tf.reduce_mean(tf.square(variable - z))).numpy())
                 row["d_z"] = (float(tf.sqrt(tf.reduce_mean(tf.square(embedding - original_embedding))).numpy())

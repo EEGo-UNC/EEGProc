@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .artifacts import file_sha256, write_csv, write_json
+from .artifacts import read_summary, summary_path, file_sha256, write_csv, write_json
 from .results import _latest_result, compatible_typicality_definition
 
 
@@ -268,18 +268,18 @@ def _counterfactual_summary(rows):
     }
 
 
-def _load_npz(path, required):
+def _load_predictions(path, required):
     path = Path(path)
     if not path.is_file():
         raise ValueError(
             "Class-awareness audit requires a completed typicality.runner archive; "
             f"missing {path}. Plain counterfactual-only runs need checkpoint-backed enrichment."
         )
-    with np.load(path, allow_pickle=False) as data:
-        missing = set(required) - set(data.files)
-        if missing:
-            raise ValueError(f"{path} is missing required arrays: {sorted(missing)}")
-        return {name: np.asarray(data[name]) for name in required}
+    data = read_summary(path)
+    missing = set(required) - set(data)
+    if missing:
+        raise ValueError(f"{path} is missing required fields: {sorted(missing)}")
+    return {name: data[name] for name in required}
 
 
 def audit_fold(
@@ -298,8 +298,8 @@ def audit_fold(
         raise ValueError(f"Fold {fold_subject} is not completed")
     generation_tau = float(fold["threshold"])
 
-    source_path = fold_dir / "calibration" / "source_trials.npz"
-    source = _load_npz(source_path, ("subject_ids", "trial_ids", "labels", "probabilities", "discrepancy"))
+    source_path = summary_path(fold_dir / "calibration" / "source_trials.json")
+    source = _load_predictions(source_path, ("subject_ids", "trial_ids", "labels", "probabilities", "discrepancy"))
     slabels, sprobs, sscores = _validate_predictions(
         source["labels"], source["probabilities"], source["discrepancy"], name="source"
     )
@@ -317,8 +317,8 @@ def audit_fold(
     audit_tau = _higher_quantile(sscores[source_selected], quantile)
     all_source_tau = _higher_quantile(sscores[source_correct], quantile)
 
-    observations_path = fold_dir / "observations.npz"
-    held = _load_npz(observations_path, ("trial_ids", "labels", "probabilities", "discrepancy"))
+    observations_path = summary_path(fold_dir / "observations.json")
+    held = _load_predictions(observations_path, ("trial_ids", "labels", "probabilities", "discrepancy"))
     hlabels, hprobs, hscores = _validate_predictions(
         held["labels"], held["probabilities"], held["discrepancy"], name="held-out"
     )
@@ -378,8 +378,8 @@ def audit_fold(
         "counterfactual_rows": counterfactual_rows,
         "sampling": source_manifest + held_manifest,
         "hashes": {
-            "source_trials_npz": file_sha256(source_path),
-            "observations_npz": file_sha256(observations_path),
+            f"source_trials_{source_path.suffix[1:]}": file_sha256(source_path),
+            f"observations_{observations_path.suffix[1:]}": file_sha256(observations_path),
             "fold_json": file_sha256(fold_path),
         },
     }

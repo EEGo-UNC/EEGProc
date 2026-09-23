@@ -25,10 +25,18 @@ def write_json(path, payload):
         payload, indent=2, allow_nan=False, default=_json_default) + "\n").encode()))
 
 
-def write_npz(path, **arrays):
-    if any(np.asarray(value).dtype.hasobject for value in arrays.values()):
-        raise TypeError("Saved arrays must not require pickle")
-    _atomic(path, lambda handle: np.savez_compressed(handle, **arrays))
+def summary_path(path):
+    """Prefer compact JSON summaries, with read-only support for old archives."""
+    path = Path(path)
+    return path.with_suffix(".json") if path.with_suffix(".json").is_file() else path.with_suffix(".npz")
+
+
+def read_summary(path):
+    path = summary_path(path)
+    if path.suffix == ".json":
+        return {name: np.asarray(value) for name, value in json.loads(path.read_text()).items()}
+    with np.load(path, allow_pickle=False) as data:
+        return {name: data[name] for name in data.files}
 
 
 def _atomic(path, write):
@@ -73,59 +81,34 @@ def array_sha256(values):
 
 
 class TrialRecorder:
-    """One attempt directory with per-step scalars and endpoint tensors.
+    """One attempt directory with per-step scalars and endpoint metrics.
 
-    Step s is the state BEFORE update s+1. Adam slots reflect s completed
-    updates. The first and final snapshots carry current and best latent, raw
-    gradient, decoder outputs, classifier embedding, and the named optimizer
-    variables. Every finite step is still written to the scalar history.
+    Step s is the state BEFORE update s+1. Every finite step is written to
+    the scalar history. Signal, latent, gradient, and optimizer tensors are
+    never persisted.
     Completed trials can be reused; unfinished trials retain all attempts.
-    Snapshots support analysis, not an automatic mid-trial restart API.
-    Paper mode saves scalar histories and selected trial embeddings, with no
-    snapshots or EEG/full-latent arrays. Full mode preserves the debug archive.
     """
 
-    def __init__(self, directory, *, artifact_mode="full"):
-        if artifact_mode not in ("paper", "full"):
-            raise ValueError("artifact_mode must be paper or full")
-        self.artifact_mode = artifact_mode
+    def __init__(self, directory):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=False)
         self.handle = (self.directory / "history.jsonl").open("x", encoding="utf-8")
         self.rows = []
-        self.last_snapshot = None
 
-    def record(self, row, arrays):
+    def record(self, row):
         self.handle.write(json.dumps(row, allow_nan=False, default=_json_default) + "\n")
         self.handle.flush()
         os.fsync(self.handle.fileno())
         self.rows.append(dict(row))
-        step = int(row["step"])
-        if self.artifact_mode == "full":
-            self.last_snapshot = (step, arrays)
-            if step == 0:
-                self._snapshot(step, arrays)
-
-    def _snapshot(self, step, arrays):
-        write_npz(self.directory / "trajectory" / f"step_{step:06d}.npz", **arrays)
 
     def close(self):
         if self.handle.closed:
             return
         self.handle.close()
-        if self.last_snapshot is not None:
-            self._snapshot(*self.last_snapshot)
         write_csv(self.directory / "history.csv", self.rows)
 
-    def finish(self, result, metadata, extra_arrays=None):
+    def finish(self, result, metadata):
         self.close()
-        arrays = result["arrays"]
-        if self.artifact_mode == "paper":
-            # Trial-level embeddings support subject probes without retaining
-            # the much larger window-by-time decoder latents or EEG tensors.
-            arrays = {key: arrays[key] for key in
-                      ("classification_embedding", "classification_embedding_prime")}
-        write_npz(self.directory / "counterfactual.npz", **arrays, **(extra_arrays or {}))
         summary = {**metadata, **result["summary"], "status": "completed"}
         write_json(self.directory / "result.json", summary)
         # The commit marker comes last, after every required artifact is durable.

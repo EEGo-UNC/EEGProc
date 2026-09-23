@@ -124,17 +124,6 @@ run_trial() {
             --seed "$SEED" \
             --out-dir "$task_root"
 
-        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.heatmap \
-            "$trial_directory/counterfactual.npz" \
-            --branch joint \
-            --sampling-rate 128 \
-            --no-show
-
-        "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.topography \
-            "$trial_directory/counterfactual.npz" \
-            --branch joint \
-            --no-show
-
         "$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.training_monitor \
             "$trial_directory/history.csv" \
             --no-show

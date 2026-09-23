@@ -52,7 +52,6 @@ def _write_trial(root, trial_id, *, success, decoded_mse):
         writer.writerow(
             {"step": 0, "decoded": decoded_mse, "success": str(success)}
         )
-    (trial_directory / "counterfactual.npz").touch()
 
 
 def test_write_metrics_json_preserves_trials_histories_and_aggregates(tmp_path):
@@ -74,9 +73,7 @@ def test_write_metrics_json_preserves_trials_histories_and_aggregates(tmp_path):
     assert decoded_summary["mean"] == pytest.approx(0.3)
     assert saved["trials"][0]["metrics"]["joint_reconstruction_alpha"] == 0.3
     assert saved["trials"][0]["history"][0]["success"] is True
-    assert "trial_00/subject_0_trial_0/counterfactual.npz" in saved["trials"][0][
-        "artifacts"
-    ]
+    assert not any(path.endswith(".npz") for trial in saved["trials"] for path in trial["artifacts"])
 
 
 def test_metrics_payload_reports_missing_trials(tmp_path):

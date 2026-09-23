@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..counterfactuals.topography import plot_band_topographies
-from .artifacts import write_npz, write_json
+from .artifacts import write_json
 
 
 def _csv(path):
@@ -126,24 +126,32 @@ def _power_maps(rows, path, title):
     names, bands = None, None
     for row in rows:
         directory = Path(row["artifact_directory"])
-        with np.load(directory / "counterfactual.npz", allow_pickle=False) as data:
-            current_names, current_bands = data["channel_names"].tolist(), data["band_names"].tolist()
-            if "physiology_counterfactual_spectral_power" in data.files:
-                after = data["physiology_counterfactual_spectral_power"]
-                before = data["physiology_reconstruction_spectral_power"]
-            else:
-                with np.load(directory / "physiology_counterfactual.npz", allow_pickle=False) as diagnostics:
-                    after = diagnostics["spectral_power"]
-                with np.load(directory / "physiology_reconstruction.npz", allow_pickle=False) as diagnostics:
-                    before = diagnostics["spectral_power"]
+        power_path = directory / "band_power.json"
+        if power_path.is_file():
+            data = json.loads(power_path.read_text())
+            change = np.asarray(data["power_change"])
+            current_names, current_bands = data["channel_names"], data["band_names"]
+        else:
+            # Historical full and compact paper archives remain readable.
+            with np.load(directory / "counterfactual.npz", allow_pickle=False) as data:
+                current_names, current_bands = data["channel_names"].tolist(), data["band_names"].tolist()
+                if "physiology_counterfactual_spectral_power" in data.files:
+                    after = data["physiology_counterfactual_spectral_power"]
+                    before = data["physiology_reconstruction_spectral_power"]
+                else:
+                    with np.load(directory / "physiology_counterfactual.npz", allow_pickle=False) as diagnostics:
+                        after = diagnostics["spectral_power"]
+                    with np.load(directory / "physiology_reconstruction.npz", allow_pickle=False) as diagnostics:
+                        before = diagnostics["spectral_power"]
+            change = after - before
         if names is not None and (names != current_names or bands != current_bands):
             raise ValueError("Cannot combine topographies with different channel/band orders")
         names, bands = current_names, current_bands
-        changes.append(after - before)
+        changes.append(change)
         keys.append([int(row["subject_id"]), int(row["trial_id"])])
     changes = np.stack(changes)
-    write_npz(path.with_suffix(".npz"), trial_keys=np.asarray(keys), power_changes=changes,
-              mean_power_change=changes.mean(axis=0), channel_names=np.asarray(names), band_names=np.asarray(bands))
+    write_json(path.with_suffix(".json"), {"trial_keys": keys,
+               "mean_power_change": changes.mean(axis=0), "channel_names": names, "band_names": bands})
     fig, _ = plot_band_topographies(changes.mean(axis=0).T, channel_names=names, band_names=bands,
                                 title=f"{title} (n={len(rows)})", colorbar_label="Power difference (signal unit squared)",
                                 signed=True, shared_scale=True)

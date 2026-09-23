@@ -112,12 +112,12 @@ class TypicalityRegion:
 
     def save(self, directory):
         from pathlib import Path
-        from .artifacts import write_json, write_npz
+        from .artifacts import write_json
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        write_npz(directory / "region.npz", prior_mean=self.prior_mean,
-                  prior_variance=self.prior_variance, tau=self.tau, variance_floor=self.variance_floor)
-        write_json(directory / "region.json", self.metadata)
+        write_json(directory / "region.json", {**self.metadata, "parameters": {
+            "prior_mean": self.prior_mean, "prior_variance": self.prior_variance,
+            "tau": self.tau, "variance_floor": self.variance_floor}})
 
     @classmethod
     def load(cls, directory):
@@ -129,6 +129,10 @@ class TypicalityRegion:
                 or metadata.get("definition") != SCORE_DEFINITION
                 or metadata.get("representation") != REPRESENTATION):
             raise ValueError("Legacy or incompatible typicality region; recalibrate full-trial Mahalanobis scores in a new study")
+        if "parameters" in metadata:
+            data = metadata.pop("parameters")
+            return cls(data["prior_mean"], data["prior_variance"], float(data["tau"]),
+                       metadata, float(data["variance_floor"]))
         with np.load(directory / "region.npz", allow_pickle=False) as data:
             return cls(data["prior_mean"], data["prior_variance"], float(data["tau"]),
                        metadata, float(data["variance_floor"]))

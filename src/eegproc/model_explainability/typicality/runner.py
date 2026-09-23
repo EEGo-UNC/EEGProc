@@ -25,7 +25,7 @@ from ..model_agnostic.runner import _metadata_arrays
 from ..model_agnostic.sic_adapter import create_sic_adapter
 from .sic_embedding import SICTrialEmbedding
 from .core import TypicalityRegion, SCHEMA_VERSION, SCORE_DEFINITION, REPRESENTATION
-from .artifacts import (write_json, write_npz, write_csv, file_sha256,
+from .artifacts import (write_json, write_csv, file_sha256,
                                   array_sha256, TrialRecorder, completed_attempt, next_attempt)
 from .physiology import (signal_diagnostics, PhysiologicalReference,
                                    vcsc_calibration, make_vcsc_loss, DEFAULT_BANDS, FAMILIES)
@@ -87,8 +87,6 @@ def build_parser():
     parser.add_argument("--physiology-required-fraction", type=_positive_float, default=0.95)
     parser.add_argument("--ece-bins", type=int, default=15)
     parser.add_argument("--seed", type=_nonnegative_int, default=42)
-    parser.add_argument("--artifact-mode", choices=("paper", "full"), default="paper",
-                        help="paper (default): retain metrics, histories, embeddings and compact physiology; omit EEG, full latents, PSDs and optimizer snapshots. full: retain all debugging arrays.")
     parser.add_argument("--resume", action="store_true", help="Verify and reuse completed trials; preserve attempts for interrupted trials.")
     parser.add_argument("--out-dir", type=Path, required=True)
     return parser
@@ -198,6 +196,7 @@ def _protocol(args, dataset, folds):
         package_dir / "model_agnostic" / "sic_adapter.py",
     ]
     return {"schema_version": SCHEMA_VERSION, "task": args.task, "arguments": arguments, "folds": folds,
+            "artifact_format": "json_csv_summaries",
             "objectives": _objective_names(args),
             "dataset_sha256": {name: array_sha256(value) for name, value in arrays.items()},
             "source_sha256": {
@@ -249,7 +248,6 @@ def _initial_reconstructions(adapter, features, output_name):
 
 
 def run_fold(args, dataset, entry, out):
-    full_artifacts = args.artifact_mode == "full"
     subject = entry["subject_id"]
     directory = out / f"subject_{subject}"
     directory.mkdir(parents=True, exist_ok=True)
@@ -282,13 +280,9 @@ def run_fold(args, dataset, entry, out):
     )
     region.save(directory / "calibration")
     write_json(directory / "calibration" / "representation.json", embedding_map.metadata())
-    source_arrays = dict(probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
-                         subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source])
-    if full_artifacts:
-        source_arrays.update(embeddings=source_embeddings,
-                             learned_prior_log_sigma=model.vc_target.prior_log_sigma.numpy(),
-                             learned_prior_mu=model.vc_target.prior_mu.numpy())
-    write_npz(directory / "calibration" / "source_trials.npz", **source_arrays)
+    write_json(directory / "calibration" / "source_trials.json", dict(
+        probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
+        subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source]))
     #Real source-subject EEG, matching the typicality region and the physiology
     #reference above. Calibrating on the held-out subject's own decoder
     #reconstructions instead leaks that subject into a reference the paper
@@ -296,23 +290,25 @@ def run_fold(args, dataset, entry, out):
     #near zero against a decoder-output reference, which is why VCSC read
     #0.000 on every counterfactual while the independent checks all failed.
     vcsc = vcsc_calibration(dataset.features[source])
-    saved_vcsc = vcsc if full_artifacts else {key: vcsc[key] for key in ("c_hat", "w_hat", "sigma_raw", "sigma_spec")}
-    write_npz(directory / "calibration" / "vcsc.npz", **saved_vcsc,
-              subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source],
-              reference=np.asarray("source_subject_real_eeg"))
+    write_json(directory / "calibration" / "vcsc.json", {
+        **{name: vcsc[name] for name in ("c_hat", "w_hat", "sigma_raw", "sigma_spec")},
+        "subject_ids": dataset.subject_ids[source], "trial_ids": dataset.trial_ids[source],
+        "reference": "source_subject_real_eeg"})
     source_diagnostics = [_diagnostics(dataset, i, dataset.features[i], args) for i in source]
     physiological = PhysiologicalReference.fit(source_diagnostics, quantile=args.physiology_quantile,
                                                required_fraction=args.physiology_required_fraction)
-    source_details = ({f"source_{name}": np.stack([d[name] for d in source_diagnostics]) for name in FAMILIES}
-                      if full_artifacts else {})
-    write_npz(directory / "calibration" / "physiology.npz", **physiological.arrays(), **source_details)
+    # Bounds are small; per-source descriptors, PSDs, and connectivity matrices
+    # are used only in memory and are not archived.
+    write_json(directory / "calibration" / "physiology.json", {
+        name: np.where(np.isfinite(value), value, None).tolist()
+        for name, value in physiological.arrays().items()})
     write_json(directory / "calibration" / "storage.json", {
-        "artifact_mode": args.artifact_mode,
+        "artifact_format": "json_csv_summaries",
         "source_trial_ids": dataset.trial_ids[source].tolist(),
         "source_subject_ids": dataset.subject_ids[source].tolist(),
         "physiology_quantile": args.physiology_quantile,
         "physiology_required_fraction": args.physiology_required_fraction,
-        "source_component_arrays_saved": full_artifacts,
+        "source_component_arrays_saved": False,
     })
     loss = make_vcsc_loss(vcsc, target_weight=args.target_weight, latent_weight=args.latent_weight,
                             decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
@@ -357,10 +353,9 @@ def run_fold(args, dataset, entry, out):
         )
     if args.report_output not in optimizers["base"].decoded_names:
         raise ValueError("The selected report output is not present in this checkpoint")
-    predictions, discrepancies, embeddings, eligible = [], [], [], []
+    predictions, discrepancies, eligible = [], [], []
     for index in held:
         features = model.get_encoder_features(dataset.features[index:index + 1])
-        z = features["window_features"]
         embedding = features["classification_embedding"]
         probabilities = features["probabilities"].numpy()[0]
         if probabilities.shape != (2,) or not np.isfinite(probabilities).all():
@@ -368,19 +363,11 @@ def run_fold(args, dataset, entry, out):
         d = float(region.discrepancy(embedding).numpy())
         predictions.append(probabilities)
         discrepancies.append(d)
-        embeddings.append(embedding.numpy()[0])
-        trial = int(dataset.trial_ids[index])
-        trial_dir = directory / f"trial_{trial}"
-        trial_dir.mkdir(exist_ok=True)
-        if full_artifacts:
-            write_npz(trial_dir / "observed.npz", x=dataset.features[index:index + 1], z=z.numpy(),
-                      classification_embedding=embedding.numpy(), probabilities=probabilities,
-                      discrepancy=d, **_metadata_arrays(dataset, index))
         if dataset.labels[index] == 0 and probabilities.argmax() == 0:
             eligible.append(index)
     observations = dict(trial_ids=dataset.trial_ids[held], labels=dataset.labels[held],
-                        probabilities=np.stack(predictions), discrepancy=np.asarray(discrepancies), embeddings=np.stack(embeddings))
-    write_npz(directory / "observations.npz", **observations)
+                        probabilities=np.stack(predictions), discrepancy=np.asarray(discrepancies))
+    write_json(directory / "observations.json", observations)
     fold_info = {"subject_id": subject, "status": "running", "checkpoint": entry,
                  "reconstruction": adapter.metadata(),
                  "threshold": region.tau, "representation": embedding_map.metadata(),
@@ -400,22 +387,22 @@ def run_fold(args, dataset, entry, out):
                 continue
             seed = int(np.random.SeedSequence([args.seed, subject, trial]).generate_state(1)[0])
             tf.keras.utils.set_random_seed(seed)
-            recorder = TrialRecorder(next_attempt(arm_dir), artifact_mode=args.artifact_mode)
+            recorder = TrialRecorder(next_attempt(arm_dir))
             metadata = {"schema_version": SCHEMA_VERSION, "task": args.task, "subject_id": subject, "trial_id": trial,
                         "true_class": 0, "objective": objective, "seed": seed, "report_output": args.report_output,
                         "checkpoint_sha256": entry["sha256"], "typicality_definition": SCORE_DEFINITION,
                         "typicality_representation": REPRESENTATION,
-                        "round_trip_evaluation": EVALUATION_PROTOCOL, "artifact_mode": args.artifact_mode}
+                        "round_trip_evaluation": EVALUATION_PROTOCOL}
 
             def progress(row):
+                recorder.record(row)
                 if args.log_every and row["step"] % args.log_every == 0:
                     print(f"  s={subject} trial={trial} {objective} step={row['step']} "
                           f"p1={row['target_probability']:.4f} D={row['discrepancy']:.5g} tau={region.tau:.5g}", flush=True)
 
             try:
                 result = optimizer.optimize(dataset.features[index:index + 1], target_class=1,
-                                             progress=progress, state_progress=recorder.record,
-                                             record_state_arrays=full_artifacts)
+                                             progress=progress)
                 arrays, summary = result["arrays"], result["summary"]
                 original, baseline, counterfactual = (arrays[name] for name in
                     ("x", f"x_reconstructed_{args.report_output}", f"x_prime_{args.report_output}"))
@@ -427,20 +414,15 @@ def run_fold(args, dataset, entry, out):
                                d_z=float(np.sqrt(np.mean((arrays["classification_embedding_prime"] - arrays["classification_embedding"]) ** 2))),
                                decoder_latent_rmse=float(np.sqrt(summary["selected_losses"]["latent"])),
                                report_output=args.report_output)
-                extra_arrays = _metadata_arrays(dataset, index)
-                if full_artifacts:
-                    for prefix, diagnostics in diagnostic_sets.items():
-                        write_npz(recorder.directory / f"physiology_{prefix}.npz", **diagnostics)
-                else:
-                    # Save endpoint features for the paper, not EEG or PSD
-                    # tensors. Keep unavailable components as NaN, as before.
-                    extra_arrays = {key: value for key, value in extra_arrays.items()
-                                    if not key.startswith("normalization_")}
-                    extra_arrays.update({f"physiology_{prefix}_{name}": diagnostics[name]
-                                         for prefix, diagnostics in diagnostic_sets.items()
-                                         for name in (*FAMILIES, "rms", "pair_indices")})
+                # A channel-by-band summary supports the report's scalp maps
+                # without retaining decoded signals or full spectral arrays.
+                write_json(recorder.directory / "band_power.json", {
+                    "channel_names": dataset.channel_names, "band_names": dataset.band_names,
+                    "power_change": (diagnostic_sets["counterfactual"]["spectral_power"]
+                                     - diagnostic_sets["reconstruction"]["spectral_power"]),
+                })
                 write_json(recorder.directory / "physiology.json", {name: physiological.assess(d) for name, d in diagnostic_sets.items()})
-                recorder.finish(result, metadata, extra_arrays)
+                recorder.finish(result, metadata)
             except (FloatingPointError, RuntimeError, ValueError, tf.errors.OpError) as error:
                 recorder.fail(error, metadata)
                 errors += 1

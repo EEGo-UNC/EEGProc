@@ -304,18 +304,27 @@ overwritten. Completed trials are saved individually.
 | `settings.json` | Arguments, loss weights, model path, input shape, selected trials, environment version. |
 | `subject_<id>_trial_<id>/history.csv` | Step 0 and each finite evaluated step: total/raw/weighted losses, selected reconstruction-path MSEs, probabilities, prediction, success, gradient norm. |
 | `subject_<id>_trial_<id>/result.json` | Original and optimized latent predictions, optional latent typicality; reconstruction fidelity, distances, losses, VCSC, step and timing. |
-| `subject_<id>_trial_<id>/counterfactual.npz` | `x`, `z`, `z_prime`, decoded baseline/counterfactual signals, and original/optimized classification embeddings; joint mode uses `<path>=joint`. |
 | `results.json` | Completed trial summaries, updated after each trial. |
 | `summary.json` | Latent success, class-flip, distance, probability-change, and per-output VCSC diagnostics. |
 
-`x_prime_<path>` remains in the model's preprocessed input space. This
-runner does not reconstruct missing raw EEG bands or undo normalization.
+New runs save no NPZ output. Numerical results, aggregate metrics, and optimization
+histories remain available in JSON/CSV. Signals, latents, embeddings, gradients,
+and optimizer state are used in memory only; they are not saved in another format.
+Prepared NPZ input files and the bundled VCSC calibration remain supported.
+
+Decoded signals remain in the model's preprocessed input space. This runner
+does not reconstruct missing raw EEG bands or undo normalization.
 Missing/disabled decoders cause an explicit error. Verify that reconstruction
 was actually trained in the selected checkpoint; decoder presence alone does
 not establish reconstruction quality. Select the correct saved LOSO model
 for the chosen subject: the runner cannot prove training-subject exclusion.
 
-## Quick start: generate the graphs
+## Graphs and historical archives
+
+New runs support optimization plots from `history.csv`. Heatmaps and signal
+scalp topographies below require an existing historical `counterfactual.npz`;
+new runs do not produce it. Recomputing signal-level analyses requires rerunning
+the model. Existing archives are not deleted by this change.
 
 Run these commands from the EEGProc repository root after activating the same
 Python environment used for the counterfactual run:
@@ -325,7 +334,7 @@ cd /Users/tolas/Documents/coding/EEGProc
 source venv/bin/activate
 ```
 
-Each completed trial directory contains the two plotting inputs:
+Historical trial directories may contain both plotting inputs:
 
 ```text
 runs/counterfactuals/YOUR_RUN/subject_0_trial_0/

@@ -49,7 +49,17 @@ External adapter and dataset-loader factories use
 `trial_ids`, and optional `labels`; normalization and channel metadata are
 also supported.
 
-## Topographies in source units
+## Outputs
+
+New runs save `settings.json`, per-trial `result.json` and `history.csv`,
+`results.json`, and `summary.json`. No NPZ output or signal/latent arrays are
+saved. Numerical success rates, distances, losses, and optimization histories
+remain available. Prepared NPZ inputs remain supported.
+
+## Historical topographies in source units
+
+This command requires a previously saved NPZ archive. New runs require
+recomputation for signal-level analyses.
 
 ```bash
 PYTHONPATH=src python -m eegproc.model_explainability.model_agnostic.topography \

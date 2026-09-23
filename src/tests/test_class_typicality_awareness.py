@@ -94,8 +94,14 @@ def test_sampling_is_deterministic_stratified_and_row_order_invariant():
     assert len(first_keys) == 4
 
 
-def test_audit_recomputes_correct1_threshold_and_counterfactual_membership(tmp_path):
+@pytest.mark.parametrize("format", ["npz", "json"])
+def test_audit_recomputes_correct1_threshold_and_counterfactual_membership(tmp_path, format):
     root = _study(tmp_path / "study")
+    if format == "json":
+        for path in root.rglob("*.npz"):
+            with np.load(path, allow_pickle=False) as data:
+                _write_json(path.with_suffix(".json"), {name: data[name].tolist() for name in data.files})
+            path.unlink()
     payload = build_class_typicality_audit(
         [root], tmp_path / "audit",
         samples_per_source_subject=1,
@@ -114,6 +120,7 @@ def test_audit_recomputes_correct1_threshold_and_counterfactual_membership(tmp_p
     assert all(row["generation_typical"] == "False" for row in counterfactuals)
     audit = json.loads((tmp_path / "audit/class_typicality_audit.json").read_text())
     assert audit["aggregate"][0]["counterfactual_typicality_success_macro_percent"] == 100.0
+    assert not list((tmp_path / "audit").rglob("*.npz"))
 
 
 def test_heldout_scores_cannot_change_source_audit_threshold(tmp_path):

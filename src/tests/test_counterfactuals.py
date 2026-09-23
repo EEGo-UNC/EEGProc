@@ -387,7 +387,8 @@ def test_runner_saves_latent_success_without_decoded_predictions(tiny_joint_mode
     assert "decoded_success_rate" not in aggregate
     assert all("counterfactual" not in path for path in saved["decoded_trials"].values())
     assert saved["steps_completed"] == 1
-    assert (out / "subject_0_trial_0/counterfactual.npz").is_file()
+    assert not list(out.rglob("*.npz"))
+    assert (out / "subject_0_trial_0/history.csv").is_file()
     settings = json.loads((out / "settings.json").read_text())
     assert settings["counterfactual_validity_prediction_space"] == "latent"
 

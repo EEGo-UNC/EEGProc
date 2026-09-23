@@ -271,11 +271,6 @@ def run(args):
             writer = csv.DictWriter(handle, fieldnames=list(result["history"][0]))
             writer.writeheader()
             writer.writerows(result["history"])
-        np.savez_compressed(
-            trial_dir / "counterfactual.npz",
-            **result["arrays"],
-            **_metadata_arrays(dataset, index),
-        )
         _write_json(trial_dir / "result.json", summary)
         summaries.append(summary)
         _write_json(out / "results.json", summaries)

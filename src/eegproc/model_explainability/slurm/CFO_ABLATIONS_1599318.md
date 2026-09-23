@@ -118,21 +118,16 @@ the fold directories supplied to it.
 
 ## Storage for paper runs
 
-Both arousal and valence launchers now use `ARTIFACT_MODE=paper` by default.
-The optimizer still evaluates all four arms and every diagnostic. It saves
-scalar histories, complete JSON summaries, compact endpoint features and
-trial embeddings, calibration parameters, and source score metadata. It does
-not save raw/decoded EEG, window-by-time latents, gradients, Adam snapshots,
-PSDs, or per-source connectivity arrays. There is one small endpoint NPZ per
-trial/arm, not a single NPZ containing all ablations. All-arm comparisons are
-in the report CSVs and `tables.tex`.
+Both arousal and valence launchers now save JSON/CSV summaries only. NPZ
+output has been removed, including compact endpoint archives, calibration
+archives, and debugging snapshots. `--artifact-mode` has been removed;
+`ARTIFACT_MODE` no longer enables array output.
 
-Use a **new OUT_ROOT** after installing this change. Old archives retain code
-and protocol hashes and cannot be resumed by the changed runner. No existing
-outputs are automatically removed. Completed results remain readable by the
-reporting tools. `ARTIFACT_MODE=full` is available for selected trials requiring
-waveform or other signal-based follow-up analyses.
+All four objectives remain in the trial, subject, and population CSV reports.
+Histories, recognition and typicality scores, physiological checks, and compact
+band-power summaries support standard reports and figures. Waveform reanalysis
+and subject probes require historical array archives or recomputation.
 
-Within a paper-mode run, `RESUME=1 OUT_ROOT=...` still verifies/skips completed
-attempts and restarts incomplete attempts. Changing storage mode does not
-change optimization settings, selected candidates, or numerical precision.
+Use a new `OUT_ROOT` after updating the code: old manifests fingerprint the old
+source and storage settings. Existing NPZ files are not deleted. Subsequent
+resumes within a new run verify its JSON/CSV artifacts as before.

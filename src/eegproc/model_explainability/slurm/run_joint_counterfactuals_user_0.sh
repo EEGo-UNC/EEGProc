@@ -158,19 +158,7 @@ echo "Output: $TASK_ROOT"
     --out-dir "$TASK_ROOT"
 
 TRIAL_DIRECTORY="$TASK_ROOT/subject_${SUBJECT_ID}_trial_${TRIAL_ID}"
-COUNTERFACTUAL_NPZ="$TRIAL_DIRECTORY/counterfactual.npz"
 HISTORY_CSV="$TRIAL_DIRECTORY/history.csv"
-
-"$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.heatmap \
-    "$COUNTERFACTUAL_NPZ" \
-    --branch joint \
-    --sampling-rate 128 \
-    --no-show
-
-"$VENV_DIR/bin/python" -m eegproc.model_explainability.counterfactuals.topography \
-    "$COUNTERFACTUAL_NPZ" \
-    --branch joint \
-    --no-show
 
 "$VENV_DIR/bin/python" -m \
     eegproc.model_explainability.counterfactuals.training_monitor \

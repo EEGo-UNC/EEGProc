@@ -60,7 +60,8 @@ region metadata use schema version 2 and explicitly record the score and
 representation. Legacy regions cannot be loaded for new optimization; resume
 rejects changed code/protocol. Offline reports and class-awareness audits can
 still read legacy archives separately, but reject mixtures of score or
-representation definitions. The full-trial subject probe requires new archives.
+representation definitions. The full-trial subject probe requires Mahalanobis
+archives that retained classification embeddings; summary-only runs omit them.
 
 The old `vc_window_embeddings` and `vc_hidden_sequence` modes are rejected.
 `--typicality-sequence` remains an option-name alias but accepts only the new
@@ -169,78 +170,57 @@ Concurrent jobs should use separate output directories.
 
 ## What is saved
 
-The default `--artifact-mode paper` preserves paper results without saving
-large EEG tensors, decoder latent sequences, gradients, Adam state, PSDs, or
-per-source connectivity/physiology arrays. Optimization, candidate selection,
-calibration, and numerical precision are identical to `--artifact-mode full`.
-Both four-arm Slurm launchers default to paper mode; `ARTIFACT_MODE=full`
-explicitly restores the debugging archive.
+New studies save no NPZ files. The former `--artifact-mode` option has been
+removed; `ARTIFACT_MODE` cannot enable array output in the Slurm launchers. Large signal, latent, embedding, gradient,
+optimizer, PSD, and per-source connectivity arrays are used in memory only.
+The output retains the metrics needed for reporting:
 
 ```text
-study.json                       protocol, checkpoint/data/code hashes, artifact mode
-environment.json                versions, command, source revision
+study.json                       protocol, checkpoint/data/code hashes, fold membership
+environment.json                 versions, command, source revision
 subject_<id>/
   fold.json                      threshold, eligibility, recognition metrics, status
-  observations.npz               held-out predictions, trial embeddings, discrepancies
+  observations.json              held-out trial IDs, labels, predictions, discrepancies
   calibration/
-    region.json + region.npz     learned target prior, threshold, source provenance
-    source_trials.npz            source IDs, labels, probabilities, discrepancies
-    representation.json         full-trial coordinate-space definition
-    vcsc.npz                    source-real-EEG calibration means/scales and trial IDs
-    physiology.npz              empirical per-component lower/upper bounds
-    storage.json                calibration storage mode, source IDs, check settings
+    region.json                  Mahalanobis definition, Gaussian parameters, epsilon, tau
+    source_trials.json           source IDs, labels, predictions, discrepancies
+    representation.json          full-trial mapping and coordinate-space definition
+    vcsc.json                    source-real-EEG reference constants and trial IDs
+    physiology.json              empirical check bounds (unavailable bounds are null)
+    storage.json                 source IDs and physiology settings
   trial_<id>/<objective>/attempt_0001/
-    history.jsonl + history.csv  scalar history at every finite evaluated step
-    counterfactual.npz           SMALL trial embeddings, physiology features, metadata
-    result.json                 selected endpoint outcomes, losses, errors, timing
-    physiology.json             per-family checks and missing-check reasons
-    complete.json               hashes of committed attempt artifacts
-report/                          all-arm CSV tables, distributions, tables.tex, results.json
+    history.jsonl + history.csv   every finite evaluated step, starting at step 0
+    result.json                  outcomes, selected step, losses, errors, timing
+    physiology.json              per-family checks and missing-check reasons
+    band_power.json              channel/band names and decoded power change for scalp maps
+    complete.json                hashes of committed trial artifacts
+report/                          CSV tables, distributions, example selection, tables.tex
 ```
 
-Each `counterfactual.npz` belongs to **one subject/trial/ablation arm**.
-It retains `classification_embedding` and `classification_embedding_prime`
-for subject probes, plus channel/band metadata and the original, baseline,
-and selected-counterfactual amplitude, spectral power, RMS, coherence, and
-signed debiased-wPLI-squared features. Diagnostic keys have the form
-`physiology_<original|reconstruction|counterfactual>_<feature>`; unavailable
-aperiodic components remain NaN, never converted into passing values.
-The source score archive retains the inputs used by the class-awareness audit.
-No source embeddings are needed for that audit.
+Step `s` precedes update `s+1`. History includes latent probabilities, raw and
+weighted losses, discrepancy, threshold, gradient norm, learning rate, decoded
+distances, and displacements. Scalars are flushed each step. The selected best
+step is distinct from the last evaluated step. `d_z` measures full-trial
+embedding RMSE; `decoder_latent_rmse` measures all optimized encoder coordinates.
+Endpoint predictions and typicality use the optimized classification embedding.
+`decoded_trials.<path>` stores signal-distance and physiology diagnostics only.
 
-Paper mode writes one small NPZ per completed arm (four per eligible trial)
-and five compact NPZs per fold. The aggregate `trial_metrics.csv`,
-`population_counterfactuals.csv`, and `subject_counterfactuals.csv` distinguish
-all arms using their `objective` column. The existing typicality plotting,
-subject probe, and class-awareness tools accept these compact archives.
-Scalp power maps use saved endpoint features; trajectories use scalar history.
+Numerical reports, class-awareness audits, optimization curves, discrepancy
+plots, and band-power scalp maps can be rebuilt without a checkpoint. Offline
+subject probes, waveform/heatmap plots, spectral entropy, and other new analyses
+of signals or embeddings require historical array archives or recomputation.
+The subject-probe command explicitly rejects new summary-only studies.
 
-`full` additionally saves `trial_<id>/observed.npz`, source embeddings and
-per-source descriptors, the initial/final tensor snapshots in `trajectory/`,
-three separate `physiology_*.npz` files including PSDs, and input/decoded EEG
-and full latents in each endpoint NPZ. Those data are unnecessary for the
-standard report. Paper mode cannot support arbitrary new waveform, PSD, or
-full-latent analyses; regenerate selected trials in full mode if needed.
+New studies declare `artifact_format=json_csv_summaries` and
+`round_trip_evaluation=latent_only`. Historical NPZ archives remain readable;
+prepared NPZ inputs and bundled calibration data remain supported. Existing
+output files are not deleted. Use a new output directory after this code change.
 
-Step `s` precedes update `s+1`. Histories retain probabilities, every raw and
-weighted loss, discrepancy, threshold, gradient norm, learning rate, and
-displacements. Endpoint features always describe the **selected best step**,
-which can precede the final evaluated step. `d_z` is full-trial embedding
-RMSE; `decoder_latent_rmse` measures all optimized encoder coordinates.
-No automatic restart from Adam snapshots is implemented in either mode.
-
-`--resume` verifies and skips completed attempts; incomplete attempts restart
-in new directories. A completed fold skips model loading. Use the same code,
-data, checkpoint, options, and output root for resume. Changing artifact mode
-or installing this change alters the recorded protocol/code hashes, so start
-updated runs in new output directories. Existing archives are not deleted or
-converted automatically; their reports remain readable. Keep the old code
-if you need to finish an old archive in place.
-
-New studies retain `round_trip_evaluation=latent_only`: target success and
-typicality use the optimized classification embedding. Decoded signals supply
-distance and physiology measurements and are never re-encoded. Historical
-round-trip studies remain readable and must be reported separately.
+`--resume` verifies completed trial artifacts and reuses them. A fully completed
+fold skips model loading. Interrupted/error trials receive new attempt
+directories. Partial folds may repeat calibration/observation inference.
+There is no mid-trial restart. Changes to data, checkpoint, protocol, or recorded
+source hashes cause resume to refuse mixing incompatible results.
 
 ## Offline class-1 awareness and subject-invariance audit
 
@@ -268,9 +248,9 @@ available correct class-1 trial.
 The audit writes fold, real-trial, counterfactual, and aggregate CSV files plus
 the exact sampling manifest and input hashes. Counterfactual transitions are
 reported as entered, preserved inside, exited, or stayed outside. Plain
-`counterfactuals.runner` archives contain `z` and `z_prime` but not the mapped
-classification embeddings or source reference bank; those older runs require one
-checkpoint-backed enrichment pass before this offline command can be used.
+`counterfactuals.runner` outputs do not contain the source-reference scores
+needed for this audit. Use `typicality.runner` summaries, or enrich the plain
+counterfactual run with checkpoint-backed reference and observation scores.
 
 ## Rebuild tables and figures without models
 
@@ -283,7 +263,7 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.plotting \
   runs/typicality/paper_report --out-dir runs/typicality/paper_figures
 ```
 
-After the counterfactual artifacts have been produced, build the paired
+For historical runs that retained NPZ signal/PSD archives, build the paired
 channel-by-band spectral table without loading a model:
 
 ```bash
@@ -312,31 +292,29 @@ Figures include latent probability/discrepancy/displacement trajectories with
 original and optimized latent typicality, per-subject
 rates, discrepancy relative to each fold's threshold, and electrode-band
 power-change maps. Numerical inputs for aggregate scalp maps are also saved.
-Existing counterfactual heatmap and topography commands can read the new
-`counterfactual.npz` files directly.
+Aggregate scalp-map means and channel/band names are saved in compact JSON.
+Signal heatmaps and the separate signal-topography tools require historical
+`counterfactual.npz` archives.
 
 ## Physiology and subject-identification limits
 
-VCSC is calibrated without labels on all initial reconstructions `R(Z0)` from
-the held-out subject, using the same selected decoder output that the study
-reports and optimizes. A `--trial-ids` smoke-test filter does not reduce this
-calibration set. Only VCSC summary statistics, measurements, and trial IDs are
-saved; labels are not used, and full calibration reconstructions are processed
-one at a time rather than retained or archived.
+VCSC is calibrated without labels on real source-subject EEG. A `--trial-ids`
+smoke-test filter does not reduce this calibration set. Only reference constants
+and trial IDs are saved; labels are not used for VCSC calibration.
 Additional source-calibrated checks cover the 99th-percentile absolute
 amplitude, band spectral power, coherence, and signed debiased wPLI squared.
 Per-component central intervals and required in-range fractions are explicit
-protocol settings. PSDs, frequencies, connectivity pairs, and all check values
-are saved. The debiased estimator can legitimately be negative; it is not
+protocol settings. Check outcomes and bounds are saved; PSDs, frequencies,
+and per-trial connectivity arrays are not retained. The debiased estimator can legitimately be negative; it is not
 clipped to zero. See [Vinck et al. (2011)](https://pubmed.ncbi.nlm.nih.gov/21276857/).
 
 An aperiodic exponent is not identified from the current band-filtered decoder
 outputs. That fifth check is `null` with a reason; the full physiological pass
 rate is `NA`. The rate over available checks is separately named. Computing
 a defensible fifth check needs an agreed estimator and appropriate signal
-support; the archived signals allow subsequent offline work on this.
+support; new runs require recomputation for subsequent signal-level work.
 
-The subject probe also runs offline:
+The subject probe runs offline on historical archives containing embeddings:
 
 ```bash
 PYTHONPATH=src python -m eegproc.model_explainability.typicality.subject_probe \
@@ -347,9 +325,9 @@ PYTHONPATH=src python -m eegproc.model_explainability.typicality.subject_probe \
 It uses the same disjoint whole-trial split for original, base, and constrained
 full-trial classification embeddings (`--representation classification_embedding`). Scaling is fitted only on training trials. All paired finite
 endpoints are included irrespective of class-flip success. Each included
-subject needs at least two paired trials. Fits, scales, split IDs, probabilities,
-confusion matrices, and balanced accuracies are saved; chance uses the actual
-number of evaluated subjects.
+subject needs at least two paired trials. Split IDs, predictions, and balanced
+accuracies are saved in CSV/JSON; input embeddings and fitted model arrays are
+not saved. Chance uses the actual number of evaluated subjects.
 
 Independent LOSO models can learn different latent coordinate bases, so their
 pooled probe may recognize the fold itself. `fold_specific_descriptive` records
