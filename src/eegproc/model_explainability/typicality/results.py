@@ -315,7 +315,7 @@ def build_report(roots, output, *, probe_results=()):
                          ("Historical decoded validity uses target argmax and confidence after full-trial re-encoding."
                           if has_round_trip else "Target success uses argmax and confidence on the optimized full-trial classification embedding."),
                          ("Historical decoded typicality uses the frozen class distribution and source threshold."
-                          if has_round_trip else "Typicality uses D <= tau on the optimized full-trial classification embedding; decoded signals are not re-encoded."),
+                          if has_round_trip else "The standard typicality endpoint uses D <= tau on the optimized full-trial embedding; typicality-arm decoded EEG is re-encoded separately for the subject-invariance report when available."),
                          "All eligible attempts remain in success-rate denominators. Unmeasured decoded validity is unavailable, not a success or failure.",
                          "Unknown physiological checks are NA, never silently passed.",
                          "ECE uses equal-width top-label confidence bins; fold SD uses ddof=1.",

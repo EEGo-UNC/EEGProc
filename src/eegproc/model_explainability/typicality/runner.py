@@ -209,7 +209,7 @@ def _protocol(args, dataset, folds):
             "round_trip_evaluation": EVALUATION_PROTOCOL,
             "counterfactual_validity": "target argmax and confidence on the optimized full-trial classification embedding; all eligible trials retained",
             "counterfactual_validity_prediction_space": "latent",
-            "decoded_evaluation": "reconstruction displacement, feature analysis, and physiology only",
+            "decoded_evaluation": "reconstruction displacement, physiology, and independent frozen-classifier re-encoding of typicality-arm EEG for subject-invariance analysis",
             "typicality_definition": SCORE_DEFINITION,
             "typicality_representation": REPRESENTATION,
             "typicality_formula": "mean((classification_embedding - prior_mean)^2 / max(prior_variance, variance_floor))",
@@ -245,6 +245,35 @@ def _initial_reconstructions(adapter, features, output_name):
         if not np.isfinite(reconstruction).all():
             raise ValueError("Initial reconstruction contains non-finite values")
         yield reconstruction[0]
+
+
+def _score_decoded_counterfactual(model, region, decoded, *, report_output):
+    """Score the generated EEG after a fresh pass through the frozen encoder.
+
+    This differs from the optimizer's D(Zcf): the decoder and encoder need not
+    be an exact inverse, so only this score describes the delivered waveform.
+    """
+    signal = np.asarray(decoded, dtype=np.float32)
+    if signal.ndim != 4 or signal.shape[0] != 1 or not np.isfinite(signal).all():
+        raise ValueError("Decoded counterfactual must be one finite full EEG trial")
+    features = model.get_encoder_features(signal)
+    embedding = np.asarray(features["classification_embedding"], dtype=np.float64)
+    probabilities = np.asarray(features["probabilities"], dtype=np.float64)
+    if embedding.shape != (1, len(region.prior_mean)) or not np.isfinite(embedding).all():
+        raise ValueError("Re-encoded decoded counterfactual has an invalid embedding")
+    if (probabilities.shape != (1, 2) or not np.isfinite(probabilities).all()
+            or np.any(probabilities < 0) or not np.allclose(probabilities.sum(axis=1), 1, atol=1e-5)):
+        raise ValueError("Re-encoded decoded counterfactual has invalid probabilities")
+    return {
+        "input": "decoded_counterfactual_eeg_reencoded_by_frozen_classifier",
+        "report_output": report_output,
+        "target_class": 1,
+        "classification_embedding": embedding[0].tolist(),
+        "probabilities": probabilities[0].tolist(),
+        "predicted_class": int(probabilities[0].argmax()),
+        "discrepancy": float(region.score(embedding)[0]),
+        "source_threshold": float(region.tau),
+    }
 
 
 def run_fold(args, dataset, entry, out):
@@ -414,6 +443,10 @@ def run_fold(args, dataset, entry, out):
                                d_z=float(np.sqrt(np.mean((arrays["classification_embedding_prime"] - arrays["classification_embedding"]) ** 2))),
                                decoder_latent_rmse=float(np.sqrt(summary["selected_losses"]["latent"])),
                                report_output=args.report_output)
+                if objective == "typicality":
+                    summary["decoded_counterfactual"] = _score_decoded_counterfactual(
+                        model, region, counterfactual, report_output=args.report_output,
+                    )
                 # A channel-by-band summary supports the report's scalp maps
                 # without retaining decoded signals or full spectral arrays.
                 write_json(recorder.directory / "band_power.json", {

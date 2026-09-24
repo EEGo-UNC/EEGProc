@@ -247,6 +247,30 @@ must include each fold's `calibration/region.json`,
 archives do not retain embeddings, so the report validates the saved scores
 and source-calibrated threshold but cannot recompute every score offline.
 
+For **counterfactual** subject invariance, run the updated optimizer into a
+new output root and then analyze its decoded EEG scores:
+
+```bash
+OUT_ROOT="$PWD/runs/counterfactuals/arousal-decoded-invariance" \
+  sbatch --array=0-22%4 src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
+
+PYTHONPATH=src python -m eegproc.model_explainability.report_iclr_decoded_subject_invariance \
+  runs/counterfactuals/arousal-decoded-invariance \
+  --samples-per-subject 3 --seed 42 \
+  --out-dir runs/counterfactuals/arousal-decoded-invariance-report
+```
+
+Wait for the cluster array to finish before running the report. It compares
+sampled held-out real class-1 $X$ with typicality-arm class-0-to-1 decoded
+$R(Z^{cf})$ that the frozen classifier labels class 1. Both are measured against
+the same fold's source real class-1 Gaussian. All eligible counterfactuals are
+counted; nonflips, errors, and pending attempts appear separately. The CSV
+and LaTeX paragraph report within-fold thresholds, source-score percentiles,
+and aggregate fold-level contrasts. The prior `final-ICLR` archive cannot be
+used for this report: it saved only optimized latent discrepancies, and it did
+not retain decoded waveforms for offline re-encoding. Use a new output root;
+the runner intentionally refuses to resume data from a different source hash.
+
 After a `typicality.runner` study has produced its counterfactual archives,
 recompute the requested correct-class-1 reference and evaluate both held-out
 real trials and counterfactual endpoints without loading TensorFlow or a model:
