@@ -77,7 +77,9 @@ are normalized by the source-calibrated threshold before task-level summary;
 raw scores from different LOSO models are not pooled. Set
 `--samples-per-subject 0` to use every available true class-1 trial.
 
-This requires `calibration/region.json`, `calibration/region.npz`,
-`calibration/source_trials.npz`, and `observations.npz` inside each `subject_*`
-fold directory. Counterfactual result files alone contain no full real-trial
-source reference bank and cannot support this analysis.
+This requires `calibration/region.json`, `calibration/source_trials.json`,
+and `observations.json` inside each `subject_*` fold directory. Historical
+NPZ summaries also work. Compact archives omit embeddings, so individual
+scores cannot be independently recomputed offline; the report validates
+the saved scores and the source-calibrated threshold. Counterfactual result
+files alone contain no real-trial source reference bank.

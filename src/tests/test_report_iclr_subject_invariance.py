@@ -11,6 +11,7 @@ from eegproc.model_explainability.report_iclr_subject_invariance import (
     SCORE_DEFINITION,
     TypicalityRegion,
     build_subject_invariance_report,
+    main,
 )
 
 
@@ -26,7 +27,8 @@ def _make_fold(root, held_subject, *, prior_mean=0.0):
     (calibration / "region.json").write_text(json.dumps({
         "schema_version": 2, "definition": SCORE_DEFINITION,
         "representation": REPRESENTATION, "held_out_subject": held_subject,
-        "source_subject_ids": source_subjects.tolist(),
+        "source_subject_ids": source_subjects.tolist(), "quantile": 0.95,
+        "quantile_method": "higher",
     }))
     np.savez_compressed(calibration / "region.npz", prior_mean=[prior_mean],
                         prior_variance=[1.0], tau=9.0, variance_floor=1e-6)
@@ -111,3 +113,36 @@ def test_saved_discrepancies_must_match_learned_distribution(tmp_path):
     np.savez_compressed(path, **values)
     with pytest.raises(ValueError, match="discrepancies do not match"):
         build_subject_invariance_report([root], tmp_path / "out", samples_per_subject=0)
+
+
+def test_compact_json_and_historical_npz_folds_can_be_analyzed_together(tmp_path):
+    root = tmp_path / "final-ICLR/valence/fold_00"
+    root.mkdir(parents=True)
+    (root / "study.json").write_text(json.dumps({
+        "task": "valence", "folds": [{"subject_id": 0}, {"subject_id": 1}],
+        "typicality_definition": SCORE_DEFINITION,
+        "typicality_representation": REPRESENTATION,
+    }))
+    _make_fold(root, 0)
+    _make_fold(root, 1, prior_mean=10.0)
+    compact = root / "subject_1"
+    region_path = compact / "calibration/region.json"
+    metadata = json.loads(region_path.read_text())
+    with np.load(compact / "calibration/region.npz", allow_pickle=False) as archive:
+        metadata["parameters"] = {name: archive[name].tolist() for name in archive.files}
+    region_path.write_text(json.dumps(metadata))
+    (compact / "calibration/region.npz").unlink()
+    for npz_path in (compact / "calibration/source_trials.npz", compact / "observations.npz"):
+        with np.load(npz_path, allow_pickle=False) as archive:
+            summary = {name: archive[name].tolist() for name in archive.files if name != "embeddings"}
+        npz_path.with_suffix(".json").write_text(json.dumps(summary))
+        npz_path.unlink()
+
+    assert main([str(tmp_path / "final-ICLR"), "--samples-per-subject", "0",
+                 "--out-dir", str(tmp_path / "out")]) == 0
+    report = json.loads((tmp_path / "out/subject_invariance.json").read_text())
+    folds = _read_csv(tmp_path / "out/subject_invariance_folds.csv")
+    assert [row["scores_recomputed_from_embeddings"] for row in folds] == ["True", "False"]
+    assert report["aggregate"][0]["heldout_source_percentile_subject_median"] == 62.5
+    assert report["input_hashes"][1]["source_trials_path"].endswith("source_trials.json")
+    assert "region_npz_sha256" not in report["input_hashes"][1]
