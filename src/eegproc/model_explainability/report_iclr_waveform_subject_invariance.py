@@ -330,6 +330,13 @@ def _aggregate(rows, *, expected_subjects):
         "n_expected_folds": expected_subjects,
         "missing_subject_ids": sorted(set(range(expected_subjects)) - ids),
         "n_comparable_folds": len(comparable),
+        "n_folds_decoded_cf_lower_discrepancy_than_real_x": sum(
+            row["decoded_cf_minus_real_x_median_over_waveform_threshold"] < 0
+            for row in comparable
+        ),
+        "min_source_decoded_reference_trials": min(
+            row["n_source_typical_real_class1"] for row in rows
+        ),
         "n_running_folds": sum(row["fold_status"] != "completed" for row in rows),
         "n_eligible_class0": sum(row["n_eligible_class0"] for row in rows),
         "n_typicality_completed": sum(row["n_typicality_completed"] for row in rows),
@@ -352,49 +359,47 @@ def _aggregate(rows, *, expected_subjects):
 
 
 def _paragraph(aggregates):
-    lines = [r"\paragraph{Subject-invariance.}",
-             "We compare each held-out subject's original real class-1 EEG $X$ and "
-             "typicality-arm decoded class-0-to-1 EEG $R(Z^{\\mathrm{cf}})$ in "
-             "the same full-trial waveform space. The fold-specific benchmark "
-             "consists of $R(Z)$ from other subjects' correctly predicted, typical "
-             "class-1 trials. We fit a diagonal Gaussian to these decoded benchmark "
-             "waveforms and apply the typicality discrepancy formula to both $X$ and "
-             "$R(Z^{\\mathrm{cf}})$, without replacing $X$ by its reconstruction "
-             "or re-encoding the counterfactual waveforms."]
+    lines = [
+        r"\paragraph{Subject-invariance.}",
+        "We compare held-out subjects' original class-1 EEG $X$ and "
+        "typicality-generated class-0-to-1 waveforms $R(Z^{\\mathrm{cf}})$ "
+        "with decoded $R(Z)$ from other subjects' correctly predicted, "
+        "typical class-1 trials. The fold-specific EEG-space discrepancy "
+        "uses the same diagonal squared Mahalanobis formula as typicality, "
+        "fitted to the source $R(Z)$ waveforms.",
+    ]
     for row in aggregates:
         task = row["task"].capitalize()
         if not row["n_comparable_folds"]:
-            lines.append(f"For {task}, no observed fold has both sampled original real class-1 EEG "
-                         "and a completed class-1 optimized counterfactual waveform.")
+            lines.append(
+                f"For {task}, no observed fold has both sampled original "
+                "class-1 EEG and a completed class-1 counterfactual waveform."
+            )
             continue
         lines.append(
-            f"For {task}, {row['n_optimized_class1_flip']} of {row['n_eligible_class0']} eligible "
-            f"typicality attempts reached class-1 argmax, and "
-            f"{row['n_optimized_confident_class1_flip']} also met the study's target "
-            f"probability threshold. Of the argmax-flip decoded "
-            f"waveforms, {row['n_decoded_cf_inside_source']} of {row['n_optimized_class1_flip']} "
-            f"were inside the source decoded-$R(Z)$ region, compared with "
-            f"{row['n_real_x_inside_source']} of {row['n_real_x_sampled']} sampled original "
-            f"real class-1 trials. Across {row['n_comparable_folds']} comparable folds, "
-            f"the fold-median source-$R(Z)$ discrepancy percentile was "
-            f"{row['fold_median_real_x_source_waveform_percentile']:.1f} for real $X$ and "
-            f"{row['fold_median_decoded_cf_source_waveform_percentile']:.1f} for decoded "
-            f"$R(Z^{{\\mathrm{{cf}}}})$; the median decoded-minus-real discrepancy gap, "
-            f"scaled by the fold's source threshold, was "
-            f"{row['fold_median_decoded_cf_minus_real_x_over_waveform_threshold']:+.3f}."
+            f"For {task}, {row['n_decoded_cf_inside_source']} of "
+            f"{row['n_optimized_class1_flip']} class-1 argmax counterfactuals "
+            f"fall within the source $R(Z)$ 95th-percentile region, compared "
+            f"with {row['n_real_x_inside_source']} of {row['n_real_x_sampled']} "
+            f"sampled original class-1 $X$. The "
+            f"counterfactual fold-median discrepancy is lower than that of "
+            f"real $X$ in {row['n_folds_decoded_cf_lower_discrepancy_than_real_x']} "
+            f"of {row['n_comparable_folds']} comparable folds. "
+            f"{row['n_optimized_confident_class1_flip']} of "
+            f"{row['n_typicality_completed']} completed attempts meet the "
+            f"study's target-probability criterion."
         )
-        if not row["n_optimized_confident_class1_flip"]:
-            lines.append(
-                f"The {task} waveform comparison describes argmax flips only: none "
-                "satisfied the archived confidence criterion for a successful counterfactual."
-            )
-        if (row["missing_subject_ids"] or row["n_typicality_pending"]
-                or row["n_typicality_error"] or row["n_running_folds"]):
-            lines.append(f"The {task} archive is incomplete ({row['n_observed_folds']} of "
-                         f"{row['n_expected_folds']} expected folds; "
-                         f"{row['n_typicality_pending']} pending attempts).")
-    lines.append("This decoded-waveform Gaussian is fitted solely for this analysis and "
-                 "is distinct from the model's learned embedding-space typicality region.")
+    if all(row["n_real_x_inside_source"] == 0 for row in aggregates):
+        lines.append(
+            "All sampled original class-1 $X$ fall outside the decoded "
+            "reference region. This decoder-domain shift limits the "
+            "subject-invariance interpretation, because the shared decoder "
+            "may contribute to the counterfactuals' low discrepancy."
+        )
+    lines.append(
+        "The supplied archives are incomplete; this empirical EEG-space "
+        "reference is distinct from the learned embedding-space typicality region."
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -469,6 +474,7 @@ def build_waveform_subject_invariance_report(roots, output, *, raw_eeg, raw_labe
         "limitations": [
             "The diagonal decoded-EEG Gaussian is empirical and is distinct from the checkpoint's learned embedding-space class-1 Gaussian.",
             "A decoded class-1 flip is not independently verified without re-encoding; class-1 selection uses the optimizer's saved latent prediction.",
+            "Original X and decoded R(Z) occupy different waveform distributions in the supplied archives; decoder-induced alignment can contribute to the observed gap.",
             "Pointwise waveform discrepancy is sensitive to temporal phase and alignment.",
             "The supplied study archives are incomplete and task summaries are provisional.",
         ],
