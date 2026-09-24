@@ -247,6 +247,23 @@ must include each fold's `calibration/region.json`,
 archives do not retain embeddings, so the report validates the saved scores
 and source-calibrated threshold but cannot recompute every score offline.
 
+To compare **optimized typicality discrepancies** from an incomplete study
+without re-encoding decoded EEG, run:
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.report_iclr_typicality_subject_invariance \
+  /Users/tolas/Desktop/incomplete-ICLR \
+  --samples-per-subject 3 --seed 42 \
+  --out-dir runs/counterfactuals/incomplete-ICLR-typicality-subject-invariance
+```
+
+This uses the frozen class-1 Gaussian's saved discrepancy for real held-out
+class-1 $X$ and for the typicality arm's optimized $Z^{cf}$. Source trials
+with true/predicted class 1 and $D\leq\tau$ form the empirical class-1
+reference. The report compares scores only within a fold, counts pending
+attempts and missing folds, and writes CSVs plus a LaTeX paragraph. It does
+not claim that $D(Z^{cf})$ is a score of the decoded EEG $R(Z^{cf})$.
+
 For **counterfactual** subject invariance, run the updated optimizer into a
 new output root and then analyze its decoded EEG scores:
 
