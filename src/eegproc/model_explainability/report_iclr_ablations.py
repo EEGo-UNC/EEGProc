@@ -6,8 +6,9 @@ Run from the EEGProc root with::
         runs/counterfactuals/final-ICLR --out-dir runs/counterfactuals/final-ICLR-report
 
 The input can contain task directories and/or fold_* study shards. No model,
-checkpoint, TensorFlow, or EEG arrays are loaded. In latent-only studies, Valid
-and Joint refer to latent predictions; decoded validity is unavailable.
+checkpoint, TensorFlow, or EEG arrays are loaded. Flip, confidence, and their
+conjunctions refer to latent predictions in latent-only studies; decoded
+validity is unavailable there.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import csv
 import json
 import math
 from pathlib import Path
-from statistics import median
 
 
 OBJECTIVES = ("target_latent", "base", "typicality", "typicality_no_physiology")
@@ -60,25 +60,42 @@ def _finite(value):
     return number if math.isfinite(number) else None
 
 
-def _endpoint(summary: dict, protocol: str) -> dict:
+def _endpoint(summary: dict, protocol: str, study_threshold) -> dict:
     row = {"status": summary["status"]}
     if row["status"] != "completed":
         row["error"] = summary.get("error")
         return row
     typical = summary["typicality"]["typical"]
     decoded = summary["decoded_trials"][summary["report_output"]]
-    latent_valid = summary["latent_counterfactual"]["success"]
     if protocol == "latent_only":
-        valid = latent_valid
+        prediction = summary["latent_counterfactual"]
     else:
-        decoded_cf = decoded.get("counterfactual")
-        valid = decoded_cf["success"] if decoded_cf is not None else None
-        typical = decoded_cf["typical"] if decoded_cf is not None else None
+        prediction = decoded.get("counterfactual")
+        typical = prediction.get("typical") if prediction is not None else None
+    threshold = _finite(summary.get("required_target_probability", study_threshold))
+    if (threshold is not None and study_threshold is not None
+            and not math.isclose(threshold, float(study_threshold), abs_tol=1e-12)):
+        raise ValueError("Result and study disagree on required target probability")
+    target_probability = _finite(prediction.get("target_probability")) if prediction else None
+    target_class = summary.get("target_class", 1)
+    predicted_class = prediction.get("predicted_class") if prediction else None
+    if predicted_class is None and prediction and prediction.get("probabilities"):
+        probabilities = prediction["probabilities"]
+        predicted_class = max(range(len(probabilities)), key=lambda index: probabilities[index])
+    flip = predicted_class == target_class if predicted_class is not None else None
+    confidence = (target_probability >= threshold
+                  if target_probability is not None and threshold is not None else None)
+    if prediction is not None and flip is not None and confidence is not None:
+        if prediction.get("success") is not None and bool(prediction["success"]) != (flip and confidence):
+            raise ValueError("Saved success disagrees with flip and confidence criterion")
     physiology = summary["physiology"]
     change_mse = _finite(decoded.get("decoded_change_mse"))
     row.update(
-        valid=valid, typical=typical,
-        joint=bool(valid and typical) if valid is not None and typical is not None else None,
+        flip=flip, confidence_acquired=confidence, typical=typical,
+        flip_typical=bool(flip and typical) if flip is not None and typical is not None else None,
+        confident_flip_typical=(bool(flip and confidence and typical)
+                                if flip is not None and confidence is not None and typical is not None else None),
+        target_probability=target_probability, required_target_probability=threshold,
         d_z=_finite(summary.get("d_z")),
         delta_dec=math.sqrt(change_mse) if change_mse is not None and change_mse >= 0 else None,
         physiological_passed=physiology.get("all_required_passed"),
@@ -97,6 +114,7 @@ def collect(root: Path):
         raise ValueError(f"No study.json found under {root}")
     rows, folds, seen = [], [], set()
     definitions, protocols = set(), set()
+    thresholds = {}
     for study_dir in studies:
         study = _read_json(study_dir / "study.json")
         task = study["task"].lower()
@@ -107,6 +125,14 @@ def collect(root: Path):
             raise ValueError(f"Expected all four ablations in {study_dir}; got {objectives}")
         protocol = study.get("round_trip_evaluation", "latent_only")
         protocols.add(protocol)
+        study_threshold = study.get("arguments", {}).get("target_probability")
+        if study_threshold is not None:
+            study_threshold = _finite(study_threshold)
+            if study_threshold is None or not 0 < study_threshold <= 1:
+                raise ValueError(f"Invalid target-probability threshold in {study_dir}")
+            if task in thresholds and thresholds[task] != study_threshold:
+                raise ValueError(f"Cannot pool different {task} confidence thresholds")
+            thresholds[task] = study_threshold
         definitions.add((study.get("typicality_definition"),
                          study.get("typicality_representation")))
         for entry in study["folds"]:
@@ -143,14 +169,14 @@ def collect(root: Path):
                         if summary["status"] == "completed" and not (attempt / "complete.json").is_file():
                             row["error"] = "Uncommitted completed attempt"
                         else:
-                            row.update(_endpoint(summary, protocol))
+                            row.update(_endpoint(summary, protocol, study_threshold))
                             row["artifact_directory"] = str(attempt.resolve())
                     rows.append(row)
     if len(protocols) != 1:
         raise ValueError(f"Cannot mix validity protocols: {sorted(protocols)}")
     if len(definitions) != 1:
         raise ValueError("Cannot pool different typicality definitions or representations")
-    return rows, folds, studies, protocols.pop(), definitions.pop()
+    return rows, folds, studies, protocols.pop(), definitions.pop(), thresholds
 
 
 def _quantiles(values):
@@ -175,7 +201,8 @@ def summarize(rows: list[dict], *, pending_folds=0) -> dict:
            "n_error": sum(row["status"] == "error" for row in rows),
            "n_pending": sum(row["status"] == "pending" for row in rows),
            "n_pending_folds": pending_folds}
-    for field in ("valid", "typical", "joint", "physiological_passed",
+    for field in ("flip", "confidence_acquired", "typical", "flip_typical",
+                  "confident_flip_typical", "physiological_passed",
                   "available_checks_passed"):
         unknown = any(row.get(field) is None for row in completed)
         if field == "physiological_passed" and out["n_pending"]:
@@ -204,30 +231,35 @@ def _fmt(value, digits=2):
 
 
 def _distance(row, field):
-    return (f"{_fmt(row[field + '_median'])} "
-            f"[{_fmt(row[field + '_q25'])}, {_fmt(row[field + '_q75'])}]"
+    digits = 4 if field == "delta_dec" else 3
+    return (f"{_fmt(row[field + '_median'], digits)} "
+            f"[{_fmt(row[field + '_q25'], digits)}, {_fmt(row[field + '_q75'], digits)}]"
             if row[field + "_median"] is not None else "--")
 
 
 def _table(population: list[dict], protocol: str) -> str:
     space = "latent" if protocol == "latent_only" else "decoded and re-encoded"
     caption = ("Population-level counterfactual evaluation across all eligible class-0 trials. "
-               f"Validity and class-1 typicality are evaluated in the {space} space; "
-               "Joint is their conjunction. Distances are median [Q1, Q3]. "
+               f"Flip and class-1 typicality are evaluated in the {space} space. "
+               "Conf. is target-class probability at or above the archived threshold; "
+               "Flip+Typ. and Conf.+Typ. are the two conjunctions (the latter also requires a flip). "
+               "Distances are median [Q1, Q3]. "
                "Phys. is passage of all required physiological checks; -- means unavailable.")
     lines = [r"\begin{table}[H]", f"\\caption{{{caption}}}",
              r"\label{tab:counterfactual_results}", r"\begin{center}",
-             r"\begin{tabular}{llcccccc}",
-             r"\textbf{Task} & \textbf{Objective} & \textbf{Valid (\%)} & \textbf{Typ. (\%)} & \textbf{Joint (\%)} & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{Phys. (\%)} \\ \hline"]
+             r"\begin{tabular}{llcccccccc}",
+             r"\textbf{Task} & \textbf{Objective} & \textbf{Flip (\%)} & \textbf{Conf. (\%)} & \textbf{Typ. (\%)} & \textbf{Flip+Typ. (\%)} & \textbf{Conf.+Typ. (\%)} & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{Phys. (\%)} \\ \hline"]
     for task in TASKS:
         for objective in OBJECTIVES:
             row = next((item for item in population if item["task"] == task and
                         item["objective"] == objective), None)
             if row is None or row["provisional"]:
-                entries = [task.title(), LABELS[objective], *("--",) * 6]
+                entries = [task.title(), LABELS[objective], *("--",) * 8]
             else:
                 entries = [task.title(), LABELS[objective],
-                           *(_fmt(row[field + "_percent"]) for field in ("valid", "typical", "joint")),
+                           *(_fmt(row[field + "_percent"]) for field in (
+                               "flip", "confidence_acquired", "typical", "flip_typical",
+                               "confident_flip_typical")),
                            _distance(row, "d_z"), _distance(row, "delta_dec"),
                            _fmt(row["physiological_passed_percent"])]
             lines.append(" & ".join(entries) + r" \\")
@@ -238,7 +270,7 @@ def _table(population: list[dict], protocol: str) -> str:
 def build_report(input_root: Path, out_dir: Path, *, expected_subjects: int = 23) -> dict:
     if expected_subjects < 1:
         raise ValueError("expected_subjects must be positive")
-    rows, folds, studies, protocol, definition = collect(input_root)
+    rows, folds, studies, protocol, definition, thresholds = collect(input_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     subjects, population = [], []
     missing_subjects = {}
@@ -270,15 +302,19 @@ def build_report(input_root: Path, out_dir: Path, *, expected_subjects: int = 23
                     and row["subject_id"] == fold["subject_id"]]
         lines = [f"# {fold['task'].title()} user {fold['subject_id']}", "",
                  f"Fold status: {fold['status']}; eligible trials: {fold['n_eligible'] if fold['n_eligible'] is not None else 'unknown'}.",
-                 "", "| Objective | Completed / eligible | Valid % | Typ. % | Joint % | d_Z median [Q1, Q3] | Delta_dec median [Q1, Q3] | Phys. % |",
-                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+                 "", "| Objective | Completed / eligible | Flip % | Conf. % | Typ. % | Flip+Typ. % | Conf.+Typ. % | d_Z median [Q1, Q3] | Delta_dec median [Q1, Q3] | Phys. % |",
+                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for row in selected:
             lines.append("| " + " | ".join((row["objective"],
                          f"{row['n_completed']} / {row['n_eligible']}",
-                         *(_fmt(row[field + "_percent"]) for field in ("valid", "typical", "joint")),
+                         *(_fmt(row[field + "_percent"]) for field in (
+                             "flip", "confidence_acquired", "typical", "flip_typical",
+                             "confident_flip_typical")),
                          _distance(row, "d_z"), _distance(row, "delta_dec"),
                          _fmt(row["physiological_passed_percent"]))) + " |")
-        lines += ["", "Rates use all eligible trials. Distances use finite selected endpoints.",
+        lines += ["", "Flip is target-class argmax; Conf. is target probability at or above the archived threshold.",
+                  "Flip+Typ. and Conf.+Typ. are separate conjunctions; the latter also requires a flip.",
+                  "Rates use all eligible trials. Distances use finite selected endpoints.",
                   "Phys. is unavailable when a required check was not assessed.", ""]
         (user_dir / f"{fold['task']}_user_{fold['subject_id']}.md").write_text(
             "\n".join(lines), encoding="utf-8")
@@ -287,7 +323,8 @@ def build_report(input_root: Path, out_dir: Path, *, expected_subjects: int = 23
                 and all(fold["status"] == "completed" for fold in folds)
                 and all(row["status"] != "pending" for row in rows))
     payload = {"input": str(input_root.resolve()), "studies": [str(path.resolve()) for path in studies],
-               "validity_protocol": protocol, "typicality_definition": definition[0],
+               "validity_protocol": protocol, "confidence_thresholds": thresholds,
+               "typicality_definition": definition[0],
                "typicality_representation": definition[1], "complete": complete,
                "expected_subjects_per_task": expected_subjects,
                "missing_subjects": missing_subjects, "folds": folds, "population": population}

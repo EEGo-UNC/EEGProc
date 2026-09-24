@@ -21,6 +21,7 @@ def _study(root, task, *, protocol="latent_only", absent_check=False):
     _json(shard / "study.json", {
         "task": task, "folds": [{"subject_id": 0}], "objectives": OBJECTIVES,
         "round_trip_evaluation": protocol,
+        "arguments": {"target_probability": 0.8},
         "typicality_definition": "test_score", "typicality_representation": "test_embedding",
     })
     _json(shard / "subject_0/fold.json", {
@@ -33,17 +34,22 @@ def _study(root, task, *, protocol="latent_only", absent_check=False):
             if trial == 3 and objective == "base":
                 _json(attempt / "result.json", {"status": "error", "error": "optimization failed"})
                 continue
-            valid = trial == 2
             typical = objective.startswith("typicality")
+            latent = {"predicted_class": 1, "target_probability": 0.54 if trial == 2 else 0.85,
+                      "success": trial == 3}
+            decoded_cf = {"predicted_class": 0 if trial == 2 else 1,
+                          "target_probability": 0.4 if trial == 2 else 0.85,
+                          "success": trial == 3, "typical": typical}
             result = {
                 "status": "completed", "task": task, "subject_id": 0,
                 "trial_id": trial, "objective": objective,
-                "report_output": "joint", "latent_counterfactual": {"success": valid},
+                "report_output": "joint", "target_class": 1,
+                "required_target_probability": 0.8, "latent_counterfactual": latent,
                 "typicality": {"typical": typical}, "d_z": float(trial),
                 "decoded_trials": {"joint": {"decoded_change_mse": 4.0,
-                                              "counterfactual": {"success": not valid, "typical": typical}}},
-                "physiology": {"all_required_passed": None if absent_check else valid,
-                               "available_checks_passed": valid},
+                                              "counterfactual": decoded_cf}},
+                "physiology": {"all_required_passed": None if absent_check else trial == 3,
+                               "available_checks_passed": trial == 3},
             }
             _json(attempt / "result.json", result)
             _json(attempt / "complete.json", {"sha256": {}})
@@ -63,14 +69,18 @@ def test_four_ablations_report_each_user_and_preserve_metric_space(tmp_path):
     base = valence[1]
     assert base["n_eligible"] == 2
     assert base["n_error"] == 1
-    assert base["valid_percent"] == 50
+    assert base["flip_percent"] == 50
+    assert base["confidence_acquired_percent"] == 0
     assert base["d_z_n"] == 1
     assert base["d_z_median"] == 2
     assert base["physiological_passed_percent"] is None
-    assert valence[2]["joint_percent"] == 50
-    assert valence[3]["joint_percent"] == 50
+    assert valence[2]["flip_typical_percent"] == 100
+    assert valence[2]["confident_flip_typical_percent"] == 50
+    assert valence[3]["flip_typical_percent"] == 100
+    assert valence[3]["confident_flip_typical_percent"] == 50
     latex = (tmp_path / "report/counterfactual_results.tex").read_text()
     assert "latent space" in latex
+    assert "Flip+Typ." in latex and "Conf.+Typ." in latex
     assert r"\lambda_{\mathrm{phys}}=0" in latex
     assert "--" in latex
     assert (tmp_path / "report/users/valence_user_0.md").is_file()
@@ -83,11 +93,12 @@ def test_round_trip_validity_is_not_taken_from_latent_success(tmp_path):
     _study(root, "valence", protocol="full_trial_decoder_encoder_v1")
     report = build_report(root, tmp_path / "report", expected_subjects=1)
     row = report["population"][0]
-    assert row["valid_percent"] == 50
+    assert row["flip_percent"] == 50
+    assert row["confidence_acquired_percent"] == 50
     trial_rows = list(csv.DictReader((tmp_path / "report/trial_optimizations.csv").open()))
     first = next(row for row in trial_rows if row["task"] == "valence" and
                  row["trial_id"] == "2" and row["objective"] == "target_latent")
-    assert first["valid"] == "False"
+    assert first["flip"] == "False"
     assert "decoded and re-encoded" in (tmp_path / "report/counterfactual_results.tex").read_text()
 
 
@@ -114,6 +125,6 @@ def test_partial_archive_keeps_population_table_blank(tmp_path):
     assert not report["complete"]
     assert report["missing_subjects"] == {"valence": [1], "arousal": [0, 1]}
     assert report["population"][0]["provisional"]
-    assert report["population"][0]["valid_percent"] == 50
+    assert report["population"][0]["flip_percent"] == 100
     assert "Valence & $\\mathcal{L}_{\\mathrm{base}}$ & -- & --" in (
         tmp_path / "report/counterfactual_results.tex").read_text()
