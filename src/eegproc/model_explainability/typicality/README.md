@@ -241,8 +241,11 @@ trial scores, per-fold and task summaries, a sampling manifest, and
 available true class-1 source trials; held-out class-0 trials are a separately
 labeled negative control. The summary normalizes fold contrasts by each
 source-calibrated threshold and gives subject-bootstrap intervals. The input
-must include each fold's `calibration/region.json`, `region.npz`,
-`source_trials.npz`, and `observations.npz` from `typicality.runner`.
+must include each fold's `calibration/region.json`,
+`calibration/source_trials.json`, and `observations.json` from the compact
+`typicality.runner` archive. Historical NPZ summaries also work. Compact
+archives do not retain embeddings, so the report validates the saved scores
+and source-calibrated threshold but cannot recompute every score offline.
 
 After a `typicality.runner` study has produced its counterfactual archives,
 recompute the requested correct-class-1 reference and evaluate both held-out

@@ -2,7 +2,7 @@
 
 Each held-out subject is scored only in its own fold's frozen classifier space.
 The source subjects supplied that fold's learned class-1 Gaussian; held-out
-trials did not. This analysis reads saved real-trial embeddings and never loads
+trials did not. This analysis reads archived real-trial scores and never loads
 a checkpoint or runs counterfactual optimization.
 """
 
@@ -42,18 +42,24 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
-def _load_npz(path, required):
-    path = Path(path)
-    if not path.is_file():
-        raise ValueError(
-            f"Missing real-trial archive {path}; this analysis needs "
-            "calibration/source_trials.npz and observations.npz from typicality.runner."
-        )
-    with np.load(path, allow_pickle=False) as archive:
-        missing = set(required) - set(archive.files)
-        if missing:
-            raise ValueError(f"{path} is missing arrays {sorted(missing)}")
-        return {name: np.asarray(archive[name]) for name in required}
+def _load_summary(stem, required):
+    """Prefer compact JSON, retaining compatibility with historical NPZ runs."""
+    stem = Path(stem)
+    json_path, npz_path = stem.with_suffix(".json"), stem.with_suffix(".npz")
+    if json_path.is_file():
+        path = json_path
+        data = {name: np.asarray(value) for name, value in json.loads(path.read_text()).items()}
+    elif npz_path.is_file():
+        path = npz_path
+        with np.load(path, allow_pickle=False) as archive:
+            data = {name: np.asarray(archive[name]) for name in archive.files}
+    else:
+        raise ValueError(f"Missing {json_path} or {npz_path}; this analysis needs "
+                         "source-trial and held-out observation summaries from typicality.runner")
+    missing = set(required) - set(data)
+    if missing:
+        raise ValueError(f"{path} is missing fields {sorted(missing)}")
+    return path, data
 
 
 def _validate_predictions(labels, probabilities, discrepancies, *, name):
@@ -108,24 +114,31 @@ def stratified_sample_indices(subject_ids, trial_ids, eligible, *, samples_per_s
 
 
 class TypicalityRegion:
-    """Read the frozen Gaussian and independently verify archived scores."""
+    """Read the frozen Gaussian; old embedding archives allow score verification."""
 
     @classmethod
     def load(cls, directory):
         directory = Path(directory)
-        if not (directory / "region.json").is_file() or not (directory / "region.npz").is_file():
+        if not (directory / "region.json").is_file():
             raise ValueError(f"Missing learned class-1 region in {directory}; this analysis "
                              "needs the real-trial calibration archives from typicality.runner")
         metadata = json.loads((directory / "region.json").read_text())
         if (metadata.get("schema_version") != 2 or metadata.get("definition") != SCORE_DEFINITION
                 or metadata.get("representation") != REPRESENTATION):
             raise ValueError(f"Incompatible typicality region in {directory}")
-        with np.load(directory / "region.npz", allow_pickle=False) as archive:
-            region = cls()
-            region.prior_mean = np.asarray(archive["prior_mean"], dtype=float)
-            region.prior_variance = np.asarray(archive["prior_variance"], dtype=float)
-            region.tau = float(archive["tau"])
-            region.variance_floor = float(archive["variance_floor"])
+        if "parameters" in metadata:
+            parameters = metadata.pop("parameters")
+        elif (directory / "region.npz").is_file():
+            with np.load(directory / "region.npz", allow_pickle=False) as archive:
+                parameters = {name: archive[name] for name in
+                              ("prior_mean", "prior_variance", "tau", "variance_floor")}
+        else:
+            raise ValueError(f"No Gaussian parameters found in {directory}")
+        region = cls()
+        region.prior_mean = np.asarray(parameters["prior_mean"], dtype=float)
+        region.prior_variance = np.asarray(parameters["prior_variance"], dtype=float)
+        region.tau = float(parameters["tau"])
+        region.variance_floor = float(parameters["variance_floor"])
         if (region.prior_mean.ndim != 1 or region.prior_variance.shape != region.prior_mean.shape
                 or not np.isfinite(region.prior_mean).all()
                 or not np.isfinite(region.prior_variance).all()
@@ -195,12 +208,14 @@ def _check_scores(archive, region, *, name):
     labels, probabilities, scores = _validate_predictions(
         archive["labels"], archive["probabilities"], archive["discrepancy"], name=name,
     )
-    embeddings = np.asarray(archive["embeddings"], dtype=float)
-    if embeddings.shape != (len(labels), len(region.prior_mean)):
-        raise ValueError(f"{name} embeddings do not match the learned class-1 distribution")
-    if not np.allclose(region.score(embeddings), scores, rtol=1e-5, atol=1e-7):
-        raise ValueError(f"{name} discrepancies do not match the learned class-1 distribution")
-    return labels, probabilities, scores
+    verified = "embeddings" in archive
+    if verified:
+        embeddings = np.asarray(archive["embeddings"], dtype=float)
+        if embeddings.shape != (len(labels), len(region.prior_mean)):
+            raise ValueError(f"{name} embeddings do not match the learned class-1 distribution")
+        if not np.allclose(region.score(embeddings), scores, rtol=1e-5, atol=1e-7):
+            raise ValueError(f"{name} discrepancies do not match the learned class-1 distribution")
+    return labels, probabilities, scores, verified
 
 
 def _trial_rows(task, fold_subject, role, indices, subjects, trials, labels, probabilities, scores, tau,
@@ -246,16 +261,14 @@ def analyze_fold(root, task, fold_entry, *, samples_per_subject=3, seed=42):
     if not np.isclose(float(fold["threshold"]), tau):
         raise ValueError(f"Fold and region thresholds differ for subject {held_subject}")
 
-    source_path = region_path / "source_trials.npz"
-    held_path = fold_dir / "observations.npz"
-    source = _load_npz(source_path, (
-        "subject_ids", "trial_ids", "labels", "probabilities", "discrepancy", "embeddings",
+    source_path, source = _load_summary(region_path / "source_trials", (
+        "subject_ids", "trial_ids", "labels", "probabilities", "discrepancy",
     ))
-    held = _load_npz(held_path, (
-        "trial_ids", "labels", "probabilities", "discrepancy", "embeddings",
+    held_path, held = _load_summary(fold_dir / "observations", (
+        "trial_ids", "labels", "probabilities", "discrepancy",
     ))
-    slabels, sprobs, sscores = _check_scores(source, region, name="source")
-    hlabels, hprobs, hscores = _check_scores(held, region, name="held-out")
+    slabels, sprobs, sscores, source_score_verified = _check_scores(source, region, name="source")
+    hlabels, hprobs, hscores, held_score_verified = _check_scores(held, region, name="held-out")
     ssubjects = np.asarray(source["subject_ids"], dtype=int)
     strials = np.asarray(source["trial_ids"], dtype=int)
     htrials = np.asarray(held["trial_ids"], dtype=int)
@@ -267,6 +280,14 @@ def analyze_fold(root, task, fold_entry, *, samples_per_subject=3, seed=42):
         raise ValueError("Source subjects differ from the region's calibration subjects")
     if set(ssubjects.tolist()) != set(checkpoint.get("source_subject_ids", [])):
         raise ValueError("Source subjects differ from the checkpoint manifest")
+    quantile = float(region.metadata["quantile"])
+    quantile_method = region.metadata.get("quantile_method", "higher")
+    source_class1_scores = sscores[slabels == 1]
+    if len(source_class1_scores) < 2 or not 0 < quantile < 1:
+        raise ValueError("Source class-1 threshold calibration is invalid")
+    expected_tau = float(np.quantile(source_class1_scores, quantile, method=quantile_method))
+    if not np.isclose(expected_tau, tau, rtol=1e-5, atol=1e-7):
+        raise ValueError("Saved threshold does not match source class-1 trial scores")
     hsubjects = np.full(len(hlabels), held_subject, dtype=int)
 
     source_indices, source_sampling = stratified_sample_indices(
@@ -281,7 +302,7 @@ def analyze_fold(root, task, fold_entry, *, samples_per_subject=3, seed=42):
     control_indices = control_indices[np.argsort(htrials[control_indices], kind="stable")]
     source_scores, held_scores = sscores[source_indices], hscores[held_indices]
     control_scores = hscores[control_indices]
-    source_cdf_scores = sscores[slabels == 1]
+    source_cdf_scores = source_class1_scores
     held_percentiles = _source_percentiles(held_scores, source_cdf_scores)
     control_percentiles = _source_percentiles(control_scores, source_cdf_scores)
     source_median, held_median = _median(source_scores), _median(held_scores)
@@ -291,6 +312,7 @@ def analyze_fold(root, task, fold_entry, *, samples_per_subject=3, seed=42):
         "task": task,
         "fold_subject": held_subject,
         "source_threshold": tau,
+        "scores_recomputed_from_embeddings": bool(source_score_verified and held_score_verified),
         "n_source_subjects": len(source_sampling),
         "n_source_subjects_with_true1": sum(item["n_available_true_class_1"] > 0
                                             for item in source_sampling),
@@ -329,16 +351,20 @@ def analyze_fold(root, task, fold_entry, *, samples_per_subject=3, seed=42):
         task, held_subject, "heldout_class0_negative_control", control_indices, hsubjects, htrials,
         hlabels, hprobs, hscores, tau, percentiles=control_percentiles,
     )
-    return row, trial_rows, source_sampling + held_sampling, {
+    hashes = {
         "study_root": str(root.resolve()),
         "task": task,
         "fold_subject": held_subject,
         "fold_json_sha256": file_sha256(fold_path),
         "region_json_sha256": file_sha256(region_path / "region.json"),
-        "region_npz_sha256": file_sha256(region_path / "region.npz"),
-        "source_trials_npz_sha256": file_sha256(source_path),
-        "observations_npz_sha256": file_sha256(held_path),
+        "source_trials_path": str(source_path.resolve()),
+        "source_trials_sha256": file_sha256(source_path),
+        "observations_path": str(held_path.resolve()),
+        "observations_sha256": file_sha256(held_path),
     }
+    if (region_path / "region.npz").is_file():
+        hashes["region_npz_sha256"] = file_sha256(region_path / "region.npz")
+    return row, trial_rows, source_sampling + held_sampling, hashes
 
 
 def _aggregate(rows, *, seed, bootstrap_replicates):
@@ -466,13 +492,14 @@ def build_subject_invariance_report(roots, output, *, samples_per_subject=3, see
     write_json(output / "subject_invariance_sampling.json", sampling)
     (output / "subject_invariance_paragraph.tex").write_text(_paper_paragraph(aggregates))
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "typicality_definition": definition,
         "selection": "true class 1, irrespective of predicted class or discrepancy",
         "comparison": "within each LOSO fold: held-out real trials versus sampled source real trials scored against that fold's frozen learned class-1 Gaussian",
         "negative_control": "all held-out true class-0 trials are reported separately and never enter the class-1 estimates",
         "source_empirical_percentile_reference": "all available source true class-1 trials in the matching fold",
         "normalization": "discrepancy divided by that fold's source-calibrated threshold; raw scores are not pooled across models",
+        "score_verification": "recompute scores when embeddings are archived; otherwise validate finite saved scores, source membership, and the source class-1 calibration quantile",
         "samples_per_subject": int(samples_per_subject),
         "seed": int(seed),
         "bootstrap_unit": "held-out subject (one LOSO fold)",
@@ -481,6 +508,7 @@ def build_subject_invariance_report(roots, output, *, samples_per_subject=3, see
         "input_hashes": hashes,
         "limitations": [
             "Source trials were used to train the model; held-out trials were not.",
+            "Compact JSON archives do not retain embeddings, so individual saved discrepancies cannot be independently recomputed offline.",
             "Independent LOSO models have different latent coordinate systems; only within-fold contrasts are aggregated.",
             "Bootstrap intervals resample held-out subjects; overlapping LOSO training sets make them descriptive rather than independent-model guarantees.",
             "This descriptive compatibility test alone does not prove subject-invariant representations.",
