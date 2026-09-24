@@ -77,14 +77,15 @@ def test_four_ablations_report_each_user_and_preserve_metric_space(tmp_path):
     assert base["vcsc_passed_percent"] == 50
     assert base["d_z_n"] == 1
     assert base["d_z_median"] == 2
-    assert base["physiological_passed_percent"] is None
+    assert base["physiological_passed_percent"] == 0
+    assert valence[2]["physiological_passed_percent"] is None
     assert valence[2]["flip_typical_percent"] == 100
     assert valence[2]["confident_flip_typical_percent"] == 50
     assert valence[2]["available_checks_passed_percent"] == 50
     assert valence[3]["flip_typical_percent"] == 100
     assert valence[3]["confident_flip_typical_percent"] == 50
     latex = (tmp_path / "report/counterfactual_results.tex").read_text()
-    assert "Phys. (4/4)" in latex
+    assert "Phys. requires all five" in latex
     assert "VCSC" in latex
     assert "Flip (\\%)" not in latex and "Typ. (\\%)" not in latex
     assert r"\lambda_{\mathrm{phys}}=0" in latex

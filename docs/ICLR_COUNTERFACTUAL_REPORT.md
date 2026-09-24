@@ -22,8 +22,8 @@ Outputs are `trial_optimizations.csv`, `user_optimizations.csv`,
 `counterfactual_results_with_provisional.tex`, and
 individual `users/<task>_user_<id>.md` reports. Each task has four rows in the
 LaTeX table, including typicality without the physiological penalty. The table
-contains displacement, VCSC pass rate, and the pass rate over the four
-assessable physiological checks. Flip, confidence acquisition, and typicality
+contains displacement, VCSC pass rate, and the full physiological pass rate.
+Flip, confidence acquisition, and typicality
 remain in the CSV and per-user reports for the accompanying prose. The
 `report.json` file records missing user shards and whether the report is
 complete. An optimization error remains in the denominator for percentages;
@@ -43,7 +43,9 @@ counterfactual signals, so decoded validity cannot be inferred. Historical
 round-trip archives, if all inputs use that protocol and preserve decoded
 predictions, produce decoded/re-encoded metrics instead. The fifth
 physiological check, aperiodic exponent, cannot be estimated from the
-band-filtered decoder, so the five-check pass rate is undefined. `Phys. 4/4`
-is explicitly the rate passing all four assessable checks. `VCSC` compares the
+band-filtered decoder. An endpoint that fails any measured required check
+therefore fails the full set; an endpoint passing all four measured checks has
+an unknown full-set result. The four-check rate remains available separately
+in the CSV. `VCSC` compares the
 saved raw penalty against the saved tolerance even for objectives whose VCSC
 optimization weight was zero. These are separate diagnostics.

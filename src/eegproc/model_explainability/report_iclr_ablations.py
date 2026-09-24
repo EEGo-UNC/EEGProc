@@ -89,6 +89,11 @@ def _endpoint(summary: dict, protocol: str, study_threshold) -> dict:
         if prediction.get("success") is not None and bool(prediction["success"]) != (flip and confidence):
             raise ValueError("Saved success disagrees with flip and confidence criterion")
     physiology = summary["physiology"]
+    full_physiology = physiology.get("all_required_passed")
+    # A missing check prevents confirming a pass, but one measured failure
+    # conclusively rules out passage of the entire required set.
+    if full_physiology is None and physiology.get("available_checks_passed") is False:
+        full_physiology = False
     change_mse = _finite(decoded.get("decoded_change_mse"))
     vcsc_penalty = _finite(decoded.get("vcsc_counterfactual"))
     vcsc_tolerance = _finite(summary.get("physiological_tolerance"))
@@ -103,7 +108,7 @@ def _endpoint(summary: dict, protocol: str, study_threshold) -> dict:
         vcsc_penalty=vcsc_penalty, vcsc_tolerance=vcsc_tolerance,
         vcsc_passed=(vcsc_penalty <= vcsc_tolerance
                      if vcsc_penalty is not None and vcsc_tolerance is not None else None),
-        physiological_passed=physiology.get("all_required_passed"),
+        physiological_passed=full_physiology,
         available_checks_passed=physiology.get("available_checks_passed"),
         physiological_available_count=physiology.get("available_count"),
         physiological_required_count=physiology.get("required_count"),
@@ -249,8 +254,9 @@ def _table(population: list[dict], *, include_provisional=False) -> str:
                "Distances are median [Q1, Q3] over finite endpoints. "
                "VCSC is the fraction with raw VCSC penalty at or below the archived tolerance, "
                "including arms without a VCSC optimization penalty. "
-               "Phys. (4/4) requires passage of all four assessable physiological checks. "
-               "The fifth check, aperiodic exponent, is unavailable for the band-filtered decoder; "
+               "Phys. requires all five physiological checks. The aperiodic exponent is "
+               "unavailable for the band-filtered decoder, but failure of any observed "
+               "check conclusively fails the full set; "
                "-- means task results are incomplete or unavailable.")
     if include_provisional:
         caption += (" A dagger marks a provisional task: its values summarize only the "
@@ -258,7 +264,7 @@ def _table(population: list[dict], *, include_provisional=False) -> str:
     lines = [r"\begin{table}[H]", f"\\caption{{{caption}}}",
              r"\label{tab:counterfactual_results}", r"\begin{center}",
              r"\begin{tabular}{llcccc}",
-             r"\textbf{Task} & \textbf{Objective} & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{VCSC (\%)} & \textbf{Phys. 4/4 (\%)} \\ \hline"]
+             r"\textbf{Task} & \textbf{Objective} & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{VCSC (\%)} & \textbf{Phys. (\%)} \\ \hline"]
     for task in TASKS:
         for objective in OBJECTIVES:
             row = next((item for item in population if item["task"] == task and
@@ -270,7 +276,7 @@ def _table(population: list[dict], *, include_provisional=False) -> str:
                 entries = [name, LABELS[objective],
                            _distance(row, "d_z"), _distance(row, "delta_dec"),
                            _fmt(row["vcsc_passed_percent"]),
-                           _fmt(row["available_checks_passed_percent"])]
+                           _fmt(row["physiological_passed_percent"])]
             lines.append(" & ".join(entries) + r" \\")
     lines += [r"\end{tabular}", r"\end{center}", r"\end{table}"]
     return "\n".join(lines) + "\n"
