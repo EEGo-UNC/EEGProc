@@ -396,8 +396,12 @@ def _paragraph(aggregates):
             "subject-invariance interpretation, because the shared decoder "
             "may contribute to the counterfactuals' low discrepancy."
         )
+    coverage = "; ".join(
+        f"{row['n_observed_folds']}/{row['n_expected_folds']} {row['task']} folds"
+        for row in aggregates
+    )
     lines.append(
-        "The supplied archives are incomplete; this empirical EEG-space "
+        f"The supplied archives cover {coverage}. This empirical EEG-space "
         "reference is distinct from the learned embedding-space typicality region."
     )
     return "\n".join(lines) + "\n"
