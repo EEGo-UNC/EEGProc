@@ -224,6 +224,26 @@ source hashes cause resume to refuse mixing incompatible results.
 
 ## Offline class-1 awareness and subject-invariance audit
 
+To analyze real class-1 transfer from the archived ICLR fold shards, run this
+from the EEGProc root:
+
+```bash
+python src/eegproc/model_explainability/report_iclr_subject_invariance.py \
+  runs/counterfactuals/final-ICLR \
+  --samples-per-subject 3 --seed 42 \
+  --out-dir runs/counterfactuals/final-ICLR-subject-invariance
+```
+
+This samples true class-1 trials regardless of predicted class and scores each
+held-out subject against its fold's source-trained class-1 Gaussian. It writes
+trial scores, per-fold and task summaries, a sampling manifest, and
+`subject_invariance_paragraph.tex`. Source empirical percentiles use all
+available true class-1 source trials; held-out class-0 trials are a separately
+labeled negative control. The summary normalizes fold contrasts by each
+source-calibrated threshold and gives subject-bootstrap intervals. The input
+must include each fold's `calibration/region.json`, `region.npz`,
+`source_trials.npz`, and `observations.npz` from `typicality.runner`.
+
 After a `typicality.runner` study has produced its counterfactual archives,
 recompute the requested correct-class-1 reference and evaluate both held-out
 real trials and counterfactual endpoints without loading TensorFlow or a model:
