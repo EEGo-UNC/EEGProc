@@ -1,13 +1,13 @@
 """Plot counterfactual optimization history as a 3-D trajectory.
 
 Axes are optimization epoch, target-class probability, and decoded
-counterfactual difference. Existing histories provide the last quantity in the
-``decoded`` column: counterfactual reconstruction MSE relative to R(z).
-Older archives used the original input; inspect the saved reference metadata.
+counterfactual difference. The ``decoded`` column now measures MSE relative to
+the original reconstruction R(z); historical runs used the original input.
+Consult the run's settings/result metadata when comparing histories.
 
 Example::
 
-    PYTHONPATH=src python -m eegproc.model_explainability.counterfactuals.training_monitor \
+    PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_training_monitor \
         runs/.../subject_0_trial_0/history.csv --no-show
 """
 
@@ -95,8 +95,7 @@ def plot_training_trajectory(
     epochs, target_probability, difference = arrays
 
     if ax is None:
-        fig = plt.figure(figsize=(10, 8), constrained_layout=True)
-        ax = fig.add_subplot(111, projection="3d")
+        fig, ax = _new_figure()
     else:
         fig = ax.figure
         ax.clear()
@@ -145,12 +144,15 @@ def plot_training_trajectory(
             lower_limit = max(0.0, lower_limit - 0.01)
             upper_limit = min(1.0, upper_limit + 0.01)
         ax.set_zlim(lower_limit, upper_limit)
-    ax.set_title(
-        "Counterfactual optimization trajectory\n"
-        f"z source: {difference_label}"
-    )
     ax.legend(loc="upper left")
     return fig, ax, points
+
+
+def _new_figure():
+    """Leave room around the 3-D axes for projected labels when saving."""
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_axes([0.06, 0.09, 0.76, 0.83], projection="3d")
+    return fig, ax
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -160,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("history_csv", type=Path)
     parser.add_argument(
         "--difference-column",
-        help="Default: decoded (MSE from counterfactual reconstruction to original reconstruction in new runs).",
+        help="Default: decoded (MSE to original reconstruction; older runs used input).",
     )
     parser.add_argument(
         "--watch",
@@ -194,7 +196,7 @@ def _render(args, ax=None):
         f"{args.history_csv.stem}_counterfactual_training_trajectory.png"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, dpi=200, bbox_inches="tight")
+    fig.savefig(output, dpi=200)
     return fig, ax, output, len(epochs)
 
 
@@ -216,9 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     plt.ion()
-    fig = plt.figure(figsize=(10, 8), constrained_layout=True)
-    ax = fig.add_subplot(111, projection="3d")
-    ax.set_title(f"Waiting for history: {args.history_csv}")
+    fig, ax = _new_figure()
     plt.show(block=False)
     last_signature = None
     output = args.output or args.history_csv.with_name(

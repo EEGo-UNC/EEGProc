@@ -7,6 +7,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
+<<<<<<< HEAD
 #SBATCH --time=12:00:00
 
 set -euo pipefail
@@ -21,6 +22,21 @@ set -euo pipefail
 # folds concurrently on pairs (0,1) and (2,3). Each MLDG episode uses
 # 8 meta-train + 4 meta-test subjects x 3 distinct trials: 24/12 trials
 # globally and 12/6 per GPU, with 10 steps per source epoch.
+=======
+#SBATCH --time=24:00:00
+
+set -euo pipefail
+
+# Run the single best DREAMER valence configuration reported on 2026-09-18
+# across every LOSO target. This launcher deliberately contains no search or
+# ablation axes: the supplied configuration is the only configuration run.
+#
+# SICModelv15 adds the learned convex joint reconstruction. Its v15 defaults
+# are made explicit below: initial alpha=0.5 and auxiliary branch weight=0.25.
+# Four allocated GPUs run two folds concurrently on pairs (0,1) and (2,3).
+# Each episode uses 8 meta-train + 4 meta-test subjects x 3 distinct trials:
+# 24/12 trials globally and 12/6 per GPU.
+>>>>>>> origin/fix/arousal-v11-calibration-level
 
 module purge
 module load python/3.12.4
@@ -33,9 +49,16 @@ EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-0}"
 
+<<<<<<< HEAD
 # Full run defaults: 6 source epochs and 1 calibration epoch.
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-10}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
+=======
+# Run six source epochs as requested. Calibration retains the existing full-run
+# budget because it is not part of the reported model hyperparameter record.
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-6}"
+CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-10}"
+>>>>>>> origin/fix/arousal-v11-calibration-level
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-100}"
@@ -130,7 +153,12 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
+<<<<<<< HEAD
 # Only the selected configuration; sequence-valued widths are fixed lists.
+=======
+# The only configuration in this run. Fixed wrappers make the two layer-width
+# lists unambiguously describe one architecture rather than search axes.
+>>>>>>> origin/fix/arousal-v11-calibration-level
 MODEL_CONFIG="$(python - <<'PY'
 import json
 import os
@@ -138,10 +166,16 @@ import os
 seed = int(os.environ["TRAINING_SEED"])
 
 print(json.dumps({
+    "classification_level": "trial",
+    "n_channels": 14,
+    "n_bands": 3,
+    "n_classes": 2,
+
     "optimizer_name": "adamw",
     "learning_rate": 1e-4,
     "weight_decay": 5e-5,
     "vrex_penalty_weight": 1.0,
+    "training_method": "mldg",
 
     "mldg_meta_train_subjects": 8,
     "mldg_meta_test_subjects": 4,
@@ -172,7 +206,7 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": 0.5,
+    "focal_gamma": 0.3,
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 2.0,
@@ -184,14 +218,22 @@ print(json.dumps({
 
     "use_subject_adversarial": True,
     "subject_adversarial_weight": 0.6,
+<<<<<<< HEAD
     "subject_loss_weight": 0.1,
+=======
+    "subject_loss_weight": 0.2,
+>>>>>>> origin/fix/arousal-v11-calibration-level
     "subject_hidden_units": 64,
     "subject_dropout": 0.0,
 
     "use_gcn_gru_branch": True,
     "use_bilstm_branch": True,
     "use_decoder": True,
+<<<<<<< HEAD
     "reconstruction_loss_weight": 0.3,
+=======
+    "reconstruction_loss_weight": 0.6,
+>>>>>>> origin/fix/arousal-v11-calibration-level
     "decoder_dropout": 0.1,
     "joint_reconstruction_auxiliary_weight": 0.25,
     "joint_reconstruction_initial_alpha": 0.5,
@@ -212,6 +254,7 @@ echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER valence"
 echo "Scope: all 23 LOSO target subjects"
+<<<<<<< HEAD
 echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 8+4 subjects x 3 trials = 36 trials/episode; 10 steps/epoch"
 echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-test"
 echo "Per GPU: 12 meta-train / 6 meta-test trials; full-episode VC statistics"
@@ -221,6 +264,17 @@ echo "Evaluation: zero-shot LOSO balanced accuracy; one configuration"
 echo "Subject loss weight: 0.2"
 echo "Joint reconstruction: weight=0.6 initial alpha=0.5 auxiliary branch weight=0.25"
 echo "Deterministic training: enabled; base seed=$TRAINING_SEED; subject seed=base+target ID"
+=======
+echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 10 steps/epoch"
+echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-test"
+echo "Per GPU: 12 meta-train / 6 meta-test trials; full-episode VC statistics"
+echo "Calibration: $CALIBRATION_EPOCHS epochs at 3/6/9/12 shots"
+echo "Selection: maximize zero-shot LOSO balanced accuracy"
+echo "Fixed winner: focal_gamma=0.3 vc_alpha=2.0 vc_beta=0.6 vc_lambda=0.05 vc_logit_scale=16.0"
+echo "Subject loss weight: 0.2; reconstruction loss weight: 0.6"
+echo "Joint reconstruction: initial alpha=0.5 auxiliary branch weight=0.25"
+echo "Configuration source: best configuration id=1 reported 2026-09-18 07:04:42"
+>>>>>>> origin/fix/arousal-v11-calibration-level
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
 echo "Git commit: $(git rev-parse HEAD)"
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -247,8 +301,13 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --classification-level trial \
     --n-channels 14 \
     --n-bands 3 \
+<<<<<<< HEAD
     --out-dir "runs/full/sic_v15_valence_best_config/DREAMER/valence/suite_${SUITE_ID}/all_subjects" \
     --run-name "full_run_v15_valence_best_config" \
+=======
+    --out-dir "runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_${SUITE_ID}/full" \
+    --run-name "full_run_v15_valence_best_20260918" \
+>>>>>>> origin/fix/arousal-v11-calibration-level
     --training-method mldg \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \
@@ -262,7 +321,11 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --calibration-learning-rate 0.0001 \
     --calibration-optimizer adamw \
     --calibration-weight-decay 0.00005 \
+<<<<<<< HEAD
     --calibration-seed "$TRAINING_SEED" \
+=======
+    --calibration-seed 42 \
+>>>>>>> origin/fix/arousal-v11-calibration-level
     --selection-metric balanced_accuracy \
     --hyperparameter-selection-level losocv \
     --decision-threshold 0.5 \

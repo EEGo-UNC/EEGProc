@@ -145,7 +145,7 @@ class-balanced trial sampling rules are unchanged.
 
 | Target | Meta-train / meta-test subjects | Trials per subject | Global trials, train / test | Trials per GPU, train / test |
 | --- | --- | --- | --- | --- |
-| Valence | 8 / 4 | 4 | 32 / 16 | 16 / 8 |
+| Valence | 8 / 4 | 3 | 24 / 12 | 12 / 6 |
 | Arousal | 12 / 6 | 2 | 24 / 12 | 12 / 6 |
 
 Arousal retains its existing episode configuration because some subjects have
@@ -155,7 +155,7 @@ memory cannot resolve that data constraint. No repeated trials or subject
 exclusions are introduced.
 
 Both launchers run the same two-GPU correctness preflight as the smoke job and
-stop if it fails. Their job names, run names, and log prefixes match their new
-filenames. Logs are `full_run_v15_TARGET_JOBID.out/.err`; results remain under
-`runs/full/sic_trial_bigru_v15_joint_best_v11/DREAMER/TARGET/suite_JOBID/full`.
+stop if it fails. Valence logs are `full_run_v15_valence_JOB_ID.out/.err`;
+its results are under
+`runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_JOB_ID/full`.
 The full datasets and CUDA memory use must still be verified on Longleaf.

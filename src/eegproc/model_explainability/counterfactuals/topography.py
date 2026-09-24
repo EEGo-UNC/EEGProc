@@ -12,7 +12,7 @@ shows whether the counterfactual is above or below its reference on average.
 
 Example::
 
-    PYTHONPATH=src python -m eegproc.model_explainability.counterfactuals.topography \
+    PYTHONPATH=src python -m eegproc.model_explainability.counterfactual_topography \
         runs/.../subject_0_trial_0/counterfactual.npz \
         --branch gcn_gru
 """
@@ -36,7 +36,7 @@ if __package__:
         split_channel_bands,
     )
 else:
-    from plotting import (  # type: ignore[no-redef]
+    from eegproc.model_explainability.counterfactuals.plotting import (  # type: ignore[no-redef]
         DEFAULT_BAND_NAMES,
         flatten_trial,
         load_counterfactual_trial,
@@ -112,17 +112,11 @@ def plot_band_topographies(
     *,
     channel_names: list[str],
     band_names: list[str],
-    title: str,
     colorbar_label: str,
     shared_scale: bool = False,
     signed: bool | None = None,
-    channel_positions: np.ndarray | None = None,
 ):
-    """Plot ``(bands, channels)`` values with band-relative color scales.
-
-    ``channel_positions`` is an optional normalized ``(channels, 2)`` array
-    for non-DREAMER montages. Omitting it preserves the original DREAMER lookup.
-    """
+    """Plot ``(bands, channels)`` values with band-relative color scales."""
     values = np.asarray(values, dtype=float)
     expected_shape = (len(band_names), len(channel_names))
     if values.shape != expected_shape or not np.isfinite(values).all():
@@ -132,18 +126,7 @@ def plot_band_topographies(
     if len(channel_names) < 3:
         raise ValueError("At least three positioned channels are required.")
 
-    if channel_positions is None:
-        positions = _channel_positions(channel_names)
-    else:
-        positions = np.asarray(channel_positions, dtype=float)
-        if (
-            positions.shape != (len(channel_names), 2)
-            or not np.isfinite(positions).all()
-        ):
-            raise ValueError(
-                "channel_positions must be finite and shaped "
-                f"{(len(channel_names), 2)}."
-            )
+    positions = _channel_positions(channel_names)
     x_positions, y_positions = positions[:, 0], positions[:, 1]
     triangulation = mtri.Triangulation(x_positions, y_positions)
     grid_axis = np.linspace(-1.0, 1.0, 250)
@@ -234,7 +217,6 @@ def plot_band_topographies(
             colorbar = fig.colorbar(contour, ax=ax, shrink=0.72, pad=0.02)
             colorbar.set_label(colorbar_label)
 
-    fig.suptitle(title, fontsize=14)
     if shared_scale:
         colorbar = fig.colorbar(contour, ax=axes.tolist(), shrink=0.78, pad=0.02)
         colorbar.set_label(colorbar_label)
@@ -346,10 +328,6 @@ def main(argv: list[str] | None = None) -> int:
         values,
         channel_names=channel_names,
         band_names=band_names,
-        title=(
-            f"{branch}: whole-trial {args.quantity} "
-            f"(reference={args.reference}, {args.measure}, band-relative scale)"
-        ),
         colorbar_label=(
             "signed mean counterfactual − reference"
             if args.quantity == "difference" and args.measure == "mean"

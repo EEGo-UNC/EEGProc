@@ -154,7 +154,7 @@ COMMAND=("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runne
     --fixed-joint-alpha 0.49751
     --typicality-representation vc_trial_embedding
     --target-loss-component "${TARGET_LOSS_COMPONENT:-confidence}"
-    --target-probability "${TARGET_PROBABILITY:-0.80}"
+    --target-probability "${TARGET_PROBABILITY:-0.50}"
     --target-weight "${TARGET_WEIGHT:-1.0}" --latent-weight "${LATENT_WEIGHT:-0.1}"
     --decoded-weight "${DECODED_WEIGHT:-0.1}" --physiological-weight "${PHYSIOLOGICAL_WEIGHT:-1.0}"
     --typicality-weight "${TYPICALITY_WEIGHT:-1.0}"
