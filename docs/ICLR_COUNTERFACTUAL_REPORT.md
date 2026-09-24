@@ -49,3 +49,35 @@ an unknown full-set result. The four-check rate remains available separately
 in the CSV. `VCSC` compares the
 saved raw penalty against the saved tolerance even for objectives whose VCSC
 optimization weight was zero. These are separate diagnostics.
+
+## Real class-1 subject-invariance analysis
+
+From the same EEGProc root, use the archived real-trial embeddings and each
+fold's source-trained class-1 Gaussian:
+
+```bash
+python src/eegproc/model_explainability/report_iclr_subject_invariance.py \
+  runs/counterfactuals/final-ICLR \
+  --samples-per-subject 3 --seed 42 \
+  --out-dir runs/counterfactuals/final-ICLR-subject-invariance
+```
+
+The input can contain task directories and `fold_*` shards. The command samples
+all **true class-1** real trials, including misclassified trials, independently
+of their discrepancy. It writes trial scores, per-fold source versus held-out
+summaries, task-level summaries, a sampling manifest, and a ready-to-review
+`subject_invariance_paragraph.tex`. The trial table includes each held-out
+score's empirical percentile among all available true class-1 source trials
+in the matching fold. Task-level medians, quartiles, and subject-bootstrap
+intervals summarize coverage and
+percentiles across folds. Held-out true class-0 trials are included as a
+separately labeled negative control. Each held-out subject is scored only
+against its own fold's frozen class-1 Gaussian. Fold contrasts
+are normalized by the source-calibrated threshold before task-level summary;
+raw scores from different LOSO models are not pooled. Set
+`--samples-per-subject 0` to use every available true class-1 trial.
+
+This requires `calibration/region.json`, `calibration/region.npz`,
+`calibration/source_trials.npz`, and `observations.npz` inside each `subject_*`
+fold directory. Counterfactual result files alone contain no full real-trial
+source reference bank and cannot support this analysis.
