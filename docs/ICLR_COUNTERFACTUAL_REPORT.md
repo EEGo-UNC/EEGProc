@@ -18,15 +18,20 @@ definitions, mixed validity protocols, different confidence thresholds within
 a task, and missing objective arms.
 
 Outputs are `trial_optimizations.csv`, `user_optimizations.csv`,
-`population_ablations.csv`, `report.json`, `counterfactual_results.tex`, and
+`population_ablations.csv`, `report.json`, `counterfactual_results.tex`,
+`counterfactual_results_with_provisional.tex`, and
 individual `users/<task>_user_<id>.md` reports. Each task has four rows in the
-LaTeX table, including typicality without the physiological penalty. The
+LaTeX table, including typicality without the physiological penalty. The table
+contains displacement, VCSC pass rate, and the pass rate over the four
+assessable physiological checks. Flip, confidence acquisition, and typicality
+remain in the CSV and per-user reports for the accompanying prose. The
 `report.json` file records missing user shards and whether the report is
 complete. An optimization error remains in the denominator for percentages;
 distances use finite selected endpoints and show median [Q1, Q3].
 If a task is missing a user shard or an optimization is pending, its LaTeX
 values stay `--` until the report is complete for that task. The CSV retains
-provisional rates with an explicit flag.
+provisional rates with an explicit flag. The second LaTeX file shows archived
+partial-task values with a dagger and an explicit provisional caption.
 
 **Metric space matters.** `Flip` means target-class argmax. `Conf.` means the
 target-class probability reached the archived run threshold; the threshold is
@@ -36,6 +41,9 @@ acquisition. Current ICLR `latent_only` archives evaluate these on the
 optimized latent classification embedding. They do not re-encode decoded
 counterfactual signals, so decoded validity cannot be inferred. Historical
 round-trip archives, if all inputs use that protocol and preserve decoded
-predictions, produce decoded/re-encoded metrics instead. `Phys.` is `--` when a
-required physiological check was unavailable; available-check rates remain in
-the CSV.
+predictions, produce decoded/re-encoded metrics instead. The fifth
+physiological check, aperiodic exponent, cannot be estimated from the
+band-filtered decoder, so the five-check pass rate is undefined. `Phys. 4/4`
+is explicitly the rate passing all four assessable checks. `VCSC` compares the
+saved raw penalty against the saved tolerance even for objectives whose VCSC
+optimization weight was zero. These are separate diagnostics.

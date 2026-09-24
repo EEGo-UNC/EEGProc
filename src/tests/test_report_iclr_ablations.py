@@ -47,9 +47,12 @@ def _study(root, task, *, protocol="latent_only", absent_check=False):
                 "required_target_probability": 0.8, "latent_counterfactual": latent,
                 "typicality": {"typical": typical}, "d_z": float(trial),
                 "decoded_trials": {"joint": {"decoded_change_mse": 4.0,
+                                              "vcsc_counterfactual": 0.0 if trial == 2 else 0.2,
                                               "counterfactual": decoded_cf}},
+                "physiological_tolerance": 1e-8,
                 "physiology": {"all_required_passed": None if absent_check else trial == 3,
-                               "available_checks_passed": trial == 3},
+                               "available_checks_passed": trial == 3,
+                               "available_count": 4, "required_count": 5},
             }
             _json(attempt / "result.json", result)
             _json(attempt / "complete.json", {"sha256": {}})
@@ -71,16 +74,19 @@ def test_four_ablations_report_each_user_and_preserve_metric_space(tmp_path):
     assert base["n_error"] == 1
     assert base["flip_percent"] == 50
     assert base["confidence_acquired_percent"] == 0
+    assert base["vcsc_passed_percent"] == 50
     assert base["d_z_n"] == 1
     assert base["d_z_median"] == 2
     assert base["physiological_passed_percent"] is None
     assert valence[2]["flip_typical_percent"] == 100
     assert valence[2]["confident_flip_typical_percent"] == 50
+    assert valence[2]["available_checks_passed_percent"] == 50
     assert valence[3]["flip_typical_percent"] == 100
     assert valence[3]["confident_flip_typical_percent"] == 50
     latex = (tmp_path / "report/counterfactual_results.tex").read_text()
-    assert "latent space" in latex
-    assert "Flip+Typ." in latex and "Conf.+Typ." in latex
+    assert "Phys. (4/4)" in latex
+    assert "VCSC" in latex
+    assert "Flip (\\%)" not in latex and "Typ. (\\%)" not in latex
     assert r"\lambda_{\mathrm{phys}}=0" in latex
     assert "--" in latex
     assert (tmp_path / "report/users/valence_user_0.md").is_file()
@@ -99,7 +105,7 @@ def test_round_trip_validity_is_not_taken_from_latent_success(tmp_path):
     first = next(row for row in trial_rows if row["task"] == "valence" and
                  row["trial_id"] == "2" and row["objective"] == "target_latent")
     assert first["flip"] == "False"
-    assert "decoded and re-encoded" in (tmp_path / "report/counterfactual_results.tex").read_text()
+    assert report["validity_protocol"] == "full_trial_decoder_encoder_v1"
 
 
 def test_rejects_missing_arm_and_duplicate_fold(tmp_path):
@@ -128,3 +134,6 @@ def test_partial_archive_keeps_population_table_blank(tmp_path):
     assert report["population"][0]["flip_percent"] == 100
     assert "Valence & $\\mathcal{L}_{\\mathrm{base}}$ & -- & --" in (
         tmp_path / "report/counterfactual_results.tex").read_text()
+    provisional = (tmp_path / "report/counterfactual_results_with_provisional.tex").read_text()
+    assert r"Valence$^{\dagger}$" in provisional
+    assert "Arousal & $\\mathcal{L}_{\\mathrm{base}}$ & --" in provisional

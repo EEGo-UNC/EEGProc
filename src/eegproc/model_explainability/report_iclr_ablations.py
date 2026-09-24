@@ -90,6 +90,8 @@ def _endpoint(summary: dict, protocol: str, study_threshold) -> dict:
             raise ValueError("Saved success disagrees with flip and confidence criterion")
     physiology = summary["physiology"]
     change_mse = _finite(decoded.get("decoded_change_mse"))
+    vcsc_penalty = _finite(decoded.get("vcsc_counterfactual"))
+    vcsc_tolerance = _finite(summary.get("physiological_tolerance"))
     row.update(
         flip=flip, confidence_acquired=confidence, typical=typical,
         flip_typical=bool(flip and typical) if flip is not None and typical is not None else None,
@@ -98,8 +100,13 @@ def _endpoint(summary: dict, protocol: str, study_threshold) -> dict:
         target_probability=target_probability, required_target_probability=threshold,
         d_z=_finite(summary.get("d_z")),
         delta_dec=math.sqrt(change_mse) if change_mse is not None and change_mse >= 0 else None,
+        vcsc_penalty=vcsc_penalty, vcsc_tolerance=vcsc_tolerance,
+        vcsc_passed=(vcsc_penalty <= vcsc_tolerance
+                     if vcsc_penalty is not None and vcsc_tolerance is not None else None),
         physiological_passed=physiology.get("all_required_passed"),
         available_checks_passed=physiology.get("available_checks_passed"),
+        physiological_available_count=physiology.get("available_count"),
+        physiological_required_count=physiology.get("required_count"),
         selected_step=summary.get("selected_step"),
         steps_completed=summary.get("steps_completed"),
         stop_reason=summary.get("stop_reason"),
@@ -202,7 +209,7 @@ def summarize(rows: list[dict], *, pending_folds=0) -> dict:
            "n_pending": sum(row["status"] == "pending" for row in rows),
            "n_pending_folds": pending_folds}
     for field in ("flip", "confidence_acquired", "typical", "flip_typical",
-                  "confident_flip_typical", "physiological_passed",
+                  "confident_flip_typical", "vcsc_passed", "physiological_passed",
                   "available_checks_passed"):
         unknown = any(row.get(field) is None for row in completed)
         if field == "physiological_passed" and out["n_pending"]:
@@ -237,31 +244,33 @@ def _distance(row, field):
             if row[field + "_median"] is not None else "--")
 
 
-def _table(population: list[dict], protocol: str) -> str:
-    space = "latent" if protocol == "latent_only" else "decoded and re-encoded"
-    caption = ("Population-level counterfactual evaluation across all eligible class-0 trials. "
-               f"Flip and class-1 typicality are evaluated in the {space} space. "
-               "Conf. is target-class probability at or above the archived threshold; "
-               "Flip+Typ. and Conf.+Typ. are the two conjunctions (the latter also requires a flip). "
-               "Distances are median [Q1, Q3]. "
-               "Phys. is passage of all required physiological checks; -- means unavailable.")
+def _table(population: list[dict], *, include_provisional=False) -> str:
+    caption = ("Counterfactual displacement and physiological diagnostics across eligible class-0 trials. "
+               "Distances are median [Q1, Q3] over finite endpoints. "
+               "VCSC is the fraction with raw VCSC penalty at or below the archived tolerance, "
+               "including arms without a VCSC optimization penalty. "
+               "Phys. (4/4) requires passage of all four assessable physiological checks. "
+               "The fifth check, aperiodic exponent, is unavailable for the band-filtered decoder; "
+               "-- means task results are incomplete or unavailable.")
+    if include_provisional:
+        caption += (" A dagger marks a provisional task: its values summarize only the "
+                    "archived user folds and must not be interpreted as population results.")
     lines = [r"\begin{table}[H]", f"\\caption{{{caption}}}",
              r"\label{tab:counterfactual_results}", r"\begin{center}",
-             r"\begin{tabular}{llcccccccc}",
-             r"\textbf{Task} & \textbf{Objective} & \textbf{Flip (\%)} & \textbf{Conf. (\%)} & \textbf{Typ. (\%)} & \textbf{Flip+Typ. (\%)} & \textbf{Conf.+Typ. (\%)} & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{Phys. (\%)} \\ \hline"]
+             r"\begin{tabular}{llcccc}",
+             r"\textbf{Task} & \textbf{Objective} & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{VCSC (\%)} & \textbf{Phys. 4/4 (\%)} \\ \hline"]
     for task in TASKS:
         for objective in OBJECTIVES:
             row = next((item for item in population if item["task"] == task and
                         item["objective"] == objective), None)
-            if row is None or row["provisional"]:
-                entries = [task.title(), LABELS[objective], *("--",) * 8]
+            if row is None or (row["provisional"] and (not include_provisional or not row["n_eligible"])):
+                entries = [task.title(), LABELS[objective], *("--",) * 4]
             else:
-                entries = [task.title(), LABELS[objective],
-                           *(_fmt(row[field + "_percent"]) for field in (
-                               "flip", "confidence_acquired", "typical", "flip_typical",
-                               "confident_flip_typical")),
+                name = task.title() + (r"$^{\dagger}$" if row["provisional"] else "")
+                entries = [name, LABELS[objective],
                            _distance(row, "d_z"), _distance(row, "delta_dec"),
-                           _fmt(row["physiological_passed_percent"])]
+                           _fmt(row["vcsc_passed_percent"]),
+                           _fmt(row["available_checks_passed_percent"])]
             lines.append(" & ".join(entries) + r" \\")
     lines += [r"\end{tabular}", r"\end{center}", r"\end{table}"]
     return "\n".join(lines) + "\n"
@@ -271,6 +280,11 @@ def build_report(input_root: Path, out_dir: Path, *, expected_subjects: int = 23
     if expected_subjects < 1:
         raise ValueError("expected_subjects must be positive")
     rows, folds, studies, protocol, definition, thresholds = collect(input_root)
+    check_counts = {(row.get("physiological_available_count"),
+                     row.get("physiological_required_count"))
+                    for row in rows if row["status"] == "completed"}
+    if check_counts and check_counts != {(4, 5)}:
+        raise ValueError(f"Phys. 4/4 table requires four of five available checks; found {check_counts}")
     out_dir.mkdir(parents=True, exist_ok=True)
     subjects, population = [], []
     missing_subjects = {}
@@ -318,7 +332,9 @@ def build_report(input_root: Path, out_dir: Path, *, expected_subjects: int = 23
                   "Phys. is unavailable when a required check was not assessed.", ""]
         (user_dir / f"{fold['task']}_user_{fold['subject_id']}.md").write_text(
             "\n".join(lines), encoding="utf-8")
-    (out_dir / "counterfactual_results.tex").write_text(_table(population, protocol), encoding="utf-8")
+    (out_dir / "counterfactual_results.tex").write_text(_table(population), encoding="utf-8")
+    (out_dir / "counterfactual_results_with_provisional.tex").write_text(
+        _table(population, include_provisional=True), encoding="utf-8")
     complete = (not any(missing_subjects.values())
                 and all(fold["status"] == "completed" for fold in folds)
                 and all(row["status"] != "pending" for row in rows))
