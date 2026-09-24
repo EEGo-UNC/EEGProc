@@ -26,6 +26,8 @@ from .typicality.artifacts import completed_attempt
 def _study_roots(roots):
     found = set()
     for root in map(Path, roots):
+        if not root.exists():
+            raise ValueError(f"Input study directory does not exist: {root}. Copy the run output here first, or use an existing study directory.")
         if (root / "study.json").is_file():
             found.add(root.resolve())
         else:
@@ -42,13 +44,48 @@ def _decoded_score(summary, region, *, path, task, subject, trial, checkpoint_sh
             raise ValueError(f"{path}: {key} does not match the requested typicality trial")
     if checkpoint_sha256 and summary.get("checkpoint_sha256") != checkpoint_sha256:
         raise ValueError(f"{path}: checkpoint differs from the fold's frozen classifier")
+    if (summary.get("typicality_definition", SCORE_DEFINITION) != SCORE_DEFINITION
+            or summary.get("typicality_representation", REPRESENTATION) != REPRESENTATION):
+        raise ValueError(f"{path}: result uses a different typicality definition")
     decoded = summary.get("decoded_counterfactual")
+    score_archive = None
     if decoded is None:
-        raise ValueError(
-            f"{path}: missing decoded_counterfactual. This archive only saved latent D(Zcf); "
-            "rerun typicality.runner with the updated code in a NEW output directory "
-            "to measure D(E(R(Zcf)))."
-        )
+        # Earlier full round-trip studies retained the generated waveform and
+        # its independent re-encoding, though compact latent-only runs did not.
+        output = summary.get("report_output")
+        round_trip = summary.get("decoded_trials", {}).get(output, {}).get("counterfactual")
+        archive_path = path.with_name("counterfactual.npz")
+        if summary.get("round_trip_evaluation") != "full_trial_decoder_encoder_v1" or round_trip is None:
+            raise ValueError(
+                f"{path}: missing decoded_counterfactual. This archive only saved latent D(Zcf); "
+                "rerun typicality.runner with the updated code in a NEW output directory "
+                "to measure D(E(R(Zcf)))."
+            )
+        if not archive_path.is_file():
+            raise ValueError(f"{path}: round-trip score has no archived decoded EEG and re-encoded embedding")
+        with np.load(archive_path, allow_pickle=False) as archive:
+            signal_key = f"x_prime_{output}"
+            embedding_key = f"classification_embedding_reencoded_{output}"
+            if signal_key not in archive or embedding_key not in archive:
+                raise ValueError(f"{archive_path}: missing decoded EEG or its re-encoded embedding")
+            signal = np.asarray(archive[signal_key])
+            embedding = np.asarray(archive[embedding_key])
+        if signal.ndim != 4 or signal.shape[0] != 1 or not np.isfinite(signal).all():
+            raise ValueError(f"{archive_path}: invalid decoded EEG waveform")
+        if embedding.shape != (1, len(region.prior_mean)):
+            raise ValueError(f"{archive_path}: invalid re-encoded decoded EEG shape")
+        if not np.isclose(float(summary["typicality"]["threshold"]), region.tau):
+            raise ValueError(f"{path}: source threshold differs from round-trip calibration")
+        decoded = {
+            "input": "decoded_counterfactual_eeg_reencoded_by_frozen_classifier",
+            "report_output": output, "target_class": 1,
+            "classification_embedding": embedding[0],
+            "probabilities": round_trip.get("probabilities"),
+            "predicted_class": round_trip.get("predicted_class"),
+            "discrepancy": round_trip.get("discrepancy"),
+            "source_threshold": region.tau,
+        }
+        score_archive = archive_path
     if (decoded.get("input") != "decoded_counterfactual_eeg_reencoded_by_frozen_classifier"
             or decoded.get("report_output") != summary.get("report_output")
             or decoded.get("target_class") != 1):
@@ -69,7 +106,7 @@ def _decoded_score(summary, region, *, path, task, subject, trial, checkpoint_sh
     predicted = int(probabilities.argmax())
     if decoded.get("predicted_class") != predicted:
         raise ValueError(f"{path}: decoded EEG predicted class disagrees with probabilities")
-    return score, predicted, probabilities
+    return score, predicted, probabilities, score_archive
 
 
 def _fold(root, task, entry, *, samples_per_subject, seed):
@@ -115,7 +152,7 @@ def _fold(root, task, entry, *, samples_per_subject, seed):
         summary = json.loads(path.read_text())
         if summary.get("status") != "completed":
             raise ValueError(f"{path}: committed attempt is not completed")
-        score, predicted, probs = _decoded_score(
+        score, predicted, probs, score_archive = _decoded_score(
             summary, region, path=path, task=task, subject=subject, trial=trial,
             checkpoint_sha256=fold.get("checkpoint", {}).get("sha256"),
         )
@@ -135,10 +172,13 @@ def _fold(root, task, entry, *, samples_per_subject, seed):
             "inside_source_region": score <= region.tau,
             "source_empirical_percentile": percentile,
             "result_path": str(path.resolve()),
+            "score_provenance": "historical_roundtrip_npz" if score_archive else "current_result_json",
         })
-        hashes.setdefault("counterfactual_results", []).append({
-            "path": str(path.resolve()), "sha256": file_sha256(path),
-        })
+        inputs = {"result_path": str(path.resolve()), "result_sha256": file_sha256(path)}
+        if score_archive:
+            inputs.update(waveform_archive_path=str(score_archive.resolve()),
+                          waveform_archive_sha256=file_sha256(score_archive))
+        hashes.setdefault("counterfactual_results", []).append(inputs)
     cf_scores = np.asarray(cf_scores, dtype=float)
     cf_percentiles = _source_percentiles(cf_scores, source_scores)
     real_percentiles = _source_percentiles(real_scores, source_scores)
@@ -217,9 +257,10 @@ def _paragraph(aggregates):
         cf_pct = row["subject_median_decoded_cf_source_percentile"]
         real_gap = row["subject_median_real_x_minus_source_over_threshold"]
         cf_gap = row["subject_median_decoded_cf_minus_source_over_threshold"]
+        fold_word = "fold" if row["n_comparable_folds"] == 1 else "folds"
         lines.append(f"For {task}, {row['n_decoded_class1_flip']} of "
                      f"{row['n_eligible_class0']} eligible counterfactuals were decoded "
-                     f"class-1 flips. Across {row['n_comparable_folds']} comparable folds, "
+                     f"class-1 flips. Across {row['n_comparable_folds']} comparable {fold_word}, "
                      f"the subject-median share inside the source class-1 region was "
                      f"{real:.1f}\\% for real $X$ and {cf:.1f}\\% for decoded $R(Z^{{\\mathrm{{cf}}}})$; "
                      f"their subject-median source-discrepancy percentiles were "
@@ -307,6 +348,7 @@ def main(argv=None):
         )
     except (ValueError, FileNotFoundError) as error:
         parser.exit(2, f"Decoded subject-invariance report: {error}\n")
+    print(f"Wrote decoded subject-invariance report to {args.out_dir}")
     return 0
 
 

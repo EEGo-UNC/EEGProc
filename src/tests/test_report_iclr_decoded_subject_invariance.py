@@ -86,6 +86,7 @@ def test_report_compares_decoded_eeg_and_real_x_to_source_class1(tmp_path):
     trials = _rows(tmp_path / "out/decoded_subject_invariance_trials.csv")
     cf = next(row for row in trials if row["role"] == "decoded_counterfactual")
     assert float(cf["discrepancy"]) == 2.25  # latent score in the archive is 100
+    assert cf["score_provenance"] == "current_result_json"
     assert float(cf["source_empirical_percentile"]) == 50.0
     assert float(fold["decoded_cf_median_discrepancy"]) == 2.25
     assert float(fold["real_x_median_discrepancy"]) == 6.25
@@ -100,6 +101,33 @@ def test_old_latent_only_archive_requires_new_counterfactual_run(tmp_path):
     with pytest.raises(ValueError, match="rerun typicality.runner"):
         build_decoded_subject_invariance_report([root], tmp_path / "out")
     assert not (tmp_path / "out").exists()
+
+
+def test_historical_roundtrip_waveform_and_reencoded_embedding_are_usable(tmp_path):
+    root, path = _archive(tmp_path, decoded=False)
+    result = json.loads(path.read_text())
+    result["round_trip_evaluation"] = "full_trial_decoder_encoder_v1"
+    result["typicality"]["threshold"] = 9
+    result["decoded_trials"] = {"joint": {"counterfactual": {
+        "probabilities": [0.2, 0.8], "predicted_class": 1,
+        "discrepancy": 2.25,
+    }}}
+    path.write_text(json.dumps(result))
+    signal_path = path.with_name("counterfactual.npz")
+    np.savez_compressed(signal_path, x_prime_joint=np.ones((1, 2, 3, 42)),
+                        classification_embedding_reencoded_joint=[[1.5]])
+    path.with_name("complete.json").write_text(json.dumps({
+        "schema_version": 1, "sha256": {
+            "result.json": file_sha256(path),
+            "counterfactual.npz": file_sha256(signal_path),
+        },
+    }))
+    report = build_decoded_subject_invariance_report([root], tmp_path / "out")
+    assert report["aggregate"][0]["n_decoded_class1_flip"] == 1
+    cf = next(row for row in _rows(tmp_path / "out/decoded_subject_invariance_trials.csv")
+              if row["role"] == "decoded_counterfactual")
+    assert float(cf["discrepancy"]) == 2.25
+    assert cf["score_provenance"] == "historical_roundtrip_npz"
 
 
 def test_decoded_nonflip_is_counted_but_not_compared_as_class1(tmp_path):

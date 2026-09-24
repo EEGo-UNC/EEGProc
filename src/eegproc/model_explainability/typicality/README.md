@@ -271,6 +271,20 @@ used for this report: it saved only optimized latent discrepancies, and it did
 not retain decoded waveforms for offline re-encoding. Use a new output root;
 the runner intentionally refuses to resume data from a different source hash.
 
+An older full round-trip archive can also be analyzed when each completed
+typicality attempt retains `counterfactual.npz` with both the decoded EEG and
+its independent re-encoded classification embedding. The local
+`runs/counterfactuals/subject0FINALTYPTEST/subject_0` archive has these files;
+it is a subject-0 pilot from a different optimization run and must not be
+presented as the final-ICLR result:
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.report_iclr_decoded_subject_invariance \
+  runs/counterfactuals/subject0FINALTYPTEST/subject_0 \
+  --samples-per-subject 3 --seed 42 \
+  --out-dir runs/counterfactuals/subject0FINALTYPTEST-decoded-invariance-report
+```
+
 After a `typicality.runner` study has produced its counterfactual archives,
 recompute the requested correct-class-1 reference and evaluate both held-out
 real trials and counterfactual endpoints without loading TensorFlow or a model:
