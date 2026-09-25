@@ -392,9 +392,10 @@ def _paragraph(aggregates):
     if all(row["n_real_x_inside_source"] == 0 for row in aggregates):
         lines.append(
             "All sampled original class-1 $X$ fall outside the decoded "
-            "reference region. This decoder-domain shift limits the "
-            "subject-invariance interpretation, because the shared decoder "
-            "may contribute to the counterfactuals' low discrepancy."
+            "reference region. Since $R(Z^{\\mathrm{cf}})$ and the reference "
+            "$R(Z)$ share a decoder while $X$ does not, these counts do not "
+            "establish subject invariance; they show overlap within the "
+            "decoder's output space."
         )
     coverage = "; ".join(
         f"{row['n_observed_folds']}/{row['n_expected_folds']} {row['task']} folds"
@@ -467,6 +468,7 @@ def build_waveform_subject_invariance_report(roots, output, *, raw_eeg, raw_labe
         "source_reference": "R(Z) from other subjects' real true-class-1 EEG with correct class-1 prediction and saved embedding typicality D <= source threshold",
         "source_reference_generation": "one frozen-checkpoint encoding of source X to Z followed by decoding Z to R(Z); no counterfactual re-encoding",
         "source_threshold": "95th percentile of source decoded R(Z) waveform discrepancies in each fold",
+        "subject_invariance_conclusion": "inconclusive: shared decoder confounds the decoded counterfactual-versus-original EEG comparison",
         "selection": "sampled held-out real true class 1 regardless of prediction; all eligible typicality outputs counted, optimized latent class-1 argmax flips in waveform comparison, with confidence-qualified flips reported separately",
         "variance_floor": variance_floor,
         "samples_per_subject": int(samples_per_subject), "seed": int(seed),
@@ -478,7 +480,7 @@ def build_waveform_subject_invariance_report(roots, output, *, raw_eeg, raw_labe
         "limitations": [
             "The diagonal decoded-EEG Gaussian is empirical and is distinct from the checkpoint's learned embedding-space class-1 Gaussian.",
             "A decoded class-1 flip is not independently verified without re-encoding; class-1 selection uses the optimizer's saved latent prediction.",
-            "Original X and decoded R(Z) occupy different waveform distributions in the supplied archives; decoder-induced alignment can contribute to the observed gap.",
+            "Original X and decoded R(Z) occupy different waveform distributions in the supplied archives; decoder-induced alignment can explain the observed gap, so this report cannot establish subject invariance.",
             "Pointwise waveform discrepancy is sensitive to temporal phase and alignment.",
             "The supplied study archives are incomplete and task summaries are provisional.",
         ],
