@@ -333,6 +333,16 @@ a band, not between bands; the adjacent colorbars retain the actual values.
 Add `--shared-scale` only when direct cross-band magnitude comparison is
 desired. Use `--measure mean-absolute` to restore unsigned activity magnitude.
 
+For attempts containing `physiology_counterfactual.npz` and
+`physiology_reconstruction.npz`, use `--measure amplitude` to plot the saved
+99th-percentile absolute amplitudes. The default `--quantity difference`
+subtracts the reconstruction's channel-by-band amplitude array from the
+counterfactual's array. It does not aggregate the waveform difference. The
+result is saved as `counterfactual_joint_difference_amplitude_topography.png`,
+leaving the signed-mean map intact. Use `--quantity counterfactual` or
+`--quantity reference` to display either saved array separately. With
+`--reference input`, the reference is `physiology_original.npz`.
+
 For 14-channel data, the DREAMER order is automatic: AF3, F7, F3, FC5, T7,
 P7, O1, O2, P8, T8, FC6, F4, F8, AF4. The scalp map currently requires these
 positioned DREAMER/Emotiv channel names. Mean absolute activity is used so
