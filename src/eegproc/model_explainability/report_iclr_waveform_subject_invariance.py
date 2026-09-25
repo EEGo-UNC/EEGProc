@@ -1,4 +1,4 @@
-"""Compare held-out real X and typicality-arm R(Zcf) with source class-1 R(Z).
+"""Compare real X, starting class-0 R(Z), and typicality R(Zcf) with class-1 R(Z).
 
 The benchmark consists of decoded latent states from other subjects' real,
 correctly predicted, typical class-1 trials. The discrepancy uses the same
@@ -64,22 +64,25 @@ def _waveform_discrepancy(signal, mean, variance):
 
 
 def _archived_decoded_eeg(result_path, *, original_x, report_output):
-    """Read only X and R(Zcf); never substitute the baseline reconstruction."""
+    """Read original X, starting class-0 R(Z), and counterfactual R(Zcf)."""
     archive_path = result_path.with_name("counterfactual.npz")
     if not archive_path.is_file():
         raise ValueError(f"{result_path}: missing decoded counterfactual EEG archive")
     with np.load(archive_path, allow_pickle=False) as archive:
+        starting_key = f"x_reconstructed_{report_output}"
         decoded_key = f"x_prime_{report_output}"
-        if "x" not in archive or decoded_key not in archive:
-            raise ValueError(f"{archive_path}: missing original X or decoded R(Zcf)")
+        if "x" not in archive or starting_key not in archive or decoded_key not in archive:
+            raise ValueError(f"{archive_path}: missing original X, starting R(Z), or R(Zcf)")
         archived_x = np.asarray(archive["x"], dtype=np.float32)
+        starting = np.asarray(archive[starting_key], dtype=np.float32)
         decoded = np.asarray(archive[decoded_key], dtype=np.float32)
     if (archived_x.shape != (1, *original_x.shape)
-            or decoded.shape != archived_x.shape
-            or not np.isfinite(archived_x).all() or not np.isfinite(decoded).all()
+            or starting.shape != archived_x.shape or decoded.shape != archived_x.shape
+            or not np.isfinite(archived_x).all()
+            or not np.isfinite(starting).all() or not np.isfinite(decoded).all()
             or not np.allclose(archived_x[0], original_x, rtol=1e-5, atol=1e-6)):
         raise ValueError(f"{archive_path}: waveform shape, values, or original trial identity disagree")
-    return decoded[0], archive_path
+    return starting[0], decoded[0], archive_path
 
 
 def _dataset_for_task(study, *, raw_eeg, raw_labels):
@@ -183,6 +186,8 @@ def _fold(root, study, entry, *, dataset, index, checkpoint_root, checkpoint_cac
         _waveform_discrepancy(value, mean, variance) for value in source_decoded
     ])
     wave_tau = float(np.quantile(source_wave_scores, 0.95, method="higher"))
+    if not np.isfinite(wave_tau) or wave_tau <= 0:
+        raise ValueError(f"{fold_dir}: decoded source class-1 threshold must be positive")
     source_rows = [{
         "task": task, "fold_subject": subject,
         "role": "decoded_source_typical_class1_R(Z)",
@@ -218,7 +223,7 @@ def _fold(root, study, entry, *, dataset, index, checkpoint_root, checkpoint_cac
     eligible = list(map(int, fold["eligible_trial_ids"]))
     if len(set(eligible)) != len(eligible) or not set(eligible).issubset(expected):
         raise ValueError(f"{fold_dir}: eligible class-0 trials conflict with observations")
-    cf_rows = []
+    start_rows, cf_rows = [], []
     n_completed = n_pending = n_error = n_latent_nonflip = n_confident_flip = 0
     for trial in sorted(eligible):
         arm = fold_dir / f"trial_{trial}" / "typicality"
@@ -253,10 +258,26 @@ def _fold(root, study, entry, *, dataset, index, checkpoint_root, checkpoint_cac
         key = (subject, trial)
         if key not in index or dataset.labels[index[key]] != 0:
             raise ValueError(f"{path}: original class-0 EEG trial is absent")
-        decoded, archive = _archived_decoded_eeg(
+        starting, decoded, archive = _archived_decoded_eeg(
             path, original_x=dataset.features[index[key]], report_output=summary["report_output"],
         )
+        starting_score = _waveform_discrepancy(starting, mean, variance)
         score = _waveform_discrepancy(decoded, mean, variance)
+        paired_delta = (score - starting_score) / wave_tau
+        start_rows.append({
+            "task": task, "fold_subject": subject,
+            "role": "decoded_starting_class0_R(Z)",
+            "subject_id": subject, "trial_id": trial, "original_true_class": 0,
+            "paired_optimized_class1_flip": bool(probabilities.argmax() == 1),
+            "waveform_discrepancy": starting_score,
+            "waveform_source_threshold": wave_tau,
+            "inside_source_waveform_region": starting_score <= wave_tau,
+            "source_waveform_percentile": float(
+                _source_percentiles(np.asarray([starting_score]), source_wave_scores)[0]
+            ),
+            "result_path": str(path.resolve()),
+            "decoded_waveform_archive": str(archive.resolve()),
+        })
         n_completed += 1
         if probabilities.argmax() != 1:
             n_latent_nonflip += 1
@@ -274,6 +295,9 @@ def _fold(root, study, entry, *, dataset, index, checkpoint_root, checkpoint_cac
             "waveform_discrepancy": score, "waveform_source_threshold": wave_tau,
             "inside_source_waveform_region": score <= wave_tau,
             "source_waveform_percentile": float(_source_percentiles(np.asarray([score]), source_wave_scores)[0]),
+            "paired_starting_class0_waveform_discrepancy": starting_score,
+            "paired_delta_cf_minus_start_over_waveform_threshold": paired_delta,
+            "closer_to_source_than_starting_class0": score < starting_score,
             "result_path": str(path.resolve()),
             "decoded_waveform_archive": str(archive.resolve()),
         })
@@ -286,6 +310,12 @@ def _fold(root, study, entry, *, dataset, index, checkpoint_root, checkpoint_cac
     real_scores = np.asarray([row["waveform_discrepancy"] for row in real_rows])
     cf_scores = np.asarray([row["waveform_discrepancy"] for row in cf_rows
                             if row["optimized_class1_flip"]])
+    start_scores = np.asarray([row["waveform_discrepancy"] for row in start_rows
+                               if row["paired_optimized_class1_flip"]])
+    paired_deltas = np.asarray([
+        row["paired_delta_cf_minus_start_over_waveform_threshold"]
+        for row in cf_rows if row["optimized_class1_flip"]
+    ])
     source_median, real_median, cf_median = map(_median, (source_wave_scores, real_scores, cf_scores))
     row = {
         "task": task, "fold_subject": subject, "fold_status": fold["status"],
@@ -297,10 +327,15 @@ def _fold(root, study, entry, *, dataset, index, checkpoint_root, checkpoint_cac
         "n_typicality_error": n_error, "n_typicality_pending": n_pending,
         "n_optimized_class1_flip": len(cf_scores), "n_optimized_nonflip": n_latent_nonflip,
         "n_optimized_confident_class1_flip": n_confident_flip,
+        "n_decoded_starting_class0_scored": len(start_rows),
+        "n_starting_class0_inside_source": int(np.count_nonzero(start_scores <= wave_tau)),
+        "n_cf_closer_than_starting_class0": int(np.count_nonzero(paired_deltas < 0)),
         "waveform_source_threshold": wave_tau,
         "source_waveform_median_discrepancy": source_median,
         "real_x_median_waveform_discrepancy": real_median,
+        "starting_class0_median_waveform_discrepancy": _median(start_scores),
         "decoded_cf_median_waveform_discrepancy": cf_median,
+        "paired_delta_cf_minus_start_over_waveform_threshold_median": _median(paired_deltas),
         "real_x_minus_source_median_over_waveform_threshold":
             (real_median - source_median) / wave_tau if real_median is not None and wave_tau > 0 else None,
         "decoded_cf_minus_source_median_over_waveform_threshold":
@@ -314,15 +349,25 @@ def _fold(root, study, entry, *, dataset, index, checkpoint_root, checkpoint_cac
     }
     hashes["source_checkpoint"] = str(checkpoint.resolve())
     hashes["source_checkpoint_sha256"] = entry["sha256"]
-    return row, source_rows + real_rows + cf_rows, sampling + source_reference_sampling, hashes
+    print(
+        f"{task} subject {subject}: starting inside {row['n_starting_class0_inside_source']}"
+        f"/{row['n_optimized_class1_flip']}, counterfactual inside "
+        f"{row['n_decoded_cf_inside_source']}/{row['n_optimized_class1_flip']}, "
+        f"counterfactual closer {row['n_cf_closer_than_starting_class0']}"
+        f"/{row['n_optimized_class1_flip']}",
+        flush=True,
+    )
+    return row, source_rows + real_rows + start_rows + cf_rows, sampling + source_reference_sampling, hashes
 
 
 def _aggregate(rows, *, expected_subjects):
     comparable = [row for row in rows if row["n_heldout_original_real_class1_sampled"]
                   and row["n_optimized_class1_flip"]]
+    paired = [row for row in rows if row["n_optimized_class1_flip"]]
 
-    def med(field):
-        return _median([row[field] for row in comparable if row[field] is not None])
+    def med(field, group=None):
+        group = comparable if group is None else group
+        return _median([row[field] for row in group if row[field] is not None])
 
     ids = {row["fold_subject"] for row in rows}
     return {
@@ -330,9 +375,14 @@ def _aggregate(rows, *, expected_subjects):
         "n_expected_folds": expected_subjects,
         "missing_subject_ids": sorted(set(range(expected_subjects)) - ids),
         "n_comparable_folds": len(comparable),
+        "n_paired_folds": len(paired),
         "n_folds_decoded_cf_lower_discrepancy_than_real_x": sum(
             row["decoded_cf_minus_real_x_median_over_waveform_threshold"] < 0
             for row in comparable
+        ),
+        "n_folds_cf_closer_than_starting_class0": sum(
+            row["paired_delta_cf_minus_start_over_waveform_threshold_median"] < 0
+            for row in paired
         ),
         "min_source_decoded_reference_trials": min(
             row["n_source_typical_real_class1"] for row in rows
@@ -347,6 +397,15 @@ def _aggregate(rows, *, expected_subjects):
             row["n_optimized_confident_class1_flip"] for row in rows
         ),
         "n_optimized_nonflip": sum(row["n_optimized_nonflip"] for row in rows),
+        "n_decoded_starting_class0_scored": sum(
+            row["n_decoded_starting_class0_scored"] for row in rows
+        ),
+        "n_starting_class0_inside_source": sum(
+            row["n_starting_class0_inside_source"] for row in rows
+        ),
+        "n_cf_closer_than_starting_class0": sum(
+            row["n_cf_closer_than_starting_class0"] for row in rows
+        ),
         "n_real_x_sampled": sum(row["n_heldout_original_real_class1_sampled"] for row in rows),
         "n_real_x_inside_source": sum(row["n_real_x_inside_source"] for row in rows),
         "n_decoded_cf_inside_source": sum(row["n_decoded_cf_inside_source"] for row in rows),
@@ -355,48 +414,52 @@ def _aggregate(rows, *, expected_subjects):
         "fold_median_real_x_minus_source_over_waveform_threshold": med("real_x_minus_source_median_over_waveform_threshold"),
         "fold_median_decoded_cf_minus_source_over_waveform_threshold": med("decoded_cf_minus_source_median_over_waveform_threshold"),
         "fold_median_decoded_cf_minus_real_x_over_waveform_threshold": med("decoded_cf_minus_real_x_median_over_waveform_threshold"),
+        "fold_median_paired_cf_minus_start_over_waveform_threshold": med(
+            "paired_delta_cf_minus_start_over_waveform_threshold_median", paired
+        ),
     }
 
 
 def _paragraph(aggregates):
     lines = [
         r"\paragraph{Subject-invariance.}",
-        "We compare held-out subjects' original class-1 EEG $X$ and "
-        "typicality-generated class-0-to-1 waveforms $R(Z^{\\mathrm{cf}})$ "
-        "with decoded $R(Z)$ from other subjects' correctly predicted, "
-        "typical class-1 trials. The fold-specific EEG-space discrepancy "
-        "uses the same diagonal squared Mahalanobis formula as typicality, "
-        "fitted to the source $R(Z)$ waveforms.",
+        "We score each held-out subject's starting class-0 reconstruction "
+        "$R(Z)$ and typicality counterfactual $R(Z^{\\mathrm{cf}})$ against "
+        "decoded $R(Z)$ from other subjects' correctly predicted, typical "
+        "class-1 trials. Both members of each pair share the same decoder. "
+        "For context, we also score sampled original class-1 EEG $X$. "
+        "The EEG-space discrepancy has the same diagonal squared "
+        "Mahalanobis form as typicality, fitted to the source class-1 $R(Z)$.",
     ]
     for row in aggregates:
         task = row["task"].capitalize()
-        if not row["n_comparable_folds"]:
+        if not row["n_paired_folds"]:
             lines.append(
-                f"For {task}, no observed fold has both sampled original "
-                "class-1 EEG and a completed class-1 counterfactual waveform."
+                f"For {task}, no observed fold has a completed class-1 "
+                "counterfactual and its starting reconstruction."
             )
             continue
         lines.append(
-            f"For {task}, {row['n_decoded_cf_inside_source']} of "
-            f"{row['n_optimized_class1_flip']} class-1 argmax counterfactuals "
-            f"fall within the source $R(Z)$ 95th-percentile region, compared "
-            f"with {row['n_real_x_inside_source']} of {row['n_real_x_sampled']} "
-            f"sampled original class-1 $X$. The "
-            f"counterfactual fold-median discrepancy is lower than that of "
-            f"real $X$ in {row['n_folds_decoded_cf_lower_discrepancy_than_real_x']} "
-            f"of {row['n_comparable_folds']} comparable folds. "
+            f"For {task}, {row['n_starting_class0_inside_source']} starting "
+            f"class-0 reconstructions and {row['n_decoded_cf_inside_source']} "
+            f"counterfactuals lie within the source class-1 $R(Z)$ "
+            f"95th-percentile region among {row['n_optimized_class1_flip']} "
+            f"class-1 argmax pairs. The counterfactual is closer to the "
+            f"class-1 reference in {row['n_cf_closer_than_starting_class0']} "
+            f"pairs and in {row['n_folds_cf_closer_than_starting_class0']} "
+            f"of {row['n_paired_folds']} fold medians; the median paired "
+            f"discrepancy change, scaled by the fold threshold, is "
+            f"{row['fold_median_paired_cf_minus_start_over_waveform_threshold']:+.3f}. "
             f"{row['n_optimized_confident_class1_flip']} of "
             f"{row['n_typicality_completed']} completed attempts meet the "
             f"study's target-probability criterion."
         )
-    if all(row["n_real_x_inside_source"] == 0 for row in aggregates):
-        lines.append(
-            "All sampled original class-1 $X$ fall outside the decoded "
-            "reference region. Since $R(Z^{\\mathrm{cf}})$ and the reference "
-            "$R(Z)$ share a decoder while $X$ does not, these counts do not "
-            "establish subject invariance; they show overlap within the "
-            "decoder's output space."
-        )
+    lines.append(
+        "This paired comparison controls for the shared decoder, but "
+        "does not isolate the typicality objective from the class-target "
+        "optimization or establish loss of subject identity. A matched "
+        "non-typicality counterfactual control is needed for that claim."
+    )
     coverage = "; ".join(
         f"{row['n_observed_folds']}/{row['n_expected_folds']} {row['task']} folds"
         for row in aggregates
@@ -459,16 +522,18 @@ def build_waveform_subject_invariance_report(roots, output, *, raw_eeg, raw_labe
     write_json(output / "waveform_subject_invariance_sampling.json", samples)
     (output / "waveform_subject_invariance_paragraph.tex").write_text(_paragraph(aggregates))
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "discrepancy_definition": "full_trial_diagonal_squared_mahalanobis_per_waveform_coordinate",
         "formula": "mean((waveform - source_mean)^2 / max(source_variance, variance_floor))",
         "waveform_space": "normalized SIC model-input EEG, shape (windows, samples, channel-bands)",
-        "real_signal": "original prepared X from DREAMER; never R(E(X))",
+        "real_signal": "original prepared class-1 X from DREAMER, scored only as context",
+        "starting_class0_signal": "x_reconstructed_<report_output> = decoded initial R(Z) of the eligible class-0 trial from typicality-arm counterfactual.npz",
         "counterfactual_signal": "x_prime_<report_output> = decoded R(Zcf) from typicality-arm counterfactual.npz",
         "source_reference": "R(Z) from other subjects' real true-class-1 EEG with correct class-1 prediction and saved embedding typicality D <= source threshold",
         "source_reference_generation": "one frozen-checkpoint encoding of source X to Z followed by decoding Z to R(Z); no counterfactual re-encoding",
         "source_threshold": "95th percentile of source decoded R(Z) waveform discrepancies in each fold",
-        "subject_invariance_conclusion": "inconclusive: shared decoder confounds the decoded counterfactual-versus-original EEG comparison",
+        "subject_invariance_conclusion": "paired starting-versus-counterfactual decoder-space comparison; subject invariance remains inconclusive without matched objective and subject-identity controls",
+        "paired_comparison": "D(R(Zcf)) - D(R(Z_start)) against the same other-subject decoded class-1 reference; negative means the counterfactual moved closer",
         "selection": "sampled held-out real true class 1 regardless of prediction; all eligible typicality outputs counted, optimized latent class-1 argmax flips in waveform comparison, with confidence-qualified flips reported separately",
         "variance_floor": variance_floor,
         "samples_per_subject": int(samples_per_subject), "seed": int(seed),
@@ -480,7 +545,8 @@ def build_waveform_subject_invariance_report(roots, output, *, raw_eeg, raw_labe
         "limitations": [
             "The diagonal decoded-EEG Gaussian is empirical and is distinct from the checkpoint's learned embedding-space class-1 Gaussian.",
             "A decoded class-1 flip is not independently verified without re-encoding; class-1 selection uses the optimizer's saved latent prediction.",
-            "Original X and decoded R(Z) occupy different waveform distributions in the supplied archives; decoder-induced alignment can explain the observed gap, so this report cannot establish subject invariance.",
+            "Original X and decoded R(Z) occupy different waveform distributions; the paired starting class-0 R(Z) is the decoder-matched control for the counterfactual.",
+            "A class-target optimization can move R(Zcf) toward decoded class-1 EEG even without the typicality penalty; matched base-arm counterfactuals are needed to attribute any movement specifically to typicality.",
             "Pointwise waveform discrepancy is sensitive to temporal phase and alignment.",
             "The supplied study archives are incomplete and task summaries are provisional.",
         ],

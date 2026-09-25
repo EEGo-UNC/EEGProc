@@ -12,7 +12,7 @@ from eegproc.model_explainability.report_iclr_waveform_subject_invariance import
 )
 
 
-def test_counterfactual_uses_x_prime_and_preserves_original_x(tmp_path):
+def test_counterfactual_reads_paired_start_and_final_waveforms(tmp_path):
     attempt = tmp_path / "attempt_0001"
     attempt.mkdir()
     result = attempt / "result.json"
@@ -22,10 +22,11 @@ def test_counterfactual_uses_x_prime_and_preserves_original_x(tmp_path):
         archive, x=original[None], x_prime_joint=np.ones((1, *original.shape)),
         x_reconstructed_joint=np.full((1, *original.shape), 99),
     )
-    decoded, actual_path = _archived_decoded_eeg(
+    starting, decoded, actual_path = _archived_decoded_eeg(
         result, original_x=original, report_output="joint",
     )
     assert actual_path == archive
+    np.testing.assert_array_equal(starting, 99)
     np.testing.assert_array_equal(decoded, 1)
     with pytest.raises(ValueError, match="original trial identity"):
         _archived_decoded_eeg(
