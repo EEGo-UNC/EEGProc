@@ -65,7 +65,14 @@ def _endpoint(summary: dict, protocol: str, study_threshold) -> dict:
     if row["status"] != "completed":
         row["error"] = summary.get("error")
         return row
-    typical = summary["typicality"]["typical"]
+    typicality = summary["typicality"]
+    typical = typicality["typical"]
+    discrepancy = _finite(typicality.get("counterfactual_discrepancy"))
+    typicality_threshold = _finite(typicality.get("threshold"))
+    if typicality_threshold is not None and typicality_threshold < 0:
+        raise ValueError("Typicality threshold must be nonnegative")
+    normalized_discrepancy = (discrepancy / typicality_threshold
+                              if discrepancy is not None and typicality_threshold else None)
     decoded = summary["decoded_trials"][summary["report_output"]]
     if protocol == "latent_only":
         prediction = summary["latent_counterfactual"]
@@ -103,6 +110,8 @@ def _endpoint(summary: dict, protocol: str, study_threshold) -> dict:
         confident_flip_typical=(bool(flip and confidence and typical)
                                 if flip is not None and confidence is not None and typical is not None else None),
         target_probability=target_probability, required_target_probability=threshold,
+        d_c1=discrepancy, typicality_threshold=typicality_threshold,
+        d_c1_over_tau=normalized_discrepancy,
         d_z=_finite(summary.get("d_z")),
         delta_dec=math.sqrt(change_mse) if change_mse is not None and change_mse >= 0 else None,
         vcsc_penalty=vcsc_penalty, vcsc_tolerance=vcsc_tolerance,
@@ -184,6 +193,18 @@ def collect(root: Path):
                             row.update(_endpoint(summary, protocol, study_threshold))
                             row["artifact_directory"] = str(attempt.resolve())
                     rows.append(row)
+    base_by_trial = {(row["task"], row["subject_id"], row["trial_id"]): row
+                     for row in rows if row["objective"] == "base"}
+    for row in rows:
+        base = base_by_trial[(row["task"], row["subject_id"], row["trial_id"])]
+        arm_tau, base_tau = row.get("typicality_threshold"), base.get("typicality_threshold")
+        if (arm_tau is not None and base_tau is not None
+                and not math.isclose(arm_tau, base_tau, rel_tol=1e-9, abs_tol=1e-12)):
+            raise ValueError("Paired arms disagree on the fold's typicality threshold")
+        arm_score, base_score = row.get("d_c1_over_tau"), base.get("d_c1_over_tau")
+        row["paired_delta_d_c1_over_tau"] = (arm_score - base_score
+                                              if arm_score is not None and base_score is not None
+                                              else None)
     if len(protocols) != 1:
         raise ValueError(f"Cannot mix validity protocols: {sorted(protocols)}")
     if len(definitions) != 1:
@@ -222,7 +243,7 @@ def summarize(rows: list[dict], *, pending_folds=0) -> dict:
         out[field + "_percent"] = (100 * sum(row.get(field) is True for row in rows) / n
                                    if n and not unknown else None)
         out[field + "_n_assessed"] = sum(row.get(field) is not None for row in completed)
-    for field in ("d_z", "delta_dec"):
+    for field in ("d_z", "delta_dec", "d_c1_over_tau", "paired_delta_d_c1_over_tau"):
         q50, q25, q75, count = _quantiles(row.get(field) for row in rows)
         out.update({field + "_median": q50, field + "_q25": q25,
                     field + "_q75": q75, field + "_n": count})
@@ -251,7 +272,10 @@ def _distance(row, field):
 
 def _table(population: list[dict], *, include_provisional=False) -> str:
     caption = ("Counterfactual displacement and physiological diagnostics across eligible class-0 trials. "
-               "Distances are median [Q1, Q3] over finite endpoints. "
+               "Displacements are median [Q1, Q3] over finite endpoints. "
+               "Paired $\\Delta D/\\tau$ is the median per-trial difference "
+               "$(D_{\\mathrm{arm}}-D_{\\mathrm{cfo}})/\\tau_{C_1}$ among trials with "
+               "both endpoints; negative values indicate lower class-1 discrepancy. "
                "VCSC is the fraction with raw VCSC penalty at or below the archived tolerance, "
                "including arms without a VCSC optimization penalty. "
                "Phys. requires all five physiological checks. The aperiodic exponent is "
@@ -263,17 +287,19 @@ def _table(population: list[dict], *, include_provisional=False) -> str:
                     "archived user folds and must not be interpreted as population results.")
     lines = [r"\begin{table}[H]", f"\\caption{{{caption}}}",
              r"\label{tab:counterfactual_results}", r"\begin{center}",
-             r"\begin{tabular}{llcccc}",
-             r"\textbf{Task} & \textbf{Objective} & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{VCSC (\%)} & \textbf{Phys. (\%)} \\ \hline"]
+             r"\begin{tabular}{llccccc}",
+             r"\textbf{Task} & \textbf{Objective} & $\Delta D/\tau$ (paired) & $\mathbf{d_Z}$ & $\Delta_{\mathrm{dec}}$ & \textbf{VCSC (\%)} & \textbf{Phys. (\%)} \\ \hline"]
     for task in TASKS:
         for objective in OBJECTIVES:
             row = next((item for item in population if item["task"] == task and
                         item["objective"] == objective), None)
             if row is None or (row["provisional"] and (not include_provisional or not row["n_eligible"])):
-                entries = [task.title(), LABELS[objective], *("--",) * 4]
+                entries = [task.title(), LABELS[objective], *("--",) * 5]
             else:
                 name = task.title() + (r"$^{\dagger}$" if row["provisional"] else "")
+                paired = row["paired_delta_d_c1_over_tau_median"]
                 entries = [name, LABELS[objective],
+                           f"{paired:+.3f}" if paired is not None else "--",
                            _distance(row, "d_z"), _distance(row, "delta_dec"),
                            _fmt(row["vcsc_passed_percent"]),
                            _fmt(row["physiological_passed_percent"])]
@@ -322,18 +348,20 @@ def build_report(input_root: Path, out_dir: Path, *, expected_subjects: int = 23
                     and row["subject_id"] == fold["subject_id"]]
         lines = [f"# {fold['task'].title()} user {fold['subject_id']}", "",
                  f"Fold status: {fold['status']}; eligible trials: {fold['n_eligible'] if fold['n_eligible'] is not None else 'unknown'}.",
-                 "", "| Objective | Completed / eligible | Flip % | Conf. % | Typ. % | Flip+Typ. % | Conf.+Typ. % | d_Z median [Q1, Q3] | Delta_dec median [Q1, Q3] | Phys. % |",
-                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+                 "", "| Objective | Completed / eligible | Flip % | Conf. % | Typ. % | Flip+Typ. % | Conf.+Typ. % | Paired Delta D/tau median | d_Z median [Q1, Q3] | Delta_dec median [Q1, Q3] | Phys. % |",
+                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for row in selected:
             lines.append("| " + " | ".join((row["objective"],
                          f"{row['n_completed']} / {row['n_eligible']}",
                          *(_fmt(row[field + "_percent"]) for field in (
                              "flip", "confidence_acquired", "typical", "flip_typical",
                              "confident_flip_typical")),
+                         _fmt(row["paired_delta_d_c1_over_tau_median"], 3),
                          _distance(row, "d_z"), _distance(row, "delta_dec"),
                          _fmt(row["physiological_passed_percent"]))) + " |")
         lines += ["", "Flip is target-class argmax; Conf. is target probability at or above the archived threshold.",
                   "Flip+Typ. and Conf.+Typ. are separate conjunctions; the latter also requires a flip.",
+                  "Paired Delta D/tau compares each trial to its base CFO endpoint; negative means lower class-1 discrepancy.",
                   "Rates use all eligible trials. Distances use finite selected endpoints.",
                   "Phys. is unavailable when a required check was not assessed.", ""]
         (user_dir / f"{fold['task']}_user_{fold['subject_id']}.md").write_text(

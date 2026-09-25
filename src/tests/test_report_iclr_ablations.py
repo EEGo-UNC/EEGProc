@@ -45,7 +45,13 @@ def _study(root, task, *, protocol="latent_only", absent_check=False):
                 "trial_id": trial, "objective": objective,
                 "report_output": "joint", "target_class": 1,
                 "required_target_probability": 0.8, "latent_counterfactual": latent,
-                "typicality": {"typical": typical}, "d_z": float(trial),
+                "typicality": {"typical": typical, "threshold": 2.0,
+                               "counterfactual_discrepancy": {
+                                   "target_latent": 1.1, "base": 1.0,
+                                   "typicality": 0.8,
+                                   "typicality_no_physiology": 0.7,
+                               }[objective] + 0.1 * (trial - 2)},
+                "d_z": float(trial),
                 "decoded_trials": {"joint": {"decoded_change_mse": 4.0,
                                               "vcsc_counterfactual": 0.0 if trial == 2 else 0.2,
                                               "counterfactual": decoded_cf}},
@@ -84,15 +90,26 @@ def test_four_ablations_report_each_user_and_preserve_metric_space(tmp_path):
     assert valence[2]["available_checks_passed_percent"] == 50
     assert valence[3]["flip_typical_percent"] == 100
     assert valence[3]["confident_flip_typical_percent"] == 50
+    assert valence[1]["paired_delta_d_c1_over_tau_median"] == 0
+    assert valence[2]["paired_delta_d_c1_over_tau_n"] == 1
+    assert valence[2]["paired_delta_d_c1_over_tau_median"] == pytest.approx(-0.1)
+    assert valence[3]["paired_delta_d_c1_over_tau_median"] == pytest.approx(-0.15)
     latex = (tmp_path / "report/counterfactual_results.tex").read_text()
     assert "Phys. requires all five" in latex
     assert "VCSC" in latex
+    assert r"$\Delta D/\tau$ (paired)" in latex
+    assert "-0.100" in latex
     assert "Flip (\\%)" not in latex and "Typ. (\\%)" not in latex
     assert r"\lambda_{\mathrm{phys}}=0" in latex
     assert "--" in latex
     assert (tmp_path / "report/users/valence_user_0.md").is_file()
     with (tmp_path / "report/user_optimizations.csv").open() as handle:
         assert len(list(csv.DictReader(handle))) == 8
+    with (tmp_path / "report/trial_optimizations.csv").open() as handle:
+        trial_rows = list(csv.DictReader(handle))
+    unpaired = next(row for row in trial_rows if row["task"] == "valence" and
+                    row["trial_id"] == "3" and row["objective"] == "typicality")
+    assert unpaired["paired_delta_d_c1_over_tau"] == ""
 
 
 def test_round_trip_validity_is_not_taken_from_latent_success(tmp_path):

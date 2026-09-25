@@ -22,7 +22,13 @@ Outputs are `trial_optimizations.csv`, `user_optimizations.csv`,
 `counterfactual_results_with_provisional.tex`, and
 individual `users/<task>_user_<id>.md` reports. Each task has four rows in the
 LaTeX table, including typicality without the physiological penalty. The table
-contains displacement, VCSC pass rate, and the full physiological pass rate.
+contains paired class-1 discrepancy, displacement, VCSC pass rate, and the
+full physiological pass rate. The paired discrepancy is the median across
+matched eligible trials of `(D_arm - D_base) / tau_C1`, where `base` is full
+CFO without typicality and `tau_C1` is that fold's source-calibrated class-1
+threshold. Negative values mean lower class-1 discrepancy than base CFO.
+Only trials with finite endpoints for both arms contribute; the CSV includes
+their count and quartiles. The base row is zero by definition.
 Flip, confidence acquisition, and typicality
 remain in the CSV and per-user reports for the accompanying prose. The
 `report.json` file records missing user shards and whether the report is
