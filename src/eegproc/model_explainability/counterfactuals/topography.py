@@ -367,15 +367,10 @@ def main(argv: list[str] | None = None) -> int:
         colorbar_label = "signed mean counterfactual − reference"
     else:
         colorbar_label = f"{args.measure} {args.quantity}"
-    scale_label = "shared scale" if args.shared_scale else "band-relative scale"
     fig, peak_channels = plot_band_topographies(
         values,
         channel_names=channel_names,
         band_names=band_names,
-        title=(
-            f"{branch}: whole-trial {args.quantity} "
-            f"(reference={args.reference}, {args.measure}, {scale_label})"
-        ),
         colorbar_label=colorbar_label,
         shared_scale=args.shared_scale,
         signed=args.measure == "mean" or (args.measure == "amplitude" and args.quantity == "difference"),

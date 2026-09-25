@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from eegproc.model_explainability import counterfactual_topography as topography
+from eegproc.model_explainability.counterfactuals import topography
 
 
 def _attempt(tmp_path):
@@ -38,6 +38,7 @@ def test_amplitude_map_subtracts_saved_arrays(tmp_path, monkeypatch):
                             "--measure", "amplitude", "--no-show"]) == 0
     np.testing.assert_allclose(captured[-1][0], (after - before).T)
     assert captured[-1][1]["signed"] is True
+    assert "title" not in captured[-1][1]
     assert (directory / "counterfactual_joint_difference_amplitude_topography.png").exists()
 
     assert topography.main([str(directory / "counterfactual.npz"), "--branch", "joint",
