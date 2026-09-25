@@ -78,6 +78,28 @@ def summarize_activity(signal: np.ndarray, *, measure: str) -> np.ndarray:
     raise ValueError("measure must be 'mean-absolute', 'rms', or 'mean'.")
 
 
+def load_physiology_amplitudes(npz_path: Path, *, reference: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load saved 99th-percentile absolute amplitudes, shaped channels × bands."""
+    directory = Path(npz_path).parent
+    reference_name = "reconstruction" if reference == "reconstruction" else "original"
+    arrays = []
+    for name in ("counterfactual", reference_name):
+        path = directory / f"physiology_{name}.npz"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{path} is required for --measure amplitude. "
+                "Use an attempt containing saved physiology diagnostics."
+            )
+        with np.load(path, allow_pickle=False) as data:
+            values = np.asarray(data["amplitude"], dtype=float)
+        if values.ndim != 2 or not np.isfinite(values).all():
+            raise ValueError(f"{path}: amplitude must be a finite channels × bands array.")
+        arrays.append(values)
+    if arrays[0].shape != arrays[1].shape:
+        raise ValueError("Counterfactual and reference amplitude arrays have different shapes.")
+    return arrays[0], arrays[1]
+
+
 def _channel_positions(channel_names: list[str]) -> np.ndarray:
     missing = [name for name in channel_names if name.upper() not in DREAMER_POSITIONS]
     if missing:
@@ -248,11 +270,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--measure",
-        choices=("mean-absolute", "rms", "mean"),
+        choices=("mean-absolute", "rms", "mean", "amplitude"),
         default="mean",
         help=(
             "Whole-trial reduction. The default mean retains the sign of the "
-            "decoded counterfactual difference."
+            "decoded counterfactual difference. Amplitude uses the saved "
+            "99th-percentile absolute amplitudes from physiology_*.npz."
         ),
     )
     parser.add_argument(
@@ -305,39 +328,61 @@ def main(argv: list[str] | None = None) -> int:
         n_channels, provided=args.channel_names, saved=saved_channel_names
     )
 
-    if args.quantity == "difference":
-        signal = flatten_trial(counterfactual - reference)
-    elif args.quantity == "counterfactual":
-        signal = flatten_trial(counterfactual)
+    if args.measure == "amplitude":
+        after, before = load_physiology_amplitudes(args.npz_path, reference=args.reference)
+        if after.shape != (n_channels, len(band_names)):
+            raise ValueError(
+                f"Saved amplitude shape {after.shape} does not match "
+                f"{n_channels} channels × {len(band_names)} bands."
+            )
+        values = {"difference": after - before, "counterfactual": after,
+                  "reference": before}[args.quantity].T
     else:
-        signal = flatten_trial(reference)
-    band_signal = split_channel_bands(
-        signal,
-        n_channels=n_channels,
-        n_bands=len(band_names),
-        feature_order=args.feature_order,
-    )
-    values = np.stack(
-        [
-            summarize_activity(band_signal[:, band_index, :], measure=args.measure)
-            for band_index in range(len(band_names))
-        ],
-        axis=0,
-    )
+        if args.quantity == "difference":
+            signal = flatten_trial(counterfactual - reference)
+        elif args.quantity == "counterfactual":
+            signal = flatten_trial(counterfactual)
+        else:
+            signal = flatten_trial(reference)
+        band_signal = split_channel_bands(
+            signal,
+            n_channels=n_channels,
+            n_bands=len(band_names),
+            feature_order=args.feature_order,
+        )
+        values = np.stack(
+            [
+                summarize_activity(band_signal[:, band_index, :], measure=args.measure)
+                for band_index in range(len(band_names))
+            ],
+            axis=0,
+        )
+    if args.measure == "amplitude":
+        colorbar_label = (
+            "99th-percentile absolute amplitude difference (signal units)"
+            if args.quantity == "difference"
+            else f"99th-percentile absolute amplitude, {args.quantity} (signal units)"
+        )
+    elif args.quantity == "difference" and args.measure == "mean":
+        colorbar_label = "signed mean counterfactual − reference"
+    else:
+        colorbar_label = f"{args.measure} {args.quantity}"
+    scale_label = "shared scale" if args.shared_scale else "band-relative scale"
     fig, peak_channels = plot_band_topographies(
         values,
         channel_names=channel_names,
         band_names=band_names,
-        colorbar_label=(
-            "signed mean counterfactual − reference"
-            if args.quantity == "difference" and args.measure == "mean"
-            else f"{args.measure} {args.quantity}"
+        title=(
+            f"{branch}: whole-trial {args.quantity} "
+            f"(reference={args.reference}, {args.measure}, {scale_label})"
         ),
+        colorbar_label=colorbar_label,
         shared_scale=args.shared_scale,
-        signed=args.measure == "mean",
+        signed=args.measure == "mean" or (args.measure == "amplitude" and args.quantity == "difference"),
     )
+    suffix = "_amplitude" if args.measure == "amplitude" else ""
     output = args.output or args.npz_path.with_name(
-        f"{args.npz_path.stem}_{branch}_{args.quantity}_topography.png"
+        f"{args.npz_path.stem}_{branch}_{args.quantity}{suffix}_topography.png"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=200, bbox_inches="tight")
