@@ -102,8 +102,8 @@ def _fold(root, study, entry, *, samples_per_subject, seed):
     source_scores = np.asarray(source["discrepancy"], dtype=float)
     reference = source_scores[(source_labels == 1) & (source_predictions == 1)
                               & (source_scores <= region.tau)]
-    if len(reference) < 2:
-        raise ValueError(f"{fold_dir}: need at least two source real class-1 trials that are predicted and typical")
+    if not len(reference):
+        raise ValueError(f"{fold_dir}: need a source real class-1 trial that is predicted and typical")
     real = [row for row in real_rows if row["role"] == "heldout"]
     real_scores = np.asarray([row["discrepancy"] for row in real], dtype=float)
     for row, percentile in zip(real, _source_percentiles(real_scores, reference)):
@@ -323,6 +323,7 @@ def build_typicality_subject_invariance_report(roots, output, *, samples_per_sub
         "limitations": [
             "This is not a score of decoded R(Zcf); no decoder-encoder round trip is used.",
             "Source subjects trained the classifier; the held-out subject did not.",
+            "Source percentile ranks are unstable in folds with very few correctly predicted typical source class-1 trials; fold counts are reported.",
             "Only optimized class-1 flips enter the primary counterfactual discrepancy comparison; nonflips, errors, and pending attempts remain in the counts.",
             "Incomplete fold coverage and unfinished attempts make task aggregates provisional.",
         ],
