@@ -232,12 +232,13 @@ smoke_runs/
 # Coverage artifacts are produced by CI, not committed.
 coverage.svg
 
-# Test fixtures are source, not data: exempt them from the broad `data/` rule above.
-!src/tests/data/
-!src/tests/data/**
 
 # Editor / OS / local-env cruft that was previously committed.
 .DS_Store
 **/.DS_Store
 .coveragearc
 .venv312_install.lock
+
+# Library data schema and windowing code (not recorded datasets).
+!src/eegproc/data/
+!src/eegproc/data/**

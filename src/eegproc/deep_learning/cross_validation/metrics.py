@@ -122,7 +122,7 @@ def _classification_metrics(
     """Compute selected classification metrics.
 
     For binary tasks, ``f1``, ``precision``, and ``recall`` follow the
-    MTLFuseNet convention: class 1 is the positive class and no macro averaging
+    Binary classification convention: class 1 is the positive class and no macro averaging
     is applied. ``binary_f1``, ``binary_precision``, and ``binary_recall`` are
     retained as backward-compatible aliases. Explicit ``macro_*`` metrics and
     ``balanced_accuracy`` remain available for class-balanced diagnostics.

@@ -1,8 +1,6 @@
 """Cross-validation for subject-wise EEG experiments.
 
-Split out of the former single-module ``cross_val`` in v2. Modules are layered so
-that every import points strictly downward; see ``tests/test_cross_validation.py``
-for the acyclicity check that keeps it that way.
+Split out of the former single-module ``cross_val`` in v2. Modules separate array helpers, metrics, fold execution, and orchestration.
 
 Requires ``eegproc[deep-learning]``.
 """

@@ -11,11 +11,12 @@ EEGProc documentation
    :caption: Contents:
    
    getting-started
+   datasets
    api/modules
 
 
 EEGProc is a fully vectorized library designed for preprocessing and extracting features from EEG (Electroencephalogram) data. This library is optimized for performance and ease of use, making it suitable for researchers and developers working in the field of neuroscience, biomedical engineering, and machine learning.
-Checkout and **star** or **fork** the project at https://github.com/VitorInserra/EEGProc
+Checkout and **star** or **fork** the project at https://github.com/EEGo-UNC/EEGProc
 
 **Features**
 

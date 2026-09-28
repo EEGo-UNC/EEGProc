@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from joblib.externals import cloudpickle
+import cloudpickle
 import multiprocessing as mp
 import os
 import queue

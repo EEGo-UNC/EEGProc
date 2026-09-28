@@ -1,11 +1,8 @@
 """
 prepare_datasets.py
 ===================
-Convert raw DEAP, DREAMER, AMIGOS, and EEGEmotions dataset files into the NumPy format
-expected by STSNet's train_eval.py (and by joint_v2_data.py's
-``build_dataset``). These files intentionally retain complete trials; the joint-v2 training
-loader later creates flat overlapping windows for window-level classification
-while preserving subject and trial IDs for subject-disjoint LOSO evaluation:
+Convert supported public EEG datasets into complete-trial NumPy arrays.
+Callers can then window and label these arrays for their own models. Outputs:
 
     {dataset}_eeg.npy    — float32, shape (n_subjects, n_trials, n_channels, n_samples)
     {dataset}_labels.npy — float32, shape (n_subjects, n_trials, n_label_dims)
@@ -1404,7 +1401,7 @@ def verify_npy(output_dir: str, dataset: str, label_mode: str | None = None) -> 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Convert DEAP / DREAMER / AMIGOS / EEGEmotions raw files to STSNet-ready .npy arrays"
+        description="Convert DEAP / DREAMER / AMIGOS / EEGEmotions raw files to complete-trial .npy arrays"
     )
     parser.add_argument(
         "--dataset",

@@ -1,27 +1,16 @@
-# Deep Learning
+# Deep learning components
 
-This directory contains experiment-oriented deep learning utilities for EEG analysis.
+Install `eegproc[deep-learning]` to use the TensorFlow components.
 
-## Directory Structure
+| Module | Purpose |
+| --- | --- |
+| [`cross_validation`](cross_validation/) | LOSO, fixed LOSO, nested evaluation, subject calibration, and the DataFrame interface. |
+| [`cross_val.py`](cross_val.py) | Compatibility import for the public cross-validation API. |
+| [`domain_generalization`](domain_generalization/) | Alternating subject groups and meta-learning strategies. |
+| [`training_outputs.py`](training_outputs.py) | Training callbacks, metrics, and diagnostics. |
+| [`supervised`](supervised/) | RNN classifier builders, dense and variational classifier heads, and contrastive loss. |
+| [`unsupervised`](unsupervised/) | CNN/GNN encoders and decoders, graph layers, and autoencoder losses. |
+| [`prepare_datasets.py`](prepare_datasets.py) | Converters for supported public EEG datasets. |
 
-- `supervised/` — implementations for supervised EEG models, training loops, and related helpers.
-- `unsupervised/` — unsupervised learning components such as autoencoders and representation-learning modules.
-- `joint_architectures/` — model definitions for joint or multi-branch architectures that combine multiple objectives or modalities.
-- `prepare_datasets.py` — converts public EEG datasets into the NumPy format expected by the training pipeline.
-- `cross_val.py` — provides cross-validation and evaluation utilities for training and benchmarking models.
-- `run_experiment.py` — entry point for launching experiments and model runs.
-- `archival_cv.py` and `smoke_test_cross_val.py` — older or auxiliary scripts for experimentation and quick validation.
-
-## Key Scripts
-
-### `prepare_datasets.py`
-
-This script prepares raw EEG datasets such as DEAP, DREAMER, AMIGOS, and EEGEmotions into standardized NumPy arrays. It handles dataset-specific loading, preprocessing, label extraction, and output writing so the rest of the training code can work with a consistent format.
-
-### `cross_val.py`
-
-This module implements model evaluation workflows, including cross-validation strategies and metric computation. It is used to train models, evaluate them under different splits, and collect performance results for experiments.
-
-## Purpose
-
-These modules are intended for building, training, and evaluating EEG deep learning models within the EEGProc project.
+Supply your own model builder to the cross-validation functions. Model definitions
+and experiment configurations live in the application that uses the library.

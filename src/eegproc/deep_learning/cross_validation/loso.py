@@ -355,7 +355,7 @@ def loso_cv(
     ---------
     ``selection_level`` determines whether configurations are ranked using
     window- or trial-level scores. Hierarchical rank-4 inputs require trial-level
-    selection. For binary tasks, ``selection_metric='f1'`` uses the MTLFuseNet
+    selection. For binary tasks, ``selection_metric='f1'`` uses the binary
     convention: class 1 is positive. ``precision`` and ``recall`` follow the same
     convention. Explicit ``macro_*`` metrics and ``balanced_accuracy`` remain
     available for class-balanced diagnostics, while ``roc_auc`` uses the class-1

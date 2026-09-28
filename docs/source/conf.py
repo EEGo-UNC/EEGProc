@@ -9,7 +9,7 @@
 project = 'EEGProc'
 copyright = '2025, Vitor Inserra'
 author = 'Vitor Inserra'
-release = '1.0.0'
+release = '2.0.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

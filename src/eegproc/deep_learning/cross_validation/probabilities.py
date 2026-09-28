@@ -242,7 +242,7 @@ def _threshold_metric_value(
     if metric == "accuracy":
         return float(accuracy_score(y_true, y_pred))
     if metric == "f1":
-        # MTLFuseNet convention: binary F1 for class 1.
+        # Binary F1 uses class 1 as the positive class.
         return float(
             f1_score(
                 y_true,
@@ -275,7 +275,7 @@ def _threshold_metric_value(
     raise ValueError(
         "threshold_selection_metric must be accuracy, f1, "
         "balanced_accuracy, or binary_f1. Here f1 follows the "
-        "MTLFuseNet binary class-1 convention."
+        "binary class-1 convention."
     )
 
 

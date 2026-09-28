@@ -142,7 +142,7 @@ def subject_calibration_cv(
     positive, a seeded subset of those source subjects is excluded from gradient
     updates and used only for source checkpoint selection. The target subject is
     never used to construct, optimize, or select that source model. This is
-    especially important for v6's MTLFuseNet-style GCN: the four ``training_*``
+    important for models that learn data-dependent adjacency: the four ``training_*``
     arrays contain only gradient-training source subjects, so its fixed
     mutual-information adjacency remains training-only.
 

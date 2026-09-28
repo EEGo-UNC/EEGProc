@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from joblib.externals import cloudpickle
+import cloudpickle
 import gc
 import numpy as np
 import os
@@ -275,7 +275,7 @@ def _run_subject_calibration_subject(
                     "For subject_calibration_cv, model_builder_function must accept "
                     "training_features, training_labels, training_subject_ids, and "
                     "training_trial_ids (directly or through **kwargs). v6 uses "
-                    "training_features to construct the MTLFuseNet MI adjacency "
+                    "training_features to construct a source-only adjacency "
                     "without target-subject leakage."
                 ) from exc
 

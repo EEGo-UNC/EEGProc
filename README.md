@@ -1,11 +1,27 @@
 # EEGProc
 
-Preprocessing, featurization, and subject-wise cross-validation for EEG.
+Featurization and Deep Learning library for EEG that is AI-friendly, lightweight, and easy to use.
 
-EEGProc is built for the awkward part of EEG machine learning: getting from raw
-recordings to features to an honest, subject-held-out evaluation, without writing
-the windowing and fold-splitting glue yourself. It is vectorized over pandas
-DataFrames and has no opinion about your model — you supply a Keras model builder.
+EEGProc is built for researchers and developers who aim to implement EEG machine learning without reinventing the wheel. It supports the implementation clean code and reduces the margin for error involved in creating and testing a model from scratch.
+
+## Dataset conversion
+
+Convert downloaded AMIGOS, DREAMER, EEGEmotions-27, or DEAP data
+to CSV with the base installation:
+
+```bash
+eegproc-to-csv --dataset amigos --input /path/to/AMIGOS --output /path/to/amigos_joined.csv.gz
+```
+
+See the [dataset guide](docs/source/datasets.md) for download links, supported
+layouts, and examples. Recordings and generated datasets are not bundled.
+
+## Included components
+
+The library keeps reusable CNN/GNN encoders and decoders, RNN classifiers,
+classifier heads, losses, cross-validation, and domain-generalization helpers.
+Adapter-based counterfactuals work with caller-supplied models and datasets; see
+[model-agnostic counterfactuals](src/eegproc/model_explainability/model_agnostic/README.md).
 
 ## Install
 
@@ -87,11 +103,19 @@ If you already hold NumPy arrays, `loso_cv` and friends take them directly.
 
 ## Package layout
 
-- `eegproc.preprocessing` — filtering, detrending, notch, band decomposition
-- `eegproc.featurization` — spectral, Hjorth, wavelet and IMF features
-- `eegproc.data` — the tidy schema and the windowing assembler (no TensorFlow)
-- `eegproc.deep_learning.cross_validation` — the cross-validation strategies
-- `eegproc.plotting` — `plot_eeg_features`
+- [`eegproc.preprocessing`](src/eegproc/preprocessing.py) — filtering, detrending, notch, band decomposition
+- [`eegproc.featurization`](src/eegproc/featurization.py) — spectral, Hjorth, wavelet and IMF features
+- [`eegproc.data`](src/eegproc/data/) — the tidy schema and the windowing assembler (no TensorFlow)
+  - [`to_csv.py`](src/eegproc/data/to_csv.py) — dataset conversion
+- [`eegproc.deep_learning`](src/eegproc/deep_learning/README.md)
+  - [`cross_validation`](src/eegproc/deep_learning/cross_validation/) — the cross-validation strategies
+  - [`supervised`](src/eegproc/deep_learning/supervised/) — RNN classifier builders, dense and variational classifier heads, and contrastive loss
+  - [`unsupervised`](src/eegproc/deep_learning/unsupervised/) — CNN/GNN encoders and decoders, graph layers, and autoencoder losses
+  - [`domain_generalization`](src/eegproc/deep_learning/domain_generalization/) — alternating subject groups and meta-learning strategies
+  - [`training_outputs.py`](src/eegproc/deep_learning/training_outputs.py) — training callbacks, metrics, and diagnostics
+  - [`prepare_datasets.py`](src/eegproc/deep_learning/prepare_datasets.py) — converters for supported public EEG datasets
+- [`eegproc.model_explainability.model_agnostic`](src/eegproc/model_explainability/model_agnostic/README.md) — adapter-based counterfactuals
+- [`eegproc.plotting`](src/eegproc/plotting/) — `plot_eeg_features`
 
 ## Scope
 

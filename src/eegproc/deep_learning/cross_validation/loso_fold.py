@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from joblib.externals import cloudpickle
+import cloudpickle
 import gc
 import numpy as np
 import tensorflow as tf
