@@ -644,9 +644,17 @@ class VariationalClassifier(tf.keras.layers.Layer):
         gamma: float = 0.0,
         lambda_: float = 0.0,
     ):
-        """Return a Keras-compatible wrapper around :meth:`vc_loss`."""
+        """Return a Keras-compatible wrapper around :meth:`vc_loss`.
+
+        The model output ``y_pred`` is not used as logits: models usually
+        expose class probabilities (``RNNClassifier`` applies a softmax after
+        this head), and treating those as logits would apply the softmax twice.
+        The logits are recomputed from the latent features stored by the
+        latest call, which is exact because the head is deterministic.
+        """
 
         def loss_fn(y_true, y_pred):
+            del y_pred
             if self._last_mh is None:
                 raise ValueError(
                     "VariationalClassifier has no stored latent features. "
@@ -659,7 +667,6 @@ class VariationalClassifier(tf.keras.layers.Layer):
                 beta=beta,
                 gamma=gamma,
                 lambda_=lambda_,
-                logits=y_pred,
             )
 
         return loss_fn

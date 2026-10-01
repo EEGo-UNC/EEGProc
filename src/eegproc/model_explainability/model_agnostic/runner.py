@@ -156,25 +156,6 @@ def _json_arguments(args):
     return output
 
 
-def _metadata_arrays(dataset, index):
-    arrays = {}
-    if dataset.normalization_offset is not None:
-        arrays["normalization_offset"] = dataset.normalization_offset[index]
-    if dataset.normalization_scale is not None:
-        arrays["normalization_scale"] = dataset.normalization_scale[index]
-    if dataset.channel_names is not None:
-        arrays["channel_names"] = np.asarray(dataset.channel_names, dtype=str)
-    if dataset.band_names is not None:
-        arrays["band_names"] = np.asarray(dataset.band_names, dtype=str)
-    if dataset.channel_positions is not None:
-        arrays["channel_positions"] = np.asarray(dataset.channel_positions, dtype=float)
-    if dataset.feature_order is not None:
-        arrays["feature_order"] = np.asarray(dataset.feature_order)
-    if dataset.signal_unit is not None:
-        arrays["signal_unit"] = np.asarray(dataset.signal_unit)
-    return arrays
-
-
 def _format_progress(row):
     extras = " ".join(
         f"{name.removeprefix('constraint_')}={value:.6g}"

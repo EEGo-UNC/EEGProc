@@ -51,13 +51,10 @@ class CNN1DEncoder(BaseEncoder):
     **kwargs
         Additional keyword arguments passed to ``tf.keras.Model``.
 
-    Input shape
-    -----------
-    ``(batch, timesteps, n_features)``
-
-    Output shape
-    ------------
-    ``(batch, ceil(timesteps / t_down), emb_dim)``
+    Notes
+    -----
+    Inputs have shape ``(batch, timesteps, n_features)``; outputs have shape
+    ``(batch, ceil(timesteps / t_down), emb_dim)``.
     """
 
     def __init__(

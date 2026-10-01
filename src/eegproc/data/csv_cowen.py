@@ -16,6 +16,10 @@ CATEGORY_NAMES = [
     "romance", "sadness", "satisfaction", "sexual_desire", "surprise", "sympathy", "triumph",
 ]
 EXCLUDED = {"contempt", "disappointment", "envy", "guilt", "pride", "sympathy", "triumph"}
+# EEGEmotions-27 numbers its emotions 1..27 in this (alphabetical) order. The
+# mapping CSV is sorted by quadrant for reading, so consumers must match rows by
+# emotion name rather than by position.
+EMOTION_ID_ORDER = tuple(name for name in CATEGORY_NAMES if name not in EXCLUDED)
 
 
 def _vector(path, size):

@@ -1,36 +1,31 @@
-"""MTLFuseNet-style spatio-spectral GCN/GRU encoder for EEGProc.
+"""Spatio-spectral GCN-GRU encoder adapted from MTLFuseNet.
 
-This module is intentionally separate from ``GCN_band_separated.py`` so the
-learned-adjacency EEGProc GCN and the MTLFuseNet-style fixed-MI GCN can be
-compared without changing either implementation.
+Electrodes are nodes of a graph whose adjacency ``A`` is fixed and estimated
+from mutual information. Frequency bands form an ordered sequence of graphs
+that share the same graph-convolution weights, and a GRU can read that band
+sequence at each timestep. Graph convolution uses the renormalized adjacency::
 
-Paper-aligned pieces
---------------------
-1. Channel adjacency A is fixed and based on mutual information.
-2. Graph convolution uses
-       A_tilde = A + I
-       A_hat   = D_tilde^-1/2 A_tilde D_tilde^-1/2
-       H_B     = ReLU(A_hat V_B W + b)
-3. Frequency bands are treated as an ordered spatio-spectral graph sequence.
-4. The SAME graph-convolution layer objects (therefore the same W and b) are
-   reused for every frequency band.
-5. A GRU can process the ordered band sequence at each EEG timestep.
+    A_tilde = A + I
+    A_hat   = D_tilde^-1/2 A_tilde D_tilde^-1/2
+    H_B     = ReLU(A_hat V_B W + b)
 
-EEGProc compatibility adaptation
----------------------------------
-MTLFuseNet uses differential-entropy node features. EEGProc's current joint
-pipeline supplies a temporal sequence of preprocessed channel-band values.
-This encoder therefore applies the MTL graph/weight-sharing mechanism to those
-per-timestep band features so it still returns
-    (batch, ceil(timesteps / t_down), emb_dim)
-and can be compared against BandSeparatedGCNEncoder in the same pipeline.
+The same graph-convolution layers, and therefore the same ``W`` and ``b``, are
+reused for every band ``B``.
 
-The encoder deliberately has NO learned projection after the spectral GRU.
-When ``use_spectral_gru=True``, the output feature dimension is exactly
-``spectral_gru_units`` (384 for the MTLFuseNet-aligned v5 baseline).
+MTLFuseNet uses differential-entropy node features. This encoder applies the
+same graph and weight-sharing mechanism to per-timestep channel-band values,
+so it returns ``(batch, ceil(timesteps / t_down), emb_dim)`` like the other
+EEGProc encoders. Feed differential-entropy features instead of filtered band
+amplitudes to follow the original method more closely. There is no learned
+projection after the spectral GRU: with ``use_spectral_gru=True`` the output
+dimension is exactly ``spectral_gru_units``.
 
-For a strict MTLFuseNet reproduction, feed DE features instead of raw/filtered
-band amplitudes.
+``BandSeparatedGCNEncoder`` (learned adjacency) lives in
+``GCN_band_separated.py``; the two can be swapped in the same model.
+
+Reference: R. Li et al., "MTLFuseNet: A novel emotion recognition model based
+on deep latent feature fusion of EEG signals and multi-task learning",
+Knowledge-Based Systems 276 (2023), 110756.
 """
 
 from __future__ import annotations
@@ -186,8 +181,8 @@ def compute_mtl_shared_mi_adjacency(
     reduces the band-wise MI matrices to ONE shared A.
 
     ``band_reduction='mean'`` is the default compatibility approximation.
-    If you have the pre-band-split channel signals x_i used to construct the
-    paper's A, prefer ``compute_mi_adjacency_from_channels`` directly.
+    If you have the pre-band-split channel signals x_i that MTLFuseNet uses to
+    construct A, prefer ``compute_mi_adjacency_from_channels`` directly.
     """
     x = _as_channel_band_array(inputs, n_channels, n_bands)
 
@@ -223,21 +218,18 @@ def compute_mtl_shared_mi_adjacency(
 
 @tf.keras.utils.register_keras_serializable(package="eegproc")
 class GCNMTLEncoder(BaseEncoder):
-    """MTLFuseNet-style shared-parameter spatio-spectral GCN/GRU encoder.
+    """Shared-parameter spatio-spectral GCN-GRU encoder (after MTLFuseNet).
 
-    Input
+    Notes
     -----
-    (batch, timesteps, n_channels * n_bands), channel-major flattened order:
-        [ch0_band0, ch0_band1, ..., ch1_band0, ...]
+    Inputs have shape ``(batch, timesteps, n_channels * n_bands)`` in
+    channel-major order (``ch0_band0, ch0_band1, ..., ch1_band0, ...``).
+    Outputs have shape ``(batch, ceil(timesteps / t_down), spectral_gru_units)``
+    when ``use_spectral_gru=True``; there is no projection after the GRU.
 
-    Output
-    ------
-    (batch, ceil(timesteps / t_down), spectral_gru_units)
-
-    There is no post-GRU Conv1D/Dense projection. The GRU output is the
-    spatio-spectral latent representation returned by this encoder.
-
-    The adjacency is fixed. It MUST be computed from training data only.
+    The adjacency is fixed and must be computed from training data only;
+    estimating it from validation or test subjects leaks their data into the
+    model.
     """
 
     def __init__(
@@ -581,12 +573,12 @@ GCNEncoder = GCNMTLEncoder
 
 @tf.keras.utils.register_keras_serializable(package="eegproc")
 class GCNMTLDecoder(tf.keras.Model):
-    """Graph-aware decoder companion for GCNMTLEncoder.
+    """Graph-aware decoder for :class:`GCNMTLEncoder` latent sequences.
 
-    MTLFuseNet does not define this decoder. It exists only so EEGProc's joint
-    VAE/reconstruction experiments can swap the encoder without losing a graph
-    decoder. It uses the SAME fixed MI adjacency and Eq. (15) normalization,
-    but should not be described as part of the original MTLFuseNet method.
+    It maps latents back to channel-band signals, for example for autoencoder
+    or reconstruction objectives, using the encoder's fixed mutual-information
+    adjacency and renormalization. MTLFuseNet does not define a decoder; this
+    is an EEGProc addition.
     """
 
     def __init__(

@@ -124,6 +124,8 @@ except ImportError:
             break
     from eegproc.preprocessing import bandpass_filter
 
+from eegproc.data.csv_cowen import EMOTION_ID_ORDER
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -394,7 +396,13 @@ def _extract_centre(
 
 
 def load_cowen_27_mapping(filepath: str) -> tuple[list[str], np.ndarray]:
-    """Load the 27-row Cowen mapping in file order."""
+    """Load the 27-row Cowen mapping, ordered by EEGEmotions-27 emotion ID.
+
+    Rows are matched by their ``emotion`` name, so the file's own row order
+    does not matter (``eegproc-to-csv --dataset cowen27`` sorts by quadrant).
+    Row ``k - 1`` of the returned array holds the valence and arousal of
+    emotion ID ``k``.
+    """
     filepath = os.fspath(filepath)
     if not os.path.isfile(filepath):
         raise FileNotFoundError(f"Cowen 27 mapping not found at {filepath}.")
@@ -420,10 +428,17 @@ def load_cowen_27_mapping(filepath: str) -> tuple[list[str], np.ndarray]:
             f"Expected 27 rows in Cowen mapping {filepath}, found {len(rows)}."
         )
 
-    emotion_names = [name for name, _, _ in rows]
-    va_map = np.asarray(
-        [(valence, arousal) for _, valence, arousal in rows], dtype=np.float32
-    )
+    by_name = {name: (valence, arousal) for name, valence, arousal in rows}
+    unknown = sorted(set(by_name) - set(EMOTION_ID_ORDER))
+    missing = sorted(set(EMOTION_ID_ORDER) - set(by_name))
+    if unknown or missing:
+        raise ValueError(
+            f"Cowen mapping {filepath} must contain each of the 27 emotions once; "
+            f"unknown: {unknown}, missing: {missing}."
+        )
+
+    emotion_names = list(EMOTION_ID_ORDER)
+    va_map = np.asarray([by_name[name] for name in emotion_names], dtype=np.float32)
     return emotion_names, va_map
 
 

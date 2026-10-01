@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import shutil
 import tempfile
 
 from ._csv_common import open_text
@@ -11,6 +12,31 @@ from .csv_eegemotions import eegemotions_frames
 from .csv_matlab import amigos_frames, deap_frames, dreamer_csv_frames, dreamer_mat_frames
 
 DATASETS = ("amigos", "dreamer", "eegemotions", "cowen27", "deap")
+
+
+def _publish_without_overwrite(temporary: Path, output: Path) -> None:
+    """Publish ``temporary`` as ``output`` without replacing a file created meanwhile.
+
+    A hard link is atomic and fails if ``output`` exists. Filesystems without
+    hard links (FAT/exFAT drives, some network shares) fall back to an
+    exclusive-create copy, which also refuses to overwrite and removes its own
+    partial output if the copy fails.
+    """
+    try:
+        output.hardlink_to(temporary)
+        return
+    except FileExistsError:
+        raise
+    except OSError:
+        pass
+    with open(temporary, "rb") as source:
+        target = open(output, "xb")
+        try:
+            with target:
+                shutil.copyfileobj(source, target)
+        except BaseException:
+            output.unlink(missing_ok=True)
+            raise
 
 
 def convert_dataset(dataset: str, input_path: str | Path, output_path: str | Path, *,
@@ -97,7 +123,7 @@ def convert_dataset(dataset: str, input_path: str | Path, output_path: str | Pat
             temporary.replace(output)
         else:
             # A concurrent writer cannot be overwritten after the initial existence check.
-            output.hardlink_to(temporary)
+            _publish_without_overwrite(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
     return rows

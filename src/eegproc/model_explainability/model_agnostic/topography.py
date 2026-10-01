@@ -11,11 +11,9 @@ import numpy as np
 from .plotting import (
     flatten_trial,
     load_counterfactual_trial,
+    plot_band_topographies,
     resolve_channel_names,
     split_channel_bands,
-)
-from .plotting import (
-    plot_band_topographies,
     summarize_activity,
 )
 
@@ -107,7 +105,8 @@ def main(argv=None):
             if "normalization_scale" not in data.files:
                 raise ValueError(
                     "Physical-unit plotting requires normalization_scale in the NPZ. "
-                    "Rerun through the model-agnostic runner with a metadata-aware loader."
+                    "Save normalization_scale (and normalization_offset, if any) "
+                    "with the counterfactual arrays."
                 )
             scale = np.asarray(data["normalization_scale"], dtype=float)
             offset = (

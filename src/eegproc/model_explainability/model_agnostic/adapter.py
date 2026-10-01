@@ -240,7 +240,7 @@ class KerasInputAdapter(CounterfactualAdapter):
     default_state_weight = 0.1
     default_signal_weight = 0.0
 
-    def __init__(self, model, *, output_kind: str, output_key: str | None):
+    def __init__(self, model, *, output_kind: str, output_key: str | None = None):
         self.model = model
         self.output_kind = output_kind
         self.output_key = output_key

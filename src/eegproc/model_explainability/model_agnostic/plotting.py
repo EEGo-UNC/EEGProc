@@ -40,7 +40,10 @@ def load_counterfactual_trial(
     branch: str | None = None,
     reference: str = "input",
 ) -> tuple[np.ndarray, np.ndarray, str, list[str] | None]:
-    """Load aligned reference and counterfactual trials from runner output.
+    """Load aligned reference and counterfactual trials from a saved archive.
+
+    Save the archive from an optimization result with
+    ``numpy.savez_compressed(path, **result["arrays"], channel_positions=...)``.
 
     ``reference='input'`` computes the standard counterfactual difference by
     comparing ``x_prime_<branch>`` directly with saved input ``x``.

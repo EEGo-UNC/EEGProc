@@ -401,7 +401,11 @@ class BandSeparatedGCNEncoder(BaseEncoder):
 GCNEncoder = BandSeparatedGCNEncoder
 
 
-@tf.keras.utils.register_keras_serializable(package="eegproc")
+# Registered under its own name: GCN.py registers a GCNDecoder too, and two
+# classes under one key would make deserialization depend on import order.
+@tf.keras.utils.register_keras_serializable(
+    package="eegproc", name="BandSeparatedGCNDecoder"
+)
 class GCNDecoder(tf.keras.Model):
     """Graph-aware decoder for :class:`GCNEncoder` latent sequences.
 

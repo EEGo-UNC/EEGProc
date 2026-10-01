@@ -830,6 +830,7 @@ def generate_all_features(
     bands: dict[str, tuple[float, float]] | None = FREQUENCY_BANDS,
     channels: list[str] | None = None,
     group_by_metadata_columns: list[str] | None = None,
+    verbose: bool = False,
 ) -> pd.DataFrame:
     """Compute the full feature set for an EEG table, optionally grouped by metadata.
 
@@ -851,6 +852,8 @@ def generate_all_features(
     group_by_metadata_columns : list[str], optional
         Columns identifying a group, e.g. ``["subject", "trial"]``. When omitted,
         the whole table is one group.
+    verbose : bool, default=False
+        Print a single-line progress display while processing groups.
 
     Returns
     -------
@@ -878,11 +881,12 @@ def generate_all_features(
 
     blocks: list[pd.DataFrame] = []
     for i, (keys, block) in enumerate(grouped, start=1):
-        print(
-            f"\r[EEGProc] Loading… {i/total_groups:6.2%}  ({i}/{total_groups})",
-            end="",
-            flush=True,
-        )
+        if verbose:
+            print(
+                f"\r[EEGProc] Loading… {i/total_groups:6.2%}  ({i}/{total_groups})",
+                end="",
+                flush=True,
+            )
 
         signal = block.drop(columns=meta, errors="ignore")
         clean = bandpass_filter(signal, fs, bands=bands, low=0.5, high=45.0, notch_hz=60)
@@ -908,7 +912,8 @@ def generate_all_features(
 
         blocks.append(pd.concat(parts, axis=1))
 
-    print("\r[EEGProc] Loading… 100.00%  (done)".ljust(60))
+    if verbose:
+        print("\r[EEGProc] Loading… 100.00%  (done)".ljust(60))
 
     if not blocks:
         return pd.DataFrame(columns=meta or None)
@@ -923,11 +928,12 @@ def feature_grouped_by_metadata(
     channels: list[str] | None = None,
     group_by_metadata_columns: list[str] | None = None,
     drop_metadata_for_fn: bool = True,
+    verbose: bool = False,
     **fn_kwargs,
 ) -> pd.DataFrame:
     """
     Group `eeg_df` by `group_by_metadata_columns`, run `target_function` on each group's EEG slice,
-    and prepend the group keys to every output row. Shows an updating single-line progress print.
+    and prepend the group keys to every output row.
 
     Parameters
     ----------
@@ -948,6 +954,8 @@ def feature_grouped_by_metadata(
     drop_metadata_for_fn : bool
         If True, drop the group-by columns before calling `target_function`.
         Set False if your function can safely ignore extra columns.
+    verbose : bool, default=False
+        Print a single-line progress display while processing groups.
     **fn_kwargs :
         Extra keyword args forwarded to `target_function`.
 
@@ -956,30 +964,22 @@ def feature_grouped_by_metadata(
     pd.DataFrame
         Concatenation of per-group outputs, with metadata keys as leading columns.
 
-     Examples
+    Examples
     --------
-    Minimal example with synthetic data (two channels, one band):
+    Band power for each (subject, trial) group of a band-filtered table:
 
-    >>> import numpy as np, pandas as pd, eegproc as eeg
-    >>> fs = 128.0
-    >>> t = np.arange(int(8*fs)) / fs   # 8 seconds
-    >>> # Two synthetic signals with an ~10 Hz component (alpha band)
-    >>> af3_alpha = 0.8*np.sin(2*np.pi*10*t) + 0.1*np.random.randn(t.size)
-    >>> f7_alpha  = 0.6*np.sin(2*np.pi*10*t + 0.7) + 0.1*np.random.randn(t.size)
-    >>> df = pd.DataFrame({
-    ...     "AF3_alpha": af3_alpha,
-    ...     "F7_alpha":  f7_alpha,
-    ... })
-    >>> bands = {"alpha": (8.0, 12.0)}
-    >>> out = eeg.feature_grouped_by_metadata(
-    ...     eeg_df=clean,
-    ...     target_function=eeg.psd_bandpowers,
-    ...     fs=FS,
-    ...     bands=["alpha"],
-    ...     channels=["AF3", "F7"],
-    ...     group_by_metadata_columns=["patient_index", "video_index"],
-    ...     drop_metadata_for_fn=True,
-    ...     )
+    >>> import numpy as np, pandas as pd
+    >>> from eegproc import (FREQUENCY_BANDS, bandpass_filter,
+    ...                      feature_grouped_by_metadata, psd_bandpowers)
+    >>> fs = 128
+    >>> raw = pd.DataFrame({"AF3": np.random.randn(8 * fs), "F7": np.random.randn(8 * fs)})
+    >>> clean = bandpass_filter(raw, fs, bands=FREQUENCY_BANDS).assign(subject="P01", trial=1)
+    >>> feats = feature_grouped_by_metadata(
+    ...     clean, target_function=psd_bandpowers, fs=fs,
+    ...     group_by_metadata_columns=["subject", "trial"],
+    ... )
+    >>> feats.columns[:3].tolist()
+    ['subject', 'trial', 'AF3_delta']
     """
     meta = list(group_by_metadata_columns or [])
     df = eeg_df
@@ -1001,11 +1001,12 @@ def feature_grouped_by_metadata(
     out_frames: list[pd.DataFrame] = []
 
     for i, (keys, block) in enumerate(iterator, start=1):
-        print(
-            f"\r[EEGProc] Loading… {i/total_groups:6.2%}  ({i}/{total_groups})",
-            end="",
-            flush=True,
-        )
+        if verbose:
+            print(
+                f"\r[EEGProc] Loading… {i/total_groups:6.2%}  ({i}/{total_groups})",
+                end="",
+                flush=True,
+            )
 
         if not isinstance(keys, tuple):
             keys = (keys,)
@@ -1035,58 +1036,10 @@ def feature_grouped_by_metadata(
 
         out_frames.append(feats)
 
-    print("\r[EEGProc] Loading… 100.00%  (done)".ljust(60))
+    if verbose:
+        print("\r[EEGProc] Loading… 100.00%  (done)".ljust(60))
 
     if out_frames:
         return pd.concat(out_frames, axis=0, ignore_index=True)
 
     return pd.DataFrame(columns=(meta if meta else None))
-
-
-if __name__ == "__main__":
-    FS = 128
-    csv_path = "DREAMER.csv"
-    dreamer_df = pd.read_csv(csv_path)
-
-    patients = dreamer_df["patient_index"]
-    videos = dreamer_df["video_index"]
-    del dreamer_df["patient_index"]
-    del dreamer_df["video_index"]
-
-    clean = bandpass_filter(
-        dreamer_df, FS, bands=FREQUENCY_BANDS, low=0.5, high=45.0, notch_hz=60
-    )
-    clean = pd.concat([patients, videos, clean], axis=1)
-    psd_df = psd_bandpowers(clean, FS, bands=FREQUENCY_BANDS)
-    shannons_df = shannons_entropy(psd_df, bands=FREQUENCY_BANDS)
-    print(shannons_df)
-    # hj = hjorth_params(clean, FS)
-    # wt_df = wavelet_band_energy(eeg_df, FS, bands=FREQUENCY_BANDS)
-    # print("Energy", wt_df)
-    # wt_df = wavelet_entropy(wt_df, bands=FREQUENCY_BANDS)
-    # print("Entropy", wt_df)
-    # imf_df = imf_band_energy(eeg_df, FS)
-    # print(imf_df)
-    # imf_df = imf_entropy(imf_df)
-    # print(imf_df)
-    # exit()
-    # print(
-    #     generate_all_features(
-    #         dreamer_df,
-    #         FS,
-    #         FREQUENCY_BANDS,
-    #         group_by_metadata_columns=["video_index", "patient_index"],
-    #     )
-    # )
-
-    # print(
-    #     feature_grouped_by_metadata(
-    #         eeg_df=clean,
-    #         target_function=psd_bandpowers,
-    #         fs=FS,
-    #         bands=FREQUENCY_BANDS,
-    #         channels=["AF3", "F7"],
-    #         group_by_metadata_columns=["patient_index", "video_index"],
-    #         drop_metadata_for_fn=True,
-    #     )
-    # )
