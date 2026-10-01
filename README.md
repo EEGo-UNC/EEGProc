@@ -145,6 +145,12 @@ results = cross_validate_dataframe(
 )
 ```
 
+## Complete DREAMER example
+
+See the [commented DREAMER example](examples/README.md) for preprocessing,
+PSD features, a BiLSTM classifier, leave-one-subject-out evaluation, and
+a model-agnostic counterfactual for a held-out input.
+
 ## Package layout
 
 - [`eegproc.preprocessing`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/preprocessing.py) — filtering, detrending, notch, band decomposition

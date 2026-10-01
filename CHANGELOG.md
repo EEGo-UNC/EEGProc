@@ -26,6 +26,11 @@
 - Preserve preprocessing and feature fixes for grouped inputs and writable
   arrays required by wavelet and IMF routines.
 
+### Examples
+
+- Add a commented DREAMER example combining preprocessing, PSD features,
+  fixed-setting BiLSTM LOSOCV, and a held-out input-space counterfactual.
+
 ### Dataset conversion
 
 - Added `eegproc-to-csv` for AMIGOS, DREAMER (MAT or split CSV), EEGEmotions-27,
