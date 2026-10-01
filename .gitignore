@@ -213,7 +213,9 @@ datasets/
 
 venv312/
 
-data/
+# Root-level only: src/eegproc/data/ (library code) and src/tests/data/ (test
+# fixtures) are tracked.
+/data/
 outputs/
 .devcontainer/
 *.npy
@@ -238,7 +240,3 @@ coverage.svg
 **/.DS_Store
 .coveragearc
 .venv312_install.lock
-
-# Library data schema and windowing code (not recorded datasets).
-!src/eegproc/data/
-!src/eegproc/data/**

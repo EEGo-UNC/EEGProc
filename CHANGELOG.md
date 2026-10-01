@@ -14,7 +14,7 @@
 - Keep adapter-based counterfactual optimization, generic Keras loading, the
   command-line runner, and plotting driven by supplied channel metadata.
 - Remove complete research model pipelines, model-specific explainability,
-  experiment reports, Slurm launchers, smoke scripts, and repository test files.
+  experiment reports, Slurm launchers, and smoke scripts.
 
 ### Packaging and APIs
 

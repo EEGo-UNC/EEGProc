@@ -63,7 +63,7 @@ docs = [
   "nbsphinx>=0.9.5",
   "ipykernel>=6.29",
 ]
-dev = ["build>=1.0"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "build>=1.0", "twine>=5"]
 
 [tool.setuptools.packages.find]
 where   = ["src"]
