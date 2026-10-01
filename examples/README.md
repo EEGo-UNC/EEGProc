@@ -30,8 +30,7 @@ these example outputs.
 
 1. Keep stimulus samples, sort by subject/trial/time, and label valence ratings
    1–2 as low and 3–5 as high. Including neutral (3) in high is an explicit example
-   choice, not a dataset-mandated threshold. Only the 14 EEG channels are inputs;
-   ECG, ratings, and identifiers cannot become features.
+   choice, not a dataset-mandated threshold. Only the 14 EEG channels are used as inputs here.
 2. Process each trial separately: common-average reference, 50 Hz notch,
    detrending, and the library's six default frequency bands. Compute PSD powers
    in non-overlapping two-second windows at 128 Hz.

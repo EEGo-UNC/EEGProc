@@ -31,7 +31,7 @@ CHANNELS = ["AF3", "F7", "F3", "FC5", "T7", "P7", "O1",
 
 def trial_features(trial, fs, bands):
     """Filter each trial independently; only EEG channels become model inputs."""
-    # Common-average reference, 50 Hz notch, default six bands, and detrending.
+    # Common-average reference, 50 Hz notch (DREAMER was collected in Europoe), default six bands, and detrending.
     clean = bandpass_filter(trial[CHANNELS], fs, bands=bands, notch_hz=50)
     return psd_bandpowers(clean, fs, bands=bands, window_sec=2, overlap=0)
 

@@ -102,11 +102,23 @@ def _feature_table() -> pd.DataFrame:
     ], ignore_index=True)
 
 
-def test_readme_featurization(fake_read_csv):
+def test_readme_featurization_and_plotting(fake_read_csv, tmp_path, monkeypatch):
     namespace = {}
     exec(_block_containing(ROOT / "README.md", "shannons_entropy(psd)"), namespace)
 
     assert list(namespace["entropy"].columns) == [f"{c}_entropy" for c in ["AF3", "F7", "F3", "FC5"]]
+
+    # Execute the plotting recipe on those same features and verify both exports.
+    monkeypatch.chdir(tmp_path)
+    exec(_block_containing(ROOT / "README.md", "save_path=\"bandpowers.png\""), namespace)
+    assert (tmp_path / "bandpowers.png").stat().st_size > 0
+    assert (tmp_path / "entropy.png").stat().st_size > 0
+    assert len(namespace["axes"]) == 4
+    assert len(namespace["entropy_axes"]) == 2
+    np.testing.assert_array_equal(namespace["axes"][0].lines[0].get_xdata(), [0, 2, 4])
+    import matplotlib.pyplot as plt
+    plt.close(namespace["fig"])
+    plt.close(namespace["entropy_fig"])
 
 
 def test_readme_cross_validation(fake_read_csv, fast_cross_validation):

@@ -3,23 +3,25 @@
 </p>
 
 <p align="center">
-  <strong>Thank you to all our contributors:</strong>
+  <strong>Contributors:</strong>
   <a href="https://github.com/VitorInserra">@VitorInserra</a>
   · <a href="https://github.com/Pranav1006">@Pranav1006</a>
   · <a href="https://github.com/sainag7">@sainag7</a>
-  · <a href="https://github.com/qwertyuiopzxcvbnmlkjhgfdsa">@qwertyuiopzxcvbnmlkjhgfdsa</a>
+  · <a href="https://github.com/qwertyuiopzxcvbnmlkjhgfdsa">@Amit_Chalmeti</a>
   · <a href="https://github.com/ygadipalli">@ygadipalli</a>
 </p>
 
 # EEGProc
 
-A lightweight Python library for EEG preprocessing, feature extraction, deep
-learning, and model explanations.
+A lightweight Python library for EEG processing and deep
+learning, and model explanations. EEGProc is meant to be friendly to AI code writers and non-technical researchers, while still providing all the technical freedom and detail needed for EEG deep learning pipelines.
 
-Built by researchers at **Columbia University** and the **University of North
-Carolina (UNC)**, EEGProc has been used in research published at international
+Built by researchers at the **University of North
+Carolina (UNC) Chapel Hill** and **Columbia University**, EEGProc has been used in research published at international
 conferences. It helps researchers and developers prepare EEG data, evaluate
 models, and explore their predictions with reusable, well-documented components.
+
+We hope researchers will continue to contribute to this library, adding more model architectures, machine learning techniques, and visualization modules.
 
 ## Install
 
@@ -56,6 +58,45 @@ See the [getting-started guide](docs/source/getting-started.md) for focused API
 examples. The [dataset guide](docs/source/datasets.md) covers supported layouts
 and download links; recordings are not bundled.
 
+## What can you model with EEG?
+
+Developers and researchers can use EEGProc to build and evaluate models that
+estimate **valence and arousal**, **attention**, **cognitive load**, and
+**engagement** from EEG. Your labeled recordings, model, and evaluation protocol
+define the prediction task.
+
+<table>
+  <tr>
+    <th>Affective state</th>
+    <th>Cognitive state</th>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/source/_static/valence-arousal.png" alt="Valence–arousal diagram illustrating frustration, enjoyment, boredom, and calmness" width="244"></td>
+    <td align="center"><img src="docs/source/_static/cognitive-state-targets.png" alt="EEG modeling targets: attention, cognitive load, and engagement" width="234"></td>
+  </tr>
+  <tr>
+    <td>Model affect along valence and arousal dimensions.</td>
+    <td>Estimate attention, cognitive load, and engagement.</td>
+  </tr>
+</table>
+
+## A typical EEG pipeline
+
+<p align="center">
+  <img src="docs/source/_static/typical-eeg-pipeline.png" alt="Typical EEG application pipeline: a task and wearable EEG feed a server and machine-learning model, with labels for training and state estimates for application feedback" width="682">
+</p>
+
+A typical workflow records EEG during a task, pairs recordings with labels such
+as self-reports or task measurements, and uses preprocessing and feature
+extraction to prepare model inputs. After training and subject-wise evaluation,
+a model produces state estimates that an application can use for feedback.
+
+EEGProc supplies the preprocessing, feature extraction, model-building,
+evaluation, and explanation components in this workflow. Your project connects
+the recording device, data storage, server, and application feedback loop.
+The [DREAMER example](examples/README.md) demonstrates the processing, training,
+evaluation, and explanation steps on a downloaded dataset.
+
 ## Featurization
 
 ```python
@@ -83,6 +124,36 @@ signal, and the entropy functions consume the corresponding energy table.
 | `wavelet_entropy` | wavelet energy | `{channel}_wentropy` |
 | `imf_band_energy` | raw signal | `{channel}_{band}_imfenergy` |
 | `imf_entropy` | IMF energy | `{channel}_imfentropy` |
+
+## Plot EEG features over time
+
+Use `plot_eeg_features` for stacked channel traces, channel/band selection, and
+image export. The examples below use `psd` and `entropy` from the featurization
+section; the four-second windows and 50% overlap match those feature calculations.
+
+```python
+from eegproc.plotting import plot_eeg_features
+
+# Save theta and alpha band-power traces for two channels.
+fig, axes = plot_eeg_features(
+    psd, title="EEG band powers", channels=["AF3", "F7"],
+    frequency_bands=["theta", "alpha"], seconds=4, overlap=0.5,
+    save_path="bandpowers.png",
+)
+
+# Entropy has one value per channel; select channels without a band filter.
+entropy_fig, entropy_axes = plot_eeg_features(
+    entropy, title="EEG spectral entropy", channels=["AF3", "F7"],
+    seconds=4, overlap=0.5, save_path="entropy.png",
+)
+```
+
+<p align="center">
+  <img src="docs/source/_static/eeg-feature-plots.png" alt="Stacked EEG feature traces showing theta-to-beta band-power ratios over time for P7, O1, and FC6" width="638">
+</p>
+
+*Illustrative EEG feature traces: theta-to-beta band-power ratios at P7, O1, and
+FC6. Derived ratios can also be passed to the plotting helper as a feature table.*
 
 ## Explain predictions with scalp topographies
 
