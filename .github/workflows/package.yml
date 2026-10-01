@@ -2,30 +2,64 @@ name: Build package
 
 on:
   push:
-    branches: [main, v2]
+    branches: [v2]
   pull_request:
-    branches: [main, v2]
+    branches: [main]
   workflow_dispatch:
+  # release.yml builds the distributions it publishes with this workflow.
+  workflow_call:
+    inputs:
+      version:
+        description: Build this version instead of pyproject.toml's (not committed).
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
 
 jobs:
   package:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: "3.12"
+
+      - name: Set the build version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PYCODE'
+          import os, re
+          from pathlib import Path
+          path = Path("pyproject.toml")
+          text, count = re.subn(
+              r'(?m)^version = "[^"]*"$', f'version = "{os.environ["VERSION"]}"', path.read_text(), count=1
+          )
+          assert count == 1, "pyproject.toml has no [project] version line"
+          path.write_text(text)
+          PYCODE
+
       - name: Build distributions
         run: |
-          python -m pip install --upgrade build
+          python -m pip install --upgrade build twine
           python -m build
+          python -m twine check --strict dist/*
+
       - name: Check distribution contents
         run: |
           python - <<'PYCODE'
+          import tomllib
           from pathlib import Path
           from zipfile import ZipFile
-          wheel = next(Path('dist').glob('*.whl'))
-          with ZipFile(wheel) as archive:
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          wheels = list(Path("dist").glob("*.whl"))
+          assert [w.name for w in wheels] == [f"eegproc-{version}-py3-none-any.whl"], wheels
+          assert Path(f"dist/eegproc-{version}.tar.gz").is_file()
+          with ZipFile(wheels[0]) as archive:
               names = archive.namelist()
           roots = {name.split('/')[0] for name in names if not name.split('/')[0].endswith('.dist-info')}
           assert roots == {'eegproc'}, roots
@@ -34,7 +68,25 @@ jobs:
           assert 'eegproc/data/schema.py' in names
           assert 'eegproc/model_explainability/model_agnostic/optimizer.py' in names
           PYCODE
-      - uses: actions/upload-artifact@v4
+
+      - name: Install the wheel in a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-env"
+          "$RUNNER_TEMP/wheel-env/bin/python" -m pip install --quiet dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-env/bin/python" - <<'PYCODE'
+          import importlib.util
+          from importlib.metadata import version
+          import eegproc, eegproc.data, eegproc.plotting
+          assert "site-packages" in eegproc.__file__, eegproc.__file__
+          assert eegproc.__version__ == version("eegproc"), eegproc.__version__
+          assert importlib.util.find_spec("tensorflow") is None, "the base install pulled in TensorFlow"
+          print("installed eegproc", eegproc.__version__)
+          PYCODE
+          "$RUNNER_TEMP/wheel-env/bin/eegproc-to-csv" --help > /dev/null
+
+      - uses: actions/upload-artifact@v7
         with:
           name: distributions
           path: dist/*
+          overwrite: true

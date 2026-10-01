@@ -74,5 +74,7 @@
   same Keras name; the band-separated one is now
   `eegproc>BandSeparatedGCNDecoder`.
 - `KerasInputAdapter` no longer requires `output_key`.
+- `VariationalAutoencoderLoss` raised a shape error for the sequence latents
+  that the EEGProc encoders produce; the KL term is now reduced per sample.
 - `eegproc-to-csv` works on drives without hard links (exFAT, FAT, some
   network shares).

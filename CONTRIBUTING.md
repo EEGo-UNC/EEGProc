@@ -35,4 +35,32 @@ suite on Python 3.10–3.13 and the full suite on 3.10, 3.12 and 3.13.
 
 Before submitting a change, run the tests, build a wheel, and check that it
 installs and imports. Describe any API changes in the review. Keep documentation
-examples runnable.
+examples runnable; `src/tests/test_docs_examples.py` executes them.
+
+## Releasing
+
+Releases are published by `.github/workflows/release.yml` when a commit that
+changes the version reaches `main`:
+
+1. In a pull request, bump the version and date the changelog:
+
+   ```bash
+   bumpver update --patch        # or --minor / --major; updates pyproject.toml and CITATION.cff
+   ```
+
+   and rename the `## X.Y.Z — unreleased` heading in `CHANGELOG.md` to
+   `## X.Y.Z — YYYY-MM-DD`.
+2. Merge the pull request. The workflow runs the tests, builds the wheel and
+   sdist, publishes them to PyPI through trusted publishing, creates the
+   `vX.Y.Z` tag and GitHub release with that changelog section, and installs
+   the published wheel on a fresh runner to check it. The docs workflow
+   redeploys the documentation.
+
+Pushes to `main` that keep the version only run the tests and the build. The
+workflow refuses to publish if the version is not newer than PyPI's, the
+changelog heading is undated, or `pyproject.toml`, bumpver and `CITATION.cff`
+disagree.
+
+To rehearse without touching PyPI, push a tag named `testpypi-N` (one at a
+time). The same chain runs against TestPyPI with a unique `X.Y.Z.devN` version
+and a draft GitHub release that is deleted afterwards.
