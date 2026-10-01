@@ -37,14 +37,19 @@ def test_dreamer_example_uses_the_matching_held_out_model(tmp_path, monkeypatch)
 
     # Observe the actual training partitions without replacing training or CV.
     trained = []
-    original_build = example.BiLSTMClassifier.build
+    original_cross_validate = example.cross_validate_dataframe
 
-    def recording_build(self, training_subject_ids):
-        model = original_build(self)
-        trained.append((set(training_subject_ids), model))
-        return model
+    def recording_cross_validate(features, build_model, **kwargs):
+        def recording_build(training_subject_ids):
+            # CV supplies fold context to this observer; the example's builder
+            # itself needs no arguments and still creates the actual model.
+            model = build_model()
+            trained.append((set(training_subject_ids), model))
+            return model
 
-    monkeypatch.setattr(example.BiLSTMClassifier, "build", recording_build)
+        return original_cross_validate(features, recording_build, **kwargs)
+
+    monkeypatch.setattr(example, "cross_validate_dataframe", recording_cross_validate)
     output = tmp_path / "output"
     results, counterfactual = example.main(csv_path, output, epochs=1)
     arrays = results["windowed_arrays"]

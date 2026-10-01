@@ -170,47 +170,41 @@ See the [model-agnostic counterfactual guide](src/eegproc/model_explainability/m
 for plotting commands and the channel positions, band metadata, and normalization
 information needed to interpret your own results.
 
-## Cross-validation
+## Deep learning
 
-Start with a feature CSV containing `subject`, `trial`, a binary `label` (0 or 1),
-and your feature columns. Keep feature rows in time order within each trial.
-This example uses two alpha-band features and four rows per sequence; change
-`feature_columns` to match your table. The complete [DREAMER example](examples/README.md)
-shows how to prepare this kind of table from recordings.
+The [DREAMER script](examples/dreamer_bilstm_counterfactual.py) builds a BiLSTM
+and passes its builder to `cross_validate_dataframe` for leave-one-subject-out
+cross-validation. Here is the same pattern for a prepared feature CSV containing
+`subject`, `trial`, a binary `label`, and EEG features in time order:
 
 ```python
 import pandas as pd
-from eegproc.deep_learning.cross_validation import cross_validate_dataframe
 from eegproc.deep_learning.supervised.rnn_architectures import BiLSTMClassifier
+from eegproc.deep_learning.cross_validation import cross_validate_dataframe
 
 features = pd.read_csv("features.csv")
 
 def build_model(training_features):
-    # EEGProc supplies only this fold's training inputs; build a fresh model.
-    _, timesteps, n_features = training_features.shape
+    # Build a fresh BiLSTM using this fold's input dimensions.
     return BiLSTMClassifier(
-        timesteps, n_features, n_classes=2, lstm_units=16, n_bilstm_layers=1,
+        *training_features.shape[1:], n_classes=2, lstm_units=16, n_bilstm_layers=1,
     ).build()
 
 results = cross_validate_dataframe(
     features, build_model, strategy="fixed_loso", fs=128,
-    feature_columns=("AF3_alpha", "F7_alpha"),  # Exclude ratings and metadata.
+    feature_columns=("AF3_alpha", "F7_alpha"),  # Choose your EEG features only.
     window_rows=4, normalize="subject_zscore",
     fixed_config={}, n_epochs=10, batch_size=32,
 )
-print(pd.DataFrame(results["user_metrics"])[["subject_id", "accuracy"]])
 ```
 
-`fixed_loso` trains on all other subjects and evaluates each held-out subject once,
-using the same settings in every fold. Windows stay within trials, and results
-use your original subject identifiers. `subject_zscore` uses each subject's own
-unlabeled data, including the held-out subject's data; omit it when that offline
-normalization assumption does not fit your evaluation.
+Each subject is held out once, with fixed training settings and windows kept
+within trials. `subject_zscore` uses each subject's own unlabeled data, including
+the held-out subject's data; omit it if that offline normalization assumption
+does not fit your evaluation. Per-subject scores are in `results["user_metrics"]`.
 
-Other strategies include `loso`, `subject_calibration` (few-shot adaptation),
-and `nested_lnso` (nested leave-N-subjects-out). For converted recordings, always
-select the EEG features explicitly; the [dataset guide](docs/source/datasets.md#use-the-result)
-shows how to keep ratings, ECG, and metadata out of model inputs.
+Follow the [example README](examples/README.md) to run the complete DREAMER
+pipeline, including preprocessing, features, model saving, and counterfactuals.
 
 ## Package layout
 
