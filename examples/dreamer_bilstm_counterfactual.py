@@ -31,7 +31,7 @@ CHANNELS = ["AF3", "F7", "F3", "FC5", "T7", "P7", "O1",
 
 def trial_features(trial, fs, bands):
     """Filter each trial independently; only EEG channels become model inputs."""
-    # Common-average reference, 50 Hz notch (DREAMER was collected in Europoe), default six bands, and detrending.
+    # Common-average reference, 50 Hz notch (DREAMER was collected in Europe), default six bands, and detrending.
     clean = bandpass_filter(trial[CHANNELS], fs, bands=bands, notch_hz=50)
     return psd_bandpowers(clean, fs, bands=bands, window_sec=2, overlap=0)
 
@@ -61,16 +61,19 @@ def main(csv_path, output_dir, epochs=10):
         group_by_metadata_columns=metadata,
     )
     feature_columns = tuple(c for c in features.columns if c not in metadata)
-    builder = BiLSTMClassifier(
-        timesteps=SEQUENCE_ROWS, n_features=len(feature_columns), n_classes=2,
-        lstm_units=16, n_bilstm_layers=1,
-    )
+
+    # cross_validate_dataframe calls this builder once per LOSO training fold.
+    def build_model():
+        return BiLSTMClassifier(
+            timesteps=SEQUENCE_ROWS, n_features=len(feature_columns), n_classes=2,
+            lstm_units=16, n_bilstm_layers=1,
+        ).build()
 
     # 3. Fixed settings: every subject is held out once, with no tuning on it.
     # Sequential folds overwrite this checkpoint, leaving the LAST fold's model.
     model_path = output_dir / "last_fold.keras"
     results = cross_validate_dataframe(
-        features, builder.build, strategy="fixed_loso", fs=FS,
+        features, build_model, strategy="fixed_loso", fs=FS,
         subject_columns=("subject_id",), trial_columns=("trial_id",),
         feature_columns=feature_columns, window_rows=SEQUENCE_ROWS,
         # Offline normalization uses each subject's own unlabeled feature rows,
