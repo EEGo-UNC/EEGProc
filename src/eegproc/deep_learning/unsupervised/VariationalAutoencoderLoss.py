@@ -450,9 +450,15 @@ class VariationalAutoencoderLoss:
             - clipped_log_var
         )
 
-        if self.kl_reduction == "sum":
-            return tf.reduce_sum(kl_per_coordinate, axis=-1)
-        return tf.reduce_mean(kl_per_coordinate, axis=-1)
+        # Reduce over every non-batch axis, like the reconstruction term, so
+        # sequence latents of shape (batch, time, latent) also give one value
+        # per sample.
+        reduce_axes = tf.range(1, tf.rank(kl_per_coordinate))
+        return self._reduce_non_batch_coordinates(
+            kl_per_coordinate,
+            reduce_axes,
+            self.kl_reduction,
+        )
 
     def get_config(self) -> dict:
         """Return a Keras-serializable configuration."""
