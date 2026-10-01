@@ -18,7 +18,9 @@ result = optimizer.optimize(trial[None, ...], target_class=1)
 ```
 
 `model` is a loaded Keras model; `trial` contains one input without its batch axis.
-Use `output_kind="probabilities"` when the model emits probabilities. Custom
+Use `output_kind="probabilities"` when the model emits probabilities. The model
+must return at least two class scores per input; wrap a binary model with a
+single sigmoid unit so that it returns `[1 - p, p]`. Custom
 adapters implement `initial_state`, `logits_from_state`, and `reconstruct`.
 They can also implement named `constraint` metrics. Reconstruction outputs must
 have the input shape. Multiclass models require an explicit target class.

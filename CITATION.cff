@@ -6,7 +6,7 @@ abstract: >-
   subject-held-out cross-validation, vectorized over pandas DataFrames.
 type: software
 license: GPL-2.0
-repository-code: "https://github.com/VitorInserra/EEGProc"
+repository-code: "https://github.com/EEGo-UNC/EEGProc"
 url: "https://eego-unc.github.io/EEGProc/"
 version: 2.0.0
 keywords:

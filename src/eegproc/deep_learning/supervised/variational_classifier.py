@@ -1,12 +1,12 @@
-"""Classification heads used by EEGProc joint and standalone models.
+"""Classification heads for EEG embeddings.
 
 ``VariationalClassifier`` maintains learned Gaussian class priors and
 classifies via Bayes' rule, with an optional auxiliary discriminator for
 latent-space alignment. ``DenseClassifier`` is a standard trainable linear
 logit head. ``HybridClassifier`` predicts with dense logits while retaining
 the variational latent, discriminator, and class-prior regularizers. All three
-heads expose the same loss-component interface, allowing the joint pipeline to
-switch heads without changing its custom train/test steps.
+heads expose the same loss-component interface, so a model with a custom
+train/test step can switch heads without changing that step.
 """
 
 from __future__ import annotations
@@ -96,10 +96,9 @@ def _categorical_focal_terms(
 class DenseClassifier(tf.keras.layers.Layer):
     """Standard dense logit head with the VC-compatible loss interface.
 
-    The joint model historically expects its classification head to expose
-    ``n_classes``, ``vc_loss_components()``, and ``discriminator_loss()``.
-    This adapter provides those methods while optimizing focal classification
-    loss. All variational regularization components are
+    It exposes ``n_classes``, ``vc_loss_components()``, and
+    ``discriminator_loss()`` like the variational heads, while optimizing
+    focal classification loss. All variational regularization components are
     returned as exact zeros, regardless of the supplied beta/gamma/lambda
     values, so selecting this head is an unambiguous dense-classifier ablation.
     """
@@ -516,7 +515,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         """Return every raw and weighted component of the VC objective.
 
         The returned ``total_loss`` is exactly the sum of the four weighted
-        terms. Passing the logits already produced by the joint model avoids a
+        terms. Passing the logits already produced by the model avoids a
         duplicate classifier call and guarantees that the logged focal loss
         corresponds to the logits used for the accuracy metric.
 
@@ -625,7 +624,7 @@ class VariationalClassifier(tf.keras.layers.Layer):
         logits: tf.Tensor | None = None,
         sample_weight: tf.Tensor | None = None,
     ) -> tf.Tensor:
-        """Return the complete VC objective while preserving the old API."""
+        """Return the complete VC objective (``total_loss`` of the components)."""
         return self.vc_loss_components(
             mh=mh,
             y=y,
@@ -755,9 +754,9 @@ class HybridClassifier(VariationalClassifier):
 
     Thus, unlike ``VariationalClassifier``, Gaussian likelihoods do not define
     the decision boundary. The Gaussian class parameters instead regularize
-    the BiLSTM embedding. ``vc_lambda=0`` is recommended for the first hybrid
-    diagnostic because the learned class-prior parameter is auxiliary to the
-    dense logits.
+    the input embedding. A class-prior weight of zero (``lambda_=0``) is a
+    reasonable starting point, because the learned class prior is auxiliary to
+    the dense logits.
     """
 
     supports_variational_regularization = True

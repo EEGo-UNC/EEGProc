@@ -185,6 +185,34 @@ for frame in pd.read_csv("/data/csv/amigos_joined.csv.gz", chunksize=100_000):
     # Apply your own filtering, feature extraction, or trial-safe windowing.
 ```
 
+To cross-validate directly from a converted table, name the EEG columns
+explicitly. Otherwise every other numeric column (the remaining ratings, ECG,
+`sample_idx`, and for EEGEmotions the demographics) becomes a model input, and
+predicting valence would silently train on arousal and dominance too:
+
+```python
+import pandas as pd
+from eegproc.deep_learning.cross_validation import cross_validate_dataframe
+
+EEG_CHANNELS = ("AF3", "F7", "F3", "FC5", "T7", "P7", "O1",
+                "O2", "P8", "T8", "FC6", "F4", "F8", "AF4")
+
+df = pd.read_csv("/data/csv/dreamer_joined.csv.gz")
+df = df[df["segment"] == "stimulus"]
+df["label"] = (df["valence"] >= 3).astype(int)
+
+results = cross_validate_dataframe(
+    df, build_model, strategy="loso",          # build_model: see the README
+    kind="signal", fs=128, window_sec=1.0,
+    subject_columns=("subject_id",), trial_columns=("trial_id",),
+    time_column="sample_idx", feature_columns=EEG_CHANNELS,
+    label_column="label",
+)
+```
+
+For AMIGOS, also drop the `baseline` segment as above; the sample index
+restarts within each segment.
+
 The DREAMER, AMIGOS, and EEGEmotions column names match the existing
 `eegproc.deep_learning.prepare_datasets` readers. For that older NumPy preparation
 command, write **uncompressed** `dreamer_joined.csv`, `amigos_joined.csv`, or

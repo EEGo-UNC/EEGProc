@@ -1,32 +1,39 @@
 Getting Started
 ===============
 
-EEGProc is a fully vectorized library designed for preprocessing and extracting features from EEG(Electroencephalogram) data. This library is optimized for performance and ease of use, making it suitable for researchers and developers working in the field of neuroscience, biomedical engineering, and machine learning.
+EEGProc is a vectorized library for preprocessing EEG (electroencephalogram)
+data, extracting features from it, and evaluating models on it subject by
+subject. It is built for researchers and developers working in neuroscience,
+biomedical engineering, and machine learning.
 
 Installation
 ------------
 
-Install from PyPI:
+Install from PyPI (Python 3.10 or newer):
 
 ```bash
-pip install eegproc
+pip install eegproc                    # preprocessing, features, data conversion, plotting
+pip install "eegproc[deep-learning]"   # adds cross-validation, models, counterfactuals
 ```
 
 or, for the latest development version:
 
 ```bash
-pip install git+https://github.com/VitorInserra/EEGProc.git
+pip install git+https://github.com/EEGo-UNC/EEGProc.git
 ```
 
 Dependencies
 ------------
 
-EEGProc relies on:
+The base install relies on:
 
 - **NumPy**, **Pandas**, **SciPy** – numerical processing
 - **PyWavelets** – wavelet features
-- **PyEMD** – empirical mode decomposition
+- **PyEMD** (`EMD-signal`) – empirical mode decomposition
 - **Matplotlib** – plotting utilities
+
+The `deep-learning` extra adds **TensorFlow**, **scikit-learn**, and
+**cloudpickle**.
 
 Quick Start
 -----------
@@ -57,7 +64,7 @@ from eegproc import psd_bandpowers, shannons_entropy, hjorth_params
 
 psd = psd_bandpowers(clean, fs, bands=FREQUENCY_BANDS)   # {channel}_{band}
 entropy_df = shannons_entropy(psd)                        # {channel}_entropy
-hjorth_df = hjorth_params(clean, fs)                      # {channel}_activity, ...
+hjorth_df = hjorth_params(clean, fs)                      # {channel}_{band}_activity, ...
 ```
 
 `shannons_entropy` consumes the **PSD table**, not the raw signal, and returns one

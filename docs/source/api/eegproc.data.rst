@@ -12,5 +12,9 @@ Submodules
 .. toctree::
    :maxdepth: 4
 
+   eegproc.data.csv_cowen
+   eegproc.data.csv_eegemotions
+   eegproc.data.csv_matlab
    eegproc.data.schema
+   eegproc.data.to_csv
    eegproc.data.windowing

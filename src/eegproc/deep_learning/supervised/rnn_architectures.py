@@ -1,6 +1,6 @@
 """Supervised RNN classifier architectures for EEG sequence data.
 
-The builders in this module can be used in two ways:
+The builders in this module can be used in three ways:
 
 1. ``build()`` creates a complete, compiled standalone classifier.
 2. ``build_feature_extractor()`` creates only the recurrent temporal encoder
@@ -9,9 +9,9 @@ The builders in this module can be used in two ways:
    temporal pooling. This is useful when every ordered element in a sequence
    must contribute to a trial-level representation.
 
-The feature-extractor form is intended for joint architectures where another
-model, such as a variational classifier, owns the final classification head
-and loss.
+The feature-extractor form is meant for larger models in which another
+component, such as a variational classifier, owns the final classification
+head and loss.
 """
 
 from __future__ import annotations
@@ -229,10 +229,10 @@ class RNNClassifier(ABC):
 
         Notes
         -----
-        This is the form that should be passed to the joint autoencoder +
-        variational-classifier architecture. It is intentionally not compiled
-        and does not create a dense, softmax, or variational classification
-        layer.
+        Use this form inside a larger model that supplies its own head, such as
+        an autoencoder combined with a variational classifier. It is
+        intentionally not compiled and does not create a dense, softmax, or
+        variational classification layer.
         """
         x_in = layers.Input(
             shape=(self.timesteps, self.n_features),

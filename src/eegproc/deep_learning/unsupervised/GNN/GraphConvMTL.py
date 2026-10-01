@@ -1,7 +1,7 @@
-"""MTLFuseNet-style graph convolution for EEGProc.
+"""Fixed-adjacency graph convolution, as used by MTLFuseNet.
 
-This layer implements the renormalized first-order spectral GCN used in
-MTLFuseNet Eq. (15):
+This layer implements the renormalized first-order spectral GCN of MTLFuseNet
+(Li et al., 2023), Eq. (15)::
 
     A_tilde = A + I
     A_hat   = D_tilde^{-1/2} A_tilde D_tilde^{-1/2}
@@ -23,7 +23,7 @@ from tensorflow.keras import layers
 
 @tf.keras.utils.register_keras_serializable(package="eegproc")
 class GraphConvMTL(layers.Layer):
-    """MTLFuseNet-style fixed-adjacency graph convolution.
+    """Fixed-adjacency graph convolution (MTLFuseNet Eq. 15).
 
     Parameters
     ----------
@@ -32,8 +32,8 @@ class GraphConvMTL(layers.Layer):
     n_nodes : int
         Number of EEG channels/nodes.
     adjacency : array-like, shape (n_nodes, n_nodes)
-        Fixed channel adjacency. For the MTLFuseNet comparison this should be
-        the mutual-information adjacency computed from TRAINING DATA ONLY.
+        Fixed, non-negative channel adjacency, typically mutual information
+        between channels. Compute it from training data only.
     activation : str or callable or None, default="relu"
         Activation after graph aggregation and feature projection.
     use_bias : bool, default=True

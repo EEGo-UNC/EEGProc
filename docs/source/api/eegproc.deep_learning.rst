@@ -14,6 +14,8 @@ Subpackages
 
    eegproc.deep_learning.cross_validation
    eegproc.deep_learning.domain_generalization
+   eegproc.deep_learning.supervised
+   eegproc.deep_learning.unsupervised
 
 Submodules
 ----------

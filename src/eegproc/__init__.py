@@ -1,3 +1,5 @@
+from importlib.metadata import PackageNotFoundError, version as _package_version
+
 from .preprocessing import (
     apply_detrend,
     numeric_interp,
@@ -18,6 +20,11 @@ from .featurization import (
     choose_dwt_level,
     feature_grouped_by_metadata,
 )
+
+try:
+    __version__ = _package_version("eegproc")
+except PackageNotFoundError:  # a source tree that has not been installed
+    __version__ = "unknown"
 
 __all__ = [
     #PREPROCESSING

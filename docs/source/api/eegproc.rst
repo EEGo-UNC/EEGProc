@@ -14,6 +14,7 @@ Subpackages
 
    eegproc.data
    eegproc.deep_learning
+   eegproc.model_explainability
    eegproc.plotting
 
 Submodules
