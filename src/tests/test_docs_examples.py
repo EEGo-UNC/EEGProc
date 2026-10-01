@@ -60,7 +60,11 @@ def _dreamer_like_table() -> pd.DataFrame:
 @pytest.fixture
 def fake_read_csv(monkeypatch):
     def read_csv(path, *args, **kwargs):
-        return _dreamer_like_table() if "dreamer" in str(path) else _channel_table()
+        if "dreamer" in str(path):
+            return _dreamer_like_table()
+        if Path(path).name == "features.csv":
+            return _feature_table()
+        return _channel_table()
 
     monkeypatch.setattr(pd, "read_csv", read_csv)
 
@@ -74,27 +78,28 @@ def fast_cross_validation(monkeypatch):
 
     def one_epoch(*args, **kwargs):
         for key, value in {"n_epochs": 1, "batch_size": 8, "verbose": 0, "n_jobs": 1,
-                           "log_predictions": False, "early_stopping_patience": None}.items():
+                           "log_predictions": False}.items():
             kwargs.setdefault(key, value)
+        kwargs["n_epochs"] = 1
+        if kwargs.get("strategy", "loso") != "fixed_loso":
+            kwargs.setdefault("early_stopping_patience", None)
         return original(*args, **kwargs)
 
     monkeypatch.setattr(cross_validation, "cross_validate_dataframe", one_epoch)
 
 
-def _subject_trial_raw() -> tuple[pd.DataFrame, pd.DataFrame]:
+def _feature_table() -> pd.DataFrame:
+    """Four feature rows per trial; extra ratings must not become model inputs."""
     rng = np.random.default_rng(2)
-    blocks = []
-    for subject in ("P01", "P07", "P12"):
-        for trial in ("a", "b"):
-            blocks.append(pd.DataFrame({
-                "subject": subject, "trial": trial,
-                "AF3": rng.standard_normal(FS * 8), "F7": rng.standard_normal(FS * 8),
-            }))
-    raw = pd.concat(blocks, ignore_index=True)
-    labels = raw.drop_duplicates(["subject", "trial"])[["subject", "trial"]].assign(
-        label=[0, 1, 1, 0, 0, 1]
-    )
-    return raw, labels
+    return pd.concat([
+        pd.DataFrame({
+            "subject": subject, "trial": trial, "label": label,
+            "AF3_alpha": rng.uniform(size=4), "F7_alpha": rng.uniform(size=4),
+            "arousal": 5.0,
+        })
+        for subject in ("P01", "P07", "P12")
+        for trial, label in (("a", 0), ("b", 1))
+    ], ignore_index=True)
 
 
 def test_readme_featurization(fake_read_csv):
@@ -104,24 +109,22 @@ def test_readme_featurization(fake_read_csv):
     assert list(namespace["entropy"].columns) == [f"{c}_entropy" for c in ["AF3", "F7", "F3", "FC5"]]
 
 
-def test_readme_cross_validation_and_converted_dataset(fake_read_csv, fast_cross_validation):
-    raw, labels = _subject_trial_raw()
-    namespace = {"raw": raw, "labels": labels}
-
+def test_readme_cross_validation(fake_read_csv, fast_cross_validation):
+    namespace = {}
     exec(_block_containing(ROOT / "README.md", "def build_model"), namespace)
-    assert {row["subject_id"] for row in namespace["results"]["user_metrics"]} == {"P01", "P07", "P12"}
-
-    exec(_block_containing(ROOT / "README.md", "EEG_CHANNELS = "), namespace)
-    assert {row["subject_id"] for row in namespace["results"]["user_metrics"]} == {1, 2, 3}
+    results = namespace["results"]
+    assert {row["subject_id"] for row in results["user_metrics"]} == {"P01", "P07", "P12"}
+    assert results["cv_strategy"] == "fixed_loso_no_validation"
+    # A model built for this table receives just the explicitly selected features.
+    model = namespace["build_model"](np.zeros((2, 4, 2), dtype="float32"))
+    assert model.input_shape == (None, 4, 2)
+    assert model.output_shape == (None, 2)
 
 
 def test_dataset_guide_cross_validation(fake_read_csv, fast_cross_validation):
-    raw, labels = _subject_trial_raw()
-    namespace = {"raw": raw, "labels": labels}
-    exec(_block_containing(ROOT / "README.md", "def build_model"), namespace)   # defines build_model
-
+    namespace = {}
+    exec(_block_containing(ROOT / "README.md", "def build_model"), namespace)
     exec(_block_containing(ROOT / "docs" / "source" / "datasets.md", "cross_validate_dataframe"), namespace)
-
     assert len(namespace["results"]["user_metrics"]) == 3
 
 

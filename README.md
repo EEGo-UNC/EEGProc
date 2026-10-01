@@ -1,39 +1,60 @@
+<p align="center">
+  <img src="docs/source/_static/eegproc-logo.png" alt="EEGProc" width="800">
+</p>
+
+<p align="center">
+  <strong>Thank you to all our contributors:</strong>
+  <a href="https://github.com/VitorInserra">@VitorInserra</a>
+  · <a href="https://github.com/Pranav1006">@Pranav1006</a>
+  · <a href="https://github.com/sainag7">@sainag7</a>
+  · <a href="https://github.com/qwertyuiopzxcvbnmlkjhgfdsa">@qwertyuiopzxcvbnmlkjhgfdsa</a>
+  · <a href="https://github.com/ygadipalli">@ygadipalli</a>
+</p>
+
 # EEGProc
 
-Featurization and deep learning library for EEG that is AI-friendly, lightweight, and easy to use.
+A lightweight Python library for EEG preprocessing, feature extraction, deep
+learning, and model explanations.
 
-EEGProc is built for researchers and developers who aim to implement EEG machine learning without reinventing the wheel. It supports writing clean code and reduces the margin for error involved in creating and testing a model from scratch.
-
-## Dataset conversion
-
-Convert downloaded AMIGOS, DREAMER, EEGEmotions-27, or DEAP data
-to CSV with the base installation:
-
-```bash
-eegproc-to-csv --dataset amigos --input /path/to/AMIGOS --output /path/to/amigos_joined.csv.gz
-```
-
-See the [dataset guide](https://github.com/EEGo-UNC/EEGProc/blob/main/docs/source/datasets.md) for download links, supported
-layouts, and examples. Recordings and generated datasets are not bundled.
-
-## Included components
-
-The library keeps reusable CNN/GNN encoders and decoders, RNN classifiers,
-classifier heads, losses, cross-validation, and domain-generalization helpers.
-Adapter-based counterfactuals work with caller-supplied models and datasets; see
-[model-agnostic counterfactuals](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/model_explainability/model_agnostic/README.md).
+Built by researchers at **Columbia University** and the **University of North
+Carolina (UNC)**, EEGProc has been used in research published at international
+conferences. It helps researchers and developers prepare EEG data, evaluate
+models, and explore their predictions with reusable, well-documented components.
 
 ## Install
 
 ```bash
-pip install eegproc                    # preprocessing + featurization
-pip install "eegproc[deep-learning]"   # adds the cross-validation stack (TensorFlow)
+pip install eegproc                   # preprocessing, features, conversion, plotting
+pip install "eegproc[deep-learning]"  # adds models, cross-validation, counterfactuals
 ```
 
-The base install deliberately does **not** pull in TensorFlow. If you only need
-filtering and features, you do not pay for a deep-learning runtime.
+Requires Python 3.10 or newer. TensorFlow is optional and is installed with the
+`deep-learning` extra.
 
-Requires Python 3.10 or newer.
+## Start with the DREAMER example
+
+The [commented example script](examples/dreamer_bilstm_counterfactual.py) walks
+through preprocessing, PSD feature extraction, a BiLSTM classifier,
+leave-one-subject-out cross-validation (LOSOCV), and a model-agnostic
+counterfactual for a held-out input.
+
+Follow the [example README](examples/README.md) for installation, dataset
+conversion, run commands, and an explanation of every step and output.
+
+## What EEGProc provides
+
+- **Preprocessing and features:** filtering, detrending, spectral band powers,
+  Hjorth parameters, and Shannon, wavelet, and IMF entropy.
+- **Dataset conversion:** convert downloaded DREAMER, AMIGOS, EEGEmotions-27,
+  and DEAP recordings into tidy CSV tables.
+- **Models and evaluation:** reusable CNN/GNN components, RNN classifiers,
+  classifier heads, losses, and subject-wise cross-validation.
+- **Model explanations:** adapter-based counterfactual optimization for
+  differentiable models, with plots and scalp topographies.
+
+See the [getting-started guide](docs/source/getting-started.md) for focused API
+examples. The [dataset guide](docs/source/datasets.md) covers supported layouts
+and download links; recordings are not bundled.
 
 ## Featurization
 
@@ -63,127 +84,80 @@ signal, and the entropy functions consume the corresponding energy table.
 | `imf_band_energy` | raw signal | `{channel}_{band}_imfenergy` |
 | `imf_entropy` | IMF energy | `{channel}_imfentropy` |
 
+## Explain predictions with scalp topographies
+
+EEGProc's model-agnostic module can visualize the differences between an input
+and its counterfactual across electrodes and frequency bands. Scalp topographies
+help show where those changes are concentrated.
+
+![Counterfactual scalp topographies for theta, alpha, and beta bands, showing amplitude differences above and RMS differences below.](docs/source/_static/counterfactual-topographies.png)
+
+*Example theta, alpha, and beta topographies: amplitude differences in the top
+row and root-mean-square (RMS) differences in the bottom row.*
+
+See the [model-agnostic counterfactual guide](src/eegproc/model_explainability/model_agnostic/README.md#topographies)
+for plotting commands and the channel positions, band metadata, and normalization
+information needed to interpret your own results.
+
 ## Cross-validation
 
-Subject-wise evaluation takes a **tidy table**: your feature columns plus
-`subject`, `trial`, and a label column. Trials never straddle a fold.
-Normalization is off by default; `normalize="subject_zscore"` standardizes each
-subject with its own statistics.
-
-```python
-import tensorflow as tf
-from eegproc import FREQUENCY_BANDS, bandpass_filter, feature_grouped_by_metadata, psd_bandpowers
-from eegproc.deep_learning.cross_validation import cross_validate_dataframe
-
-def band_powers(signal, fs, bands, **_):
-    return psd_bandpowers(bandpass_filter(signal, fs, bands=bands), fs, bands=bands)
-
-features = feature_grouped_by_metadata(
-    raw,                                           # electrodes + "subject", "trial" columns
-    target_function=band_powers,
-    fs=128,
-    group_by_metadata_columns=["subject", "trial"],
-)
-features = features.merge(labels, on=["subject", "trial"])   # labels: subject, trial, label
-
-def build_model(training_features, **hyperparameters):
-    # Declaring training_features gives the builder this fold's training windows.
-    _, timesteps, n_features = training_features.shape
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input((timesteps, n_features)),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(1, activation="sigmoid"),
-    ])
-    model.compile(optimizer="adam", loss="binary_crossentropy")
-    return model
-
-results = cross_validate_dataframe(
-    features, build_model, strategy="loso", fs=128, label_column="label",
-)
-
-for row in results["user_metrics"]:
-    print(row["subject_id"], row["accuracy"])      # "P07" 0.71
-```
-
-Results are reported against your own subject identifiers, not positional indices.
-
-Available strategies: `loso` (leave-one-subject-out), `fixed_loso` (a single fixed
-configuration), `subject_calibration` (few-shot adaptation to a held-out subject),
-and `nested_lnso` (nested leave-N-subjects-out).
-
-Sessions need no special support: `trial_columns=("session", "trial")` scopes
-trials per session, and `subject_columns=("subject", "session")` gives
-leave-one-session-out through the same code path.
-
-If you already hold NumPy arrays, `loso_cv` and friends take them directly.
-
-### Using converted datasets safely
-
-Unless you pass `feature_columns`, every numeric column that is not a declared
-subject, trial, time, or label column is used as a feature. Tables written by
-`eegproc-to-csv` also hold the other ratings, ECG, sample indices, and (for
-EEGEmotions) demographics, so predicting valence from them without
-`feature_columns` would silently train on arousal and dominance too. Name the
-columns explicitly:
+Start with a feature CSV containing `subject`, `trial`, a binary `label` (0 or 1),
+and your feature columns. Keep feature rows in time order within each trial.
+This example uses two alpha-band features and four rows per sequence; change
+`feature_columns` to match your table. The complete [DREAMER example](examples/README.md)
+shows how to prepare this kind of table from recordings.
 
 ```python
 import pandas as pd
+from eegproc.deep_learning.cross_validation import cross_validate_dataframe
+from eegproc.deep_learning.supervised.rnn_architectures import BiLSTMClassifier
 
-EEG_CHANNELS = ("AF3", "F7", "F3", "FC5", "T7", "P7", "O1",
-                "O2", "P8", "T8", "FC6", "F4", "F8", "AF4")
+features = pd.read_csv("features.csv")
 
-df = pd.read_csv("dreamer_joined.csv.gz")
-df = df[df["segment"] == "stimulus"]
-df["label"] = (df["valence"] >= 3).astype(int)
+def build_model(training_features):
+    # EEGProc supplies only this fold's training inputs; build a fresh model.
+    _, timesteps, n_features = training_features.shape
+    return BiLSTMClassifier(
+        timesteps, n_features, n_classes=2, lstm_units=16, n_bilstm_layers=1,
+    ).build()
 
 results = cross_validate_dataframe(
-    df, build_model, strategy="loso",
-    kind="signal", fs=128, window_sec=1.0,
-    subject_columns=("subject_id",), trial_columns=("trial_id",),
-    time_column="sample_idx", feature_columns=EEG_CHANNELS,
-    label_column="label",
+    features, build_model, strategy="fixed_loso", fs=128,
+    feature_columns=("AF3_alpha", "F7_alpha"),  # Exclude ratings and metadata.
+    window_rows=4, normalize="subject_zscore",
+    fixed_config={}, n_epochs=10, batch_size=32,
 )
+print(pd.DataFrame(results["user_metrics"])[["subject_id", "accuracy"]])
 ```
 
-## Complete DREAMER example
+`fixed_loso` trains on all other subjects and evaluates each held-out subject once,
+using the same settings in every fold. Windows stay within trials, and results
+use your original subject identifiers. `subject_zscore` uses each subject's own
+unlabeled data, including the held-out subject's data; omit it when that offline
+normalization assumption does not fit your evaluation.
 
-See the [commented DREAMER example](examples/README.md) for preprocessing,
-PSD features, a BiLSTM classifier, leave-one-subject-out evaluation, and
-a model-agnostic counterfactual for a held-out input.
+Other strategies include `loso`, `subject_calibration` (few-shot adaptation),
+and `nested_lnso` (nested leave-N-subjects-out). For converted recordings, always
+select the EEG features explicitly; the [dataset guide](docs/source/datasets.md#use-the-result)
+shows how to keep ratings, ECG, and metadata out of model inputs.
 
 ## Package layout
 
-- [`eegproc.preprocessing`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/preprocessing.py) — filtering, detrending, notch, band decomposition
-- [`eegproc.featurization`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/featurization.py) — spectral, Hjorth, wavelet and IMF features
-- [`eegproc.data`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/data) — the tidy schema and the windowing assembler (no TensorFlow)
-  - [`to_csv.py`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/data/to_csv.py) — dataset conversion
-- [`eegproc.deep_learning`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/deep_learning/README.md)
-  - [`cross_validation`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/deep_learning/cross_validation) — the cross-validation strategies
-  - [`supervised`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/deep_learning/supervised) — RNN classifier builders, dense and variational classifier heads, and contrastive loss
-  - [`unsupervised`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/deep_learning/unsupervised) — CNN/GNN encoders and decoders, graph layers, and autoencoder losses
-  - [`domain_generalization`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/deep_learning/domain_generalization) — alternating subject groups and meta-learning strategies
-  - [`training_outputs.py`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/deep_learning/training_outputs.py) — training callbacks, metrics, and diagnostics
-  - [`prepare_datasets.py`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/deep_learning/prepare_datasets.py) — converters for supported public EEG datasets
-- [`eegproc.model_explainability.model_agnostic`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/model_explainability/model_agnostic/README.md) — adapter-based counterfactuals
-- [`eegproc.plotting`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/plotting) — `plot_eeg_features`
+| Module | Purpose |
+| --- | --- |
+| [`eegproc.preprocessing`](src/eegproc/preprocessing.py) | Filtering, detrending, and band decomposition |
+| [`eegproc.featurization`](src/eegproc/featurization.py) | Spectral, Hjorth, wavelet, and IMF features |
+| [`eegproc.data`](src/eegproc/data/) | Dataset conversion, table schema, and trial-safe windowing |
+| [`eegproc.deep_learning`](src/eegproc/deep_learning/README.md) | Reusable models, cross-validation, and domain generalization |
+| [`eegproc.model_explainability`](src/eegproc/model_explainability/model_agnostic/README.md) | Model-agnostic counterfactuals and topographies |
+| [`eegproc.plotting`](src/eegproc/plotting/) | EEG feature plots |
 
-## Scope
+## Documentation and contributing
 
-EEGProc gives you data preparation, evaluation, and reusable model components,
-not complete research models. The cross-validators take a builder that returns
-a compiled Keras model and handle folds, windowing, thresholds, calibration and
-reporting; the encoders, classifier heads and losses in `deep_learning` are
-building blocks for such builders.
-
-## Documentation
-
-<https://eego-unc.github.io/EEGProc/>
-
-## Contributing
-
-See [CONTRIBUTING.md](https://github.com/EEGo-UNC/EEGProc/blob/main/CONTRIBUTING.md). Changes are documented in
-[CHANGELOG.md](https://github.com/EEGo-UNC/EEGProc/blob/main/CHANGELOG.md).
+Browse the [documentation](https://eego-unc.github.io/EEGProc/), follow the
+[contribution guide](CONTRIBUTING.md), or read the [changelog](CHANGELOG.md).
+If you use EEGProc in your research, see [CITATION.cff](CITATION.cff).
 
 ## License
 
-GPLv2. See [LICENSE](https://github.com/EEGo-UNC/EEGProc/blob/main/LICENSE).
+GPLv2. See [LICENSE](LICENSE).
