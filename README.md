@@ -170,7 +170,7 @@ See the [model-agnostic counterfactual guide](src/eegproc/model_explainability/m
 for plotting commands and the channel positions, band metadata, and normalization
 information needed to interpret your own results.
 
-## Deep learning
+## Deep Learning
 
 The [DREAMER script](examples/dreamer_bilstm_counterfactual.py) builds a BiLSTM
 and passes its builder to `cross_validate_dataframe` for leave-one-subject-out
