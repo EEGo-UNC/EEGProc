@@ -6,10 +6,16 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
+import tomllib
+from pathlib import Path
+
 project = 'EEGProc'
 copyright = '2025, Vitor Inserra'
 author = 'Vitor Inserra'
-release = '1.0.0'
+# pyproject.toml is the single source of the version.
+with open(Path(__file__).resolve().parents[2] / "pyproject.toml", "rb") as _pyproject:
+    release = tomllib.load(_pyproject)["project"]["version"]
+version = release
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -60,3 +66,12 @@ always_document_param_types = True
 # }
 
 myst_enable_extensions = ["colon_fence", "deflist"]
+
+# Package ``__init__`` modules re-export their submodules' public names.
+# Document each object once, where it is defined, so cross-references such as
+# ``EEGFrame`` resolve to a single target.
+autodoc_default_options = {
+    "members": True,
+    "show-inheritance": True,
+    "ignore-module-all": True,
+}
