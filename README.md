@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/source/_static/eegproc-logo.png" alt="EEGProc" width="800">
+  <img src="https://raw.githubusercontent.com/EEGo-UNC/EEGProc/main/docs/source/_static/eegproc-logo.png" alt="EEGProc" width="800">
 </p>
 
 <p align="center">
@@ -35,12 +35,12 @@ Requires Python 3.10 or newer. TensorFlow is optional and is installed with the
 
 ## Start with the DREAMER example
 
-The [commented example script](examples/dreamer_bilstm_counterfactual.py) walks
+The [commented example script](https://github.com/EEGo-UNC/EEGProc/blob/main/examples/dreamer_bilstm_counterfactual.py) walks
 through preprocessing, PSD feature extraction, a BiLSTM classifier,
 leave-one-subject-out cross-validation (LOSOCV), and a model-agnostic
 counterfactual for a held-out input.
 
-Follow the [example README](examples/README.md) for installation, dataset
+Follow the [example README](https://github.com/EEGo-UNC/EEGProc/blob/main/examples/README.md) for installation, dataset
 conversion, run commands, and an explanation of every step and output.
 
 ## What EEGProc provides
@@ -54,8 +54,8 @@ conversion, run commands, and an explanation of every step and output.
 - **Model explanations:** adapter-based counterfactual optimization for
   differentiable models, with plots and scalp topographies.
 
-See the [getting-started guide](docs/source/getting-started.md) for focused API
-examples. The [dataset guide](docs/source/datasets.md) covers supported layouts
+See the [getting-started guide](https://github.com/EEGo-UNC/EEGProc/blob/main/docs/source/getting-started.md) for focused API
+examples. The [dataset guide](https://github.com/EEGo-UNC/EEGProc/blob/main/docs/source/datasets.md) covers supported layouts
 and download links; recordings are not bundled.
 
 ## What can you model with EEG?
@@ -71,8 +71,8 @@ define the prediction task.
     <th>Cognitive state</th>
   </tr>
   <tr>
-    <td align="center"><img src="docs/source/_static/valence-arousal.png" alt="Valence–arousal diagram illustrating frustration, enjoyment, boredom, and calmness" width="244"></td>
-    <td align="center"><img src="docs/source/_static/cognitive-state-targets.png" alt="EEG modeling targets: attention, cognitive load, and engagement" width="234"></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/EEGo-UNC/EEGProc/main/docs/source/_static/valence-arousal.png" alt="Valence–arousal diagram illustrating frustration, enjoyment, boredom, and calmness" width="244"></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/EEGo-UNC/EEGProc/main/docs/source/_static/cognitive-state-targets.png" alt="EEG modeling targets: attention, cognitive load, and engagement" width="234"></td>
   </tr>
   <tr>
     <td>Model affect along valence and arousal dimensions.</td>
@@ -83,7 +83,7 @@ define the prediction task.
 ## A typical EEG pipeline
 
 <p align="center">
-  <img src="docs/source/_static/typical-eeg-pipeline.png" alt="Typical EEG application pipeline: a task and wearable EEG feed a server and machine-learning model, with labels for training and state estimates for application feedback" width="682">
+  <img src="https://raw.githubusercontent.com/EEGo-UNC/EEGProc/main/docs/source/_static/typical-eeg-pipeline.png" alt="Typical EEG application pipeline: a task and wearable EEG feed a server and machine-learning model, with labels for training and state estimates for application feedback" width="682">
 </p>
 
 A typical workflow records EEG during a task, pairs recordings with labels such
@@ -94,7 +94,7 @@ a model produces state estimates that an application can use for feedback.
 EEGProc supplies the preprocessing, feature extraction, model-building,
 evaluation, and explanation components in this workflow. Your project connects
 the recording device, data storage, server, and application feedback loop.
-The [DREAMER example](examples/README.md) demonstrates the processing, training,
+The [DREAMER example](https://github.com/EEGo-UNC/EEGProc/blob/main/examples/README.md) demonstrates the processing, training,
 evaluation, and explanation steps on a downloaded dataset.
 
 ## Featurization
@@ -149,7 +149,7 @@ entropy_fig, entropy_axes = plot_eeg_features(
 ```
 
 <p align="center">
-  <img src="docs/source/_static/eeg-feature-plots.png" alt="Stacked EEG feature traces showing theta-to-beta band-power ratios over time for P7, O1, and FC6" width="638">
+  <img src="https://raw.githubusercontent.com/EEGo-UNC/EEGProc/main/docs/source/_static/eeg-feature-plots.png" alt="Stacked EEG feature traces showing theta-to-beta band-power ratios over time for P7, O1, and FC6" width="638">
 </p>
 
 *Illustrative EEG feature traces: theta-to-beta band-power ratios at P7, O1, and
@@ -161,18 +161,18 @@ EEGProc's model-agnostic module can visualize the differences between an input
 and its counterfactual across electrodes and frequency bands. Scalp topographies
 help show where those changes are concentrated.
 
-![Counterfactual scalp topographies for theta, alpha, and beta bands, showing amplitude differences above and RMS differences below.](docs/source/_static/counterfactual-topographies.png)
+![Counterfactual scalp topographies for theta, alpha, and beta bands, showing amplitude differences above and RMS differences below.](https://raw.githubusercontent.com/EEGo-UNC/EEGProc/main/docs/source/_static/counterfactual-topographies.png)
 
 *Example theta, alpha, and beta topographies: amplitude differences in the top
 row and root-mean-square (RMS) differences in the bottom row.*
 
-See the [model-agnostic counterfactual guide](src/eegproc/model_explainability/model_agnostic/README.md#topographies)
+See the [model-agnostic counterfactual guide](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/model_explainability/model_agnostic/README.md#topographies)
 for plotting commands and the channel positions, band metadata, and normalization
 information needed to interpret your own results.
 
 ## Deep Learning
 
-The [DREAMER script](examples/dreamer_bilstm_counterfactual.py) builds a BiLSTM
+The [DREAMER script](https://github.com/EEGo-UNC/EEGProc/blob/main/examples/dreamer_bilstm_counterfactual.py) builds a BiLSTM
 and passes its builder to `cross_validate_dataframe` for leave-one-subject-out
 cross-validation. Here is the same pattern for a prepared feature CSV containing
 `subject`, `trial`, a binary `label`, and EEG features in time order:
@@ -203,26 +203,26 @@ within trials. `subject_zscore` uses each subject's own unlabeled data, includin
 the held-out subject's data; omit it if that offline normalization assumption
 does not fit your evaluation. Per-subject scores are in `results["user_metrics"]`.
 
-Follow the [example README](examples/README.md) to run the complete DREAMER
+Follow the [example README](https://github.com/EEGo-UNC/EEGProc/blob/main/examples/README.md) to run the complete DREAMER
 pipeline, including preprocessing, features, model saving, and counterfactuals.
 
 ## Package layout
 
 | Module | Purpose |
 | --- | --- |
-| [`eegproc.preprocessing`](src/eegproc/preprocessing.py) | Filtering, detrending, and band decomposition |
-| [`eegproc.featurization`](src/eegproc/featurization.py) | Spectral, Hjorth, wavelet, and IMF features |
-| [`eegproc.data`](src/eegproc/data/) | Dataset conversion, table schema, and trial-safe windowing |
-| [`eegproc.deep_learning`](src/eegproc/deep_learning/README.md) | Reusable models, cross-validation, and domain generalization |
-| [`eegproc.model_explainability`](src/eegproc/model_explainability/model_agnostic/README.md) | Model-agnostic counterfactuals and topographies |
-| [`eegproc.plotting`](src/eegproc/plotting/) | EEG feature plots |
+| [`eegproc.preprocessing`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/preprocessing.py) | Filtering, detrending, and band decomposition |
+| [`eegproc.featurization`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/featurization.py) | Spectral, Hjorth, wavelet, and IMF features |
+| [`eegproc.data`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/data) | Dataset conversion, table schema, and trial-safe windowing |
+| [`eegproc.deep_learning`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/deep_learning/README.md) | Reusable models, cross-validation, and domain generalization |
+| [`eegproc.model_explainability`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/model_explainability/model_agnostic/README.md) | Model-agnostic counterfactuals and topographies |
+| [`eegproc.plotting`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/plotting) | EEG feature plots |
 
 ## Documentation and contributing
 
 Browse the [documentation](https://eego-unc.github.io/EEGProc/), follow the
-[contribution guide](CONTRIBUTING.md), or read the [changelog](CHANGELOG.md).
-If you use EEGProc in your research, see [CITATION.cff](CITATION.cff).
+[contribution guide](https://github.com/EEGo-UNC/EEGProc/blob/main/CONTRIBUTING.md), or read the [changelog](https://github.com/EEGo-UNC/EEGProc/blob/main/CHANGELOG.md).
+If you use EEGProc in your research, see [CITATION.cff](https://github.com/EEGo-UNC/EEGProc/blob/main/CITATION.cff).
 
 ## License
 
-GPLv2. See [LICENSE](LICENSE).
+GPLv2. See [LICENSE](https://github.com/EEGo-UNC/EEGProc/blob/main/LICENSE).
