@@ -1,0 +1,7 @@
+eegproc.deep\_learning.unsupervised.GNN.GCN\_band\_separated module
+===================================================================
+
+.. automodule:: eegproc.deep_learning.unsupervised.GNN.GCN_band_separated
+   :members:
+   :show-inheritance:
+   :undoc-members:

@@ -1,0 +1,7 @@
+eegproc.deep\_learning.unsupervised.utils module
+================================================
+
+.. automodule:: eegproc.deep_learning.unsupervised.utils
+   :members:
+   :show-inheritance:
+   :undoc-members:

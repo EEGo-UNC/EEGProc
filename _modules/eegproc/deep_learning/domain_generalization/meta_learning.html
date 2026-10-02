@@ -1,0 +1,969 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.domain_generalization.meta_learning &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.domain_generalization.meta_learning</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.deep_learning.domain_generalization.meta_learning</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Mapping</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">..cross_validation.arrays</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">_as_numpy_1d</span><span class="p">,</span>
+    <span class="n">_prepare_fit_inputs_with_subject_ids</span><span class="p">,</span>
+<span class="p">)</span>
+
+
+<div class="viewcode-block" id="MLDGEpisodeSequence">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.MLDGEpisodeSequence">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">MLDGEpisodeSequence</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">Sequence</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Build class-balanced, complete-trial MLDG episodes for domain generalization.</span>
+
+<span class="sd">    One sequence item is one MLDG update. Meta-train and meta-test subjects are</span>
+<span class="sd">    disjoint, subject roles are balanced across an epoch, and each role receives</span>
+<span class="sd">    as close to a 50/50 class split as its number of selected trials permits.</span>
+<span class="sd">    Selected trials are kept intact so window-level inputs never split a trial.</span>
+
+<span class="sd">    For an even ``trials_per_subject``, every subject contributes exactly half</span>
+<span class="sd">    class-0 and half class-1 trials. For an odd value, every subject contributes</span>
+<span class="sd">    a one-trial class difference, and the extra class alternates across subjects</span>
+<span class="sd">    so the complete meta-train and meta-test groups remain balanced whenever</span>
+<span class="sd">    their total number of trials is even.</span>
+<span class="sd">    """</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">eeg</span><span class="p">,</span>
+        <span class="n">labels</span><span class="p">,</span>
+        <span class="n">subject_ids</span><span class="p">,</span>
+        <span class="n">trial_ids</span><span class="p">,</span>
+        <span class="n">sample_weight</span><span class="p">,</span>
+        <span class="n">meta_train_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">meta_test_subjects</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">trials_per_subject</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">steps_per_epoch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">eeg</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">eeg</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">labels</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">labels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">subject_ids</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">trial_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">trial_ids</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sample_weight</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="kc">None</span>
+            <span class="k">if</span> <span class="n">sample_weight</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">sample_weight</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">n_samples</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">eeg</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="p">)</span>
+            <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span><span class="p">)</span>
+            <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trial_ids</span><span class="p">)</span>
+            <span class="o">==</span> <span class="n">n_samples</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"MLDG EEG, labels, subject IDs, and trial IDs must align."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sample_weight</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sample_weight</span><span class="p">)</span> <span class="o">!=</span> <span class="n">n_samples</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"MLDG sample weights must align with EEG inputs."</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">class_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">class_ids</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">class_ids</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">class_ids</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">class_ids</span><span class="p">))</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Class-balanced MLDG currently requires exactly two classes; "</span>
+                <span class="sa">f</span><span class="s2">"found </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">subjects</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">meta_test_subjects</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"mldg_meta_test_subjects must be &gt;= 1."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"MLDG needs at least one meta-train subject in addition to its "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span><span class="si">}</span><span class="s2"> meta-test subjects; only "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="p">)</span><span class="si">}</span><span class="s2"> source subjects are available."</span>
+            <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="p">)</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span>
+            <span class="k">if</span> <span class="n">meta_train_subjects</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">meta_train_subjects</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"mldg_meta_train_subjects must be &gt;= 1 or null."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"mldg_meta_train_subjects + mldg_meta_test_subjects cannot "</span>
+                <span class="sa">f</span><span class="s2">"exceed the </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="p">)</span><span class="si">}</span><span class="s2"> available source subjects."</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">trials_per_subject</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">trials_per_subject</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">trials_per_subject</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"mldg_trials_per_subject must be &gt;= 1."</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_trial_groups_by_class</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">total_trial_groups</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">():</span>
+            <span class="n">subject_mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span> <span class="o">==</span> <span class="n">subject_id</span>
+            <span class="n">groups_by_class</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="nb">int</span><span class="p">(</span><span class="n">class_id</span><span class="p">):</span> <span class="p">[]</span> <span class="k">for</span> <span class="n">class_id</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+            <span class="p">}</span>
+            <span class="k">for</span> <span class="n">trial_id</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trial_ids</span><span class="p">[</span><span class="n">subject_mask</span><span class="p">])</span><span class="o">.</span><span class="n">tolist</span><span class="p">():</span>
+                <span class="n">indices</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">flatnonzero</span><span class="p">(</span>
+                    <span class="n">subject_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trial_ids</span> <span class="o">==</span> <span class="n">trial_id</span><span class="p">)</span>
+                <span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">):</span>
+                    <span class="n">trial_classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">class_ids</span><span class="p">[</span><span class="n">indices</span><span class="p">])</span>
+                    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">trial_classes</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">"Subject </span><span class="si">{</span><span class="n">subject_id</span><span class="si">!r}</span><span class="s2"> trial </span><span class="si">{</span><span class="n">trial_id</span><span class="si">!r}</span><span class="s2"> has "</span>
+                            <span class="sa">f</span><span class="s2">"inconsistent labels </span><span class="si">{</span><span class="n">trial_classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span><span class="si">}</span><span class="s2">."</span>
+                        <span class="p">)</span>
+                    <span class="n">groups_by_class</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">trial_classes</span><span class="p">[</span><span class="mi">0</span><span class="p">])]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span>
+            <span class="n">missing_classes</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">class_id</span>
+                <span class="k">for</span> <span class="n">class_id</span><span class="p">,</span> <span class="n">groups</span> <span class="ow">in</span> <span class="n">groups_by_class</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">groups</span>
+            <span class="p">]</span>
+            <span class="k">if</span> <span class="n">missing_classes</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Subject </span><span class="si">{</span><span class="n">subject_id</span><span class="si">!r}</span><span class="s2"> has no trials for classes "</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">missing_classes</span><span class="si">}</span><span class="s2">; per-subject class-balanced MLDG "</span>
+                    <span class="s2">"requires at least one trial from every class."</span>
+                <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_trial_groups_by_class</span><span class="p">[</span><span class="n">subject_id</span><span class="p">]</span> <span class="o">=</span> <span class="n">groups_by_class</span>
+            <span class="n">total_trial_groups</span> <span class="o">+=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">groups</span><span class="p">)</span> <span class="k">for</span> <span class="n">groups</span> <span class="ow">in</span> <span class="n">groups_by_class</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
+
+        <span class="n">subjects_per_episode</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span>
+        <span class="n">default_steps</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span>
+                <span class="n">total_trial_groups</span>
+                <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">subjects_per_episode</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">trials_per_subject</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">steps_per_epoch</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">default_steps</span><span class="p">)</span> <span class="k">if</span> <span class="n">steps_per_epoch</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">steps_per_epoch</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">steps_per_epoch</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"mldg_steps_per_epoch must be &gt;= 1 or null."</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">seed</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">seed</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_epoch</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_episodes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_build_epoch</span><span class="p">()</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">steps_per_epoch</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_balanced_subject_choice</span><span class="p">(</span><span class="n">subjects</span><span class="p">,</span> <span class="n">counts</span><span class="p">,</span> <span class="n">n_select</span><span class="p">,</span> <span class="n">rng</span><span class="p">):</span>
+        <span class="n">candidates</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">subjects</span><span class="p">)</span>
+        <span class="n">rng</span><span class="o">.</span><span class="n">shuffle</span><span class="p">(</span><span class="n">candidates</span><span class="p">)</span>
+        <span class="n">candidates</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">subject_id</span><span class="p">:</span> <span class="n">counts</span><span class="p">[</span><span class="n">subject_id</span><span class="p">])</span>
+        <span class="n">chosen</span> <span class="o">=</span> <span class="n">candidates</span><span class="p">[:</span><span class="n">n_select</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="n">chosen</span><span class="p">:</span>
+            <span class="n">counts</span><span class="p">[</span><span class="n">subject_id</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">chosen</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_balanced_class_counts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">selected_subjects</span><span class="p">,</span> <span class="n">role</span><span class="p">,</span> <span class="n">step_index</span><span class="p">,</span> <span class="n">rng</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Return per-subject class counts balanced across one MLDG role."""</span>
+        <span class="n">n_subjects</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">selected_subjects</span><span class="p">)</span>
+        <span class="n">low_class</span><span class="p">,</span> <span class="n">high_class</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()]</span>
+        <span class="n">base</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">trials_per_subject</span> <span class="o">//</span> <span class="mi">2</span>
+        <span class="n">allocations</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">subject_id</span><span class="p">:</span> <span class="p">{</span><span class="n">low_class</span><span class="p">:</span> <span class="n">base</span><span class="p">,</span> <span class="n">high_class</span><span class="p">:</span> <span class="n">base</span><span class="p">}</span>
+            <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="n">selected_subjects</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">trials_per_subject</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">allocations</span>
+
+        <span class="c1"># There is one extra trial per subject. Split those extras evenly across</span>
+        <span class="c1"># the role. If the role total is odd, alternate its one-trial majority</span>
+        <span class="c1"># across epochs, steps, and roles rather than always favoring one class.</span>
+        <span class="n">high_extras</span> <span class="o">=</span> <span class="n">n_subjects</span> <span class="o">//</span> <span class="mi">2</span>
+        <span class="k">if</span> <span class="n">n_subjects</span> <span class="o">%</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">high_extras</span> <span class="o">+=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_epoch</span> <span class="o">+</span> <span class="n">step_index</span> <span class="o">+</span> <span class="n">role</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span>
+        <span class="n">extra_classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">high_class</span><span class="p">]</span> <span class="o">*</span> <span class="n">high_extras</span>
+            <span class="o">+</span> <span class="p">[</span><span class="n">low_class</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="n">n_subjects</span> <span class="o">-</span> <span class="n">high_extras</span><span class="p">),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">rng</span><span class="o">.</span><span class="n">shuffle</span><span class="p">(</span><span class="n">extra_classes</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">subject_id</span><span class="p">,</span> <span class="n">extra_class</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">selected_subjects</span><span class="p">,</span> <span class="n">extra_classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()):</span>
+            <span class="n">allocations</span><span class="p">[</span><span class="n">subject_id</span><span class="p">][</span><span class="nb">int</span><span class="p">(</span><span class="n">extra_class</span><span class="p">)]</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">allocations</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_take_unique_group_indices</span><span class="p">(</span><span class="n">groups</span><span class="p">,</span> <span class="n">n_select</span><span class="p">,</span> <span class="n">rng</span><span class="p">,</span> <span class="n">queue</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Use a shuffled coverage queue without duplicating a trial in a batch."""</span>
+        <span class="k">if</span> <span class="n">n_select</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">groups</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Balanced MLDG requested </span><span class="si">{</span><span class="n">n_select</span><span class="si">}</span><span class="s2"> distinct trials from a "</span>
+                <span class="sa">f</span><span class="s2">"subject/class pool containing only </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">groups</span><span class="p">)</span><span class="si">}</span><span class="s2">. Reduce "</span>
+                <span class="s2">"mldg_trials_per_subject or provide more trials."</span>
+            <span class="p">)</span>
+        <span class="n">chosen</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">chosen_set</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">chosen</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">n_select</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">queue</span><span class="p">:</span>
+                <span class="n">queue</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">rng</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">groups</span><span class="p">))</span><span class="o">.</span><span class="n">tolist</span><span class="p">())</span>
+            <span class="n">candidate</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">queue</span><span class="o">.</span><span class="n">pop</span><span class="p">())</span>
+            <span class="k">if</span> <span class="n">candidate</span> <span class="ow">in</span> <span class="n">chosen_set</span><span class="p">:</span>
+                <span class="c1"># A queue may refill at a class-pool boundary. Defer duplicates</span>
+                <span class="c1"># so a complete episode still contains distinct trials.</span>
+                <span class="n">queue</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">candidate</span><span class="p">)</span>
+                <span class="k">continue</span>
+            <span class="n">chosen</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">candidate</span><span class="p">)</span>
+            <span class="n">chosen_set</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">candidate</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">chosen</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_sample_complete_trials</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">subject_id</span><span class="p">,</span> <span class="n">class_counts</span><span class="p">,</span> <span class="n">rng</span><span class="p">,</span> <span class="n">trial_queues</span><span class="p">):</span>
+        <span class="n">chosen_groups</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">class_id</span><span class="p">,</span> <span class="n">n_select</span> <span class="ow">in</span> <span class="n">class_counts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">groups</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_trial_groups_by_class</span><span class="p">[</span><span class="n">subject_id</span><span class="p">][</span><span class="nb">int</span><span class="p">(</span><span class="n">class_id</span><span class="p">)]</span>
+            <span class="n">queue</span> <span class="o">=</span> <span class="n">trial_queues</span><span class="p">[(</span><span class="n">subject_id</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">class_id</span><span class="p">))]</span>
+            <span class="n">chosen</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_take_unique_group_indices</span><span class="p">(</span><span class="n">groups</span><span class="p">,</span> <span class="n">n_select</span><span class="p">,</span> <span class="n">rng</span><span class="p">,</span> <span class="n">queue</span><span class="p">)</span>
+            <span class="n">chosen_groups</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">groups</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="n">chosen</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">chosen_groups</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_build_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">epoch_seed</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">seed</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">_epoch</span>
+        <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">epoch_seed</span><span class="p">)</span>
+        <span class="n">meta_test_counts</span> <span class="o">=</span> <span class="p">{</span><span class="n">subject_id</span><span class="p">:</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">()}</span>
+        <span class="n">meta_train_counts</span> <span class="o">=</span> <span class="p">{</span><span class="n">subject_id</span><span class="p">:</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">()}</span>
+        <span class="n">episodes</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">all_subjects</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+        <span class="n">trial_queues</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="p">(</span><span class="n">subject_id</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">class_id</span><span class="p">)):</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="n">all_subjects</span>
+            <span class="k">for</span> <span class="n">class_id</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="k">for</span> <span class="n">step_index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">steps_per_epoch</span><span class="p">):</span>
+            <span class="n">meta_test</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_balanced_subject_choice</span><span class="p">(</span>
+                <span class="n">all_subjects</span><span class="p">,</span>
+                <span class="n">meta_test_counts</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span><span class="p">,</span>
+                <span class="n">rng</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">meta_test_set</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">meta_test</span><span class="p">)</span>
+            <span class="n">remaining</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">subject_id</span>
+                <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="n">all_subjects</span>
+                <span class="k">if</span> <span class="n">subject_id</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">meta_test_set</span>
+            <span class="p">]</span>
+            <span class="n">meta_train</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_balanced_subject_choice</span><span class="p">(</span>
+                <span class="n">remaining</span><span class="p">,</span>
+                <span class="n">meta_train_counts</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span><span class="p">,</span>
+                <span class="n">rng</span><span class="p">,</span>
+            <span class="p">)</span>
+
+            <span class="n">episode_indices</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="n">episode_roles</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">role</span><span class="p">,</span> <span class="n">selected_subjects</span> <span class="ow">in</span> <span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="n">meta_train</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">meta_test</span><span class="p">)):</span>
+                <span class="n">class_allocations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_balanced_class_counts</span><span class="p">(</span>
+                    <span class="n">selected_subjects</span><span class="p">,</span>
+                    <span class="n">role</span><span class="p">,</span>
+                    <span class="n">step_index</span><span class="p">,</span>
+                    <span class="n">rng</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">for</span> <span class="n">subject_id</span> <span class="ow">in</span> <span class="n">selected_subjects</span><span class="p">:</span>
+                    <span class="n">indices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample_complete_trials</span><span class="p">(</span>
+                        <span class="n">subject_id</span><span class="p">,</span>
+                        <span class="n">class_allocations</span><span class="p">[</span><span class="n">subject_id</span><span class="p">],</span>
+                        <span class="n">rng</span><span class="p">,</span>
+                        <span class="n">trial_queues</span><span class="p">,</span>
+                    <span class="p">)</span>
+                    <span class="n">episode_indices</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span>
+                    <span class="n">episode_roles</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">),</span> <span class="n">role</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">))</span>
+            <span class="n">indices</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">episode_indices</span><span class="p">)</span>
+            <span class="n">roles</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">episode_roles</span><span class="p">)</span>
+            <span class="n">order</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">))</span>
+            <span class="n">episodes</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">indices</span><span class="p">[</span><span class="n">order</span><span class="p">],</span> <span class="n">roles</span><span class="p">[</span><span class="n">order</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_episodes</span> <span class="o">=</span> <span class="n">episodes</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+        <span class="n">indices</span><span class="p">,</span> <span class="n">roles</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_episodes</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">index</span><span class="p">)]</span>
+        <span class="n">inputs</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"eeg"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">eeg</span><span class="p">[</span><span class="n">indices</span><span class="p">],</span>
+            <span class="s2">"subject_id"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span><span class="p">[</span><span class="n">indices</span><span class="p">],</span>
+            <span class="s2">"mldg_role"</span><span class="p">:</span> <span class="n">roles</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sample_weight</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">inputs</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="p">[</span><span class="n">indices</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">inputs</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="p">[</span><span class="n">indices</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">sample_weight</span><span class="p">[</span><span class="n">indices</span><span class="p">]</span>
+
+<div class="viewcode-block" id="MLDGEpisodeSequence.on_epoch_end">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.MLDGEpisodeSequence.on_epoch_end">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">on_epoch_end</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_epoch</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_build_epoch</span><span class="p">()</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="fit_mldg">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.fit_mldg">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fit_mldg</span><span class="p">(</span>
+    <span class="n">model</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">x</span><span class="p">,</span>
+    <span class="n">y</span><span class="p">,</span>
+    <span class="n">epochs</span><span class="p">,</span>
+    <span class="n">verbose</span><span class="p">,</span>
+    <span class="n">callbacks</span><span class="p">,</span>
+    <span class="n">validation_split</span><span class="p">,</span>
+    <span class="n">validation_data</span><span class="p">,</span>
+    <span class="n">class_weight</span><span class="p">,</span>
+    <span class="n">sample_weight</span><span class="p">,</span>
+    <span class="n">initial_epoch</span><span class="p">,</span>
+    <span class="n">steps_per_epoch</span><span class="p">,</span>
+    <span class="n">validation_steps</span><span class="p">,</span>
+    <span class="n">validation_batch_size</span><span class="p">,</span>
+    <span class="n">validation_freq</span><span class="p">,</span>
+    <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Adapt ordinary source arrays into complete MLDG episodes."""</span>
+    <span class="k">if</span> <span class="n">validation_split</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"MLDG does not support sample-level validation_split. Use "</span>
+            <span class="s2">"subject-disjoint validation_data or validation_subjects=0."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"MLDG source fitting requires inputs prepared by "</span>
+            <span class="s2">"model.prepare_fit_inputs(...)."</span>
+        <span class="p">)</span>
+    <span class="n">missing</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"eeg"</span><span class="p">,</span> <span class="s2">"subject_id"</span><span class="p">,</span> <span class="s2">"trial_id"</span><span class="p">}</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"MLDG source inputs are missing "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing</span><span class="p">)</span><span class="si">}</span><span class="s2">. The model builder must receive aligned "</span>
+            <span class="s2">"training_subject_ids and training_trial_ids."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">y</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"MLDG source fitting requires labels."</span><span class="p">)</span>
+
+    <span class="n">resolved_sample_weight</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">sample_weight</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">sample_weight</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">class_weight</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">labels_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">labels_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">labels_array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">class_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">labels_array</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">class_ids</span> <span class="o">=</span> <span class="n">labels_array</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">class_weights</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">class_weight</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">class_id</span><span class="p">),</span> <span class="mf">1.0</span><span class="p">)</span> <span class="k">for</span> <span class="n">class_id</span> <span class="ow">in</span> <span class="n">class_ids</span><span class="p">],</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">resolved_sample_weight</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">class_weights</span>
+            <span class="k">if</span> <span class="n">resolved_sample_weight</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">resolved_sample_weight</span> <span class="o">*</span> <span class="n">class_weights</span>
+        <span class="p">)</span>
+
+    <span class="n">episode_steps</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">mldg_steps_per_epoch</span>
+        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">mldg_steps_per_epoch</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">steps_per_epoch</span>
+    <span class="p">)</span>
+    <span class="n">episodes</span> <span class="o">=</span> <span class="n">MLDGEpisodeSequence</span><span class="p">(</span>
+        <span class="n">eeg</span><span class="o">=</span><span class="n">x</span><span class="p">[</span><span class="s2">"eeg"</span><span class="p">],</span>
+        <span class="n">labels</span><span class="o">=</span><span class="n">y</span><span class="p">,</span>
+        <span class="n">subject_ids</span><span class="o">=</span><span class="n">x</span><span class="p">[</span><span class="s2">"subject_id"</span><span class="p">],</span>
+        <span class="n">trial_ids</span><span class="o">=</span><span class="n">x</span><span class="p">[</span><span class="s2">"trial_id"</span><span class="p">],</span>
+        <span class="n">sample_weight</span><span class="o">=</span><span class="n">resolved_sample_weight</span><span class="p">,</span>
+        <span class="n">meta_train_subjects</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_train_subjects</span><span class="p">,</span>
+        <span class="n">meta_test_subjects</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_test_subjects</span><span class="p">,</span>
+        <span class="n">trials_per_subject</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">mldg_trials_per_subject</span><span class="p">,</span>
+        <span class="n">steps_per_epoch</span><span class="o">=</span><span class="n">episode_steps</span><span class="p">,</span>
+        <span class="n">seed</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">mldg_seed</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="c1"># One item is already one complete episode; Keras must not rebatch it</span>
+    <span class="c1">#</span>
+    <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+        <span class="n">model</span><span class="p">,</span>
+        <span class="n">x</span><span class="o">=</span><span class="n">episodes</span><span class="p">,</span>
+        <span class="n">y</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">batch_size</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">epochs</span><span class="o">=</span><span class="n">epochs</span><span class="p">,</span>
+        <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">,</span>
+        <span class="n">callbacks</span><span class="o">=</span><span class="n">callbacks</span><span class="p">,</span>
+        <span class="n">validation_split</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">validation_data</span><span class="o">=</span><span class="n">validation_data</span><span class="p">,</span>
+        <span class="n">shuffle</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">class_weight</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">sample_weight</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">initial_epoch</span><span class="o">=</span><span class="n">initial_epoch</span><span class="p">,</span>
+        <span class="n">steps_per_epoch</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">validation_steps</span><span class="o">=</span><span class="n">validation_steps</span><span class="p">,</span>
+        <span class="n">validation_batch_size</span><span class="o">=</span><span class="n">validation_batch_size</span><span class="p">,</span>
+        <span class="n">validation_freq</span><span class="o">=</span><span class="n">validation_freq</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_dense_gradient</span><span class="p">(</span><span class="n">gradient</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">gradient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">gradient</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">IndexedSlices</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">convert_to_tensor</span><span class="p">(</span><span class="n">gradient</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">gradient</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_combine_first_order_gradients</span><span class="p">(</span><span class="n">meta_train</span><span class="p">,</span> <span class="n">meta_test</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+    <span class="n">combined</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">train_gradient</span><span class="p">,</span> <span class="n">test_gradient</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">meta_train</span><span class="p">,</span> <span class="n">meta_test</span><span class="p">):</span>
+        <span class="n">train_gradient</span> <span class="o">=</span> <span class="n">_dense_gradient</span><span class="p">(</span><span class="n">train_gradient</span><span class="p">)</span>
+        <span class="n">test_gradient</span> <span class="o">=</span> <span class="n">_dense_gradient</span><span class="p">(</span><span class="n">test_gradient</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">train_gradient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">gradient</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="kc">None</span>
+                <span class="k">if</span> <span class="n">test_gradient</span> <span class="ow">is</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">beta</span><span class="p">,</span> <span class="n">test_gradient</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">test_gradient</span>
+            <span class="p">)</span>
+        <span class="k">elif</span> <span class="n">test_gradient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">gradient</span> <span class="o">=</span> <span class="n">train_gradient</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">gradient</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">train_gradient</span> <span class="o">+</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">beta</span><span class="p">,</span> <span class="n">test_gradient</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">test_gradient</span>
+            <span class="p">)</span>
+        <span class="n">combined</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">gradient</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">combined</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_gradient_cosine_similarity</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">):</span>
+    <span class="n">dot</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">zeros</span><span class="p">((),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">left_norm_sq</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">zeros</span><span class="p">((),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">right_norm_sq</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">zeros</span><span class="p">((),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">left_gradient</span><span class="p">,</span> <span class="n">right_gradient</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">):</span>
+        <span class="n">left_gradient</span> <span class="o">=</span> <span class="n">_dense_gradient</span><span class="p">(</span><span class="n">left_gradient</span><span class="p">)</span>
+        <span class="n">right_gradient</span> <span class="o">=</span> <span class="n">_dense_gradient</span><span class="p">(</span><span class="n">right_gradient</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">left_gradient</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">right_gradient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">left_flat</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">left_gradient</span><span class="p">,</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="n">right_flat</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">right_gradient</span><span class="p">,</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="n">dot</span> <span class="o">+=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reduce_sum</span><span class="p">(</span><span class="n">left_flat</span> <span class="o">*</span> <span class="n">right_flat</span><span class="p">)</span>
+        <span class="n">left_norm_sq</span> <span class="o">+=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reduce_sum</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">left_flat</span><span class="p">))</span>
+        <span class="n">right_norm_sq</span> <span class="o">+=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reduce_sum</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">right_flat</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">divide_no_nan</span><span class="p">(</span><span class="n">dot</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">left_norm_sq</span> <span class="o">*</span> <span class="n">right_norm_sq</span><span class="p">))</span>
+
+
+<div class="viewcode-block" id="run_mldg_train_step">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.run_mldg_train_step">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">run_mldg_train_step</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y_flat</span><span class="p">,</span> <span class="n">sample_weight</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Execute the first-order MLDG update outside the model definition."""</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">"mldg_role"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">x</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"MLDG train_step requires the episode roles produced by "</span>
+            <span class="s2">"MLDGEpisodeSequence."</span>
+        <span class="p">)</span>
+    <span class="n">eeg_inputs</span><span class="p">,</span> <span class="n">subject_ids</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_split_eeg_and_subject_inputs</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">subject_ids</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"MLDG source training requires subject IDs."</span><span class="p">)</span>
+    <span class="n">roles</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="s2">"mldg_role"</span><span class="p">],</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span> <span class="n">tf</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+    <span class="n">meta_train_mask</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">equal</span><span class="p">(</span><span class="n">roles</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">meta_test_mask</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">equal</span><span class="p">(</span><span class="n">roles</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">tf</span><span class="o">.</span><span class="n">debugging</span><span class="o">.</span><span class="n">assert_positive</span><span class="p">(</span>
+        <span class="n">tf</span><span class="o">.</span><span class="n">reduce_sum</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">meta_train_mask</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">int32</span><span class="p">)),</span>
+        <span class="n">message</span><span class="o">=</span><span class="s2">"Every MLDG episode needs meta-train examples."</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">tf</span><span class="o">.</span><span class="n">debugging</span><span class="o">.</span><span class="n">assert_positive</span><span class="p">(</span>
+        <span class="n">tf</span><span class="o">.</span><span class="n">reduce_sum</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">meta_test_mask</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">int32</span><span class="p">)),</span>
+        <span class="n">message</span><span class="o">=</span><span class="s2">"Every MLDG episode needs meta-test examples."</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">masked</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">mask</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">tf</span><span class="o">.</span><span class="n">boolean_mask</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">mask</span><span class="p">)</span>
+
+    <span class="n">meta_train_eeg</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">eeg_inputs</span><span class="p">,</span> <span class="n">meta_train_mask</span><span class="p">)</span>
+    <span class="n">meta_train_y</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">y_flat</span><span class="p">,</span> <span class="n">meta_train_mask</span><span class="p">)</span>
+    <span class="n">meta_train_subject_ids</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">subject_ids</span><span class="p">,</span> <span class="n">meta_train_mask</span><span class="p">)</span>
+    <span class="n">meta_train_weight</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">sample_weight</span><span class="p">,</span> <span class="n">meta_train_mask</span><span class="p">)</span>
+    <span class="n">meta_test_eeg</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">eeg_inputs</span><span class="p">,</span> <span class="n">meta_test_mask</span><span class="p">)</span>
+    <span class="n">meta_test_y</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">y_flat</span><span class="p">,</span> <span class="n">meta_test_mask</span><span class="p">)</span>
+    <span class="n">meta_test_subject_ids</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">subject_ids</span><span class="p">,</span> <span class="n">meta_test_mask</span><span class="p">)</span>
+    <span class="n">meta_test_weight</span> <span class="o">=</span> <span class="n">masked</span><span class="p">(</span><span class="n">sample_weight</span><span class="p">,</span> <span class="n">meta_test_mask</span><span class="p">)</span>
+
+    <span class="c1"># A keeps the complete source objective, including independent GCN-GRU</span>
+    <span class="c1"># and BiLSTM reconstruction. B keeps the complete VC emotion objective but</span>
+    <span class="c1"># deliberately excludes reconstruction, so virtual-unseen performance</span>
+    <span class="c1"># cannot improve merely by reproducing that subject's EEG.</span>
+    <span class="k">with</span> <span class="n">tf</span><span class="o">.</span><span class="n">GradientTape</span><span class="p">()</span> <span class="k">as</span> <span class="n">meta_train_tape</span><span class="p">:</span>
+        <span class="n">meta_train_outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_encode</span><span class="p">(</span><span class="n">meta_train_eeg</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">meta_train_vc</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_vc_components</span><span class="p">(</span>
+            <span class="n">meta_train_outputs</span><span class="p">[</span><span class="s2">"classification_embedding"</span><span class="p">],</span>
+            <span class="n">meta_train_outputs</span><span class="p">[</span><span class="s2">"logits"</span><span class="p">],</span>
+            <span class="n">meta_train_y</span><span class="p">,</span>
+            <span class="n">meta_train_weight</span><span class="p">,</span>
+            <span class="n">calibration</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">meta_train_reconstruction</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_reconstruction_components</span><span class="p">(</span>
+            <span class="n">meta_train_outputs</span><span class="p">,</span>
+            <span class="n">training</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">meta_train_subject</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_subject_components</span><span class="p">(</span>
+            <span class="n">meta_train_outputs</span><span class="p">[</span><span class="s2">"pooled_features"</span><span class="p">],</span>
+            <span class="n">meta_train_subject_ids</span><span class="p">,</span>
+            <span class="n">training</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">use_grl</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">dtype</span> <span class="o">=</span> <span class="n">meta_train_vc</span><span class="p">[</span><span class="s2">"total_loss"</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span>
+        <span class="n">meta_train_loss</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">vc_loss_weight</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">meta_train_vc</span><span class="p">[</span><span class="s2">"total_loss"</span><span class="p">]</span>
+            <span class="o">+</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">reconstruction_loss_weight</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+            <span class="o">*</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span>
+                <span class="n">meta_train_reconstruction</span><span class="p">[</span><span class="s2">"reconstruction_loss"</span><span class="p">],</span>
+                <span class="n">dtype</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="o">+</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">subject_loss_weight</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+            <span class="o">*</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">meta_train_subject</span><span class="p">[</span><span class="s2">"subject_loss"</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
+            <span class="o">+</span> <span class="n">model</span><span class="o">.</span><span class="n">_regularization_loss</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="p">)</span>
+    <span class="n">variables</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">trainable_variables</span>
+    <span class="n">meta_train_gradients</span> <span class="o">=</span> <span class="n">meta_train_tape</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">meta_train_loss</span><span class="p">,</span> <span class="n">variables</span><span class="p">)</span>
+
+    <span class="c1"># The temporary inner update is detached: this is first-order MLDG.</span>
+    <span class="n">original_values</span> <span class="o">=</span> <span class="p">[</span><span class="n">tf</span><span class="o">.</span><span class="n">identity</span><span class="p">(</span><span class="n">variable</span><span class="p">)</span> <span class="k">for</span> <span class="n">variable</span> <span class="ow">in</span> <span class="n">variables</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">variable</span><span class="p">,</span> <span class="n">gradient</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">variables</span><span class="p">,</span> <span class="n">meta_train_gradients</span><span class="p">):</span>
+        <span class="n">gradient</span> <span class="o">=</span> <span class="n">_dense_gradient</span><span class="p">(</span><span class="n">gradient</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">gradient</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">variable</span><span class="o">.</span><span class="n">assign_sub</span><span class="p">(</span>
+                <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">mldg_inner_learning_rate</span><span class="p">,</span> <span class="n">gradient</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+                <span class="o">*</span> <span class="n">tf</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">gradient</span><span class="p">)</span>
+            <span class="p">)</span>
+
+    <span class="k">with</span> <span class="n">tf</span><span class="o">.</span><span class="n">GradientTape</span><span class="p">()</span> <span class="k">as</span> <span class="n">meta_test_tape</span><span class="p">:</span>
+        <span class="n">meta_test_outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_encode</span><span class="p">(</span><span class="n">meta_test_eeg</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">meta_test_vc</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_vc_components</span><span class="p">(</span>
+            <span class="n">meta_test_outputs</span><span class="p">[</span><span class="s2">"classification_embedding"</span><span class="p">],</span>
+            <span class="n">meta_test_outputs</span><span class="p">[</span><span class="s2">"logits"</span><span class="p">],</span>
+            <span class="n">meta_test_y</span><span class="p">,</span>
+            <span class="n">meta_test_weight</span><span class="p">,</span>
+            <span class="n">calibration</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">meta_test_loss</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">vc_loss_weight</span><span class="p">,</span> <span class="n">meta_test_vc</span><span class="p">[</span><span class="s2">"total_loss"</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+            <span class="o">*</span> <span class="n">meta_test_vc</span><span class="p">[</span><span class="s2">"total_loss"</span><span class="p">]</span>
+        <span class="p">)</span>
+    <span class="n">meta_test_gradients</span> <span class="o">=</span> <span class="n">meta_test_tape</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">meta_test_loss</span><span class="p">,</span> <span class="n">variables</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">variable</span><span class="p">,</span> <span class="n">original_value</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">variables</span><span class="p">,</span> <span class="n">original_values</span><span class="p">):</span>
+        <span class="n">variable</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">original_value</span><span class="p">)</span>
+    <span class="n">combined_gradients</span> <span class="o">=</span> <span class="n">_combine_first_order_gradients</span><span class="p">(</span>
+        <span class="n">meta_train_gradients</span><span class="p">,</span>
+        <span class="n">meta_test_gradients</span><span class="p">,</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_test_weight</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">_apply_gradients</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">main_optimizer</span><span class="p">,</span> <span class="n">combined_gradients</span><span class="p">,</span> <span class="n">variables</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">update_vc_discriminator</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">vc_discriminator_optimizer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="s2">"update_vc_discriminator=True requires a discriminator optimizer."</span>
+            <span class="p">)</span>
+        <span class="n">embedding_frozen</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span>
+            <span class="n">meta_train_outputs</span><span class="p">[</span><span class="s2">"classification_embedding"</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="k">with</span> <span class="n">tf</span><span class="o">.</span><span class="n">GradientTape</span><span class="p">()</span> <span class="k">as</span> <span class="n">disc_tape</span><span class="p">:</span>
+            <span class="n">disc_loss</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">vc_target</span><span class="o">.</span><span class="n">discriminator_loss</span><span class="p">(</span>
+                <span class="n">embedding_frozen</span><span class="p">,</span>
+                <span class="n">meta_train_y</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="n">disc_variables</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_vc_discriminator_variables</span><span class="p">()</span>
+        <span class="n">disc_gradients</span> <span class="o">=</span> <span class="n">disc_tape</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">disc_loss</span><span class="p">,</span> <span class="n">disc_variables</span><span class="p">)</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">_apply_gradients</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">.</span><span class="n">vc_discriminator_optimizer</span><span class="p">,</span>
+            <span class="n">disc_gradients</span><span class="p">,</span>
+            <span class="n">disc_variables</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">outer_loss</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">meta_train_loss</span>
+        <span class="o">+</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_test_weight</span><span class="p">,</span> <span class="n">meta_test_loss</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">meta_test_loss</span>
+    <span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">_update_metrics</span><span class="p">(</span>
+        <span class="n">total_loss</span><span class="o">=</span><span class="n">outer_loss</span><span class="p">,</span>
+        <span class="n">vc_components</span><span class="o">=</span><span class="n">meta_train_vc</span><span class="p">,</span>
+        <span class="n">outputs</span><span class="o">=</span><span class="n">meta_train_outputs</span><span class="p">,</span>
+        <span class="n">y_flat</span><span class="o">=</span><span class="n">meta_train_y</span><span class="p">,</span>
+        <span class="n">sample_weight</span><span class="o">=</span><span class="n">meta_train_weight</span><span class="p">,</span>
+        <span class="n">reconstruction_components</span><span class="o">=</span><span class="n">meta_train_reconstruction</span><span class="p">,</span>
+        <span class="n">subject_components</span><span class="o">=</span><span class="n">meta_train_subject</span><span class="p">,</span>
+        <span class="n">vrex_components</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_train_loss_tracker</span><span class="o">.</span><span class="n">update_state</span><span class="p">(</span><span class="n">meta_train_loss</span><span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_test_loss_tracker</span><span class="o">.</span><span class="n">update_state</span><span class="p">(</span><span class="n">meta_test_loss</span><span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_train_subjects_tracker</span><span class="o">.</span><span class="n">update_state</span><span class="p">(</span>
+        <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">meta_train_subject_ids</span><span class="p">)</span><span class="o">.</span><span class="n">y</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">mldg_meta_test_subjects_tracker</span><span class="o">.</span><span class="n">update_state</span><span class="p">(</span>
+        <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">meta_test_subject_ids</span><span class="p">)</span><span class="o">.</span><span class="n">y</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">mldg_gradient_cosine_tracker</span><span class="o">.</span><span class="n">update_state</span><span class="p">(</span>
+        <span class="n">_gradient_cosine_similarity</span><span class="p">(</span><span class="n">meta_train_gradients</span><span class="p">,</span> <span class="n">meta_test_gradients</span><span class="p">)</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="MetaLearningSubjectSequence">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.MetaLearningSubjectSequence">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">MetaLearningSubjectSequence</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">Sequence</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Yield subject-stratified, class-balanced first-order MLDG episodes.</span>
+
+<span class="sd">    Every item contains two disjoint groups sampled from the current fold's</span>
+<span class="sd">    gradient-training subjects:</span>
+
+<span class="sd">    ``meta_train`` (A)</span>
+<span class="sd">        Supplies the inner VC/classification, branch-reconstruction, and</span>
+<span class="sd">        optional adversarial gradient.</span>
+<span class="sd">    ``meta_test`` (B)</span>
+<span class="sd">        Supplies the complete VC emotion gradient, without reconstruction,</span>
+<span class="sd">        after the model has been moved to temporary fast weights from A.</span>
+
+<span class="sd">    Subject IDs are remapped once over the complete fold-local training pool so</span>
+<span class="sd">    A and B use one consistent subject-class vocabulary. The true LOSO test</span>
+<span class="sd">    subject and any validation subjects are absent because this sequence is</span>
+<span class="sd">    constructed only from ``X_fit_train``.</span>
+<span class="sd">    """</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">X</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+        <span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+        <span class="n">subject_ids</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">model</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span>
+        <span class="n">meta_train_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span>
+        <span class="n">meta_test_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">samples_per_subject</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="n">class_weight</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">X</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">y_ids</span> <span class="o">=</span> <span class="n">_as_numpy_1d</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">subject_ids</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">X</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span><span class="p">)):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"MLDG X, y, and subject_ids must have matching lengths."</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">meta_train_subjects</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">meta_test_subjects</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">samples_per_subject</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">samples_per_subject</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"MLDG requires at least one A and one B subject."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">samples_per_subject</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"samples_per_subject must be at least 1."</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">unique_subjects</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y_ids</span><span class="p">))</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Class-balanced MLDG currently requires exactly two classes; "</span>
+                <span class="sa">f</span><span class="s2">"found </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="k">for</span> <span class="n">subject</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">unique_subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">():</span>
+            <span class="n">subject_classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">y_ids</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span> <span class="o">==</span> <span class="n">subject</span><span class="p">]</span>
+            <span class="p">)</span>
+            <span class="n">missing_classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">setdiff1d</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="p">,</span> <span class="n">subject_classes</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">missing_classes</span><span class="o">.</span><span class="n">size</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Subject </span><span class="si">{</span><span class="n">subject</span><span class="si">!r}</span><span class="s2"> has no samples for classes "</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">missing_classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span><span class="si">}</span><span class="s2">; per-subject class-balanced "</span>
+                    <span class="s2">"MLDG requires both classes."</span>
+                <span class="p">)</span>
+        <span class="n">required_subjects</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span>
+        <span class="k">if</span> <span class="n">required_subjects</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unique_subjects</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"MLDG episode requests "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">required_subjects</span><span class="si">}</span><span class="s2"> subjects, but this fold has only "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unique_subjects</span><span class="p">)</span><span class="si">}</span><span class="s2"> gradient-training subjects."</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">class_weight</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">class_weight</span> <span class="ow">or</span> <span class="p">{})</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">base_seed</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">if</span> <span class="n">seed</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">epoch_index</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">total_episode_samples</span> <span class="o">=</span> <span class="n">required_subjects</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">samples_per_subject</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">steps_per_epoch</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span>
+            <span class="mi">1</span><span class="p">,</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">X</span><span class="p">)</span> <span class="o">/</span> <span class="n">total_episode_samples</span><span class="p">)),</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Configure the fold-local adversarial head, when enabled, and retain a</span>
+        <span class="c1"># contiguous subject vocabulary for both A and B.</span>
+        <span class="n">prepared</span> <span class="o">=</span> <span class="n">_prepare_fit_inputs_with_subject_ids</span><span class="p">(</span>
+            <span class="n">model</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">X</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">prepared</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">eeg_for_fit</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">prepared</span><span class="p">[</span><span class="s2">"eeg"</span><span class="p">])</span>
+            <span class="n">prepared_subject_ids</span> <span class="o">=</span> <span class="n">prepared</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"subject_id"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">prepared_subject_ids</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"prepare_fit_inputs returned a mapping without subject_id."</span>
+                <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">subject_classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">prepared_subject_ids</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">eeg_for_fit</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">prepared</span><span class="p">)</span>
+            <span class="n">subject_to_class</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">value</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">generic</span><span class="p">)</span> <span class="k">else</span> <span class="n">value</span><span class="p">:</span> <span class="n">index</span>
+                <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unique_subjects</span><span class="p">)</span>
+            <span class="p">}</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">subject_classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+                <span class="p">[</span>
+                    <span class="n">subject_to_class</span><span class="p">[</span>
+                        <span class="n">value</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">generic</span><span class="p">)</span> <span class="k">else</span> <span class="n">value</span>
+                    <span class="p">]</span>
+                    <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span>
+                <span class="p">],</span>
+                <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
+            <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">steps_per_epoch</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_sample_subject_windows</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">subject</span><span class="p">,</span>
+        <span class="n">class_counts</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+        <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Sample the requested number of windows from each subject/class."""</span>
+        <span class="n">chosen</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">class_id</span><span class="p">,</span> <span class="n">n_select</span> <span class="ow">in</span> <span class="n">class_counts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">n_select</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="n">candidates</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">flatnonzero</span><span class="p">(</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_ids</span> <span class="o">==</span> <span class="n">subject</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y_ids</span> <span class="o">==</span> <span class="nb">int</span><span class="p">(</span><span class="n">class_id</span><span class="p">))</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">candidates</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"MLDG selected subject </span><span class="si">{</span><span class="n">subject</span><span class="si">!r}</span><span class="s2"> without class "</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">class_id</span><span class="si">!r}</span><span class="s2"> windows."</span>
+                <span class="p">)</span>
+            <span class="n">chosen</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span>
+                    <span class="n">candidates</span><span class="p">,</span>
+                    <span class="n">size</span><span class="o">=</span><span class="n">n_select</span><span class="p">,</span>
+                    <span class="n">replace</span><span class="o">=</span><span class="n">candidates</span><span class="o">.</span><span class="n">size</span> <span class="o">&lt;</span> <span class="n">n_select</span><span class="p">,</span>
+                <span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">chosen</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_balanced_sample_counts</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">subjects</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+        <span class="n">group_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">item_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]:</span>
+<span class="w">        </span><span class="sd">"""Balance an A or B group, including odd samples-per-subject values."""</span>
+        <span class="n">low_class</span><span class="p">,</span> <span class="n">high_class</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()]</span>
+        <span class="n">base</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">samples_per_subject</span> <span class="o">//</span> <span class="mi">2</span>
+        <span class="n">allocations</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">subject</span><span class="p">:</span> <span class="p">{</span><span class="n">low_class</span><span class="p">:</span> <span class="n">base</span><span class="p">,</span> <span class="n">high_class</span><span class="p">:</span> <span class="n">base</span><span class="p">}</span>
+            <span class="k">for</span> <span class="n">subject</span> <span class="ow">in</span> <span class="n">subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">samples_per_subject</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">allocations</span>
+
+        <span class="n">n_subjects</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">subjects</span><span class="p">)</span>
+        <span class="n">high_extras</span> <span class="o">=</span> <span class="n">n_subjects</span> <span class="o">//</span> <span class="mi">2</span>
+        <span class="k">if</span> <span class="n">n_subjects</span> <span class="o">%</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">high_extras</span> <span class="o">+=</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">epoch_index</span> <span class="o">+</span> <span class="n">item_index</span> <span class="o">+</span> <span class="n">group_index</span>
+            <span class="p">)</span> <span class="o">%</span> <span class="mi">2</span>
+        <span class="n">extra_classes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">high_class</span><span class="p">]</span> <span class="o">*</span> <span class="n">high_extras</span>
+            <span class="o">+</span> <span class="p">[</span><span class="n">low_class</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="n">n_subjects</span> <span class="o">-</span> <span class="n">high_extras</span><span class="p">),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">rng</span><span class="o">.</span><span class="n">shuffle</span><span class="p">(</span><span class="n">extra_classes</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">subject</span><span class="p">,</span> <span class="n">extra_class</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span> <span class="n">extra_classes</span><span class="o">.</span><span class="n">tolist</span><span class="p">()):</span>
+            <span class="n">allocations</span><span class="p">[</span><span class="n">subject</span><span class="p">][</span><span class="nb">int</span><span class="p">(</span><span class="n">extra_class</span><span class="p">)]</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">allocations</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_sample_group_indices</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">subjects</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+        <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span><span class="p">,</span>
+        <span class="n">group_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">item_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+        <span class="n">allocations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_balanced_sample_counts</span><span class="p">(</span>
+            <span class="n">subjects</span><span class="p">,</span>
+            <span class="n">group_index</span><span class="p">,</span>
+            <span class="n">item_index</span><span class="p">,</span>
+            <span class="n">rng</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">indices</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_sample_subject_windows</span><span class="p">(</span>
+                    <span class="n">subject</span><span class="p">,</span>
+                    <span class="n">allocations</span><span class="p">[</span><span class="n">subject</span><span class="p">],</span>
+                    <span class="n">rng</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">for</span> <span class="n">subject</span> <span class="ow">in</span> <span class="n">subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+            <span class="p">],</span>
+            <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">rng</span><span class="o">.</span><span class="n">shuffle</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">indices</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_sample_weights</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">indices</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">class_weight</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">class_weight</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">label</span><span class="p">),</span> <span class="mf">1.0</span><span class="p">)</span> <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">y_ids</span><span class="p">[</span><span class="n">indices</span><span class="p">]],</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+        <span class="n">seed_sequence</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">SeedSequence</span><span class="p">(</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">base_seed</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">epoch_index</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">index</span><span class="p">)]</span>
+        <span class="p">)</span>
+        <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">seed_sequence</span><span class="p">)</span>
+        <span class="n">selected</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">unique_subjects</span><span class="p">,</span>
+            <span class="n">size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_test_subjects</span><span class="p">,</span>
+            <span class="n">replace</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">subjects_a</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">selected</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span><span class="p">])</span>
+        <span class="n">subjects_b</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">selected</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">meta_train_subjects</span> <span class="p">:])</span>
+        <span class="n">indices_a</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample_group_indices</span><span class="p">(</span><span class="n">subjects_a</span><span class="p">,</span> <span class="n">rng</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
+        <span class="n">indices_b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample_group_indices</span><span class="p">(</span><span class="n">subjects_b</span><span class="p">,</span> <span class="n">rng</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
+
+        <span class="n">x_batch</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"meta_train"</span><span class="p">:</span> <span class="p">{</span>
+                <span class="s2">"eeg"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">eeg_for_fit</span><span class="p">[</span><span class="n">indices_a</span><span class="p">],</span>
+                <span class="s2">"subject_id"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">subject_classes</span><span class="p">[</span><span class="n">indices_a</span><span class="p">],</span>
+            <span class="p">},</span>
+            <span class="s2">"meta_test"</span><span class="p">:</span> <span class="p">{</span>
+                <span class="s2">"eeg"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">eeg_for_fit</span><span class="p">[</span><span class="n">indices_b</span><span class="p">],</span>
+                <span class="s2">"subject_id"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">subject_classes</span><span class="p">[</span><span class="n">indices_b</span><span class="p">],</span>
+            <span class="p">},</span>
+        <span class="p">}</span>
+        <span class="n">y_batch</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"meta_train"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">[</span><span class="n">indices_a</span><span class="p">],</span>
+            <span class="s2">"meta_test"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">[</span><span class="n">indices_b</span><span class="p">],</span>
+        <span class="p">}</span>
+        <span class="n">sample_weight</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"meta_train"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample_weights</span><span class="p">(</span><span class="n">indices_a</span><span class="p">),</span>
+            <span class="s2">"meta_test"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample_weights</span><span class="p">(</span><span class="n">indices_b</span><span class="p">),</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">,</span> <span class="n">sample_weight</span>
+
+<div class="viewcode-block" id="MetaLearningSubjectSequence.on_epoch_end">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.MetaLearningSubjectSequence.on_epoch_end">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">on_epoch_end</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">epoch_index</span> <span class="o">+=</span> <span class="mi">1</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

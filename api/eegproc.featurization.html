@@ -1,0 +1,551 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.featurization module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.preprocessing module" href="eegproc.preprocessing.html" />
+    <link rel="prev" title="eegproc.plotting.plots module" href="eegproc.plotting.plots.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#submodules">Submodules</a><ul class="current">
+<li class="toctree-l4 current"><a class="current reference internal" href="#">eegproc.featurization module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.preprocessing.html">eegproc.preprocessing module</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+      <li class="breadcrumb-item active">eegproc.featurization module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.featurization.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.featurization">
+<span id="eegproc-featurization-module"></span><h1>eegproc.featurization module<a class="headerlink" href="#module-eegproc.featurization" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.choose_dwt_level">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">choose_dwt_level</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n_samples</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">wavelet</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_freq</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#choose_dwt_level"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.choose_dwt_level" title="Link to this definition"></a></dt>
+<dd><p>Choose a discrete wavelet transform (DWT) level given data length and a target minimum frequency.</p>
+<p>The selected level is bounded by PyWavelets’ maximum permissible level for the
+given signal length and wavelet filter length, and ensures that the <em>detail</em>
+subband captures energy at or above <code class="docutils literal notranslate"><span class="pre">min_freq</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>n_samples</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Number of time-domain samples in the signal.</p></li>
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Sampling rate in Hz. Must be positive.</p></li>
+<li><p><strong>wavelet</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>) – Name of a PyWavelets wavelet (e.g., <code class="docutils literal notranslate"><span class="pre">&quot;db4&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;sym5&quot;</span></code>).</p></li>
+<li><p><strong>min_freq</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Target minimum frequency (Hz) you still wish to capture
+in a detail subband. If non-positive, a tiny floor (<code class="docutils literal notranslate"><span class="pre">1e-6</span></code>) is used
+to avoid taking <code class="docutils literal notranslate"><span class="pre">log2(0)</span></code> and to return a conservative level.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>int</em> – The chosen DWT level (&gt;= 1) that balances the maximum allowable level
+with the goal of preserving content at or above <code class="docutils literal notranslate"><span class="pre">min_freq</span></code>.</p>
+</dd>
+</dl>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<p>pywt.dwt_max_level: Maximum level allowed by signal and filter length.
+pywt.Wavelet: Wavelet objects carrying filter lengths and properties.</p>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.dwt_subband_ranges">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">dwt_subband_ranges</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">level</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#dwt_subband_ranges"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.dwt_subband_ranges" title="Link to this definition"></a></dt>
+<dd><p>Return nominal frequency ranges (Hz) for DWT subbands up to a level.</p>
+<p>Uses paired ranges for detail bands <code class="docutils literal notranslate"><span class="pre">D{j}</span></code> and the approximation band <code class="docutils literal notranslate"><span class="pre">A{level}</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Sampling rate in Hz.</p></li>
+<li><p><strong>level</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Decomposition level (&gt;= 1).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>dict[str, tuple[float, float]]</em> – Mapping like <code class="docutils literal notranslate"><span class="pre">{&quot;D1&quot;:</span> <span class="pre">(f_lo,</span> <span class="pre">f_hi),</span> <span class="pre">...,</span> <span class="pre">&quot;A{level}&quot;:</span> <span class="pre">(0,</span> <span class="pre">f_c)}</span></code>.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.feature_grouped_by_metadata">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">feature_grouped_by_metadata</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">eeg_df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_function</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">&lt;function</span> <span class="pre">psd_bandpowers&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">128</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{'alpha':</span> <span class="pre">(8.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">13.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">'betaH'</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">(20.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">30.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">'betaL'</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">(13.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">20.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">'delta'</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">(0.5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">4.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">'gamma'</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">(30.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">45.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">'theta'</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">(4.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">8.0)}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channels</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group_by_metadata_columns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">drop_metadata_for_fn</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">**fn_kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#feature_grouped_by_metadata"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.feature_grouped_by_metadata" title="Link to this definition"></a></dt>
+<dd><p>Group <cite>eeg_df</cite> by <cite>group_by_metadata_columns</cite>, run <cite>target_function</cite> on each group’s EEG slice,
+and prepend the group keys to every output row.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>eeg_df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Input with EEG columns (and possibly metadata columns).</p></li>
+<li><p><strong>target_function</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Callable</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>]</span>, default: <code class="docutils literal notranslate"><span class="pre">&lt;function</span> <span class="pre">psd_bandpowers</span> <span class="pre">at</span> <span class="pre">0x7f5cd7a86480&gt;</span></code>) – Function that takes <code class="docutils literal notranslate"><span class="pre">(df,</span> <span class="pre">fs=...,</span> <span class="pre">bands=...,</span> <span class="pre">**kwargs)</span></code> and returns a
+<code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code> of features.
+Example: <cite>psd_bandpowers</cite>.</p></li>
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">128</span></code>) – Sampling frequency to pass to <cite>target_function</cite>.</p></li>
+<li><p><strong>bands</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span>, default: <code class="docutils literal notranslate"><span class="pre">{'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0),</span> <span class="pre">'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0)}</span></code>) – Bands mapping to pass to <cite>target_function</cite> (if it uses it).</p></li>
+<li><p><strong>channels</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – If provided, restrict input columns to these (metadata cols are always kept for grouping).</p></li>
+<li><p><strong>group_by_metadata_columns</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Columns to group by (e.g., [“patient_id”, “video_id”]). If None, process the whole df once.</p></li>
+<li><p><strong>drop_metadata_for_fn</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code>) – If True, drop the group-by columns before calling <cite>target_function</cite>.
+Set False if your function can safely ignore extra columns.</p></li>
+<li><p><strong>verbose</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">False</span></code>) – Print a single-line progress display while processing groups.</p></li>
+<li><p><strong>**fn_kwargs</strong> – Extra keyword args forwarded to <cite>target_function</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pd.DataFrame</em> – Concatenation of per-group outputs, with metadata keys as leading columns.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<p>Band power for each (subject, trial) group of a band-filtered table:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span><span class="o">,</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">eegproc</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span><span class="n">FREQUENCY_BANDS</span><span class="p">,</span> <span class="n">bandpass_filter</span><span class="p">,</span>
+<span class="gp">... </span>                     <span class="n">feature_grouped_by_metadata</span><span class="p">,</span> <span class="n">psd_bandpowers</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">fs</span> <span class="o">=</span> <span class="mi">128</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">raw</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">"AF3"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">8</span> <span class="o">*</span> <span class="n">fs</span><span class="p">),</span> <span class="s2">"F7"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">8</span> <span class="o">*</span> <span class="n">fs</span><span class="p">)})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">clean</span> <span class="o">=</span> <span class="n">bandpass_filter</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="n">fs</span><span class="p">,</span> <span class="n">bands</span><span class="o">=</span><span class="n">FREQUENCY_BANDS</span><span class="p">)</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">subject</span><span class="o">=</span><span class="s2">"P01"</span><span class="p">,</span> <span class="n">trial</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">feats</span> <span class="o">=</span> <span class="n">feature_grouped_by_metadata</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">clean</span><span class="p">,</span> <span class="n">target_function</span><span class="o">=</span><span class="n">psd_bandpowers</span><span class="p">,</span> <span class="n">fs</span><span class="o">=</span><span class="n">fs</span><span class="p">,</span>
+<span class="gp">... </span>    <span class="n">group_by_metadata_columns</span><span class="o">=</span><span class="p">[</span><span class="s2">"subject"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">],</span>
+<span class="gp">... </span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">feats</span><span class="o">.</span><span class="n">columns</span><span class="p">[:</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+<span class="go">['subject', 'trial', 'AF3_delta']</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.generate_all_features">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">generate_all_features</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">raw_eeg_df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0)}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channels</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group_by_metadata_columns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#generate_all_features"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.generate_all_features" title="Link to this definition"></a></dt>
+<dd><p>Compute the full feature set for an EEG table, optionally grouped by metadata.</p>
+<p>Runs the whole featurization pipeline per group and concatenates the result:
+band-pass with notch, then PSD bandpowers, Shannon entropy, Hjorth parameters,
+wavelet band energy and entropy, and IMF band energy and entropy.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>raw_eeg_df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Raw EEG, one column per electrode, plus any metadata columns.</p></li>
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Sampling rate in Hz.</p></li>
+<li><p><strong>bands</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">{'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0),</span> <span class="pre">'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0)}</span></code>) – Band vocabulary; defaults to <code class="xref py py-data docutils literal notranslate"><span class="pre">FREQUENCY_BANDS</span></code>.</p></li>
+<li><p><strong>channels</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Restrict processing to these electrode columns. Grouping columns are
+always retained.</p></li>
+<li><p><strong>group_by_metadata_columns</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Columns identifying a group, e.g. <code class="docutils literal notranslate"><span class="pre">[&quot;subject&quot;,</span> <span class="pre">&quot;trial&quot;]</span></code>. When omitted,
+the whole table is one group.</p></li>
+<li><p><strong>verbose</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">False</span></code>) – Print a single-line progress display while processing groups.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per (group, window): the metadata columns followed by every
+feature column.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">feats</span> <span class="o">=</span> <span class="n">generate_all_features</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">raw_df</span><span class="p">,</span> <span class="n">fs</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">group_by_metadata_columns</span><span class="o">=</span><span class="p">[</span><span class="s2">"subject"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">],</span>
+<span class="gp">... </span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.hjorth_params">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">hjorth_params</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">window_sec</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overlap</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">detrend</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'constant'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1e-300</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#hjorth_params"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.hjorth_params" title="Link to this definition"></a></dt>
+<dd><p>Compute Hjorth parameters (activity, mobility, complexity) per channel over windows.</p>
+<p>Expects columns named <code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code> where each <code class="docutils literal notranslate"><span class="pre">band</span></code> is a key in <code class="docutils literal notranslate"><span class="pre">bands</span></code>
+(bandpass_filter) may be used to achieve the expected table.
+For each numeric column, the function computes:
+- <strong>Activity</strong>: variance of the signal
+- <strong>Mobility</strong>: sqrt(var(Δx) / var(x))
+- <strong>Complexity</strong>: mobility(Δx) / mobility(x)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Bandpass Filtered EEG dataframe. Numeric columns must be named like
+<code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code> (e.g., <code class="docutils literal notranslate"><span class="pre">AF3_alpha</span></code>).</p></li>
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Sampling rate in Hz.</p></li>
+<li><p><strong>window_sec</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">4.0</span></code>) – Window length in seconds.</p></li>
+<li><p><strong>overlap</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.5</span></code>) – Fractional overlap in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1)</span></code> between windows.</p></li>
+<li><p><strong>detrend</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'constant'</span></code>) – Detrending applied per column prior to differencing.</p></li>
+<li><p><strong>eps</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1e-300</span></code>) – Numerical guard to prevent division by zero.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per window, with columns:
+<code class="docutils literal notranslate"><span class="pre">{channel}_activity</span></code>, <code class="docutils literal notranslate"><span class="pre">{channel}_mobility</span></code>, <code class="docutils literal notranslate"><span class="pre">{channel}_complexity</span></code>.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If window is too small (needs &gt;= 3 samples) or overlap is invalid.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.imf_band_energy">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">imf_band_energy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">imf_to_band</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">['gamma',</span> <span class="pre">'betaH',</span> <span class="pre">'betaL',</span> <span class="pre">'alpha',</span> <span class="pre">'theta',</span> <span class="pre">'delta']</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">window_sec</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overlap</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">EMD_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#imf_band_energy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.imf_band_energy" title="Link to this definition"></a></dt>
+<dd><p>Compute Intrinsic Mode Function (IMF) band-energy distributions per channel using
+Empirical Mode Decomposition (EMD).</p>
+<p>Expects columns named <code class="docutils literal notranslate"><span class="pre">{channel}</span></code> where each row is a reading of raw EEG data.
+For each column, applies EMD decomposition to find mean m(t) of envelopes (cubic splines
+fit to extremas) and takes difference between raw data point and m(t) [d(t) = x(t) - m(t)].
+For each window and channel, the IMF band-energy is based on the cumulative sums of the IMFs
+returned by the EMD function.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Raw data EEG dataframe. Numeric columns.</p></li>
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Sampling rate in Hz (used only for window sizing).</p></li>
+<li><p><strong>imf_to_band</strong> (<em>list</em><em>[</em><em>str</em><em>]</em><em>, </em><em>default=</em><em>[</em><em>&quot;gamma&quot;</em><em>, </em><em>&quot;betaH&quot;</em><em>, </em><em>&quot;betaL&quot;</em><em>, </em><em>&quot;alpha&quot;</em><em>, </em><em>&quot;theta&quot;</em><em>, </em><em>&quot;delta&quot;</em><em>]</em>) – Labels to assign to IMFs 1..K (K = number of labels).</p></li>
+<li><p><strong>window_sec</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">4.0</span></code>) – Window length in seconds.</p></li>
+<li><p><strong>overlap</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.5</span></code>) – Fractional overlap in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1)</span></code>.</p></li>
+<li><p><strong>EMD_kwargs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">{}</span></code>) – Extra keyword arguments passed to <code class="docutils literal notranslate"><span class="pre">PyEMD.EMD</span></code> (e.g., <code class="docutils literal notranslate"><span class="pre">max_imf</span></code> is internally set).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per window; columns: <code class="docutils literal notranslate"><span class="pre">{channel}_{band}_imfenergy</span></code> for each band label.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If window too small, overlap invalid, or window longer than available samples.</p>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>IMF indices are assigned in order to the names in <code class="docutils literal notranslate"><span class="pre">imf_to_band</span></code>; if fewer IMFs
+are present than labels, missing energies are filled with 0.0.</p></li>
+<li><p>The EMD is computed once per full signal and reused for all windows via cumulative sums.</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.imf_entropy">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">imf_entropy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">imf_energy_df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">['gamma',</span> <span class="pre">'betaH',</span> <span class="pre">'betaL',</span> <span class="pre">'alpha',</span> <span class="pre">'theta',</span> <span class="pre">'delta']</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1e-300</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#imf_entropy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.imf_entropy" title="Link to this definition"></a></dt>
+<dd><p>Compute (normalized) Shannon entropy of IMF energy distributions per channel.</p>
+<p>For each window and channel, uses the vector of <code class="docutils literal notranslate"><span class="pre">_imfenergy</span></code> values across
+<code class="docutils literal notranslate"><span class="pre">bands</span></code> as a distribution and computes <code class="docutils literal notranslate"><span class="pre">-Σplogp</span></code>. Optionally normalizes
+by <code class="docutils literal notranslate"><span class="pre">log(K)</span></code> where <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">=</span> <span class="pre">len(bands)</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>imf_energy_df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Output from <a class="reference internal" href="#eegproc.featurization.imf_band_energy" title="eegproc.featurization.imf_band_energy"><code class="xref py py-func docutils literal notranslate"><span class="pre">imf_band_energy()</span></code></a> with columns <code class="docutils literal notranslate"><span class="pre">{ch}_{band}_imfenergy</span></code>.</p></li>
+<li><p><strong>bands</strong> (<em>list</em><em>[</em><em>str</em><em>]</em><em>, </em><em>default=</em><em>[</em><em>&quot;gamma&quot;</em><em>, </em><em>&quot;betaH&quot;</em><em>, </em><em>&quot;betaL&quot;</em><em>, </em><em>&quot;alpha&quot;</em><em>, </em><em>&quot;theta&quot;</em><em>, </em><em>&quot;delta&quot;</em><em>]</em>) – Band labels (order defines component order).</p></li>
+<li><p><strong>normalize</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code>) – If True, divide entropy by <code class="docutils literal notranslate"><span class="pre">log(K)</span></code> to obtain values in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1]</span></code>.</p></li>
+<li><p><strong>eps</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1e-300</span></code>) – Numerical guard for zero energies.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per window; columns <code class="docutils literal notranslate"><span class="pre">{ch}_imfentropy</span></code>.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.psd_bandpowers">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">psd_bandpowers</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0)}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">window_sec</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overlap</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">detrend</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'constant'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#psd_bandpowers"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.psd_bandpowers" title="Link to this definition"></a></dt>
+<dd><p>Compute Welch PSD band powers per channel-band column over selected window size.</p>
+<p>Expects columns named <code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code> where each <code class="docutils literal notranslate"><span class="pre">band</span></code> is a key in <code class="docutils literal notranslate"><span class="pre">bands</span></code>
+(bandpass_filter) may be used to achieve the expected table.
+Each row of the expected df is a wave amplitude reading of the channel-band combination.
+For each window, integrates the Welch PSD within each band using the trapezoid rule.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Bandpass Filtered EEG dataframe. Numeric columns must be named like
+<code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code> (e.g., <code class="docutils literal notranslate"><span class="pre">AF3_alpha</span></code>).</p></li>
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Sampling rate in Hz.</p></li>
+<li><p><strong>bands</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span>, default: <code class="docutils literal notranslate"><span class="pre">{'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0),</span> <span class="pre">'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0)}</span></code>) – Mapping of band name to inclusive frequency bounds (Hz) <code class="docutils literal notranslate"><span class="pre">(lo,</span> <span class="pre">hi)</span></code>.</p></li>
+<li><p><strong>window_sec</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">4.0</span></code>) – Window length in seconds used for Welch’s method (<code class="docutils literal notranslate"><span class="pre">nperseg</span> <span class="pre">=</span> <span class="pre">round(fs*window_sec)</span></code>).</p></li>
+<li><p><strong>overlap</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.5</span></code>) – Fractional overlap in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1)</span></code> between consecutive windows.</p></li>
+<li><p><strong>detrend</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'constant'</span></code>) – Detrending applied before PSD computation via <code class="docutils literal notranslate"><span class="pre">apply_detrend</span></code>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per window, columns match the input band columns (e.g., <code class="docutils literal notranslate"><span class="pre">AF3_alpha</span></code>)
+and contain power spectral density-integrated band powers.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If no valid <code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code> columns are found, if the window is too small,
+    or if <code class="docutils literal notranslate"><span class="pre">overlap</span></code> is outside <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1)</span></code>.</p>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>Uses <code class="docutils literal notranslate"><span class="pre">scipy.signal.welch</span></code> with a Hann window and no overlap inside the Welch call
+(windowing/overlap are controlled at the outer sliding-window level).</p></li>
+</ul>
+<p class="rubric">Examples</p>
+<p>Minimal example with synthetic data (two channels, one band):</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span><span class="o">,</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">fs</span> <span class="o">=</span> <span class="mf">128.0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="mi">8</span><span class="o">*</span><span class="n">fs</span><span class="p">))</span> <span class="o">/</span> <span class="n">fs</span>   <span class="c1"># 8 seconds</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Two synthetic signals with an ~10 Hz component (alpha band)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">af3_alpha</span> <span class="o">=</span> <span class="mf">0.8</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="o">*</span><span class="mi">10</span><span class="o">*</span><span class="n">t</span><span class="p">)</span> <span class="o">+</span> <span class="mf">0.1</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">size</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">f7_alpha</span>  <span class="o">=</span> <span class="mf">0.6</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="o">*</span><span class="mi">10</span><span class="o">*</span><span class="n">t</span> <span class="o">+</span> <span class="mf">0.7</span><span class="p">)</span> <span class="o">+</span> <span class="mf">0.1</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">size</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span>
+<span class="gp">... </span>    <span class="s2">"AF3_alpha"</span><span class="p">:</span> <span class="n">af3_alpha</span><span class="p">,</span>
+<span class="gp">... </span>    <span class="s2">"F7_alpha"</span><span class="p">:</span>  <span class="n">f7_alpha</span><span class="p">,</span>
+<span class="gp">... </span><span class="p">})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">bands</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"alpha"</span><span class="p">:</span> <span class="p">(</span><span class="mf">8.0</span><span class="p">,</span> <span class="mf">12.0</span><span class="p">)}</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">out</span> <span class="o">=</span> <span class="n">psd_bandpowers</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">fs</span><span class="o">=</span><span class="n">fs</span><span class="p">,</span> <span class="n">bands</span><span class="o">=</span><span class="n">bands</span><span class="p">,</span> <span class="n">window_sec</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span> <span class="n">overlap</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">out</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+<span class="go">       AF3_alpha   F7_alpha</span>
+<span class="go">0       ...         ...</span>
+<span class="go">1       ...         ...</span>
+<span class="go">2       ...         ...</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.shannons_entropy">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">shannons_entropy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">psd_df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0)}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1e-300</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">assume_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#shannons_entropy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.shannons_entropy" title="Link to this definition"></a></dt>
+<dd><p>Measure how evenly a channel’s energy is spread across its frequency bands.</p>
+<p>Takes a <strong>PSD table</strong> (the output of <a class="reference internal" href="#eegproc.featurization.psd_bandpowers" title="eegproc.featurization.psd_bandpowers"><code class="xref py py-func docutils literal notranslate"><span class="pre">psd_bandpowers()</span></code></a>), not a raw signal.
+Each row is one window; for every channel the band energies in that row are
+normalized into a probability distribution and reduced to a single normalized
+Shannon entropy in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1]</span></code>. A value near 1 means energy is spread evenly
+across bands; near 0 means it is concentrated in one band.</p>
+<p>This is entropy <em>across</em> bands, one value per channel — not entropy within
+each band. A channel with fewer than two band columns has no distribution to
+measure and yields <code class="docutils literal notranslate"><span class="pre">NaN</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>psd_df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – PSD table with columns named <code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code>, where <code class="docutils literal notranslate"><span class="pre">band</span></code> is a key
+of <code class="docutils literal notranslate"><span class="pre">bands</span></code> (e.g. <code class="docutils literal notranslate"><span class="pre">AF3_alpha</span></code>). Columns that do not match this pattern
+(metadata, indices) are ignored.</p></li>
+<li><p><strong>bands</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span>, default: <code class="docutils literal notranslate"><span class="pre">{'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0),</span> <span class="pre">'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0)}</span></code>) – Band vocabulary. Only the keys are used here, to decide which columns are
+band columns and in what order they are read.</p></li>
+<li><p><strong>eps</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1e-300</span></code>) – Numerical guard against <code class="docutils literal notranslate"><span class="pre">log(0)</span></code> and division by zero.</p></li>
+<li><p><strong>assume_log</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">False</span></code>) – Whether <code class="docutils literal notranslate"><span class="pre">psd_df</span></code> holds log-power. <code class="docutils literal notranslate"><span class="pre">False</span></code> treats values as linear power,
+<code class="docutils literal notranslate"><span class="pre">True</span></code> exponentiates first, and <code class="docutils literal notranslate"><span class="pre">None</span></code> infers it from the fraction of
+negative values.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per input row, indexed like <code class="docutils literal notranslate"><span class="pre">psd_df</span></code>. One column per channel,
+named <code class="docutils literal notranslate"><span class="pre">{channel}_entropy</span></code>.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">eegproc</span><span class="w"> </span><span class="kn">import</span> <span class="n">psd_bandpowers</span><span class="p">,</span> <span class="n">shannons_entropy</span><span class="p">,</span> <span class="n">bandpass_filter</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">clean</span> <span class="o">=</span> <span class="n">bandpass_filter</span><span class="p">(</span><span class="n">raw_df</span><span class="p">,</span> <span class="n">fs</span><span class="o">=</span><span class="mi">128</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">psd</span> <span class="o">=</span> <span class="n">psd_bandpowers</span><span class="p">(</span><span class="n">clean</span><span class="p">,</span> <span class="n">fs</span><span class="o">=</span><span class="mi">128</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">shannons_entropy</span><span class="p">(</span><span class="n">psd</span><span class="p">)</span><span class="o">.</span><span class="n">columns</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+<span class="go">['AF3_entropy', 'F7_entropy']</span>
+</pre></div>
+</div>
+<p>Energy spread evenly across bands is the maximum-entropy case:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">psd</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">"AF3_delta"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">],</span> <span class="s2">"AF3_theta"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">],</span>
+<span class="gp">... </span>                    <span class="s2">"AF3_alpha"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">],</span> <span class="s2">"AF3_betaL"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">],</span>
+<span class="gp">... </span>                    <span class="s2">"AF3_betaH"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">],</span> <span class="s2">"AF3_gamma"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">float</span><span class="p">(</span><span class="n">shannons_entropy</span><span class="p">(</span><span class="n">psd</span><span class="p">)[</span><span class="s2">"AF3_entropy"</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="go">1.0</span>
+</pre></div>
+</div>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>Entropy is normalized by <code class="docutils literal notranslate"><span class="pre">log2(n_bands)</span></code>, so results are comparable
+across channels only when they share the same band vocabulary.</p></li>
+<li><p>Changed in v2: this function previously accepted a raw signal with
+<code class="docutils literal notranslate"><span class="pre">fs</span></code>/<code class="docutils literal notranslate"><span class="pre">window_sec</span></code>/<code class="docutils literal notranslate"><span class="pre">overlap</span></code> and emitted <code class="docutils literal notranslate"><span class="pre">{channel}_{band}_entropy</span></code>.
+It now consumes a PSD table and emits <code class="docutils literal notranslate"><span class="pre">{channel}_entropy</span></code>.</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.wavelet_band_energy">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">wavelet_band_energy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">wavelet</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'db4'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'periodization'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">window_sec</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overlap</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#wavelet_band_energy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.wavelet_band_energy" title="Link to this definition"></a></dt>
+<dd><p>Compute band energies by distributing DWT subband energies into target bands.</p>
+<p>Expects columns named <code class="docutils literal notranslate"><span class="pre">{channel}</span></code> where each row is a reading of raw EEG data.
+For each window and channel, performs a multilevel DWT, computes energy in each
+detail/approximation subband, then proportionally assigns subband energy to user
+bands by frequency overlap.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Raw data EEG dataframe. Numeric columns.</p></li>
+<li><p><strong>fs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Sampling rate in Hz.</p></li>
+<li><p><strong>bands</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span>) – Target bands as <code class="docutils literal notranslate"><span class="pre">{name:</span> <span class="pre">(lo,</span> <span class="pre">hi)}</span></code> in Hz.</p></li>
+<li><p><strong>wavelet</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'db4'</span></code>) – PyWavelets wavelet name for <code class="docutils literal notranslate"><span class="pre">pywt.wavedec</span></code>.</p></li>
+<li><p><strong>mode</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'periodization'</span></code>) – Signal extension mode for DWT.</p></li>
+<li><p><strong>window_sec</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">4.0</span></code>) – Window length in seconds.</p></li>
+<li><p><strong>overlap</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.5</span></code>) – Fractional overlap in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1)</span></code>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per window; columns: <code class="docutils literal notranslate"><span class="pre">{channel}_{band}_wenergy</span></code> for each
+<code class="docutils literal notranslate"><span class="pre">channel</span></code> in <code class="docutils literal notranslate"><span class="pre">df</span></code> and each band in <code class="docutils literal notranslate"><span class="pre">bands</span></code>.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If window too small, <code class="docutils literal notranslate"><span class="pre">overlap</span></code> invalid, or window longer than available samples.</p>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>The DWT level is chosen automatically via <a class="reference internal" href="#eegproc.featurization.choose_dwt_level" title="eegproc.featurization.choose_dwt_level"><code class="xref py py-func docutils literal notranslate"><span class="pre">choose_dwt_level()</span></code></a> to respect
+both data length and minimum target band frequency.</p></li>
+<li><p>Energy is computed as the sum of squared coefficients per subband.</p></li>
+<li><p>Subband energy is apportioned to target bands by fractional frequency overlap.</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.featurization.wavelet_entropy">
+<span class="sig-prename descclassname"><span class="pre">eegproc.featurization.</span></span><span class="sig-name descname"><span class="pre">wavelet_entropy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">wv_band_energy_df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1e-300</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/featurization.html#wavelet_entropy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.featurization.wavelet_entropy" title="Link to this definition"></a></dt>
+<dd><p>Compute (optionally normalized) Shannon entropy of wavelet band-energy distributions per channel.</p>
+<p>Expects columns <code class="docutils literal notranslate"><span class="pre">{channel}_{band}_wenergy</span></code> where each row is a windowed wavelet band energy.
+For each window and channel, treats the vector of <code class="docutils literal notranslate"><span class="pre">_wenergy</span></code> values across
+<code class="docutils literal notranslate"><span class="pre">bands</span></code> as a distribution, then computes <code class="docutils literal notranslate"><span class="pre">-Σplogp</span></code>.
+Optionally normalizes by <code class="docutils literal notranslate"><span class="pre">log(K)</span></code> where <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">=</span> <span class="pre">len(bands)</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>wv_band_energy_df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Output of <a class="reference internal" href="#eegproc.featurization.wavelet_band_energy" title="eegproc.featurization.wavelet_band_energy"><code class="xref py py-func docutils literal notranslate"><span class="pre">wavelet_band_energy()</span></code></a>; columns like <code class="docutils literal notranslate"><span class="pre">{ch}_{band}_wenergy</span></code>.</p></li>
+<li><p><strong>bands</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span>) – Same band dictionary used for energy computation (order defines component order).</p></li>
+<li><p><strong>normalize</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code>) – If True, divide entropy by <code class="docutils literal notranslate"><span class="pre">log(K)</span></code> to obtain values in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1]</span></code>.</p></li>
+<li><p><strong>eps</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1e-300</span></code>) – Numerical guard for zero energies.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – One row per window, columns <code class="docutils literal notranslate"><span class="pre">{ch}_wentropy</span></code>.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If no matching <code class="docutils literal notranslate"><span class="pre">{channel}_{band}_wenergy</span></code> columns are found.</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.plotting.plots.html" class="btn btn-neutral float-left" title="eegproc.plotting.plots module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.preprocessing.html" class="btn btn-neutral float-right" title="eegproc.preprocessing module" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

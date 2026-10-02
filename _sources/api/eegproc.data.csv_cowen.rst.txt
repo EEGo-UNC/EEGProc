@@ -1,0 +1,7 @@
+eegproc.data.csv\_cowen module
+==============================
+
+.. automodule:: eegproc.data.csv_cowen
+   :members:
+   :show-inheritance:
+   :undoc-members:

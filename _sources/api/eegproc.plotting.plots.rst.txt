@@ -1,0 +1,7 @@
+eegproc.plotting.plots module
+=============================
+
+.. automodule:: eegproc.plotting.plots
+   :members:
+   :show-inheritance:
+   :undoc-members:

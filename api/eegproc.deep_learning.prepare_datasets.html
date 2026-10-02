@@ -1,0 +1,430 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.prepare_datasets module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.deep_learning.training_outputs module" href="eegproc.deep_learning.training_outputs.html" />
+    <link rel="prev" title="eegproc.deep_learning.unsupervised.utils module" href="eegproc.deep_learning.unsupervised.utils.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.data.html">eegproc.data package</a></li>
+<li class="toctree-l4 current"><a class="reference internal" href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.plotting.html">eegproc.plotting package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.prepare_datasets module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.deep_learning.prepare_datasets.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.deep_learning.prepare_datasets">
+<span id="eegproc-deep-learning-prepare-datasets-module"></span><h1>eegproc.deep_learning.prepare_datasets module<a class="headerlink" href="#module-eegproc.deep_learning.prepare_datasets" title="Link to this heading"></a></h1>
+<section id="prepare-datasets-py">
+<h2>prepare_datasets.py<a class="headerlink" href="#prepare-datasets-py" title="Link to this heading"></a></h2>
+<p>Convert supported public EEG datasets into complete-trial NumPy arrays.
+Callers can then window and label these arrays for their own models. Outputs:</p>
+<blockquote>
+<div><p>{dataset}_eeg.npy    — float32, shape (n_subjects, n_trials, n_channels, n_samples)
+{dataset}_labels.npy — float32, shape (n_subjects, n_trials, n_label_dims)</p>
+</div></blockquote>
+<section id="usage">
+<h3>Usage<a class="headerlink" href="#usage" title="Link to this heading"></a></h3>
+<blockquote>
+<div><p># DEAP  (point to the folder containing s01.dat … s32.dat)
+python prepare_datasets.py –dataset deap –input_dir /path/to/deap/data_preprocessed_python</p>
+<p># DREAMER  (point to the folder containing dreamer_joined.csv)
+python prepare_datasets.py –dataset dreamer –input_dir /path/to/dreamer</p>
+<p># AMIGOS  (point to the folder containing amigos_joined.csv, or to the
+# legacy unzipped ‘data_preprocessed’ folder containing
+# Data_Preprocessed_P01.mat … Data_Preprocessed_P40.mat)
+python prepare_datasets.py –dataset amigos –input_dir /path/to/amigos</p>
+<p># All three
+python prepare_datasets.py –dataset all         –deap_dir /path/to/deap/data_preprocessed_python         –dreamer_dir /path/to/dreamer         –amigos_dir /path/to/amigos/data_preprocessed</p>
+<p># EEGEmotions (point to the folder containing eegemotions_labeled.csv and cowen_27_valence_arousal.csv)
+python prepare_datasets.py –dataset eegemotions –input_dir /path/to/eegemotions         –eegemotions_label_mode emotion_27</p>
+<p># EEGEmotions with valence/arousal labels from the Cowen 27 mapping
+python prepare_datasets.py –dataset eegemotions –input_dir /path/to/eegemotions         –eegemotions_label_mode valence_arousal</p>
+</div></blockquote>
+<p>Output files are written to the current working directory (or –output_dir).</p>
+</section>
+<section id="dataset-structures">
+<h3>Dataset structures<a class="headerlink" href="#dataset-structures" title="Link to this heading"></a></h3>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>DEAP (preprocessed Python version):
+    s01.dat ... s32.dat — each is a pickle dict with keys:
+        'data'   : (40, 40, 8064)  trials x (32 EEG + 8 peripheral) x samples
+                   We keep only the first 32 channels (EEG).
+                   Signals are already downsampled to 128 Hz and filtered 4-45 Hz.
+                   The first 3 seconds of each trial (baseline) are pre-removed
+                   in some versions; we trim to the last 60 s (7680 samples).
+        'labels' : (40, 4)  valence, arousal, dominance, liking  (1-9 scale)
+
+DREAMER (dreamer_joined.csv):
+    Long/tidy format — one row per EEG sample with columns:
+        subject_id, trial_id, segment, sample_idx,
+        AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4,
+        ECG1, ECG2, valence, arousal, dominance
+    This script groups by subject_id/trial_id, keeps the 14 EEG channels, and
+    selects only the contiguous stimulus segment for each subject/trial and
+    applies EEGProc's preprocessing.bandpass_filter to that stimulus recording.
+    The retained waveforms are theta (4-8 Hz), alpha (8-13 Hz), and
+    beta (13-30 Hz); delta and gamma are omitted. A 50 Hz notch is applied
+    before the band-pass filters. The 14 x 3 channel-band outputs are
+    flattened channel-major, for example AF3_theta, AF3_alpha, AF3_beta,
+    F7_theta, ... .
+    Baseline rows are excluded. Stimulus lengths vary; filtering is performed
+    on the full contiguous stimulus before taking its middle 60 s (7680 samples),
+    which reduces boundary artifacts in the retained data.
+    This three-band representation matches DREAMER's published 4-30 Hz
+    preprocessing range and avoids constructing a gamma feature from data that
+    may already have been low-pass filtered at 30 Hz.
+    NOTE: even though the CSV includes dominance, this converter writes labels
+    with shape (n_subjects, 18, 2) using [valence, arousal] only.
+
+AMIGOS (joined CSV or legacy preprocessed Matlab version):
+    ``amigos_joined.csv`` is a long-form table with one row per EEG sample.
+    It contains ``subject_id``, ``trial_id``, ``sample_idx``, the 14 EEG
+    channels in the same Emotiv EPOC order as DREAMER, two peripheral ECG
+    columns that are ignored here, and ``valence``, ``arousal``,
+    ``dominance`` labels. This script groups by subject/trial, keeps the 14
+    EEG channels, extracts the center 60 s from each trial, and writes raw
+    labels with shape ``(n_subjects, n_trials, 2)`` using [valence,
+    arousal] only.
+
+    For backwards compatibility, the legacy ``Data_Preprocessed_P01.mat`` ...
+    ``Data_Preprocessed_P40.mat`` layout is still supported if the joined CSV
+    is not present.
+
+EEGEmotions (joined CSV + Cowen 27 mapping):
+        ``eegemotions_labeled.csv`` stores one EEG sample per row with columns:
+                subject_id, trial_id, segment, sample_idx,
+                AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4,
+                age, gender, nation, source_file, source_file_label,
+                emo_label_cowen_27, emo_label_ekman_6
+        This converter uses the 14 EEG channels above, keeps the first 27 emotion
+        trials for each complete subject, and extracts the center 60 s from each
+        trial. The labels can be written in one of two modes:
+
+        - ``emotion_27``: one-hot vectors with shape ``(n_subjects, 27)``
+        - ``valence_arousal``: mapped Cowen valence/arousal vectors with shape
+            ``(n_subjects, 2)``
+
+        The accompanying ``cowen_27_valence_arousal.csv`` file provides the
+        emotion-to-valence/arousal mapping.
+</pre></div>
+</div>
+</section>
+</section>
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.load_amigos_joined_csv">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">load_amigos_joined_csv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filepath</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#load_amigos_joined_csv"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.load_amigos_joined_csv" title="Link to this definition"></a></dt>
+<dd><p>Load the joined AMIGOS CSV and convert it to raw trial arrays.</p>
+<p>The joined CSV stores one EEG sample per row, so this loader streams the
+file in subject/trial order, groups rows into trials, keeps only the 14
+EEG channels, and extracts the center 60 s from each trial.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>filepath</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.load_amigos_subject">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">load_amigos_subject</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filepath</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#load_amigos_subject"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.load_amigos_subject" title="Link to this definition"></a></dt>
+<dd><p>Load one AMIGOS subject .mat file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>filepath</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><ul class="simple">
+<li><p><strong>eeg</strong> (<em>float32 ndarray, shape (AMIGOS_N_TRIALS, AMIGOS_N_CHANNELS, AMIGOS_TRIAL_SAMPLES)</em>)</p></li>
+<li><p><strong>labels</strong> (<em>float32 ndarray, shape (AMIGOS_N_TRIALS, 2)  [valence, arousal]</em>)</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If one of the first <code class="docutils literal notranslate"><span class="pre">AMIGOS_N_TRIALS</span></code> trials is missing its EEG
+    signal or its self-assessment label (this shouldn’t happen for any
+    subject not already in <code class="docutils literal notranslate"><span class="pre">AMIGOS_SKIPPED_SUBJECTS</span></code>, since the
+    missing-data issue in the public release only affects the 4
+    long-video trials this converter doesn’t use).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.load_cowen_27_mapping">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">load_cowen_27_mapping</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filepath</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#load_cowen_27_mapping"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.load_cowen_27_mapping" title="Link to this definition"></a></dt>
+<dd><p>Load the 27-row Cowen mapping, ordered by EEGEmotions-27 emotion ID.</p>
+<p>Rows are matched by their <code class="docutils literal notranslate"><span class="pre">emotion</span></code> name, so the file’s own row order
+does not matter (<code class="docutils literal notranslate"><span class="pre">eegproc-to-csv</span> <span class="pre">--dataset</span> <span class="pre">cowen27</span></code> sorts by quadrant).
+Row <code class="docutils literal notranslate"><span class="pre">k</span> <span class="pre">-</span> <span class="pre">1</span></code> of the returned array holds the valence and arousal of
+emotion ID <code class="docutils literal notranslate"><span class="pre">k</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>filepath</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.load_deap_subject">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">load_deap_subject</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filepath</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#load_deap_subject"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.load_deap_subject" title="Link to this definition"></a></dt>
+<dd><p>Load one DEAP subject file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>filepath</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><ul class="simple">
+<li><p><strong>eeg</strong> (<em>float32 ndarray, shape (40, 32, 7680)</em>)</p></li>
+<li><p><strong>labels</strong> (<em>float32 ndarray, shape (40, 4)  [valence, arousal, dominance, liking]</em>)</p></li>
+</ul>
+</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.load_eegemotions_joined_csv">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">load_eegemotions_joined_csv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filepath</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">label_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'emotion_27'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#load_eegemotions_joined_csv"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.load_eegemotions_joined_csv" title="Link to this definition"></a></dt>
+<dd><p>Load eegemotions_labeled.csv and convert it to raw trial arrays.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>filepath</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>label_mode</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'emotion_27'</span></code>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.prepare_amigos">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">prepare_amigos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dir</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#prepare_amigos"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.prepare_amigos" title="Link to this definition"></a></dt>
+<dd><p>Convert AMIGOS inputs to a single pair of .npy arrays.</p>
+<p><code class="docutils literal notranslate"><span class="pre">input_dir</span></code> can point to one of three things:
+- a directory containing <code class="docutils literal notranslate"><span class="pre">amigos_joined.csv</span></code>;
+- the <code class="docutils literal notranslate"><span class="pre">amigos_joined.csv</span></code> file itself;
+- a legacy <code class="docutils literal notranslate"><span class="pre">data_preprocessed</span></code> folder containing <code class="docutils literal notranslate"><span class="pre">Data_Preprocessed_P*.mat</span></code>.</p>
+<p>The joined CSV path is preferred because it matches the current AMIGOS
+source file used by the joint-v2 pipeline.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>input_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>output_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.prepare_deap">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">prepare_deap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dir</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#prepare_deap"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.prepare_deap" title="Link to this definition"></a></dt>
+<dd><p>Convert all DEAP subject files to a single pair of .npy arrays.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>input_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>output_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.prepare_dreamer">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">prepare_dreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dir</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#prepare_dreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.prepare_dreamer" title="Link to this definition"></a></dt>
+<dd><p>Convert <code class="docutils literal notranslate"><span class="pre">dreamer_joined.csv</span></code> to channel-band waveform arrays.</p>
+<p>Only the contiguous stimulus segment is used. Baseline rows are excluded
+because the trial-level valence and arousal ratings describe the emotional
+film stimulus, not the pre-stimulus baseline. Filtering is applied to the
+complete stimulus recording before the middle 60 seconds are retained.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>input_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>) – Folder containing <code class="docutils literal notranslate"><span class="pre">dreamer_joined.csv</span></code>.</p></li>
+<li><p><strong>output_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>) – Destination for <code class="docutils literal notranslate"><span class="pre">dreamer_eeg.npy</span></code> and <code class="docutils literal notranslate"><span class="pre">dreamer_labels.npy</span></code>.</p></li>
+<li><p><strong>shapes</strong> (<em>Output</em>)</p></li>
+<li><p><strong>-------------</strong></p></li>
+<li><p><strong>dreamer_eeg.npy</strong> – Float32 <code class="docutils literal notranslate"><span class="pre">(23,</span> <span class="pre">18,</span> <span class="pre">42,</span> <span class="pre">7680)</span></code>. The feature dimension is
+<code class="docutils literal notranslate"><span class="pre">14</span> <span class="pre">electrodes</span> <span class="pre">x</span> <span class="pre">3</span> <span class="pre">bands</span></code> in channel-major order.</p></li>
+<li><p><strong>dreamer_labels.npy</strong> – Float32 <code class="docutils literal notranslate"><span class="pre">(23,</span> <span class="pre">18,</span> <span class="pre">2)</span></code> containing <code class="docutils literal notranslate"><span class="pre">[valence,</span> <span class="pre">arousal]</span></code>.</p></li>
+<li><p><strong>windows</strong> (<em>The converter does not pre-window these arrays. With four-second</em>)</p></li>
+<li><p><strong>overlap</strong> (<em>and 50%</em>)</p></li>
+<li><p><strong>from</strong> (<em>the training loader derives 29 flat window samples</em>)</p></li>
+<li><p><strong>windows.</strong> (<em>each retained 60-second trial and repeats the trial rating for those</em>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.prepare_eegemotions">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">prepare_eegemotions</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">label_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'emotion_27'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#prepare_eegemotions"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.prepare_eegemotions" title="Link to this definition"></a></dt>
+<dd><p>Convert eegemotions_labeled.csv to a single pair of .npy arrays.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>input_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>output_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>label_mode</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'emotion_27'</span></code>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.deep_learning.prepare_datasets.verify_npy">
+<span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.prepare_datasets.</span></span><span class="sig-name descname"><span class="pre">verify_npy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">output_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dataset</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">label_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/prepare_datasets.html#verify_npy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.prepare_datasets.verify_npy" title="Link to this definition"></a></dt>
+<dd><p>Reload and verify the saved .npy files.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>output_dir</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>dataset</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>label_mode</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.deep_learning.unsupervised.utils.html" class="btn btn-neutral float-left" title="eegproc.deep_learning.unsupervised.utils module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.deep_learning.training_outputs.html" class="btn btn-neutral float-right" title="eegproc.deep_learning.training_outputs module" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

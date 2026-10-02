@@ -1,0 +1,686 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.supervised.rnn_architectures &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.supervised.rnn_architectures</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.deep_learning.supervised.rnn_architectures</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Supervised RNN classifier architectures for EEG sequence data.</span>
+
+<span class="sd">The builders in this module can be used in three ways:</span>
+
+<span class="sd">1. ``build()`` creates a complete, compiled standalone classifier.</span>
+<span class="sd">2. ``build_feature_extractor()`` creates only the recurrent temporal encoder</span>
+<span class="sd">   and pooling pathway, returning one sequence-level embedding per sample.</span>
+<span class="sd">3. ``build_sequence_summarizer()`` returns the final recurrent state without</span>
+<span class="sd">   temporal pooling. This is useful when every ordered element in a sequence</span>
+<span class="sd">   must contribute to a trial-level representation.</span>
+
+<span class="sd">The feature-extractor form is meant for larger models in which another</span>
+<span class="sd">component, such as a variational classifier, owns the final classification</span>
+<span class="sd">head and loss.</span>
+<span class="sd">"""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span><span class="p">,</span> <span class="n">abstractmethod</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Sequence</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tensorflow.keras</span><span class="w"> </span><span class="kn">import</span> <span class="n">Model</span><span class="p">,</span> <span class="n">layers</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.variational_classifier</span><span class="w"> </span><span class="kn">import</span> <span class="n">VariationalClassifier</span>
+
+
+<span class="n">LossLike</span> <span class="o">=</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Callable</span> <span class="o">|</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">losses</span><span class="o">.</span><span class="n">Loss</span>
+<span class="n">OptimizerLike</span> <span class="o">=</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">optimizers</span><span class="o">.</span><span class="n">Optimizer</span>
+
+
+<div class="viewcode-block" id="RNNClassifier">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RNNClassifier</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Base builder for RNN-based EEG sequence classifiers.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    timesteps : int | None</span>
+<span class="sd">        Number of temporal samples in each input sequence. ``None`` allows a</span>
+<span class="sd">        variable-length sequence.</span>
+<span class="sd">    n_features : int</span>
+<span class="sd">        Number of features at each timestep.</span>
+<span class="sd">    n_classes : int</span>
+<span class="sd">        Number of target classes used by the standalone classifier.</span>
+<span class="sd">    rnn_units : int or sequence[int], default=128</span>
+<span class="sd">        A scalar repeats one hidden width across ``n_rnn_layers``. A sequence</span>
+<span class="sd">        gives the width of each recurrent layer, for example ``(128, 64)``.</span>
+<span class="sd">    n_rnn_layers : int, default=2</span>
+<span class="sd">        Number of recurrent layers in the stack.</span>
+<span class="sd">    dropout : float, default=0.10</span>
+<span class="sd">        Dropout applied after each recurrent layer.</span>
+<span class="sd">    loss : str, callable, or tf.keras.losses.Loss</span>
+<span class="sd">        Standalone-model loss. Use ``"variational"`` to attach a</span>
+<span class="sd">        ``VariationalClassifier`` head.</span>
+<span class="sd">    optimizer : str or tf.keras.optimizers.Optimizer, default="adam"</span>
+<span class="sd">        Optimizer for the standalone compiled model.</span>
+<span class="sd">    metrics : list[str] | None</span>
+<span class="sd">        Metrics for the standalone compiled model.</span>
+<span class="sd">    name : str, default="rnn_classifier"</span>
+<span class="sd">        Base name used for the model and its layers.</span>
+<span class="sd">    alpha, beta, gamma, lambda_ : float</span>
+<span class="sd">        Coefficients forwarded to ``VariationalClassifier.keras_loss`` when</span>
+<span class="sd">        ``loss="variational"``.</span>
+<span class="sd">    """</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">n_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">rnn_units</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">n_rnn_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">loss</span><span class="p">:</span> <span class="n">LossLike</span> <span class="o">=</span> <span class="s2">"softmax_crossentropy"</span><span class="p">,</span>
+        <span class="n">optimizer</span><span class="p">:</span> <span class="n">OptimizerLike</span> <span class="o">=</span> <span class="s2">"adam"</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"rnn_classifier"</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">beta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">gamma</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">lambda_</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">timesteps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">timesteps</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"timesteps must be at least 1 or None."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_features</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_features must be at least 1."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_classes</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_classes must be at least 2."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_rnn_layers</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_rnn_layers must be at least 1."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">rnn_units</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span>
+            <span class="n">rnn_units</span><span class="p">,</span>
+            <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">),</span>
+        <span class="p">):</span>
+            <span class="n">units_by_layer</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">units</span><span class="p">)</span> <span class="k">for</span> <span class="n">units</span> <span class="ow">in</span> <span class="n">rnn_units</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">units_by_layer</span> <span class="ow">or</span> <span class="nb">any</span><span class="p">(</span><span class="n">units</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">units</span> <span class="ow">in</span> <span class="n">units_by_layer</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"rnn_units sequences must contain positive integers."</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">units_by_layer</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_rnn_layers</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"The rnn_units sequence length must match n_rnn_layers; "</span>
+                    <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">units_by_layer</span><span class="si">}</span><span class="s2"> and </span><span class="si">{</span><span class="n">n_rnn_layers</span><span class="si">}</span><span class="s2">."</span>
+                <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">scalar_units</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">rnn_units</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">scalar_units</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"rnn_units must be at least 1."</span><span class="p">)</span>
+            <span class="n">units_by_layer</span> <span class="o">=</span> <span class="p">(</span><span class="n">scalar_units</span><span class="p">,)</span> <span class="o">*</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_rnn_layers</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">dropout</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"dropout must be in [0, 1)."</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">timesteps</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">timesteps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_features</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_features</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_classes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span> <span class="o">=</span> <span class="n">units_by_layer</span>
+        <span class="c1"># Preserve a scalar final-width attribute for compatibility with code</span>
+        <span class="c1"># that inspected this builder before per-layer widths were supported.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_rnn_layers</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_rnn_layers</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">loss</span> <span class="o">=</span> <span class="n">loss</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span> <span class="o">=</span> <span class="n">optimizer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">metrics</span> <span class="o">=</span> <span class="n">metrics</span> <span class="k">if</span> <span class="n">metrics</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">[</span><span class="s2">"accuracy"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">name</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">alpha</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">beta</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">beta</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gamma</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">gamma</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">lambda_</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">lambda_</span><span class="p">)</span>
+
+<div class="viewcode-block" id="RNNClassifier.resolve_loss">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.resolve_loss">[docs]</a>
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">resolve_loss</span><span class="p">(</span><span class="n">loss</span><span class="p">:</span> <span class="n">LossLike</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LossLike</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Map friendly loss aliases to Keras-compatible losses."""</span>
+        <span class="k">if</span> <span class="n">loss</span> <span class="o">==</span> <span class="s2">"softmax_crossentropy"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">losses</span><span class="o">.</span><span class="n">SparseCategoricalCrossentropy</span><span class="p">(</span>
+                <span class="n">from_logits</span><span class="o">=</span><span class="kc">False</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">loss</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.uses_variational_head">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.uses_variational_head">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">uses_variational_head</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return whether the standalone model should use the VC head."""</span>
+        <span class="k">return</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">loss</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">loss</span> <span class="o">==</span> <span class="s2">"variational"</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.recurrent_layer">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.recurrent_layer">[docs]</a>
+    <span class="nd">@abstractmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recurrent_layer</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">layer_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">return_sequences</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">layers</span><span class="o">.</span><span class="n">Layer</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Create one recurrent layer/block for this architecture."""</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.recurrent_stack">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.recurrent_stack">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recurrent_stack</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">x</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">return_sequences</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Apply the recurrent stack with an optional final temporal axis."""</span>
+        <span class="k">for</span> <span class="n">layer_index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_rnn_layers</span><span class="p">):</span>
+            <span class="n">is_final_layer</span> <span class="o">=</span> <span class="n">layer_index</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_rnn_layers</span> <span class="o">-</span> <span class="mi">1</span>
+            <span class="n">layer_returns_sequence</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">is_final_layer</span> <span class="ow">or</span> <span class="n">return_sequences</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">recurrent_layer</span><span class="p">(</span>
+                <span class="n">layer_index</span><span class="p">,</span>
+                <span class="n">return_sequences</span><span class="o">=</span><span class="n">layer_returns_sequence</span><span class="p">,</span>
+            <span class="p">)(</span><span class="n">x</span><span class="p">)</span>
+            <span class="c1"># Layer normalization is sample-local and does not carry running</span>
+            <span class="c1"># statistics learned from the training subjects into a held-out</span>
+            <span class="c1"># subject, making it safer for LOSO EEG generalization.</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">LayerNormalization</span><span class="p">(</span>
+                <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_ln_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="p">)(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_dropout_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="p">)(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.build_sequence_summarizer">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.build_sequence_summarizer">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">build_sequence_summarizer</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Build a recurrent sequence-to-vector model without temporal pooling.</span>
+
+<span class="sd">        Every element is processed in order by the recurrent stack. All</span>
+<span class="sd">        intermediate recurrent layers retain the sequence; only the final</span>
+<span class="sd">        layer returns its state. For bidirectional architectures, Keras</span>
+<span class="sd">        concatenates the forward and backward final states.</span>
+<span class="sd">        """</span>
+        <span class="n">x_in</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Input</span><span class="p">(</span>
+            <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_features</span><span class="p">),</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_sequence_input"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">embedding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">recurrent_stack</span><span class="p">(</span><span class="n">x_in</span><span class="p">,</span> <span class="n">return_sequences</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">Model</span><span class="p">(</span>
+            <span class="n">inputs</span><span class="o">=</span><span class="n">x_in</span><span class="p">,</span>
+            <span class="n">outputs</span><span class="o">=</span><span class="n">embedding</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_sequence_summarizer"</span><span class="p">,</span>
+        <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.temporal_embedding">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.temporal_embedding">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">temporal_embedding</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Collapse an RNN output sequence into one embedding per sample.</span>
+
+<span class="sd">        This retains the temporal pooling structure used by the original</span>
+<span class="sd">        standalone RNN classifiers: two max-pooling stages followed by global</span>
+<span class="sd">        average pooling.</span>
+<span class="sd">        """</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">MaxPool1D</span><span class="p">(</span>
+            <span class="n">pool_size</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+            <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_tpool_0"</span><span class="p">,</span>
+        <span class="p">)(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">MaxPool1D</span><span class="p">(</span>
+            <span class="n">pool_size</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+            <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_tpool_1"</span><span class="p">,</span>
+        <span class="p">)(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">layers</span><span class="o">.</span><span class="n">GlobalAveragePooling1D</span><span class="p">(</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_embedding"</span>
+        <span class="p">)(</span><span class="n">x</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.build_feature_extractor">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.build_feature_extractor">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">build_feature_extractor</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Build the RNN stack without a final classification head.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        tf.keras.Model</span>
+<span class="sd">            Model mapping ``(batch, timesteps, n_features)`` to a 2D</span>
+<span class="sd">            sequence-level embedding ``(batch, embedding_features)``.</span>
+
+<span class="sd">        Notes</span>
+<span class="sd">        -----</span>
+<span class="sd">        Use this form inside a larger model that supplies its own head, such as</span>
+<span class="sd">        an autoencoder combined with a variational classifier. It is</span>
+<span class="sd">        intentionally not compiled and does not create a dense, softmax, or</span>
+<span class="sd">        variational classification layer.</span>
+<span class="sd">        """</span>
+        <span class="n">x_in</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Input</span><span class="p">(</span>
+            <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_features</span><span class="p">),</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_feature_input"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">recurrent_stack</span><span class="p">(</span><span class="n">x_in</span><span class="p">,</span> <span class="n">return_sequences</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">embedding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">temporal_embedding</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">Model</span><span class="p">(</span>
+            <span class="n">inputs</span><span class="o">=</span><span class="n">x_in</span><span class="p">,</span>
+            <span class="n">outputs</span><span class="o">=</span><span class="n">embedding</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_feature_extractor"</span><span class="p">,</span>
+        <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.classifier_head">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.classifier_head">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">classifier_head</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">embedding</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">VariationalClassifier</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""Attach the standalone standard or variational classifier head."""</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">uses_variational_head</span><span class="p">():</span>
+            <span class="n">vc_head</span> <span class="o">=</span> <span class="n">VariationalClassifier</span><span class="p">(</span>
+                <span class="n">n_classes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_variational_classifier"</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">logits</span> <span class="o">=</span> <span class="n">vc_head</span><span class="p">(</span><span class="n">embedding</span><span class="p">)</span>
+            <span class="n">probabilities</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Softmax</span><span class="p">(</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_class_probabilities"</span>
+            <span class="p">)(</span><span class="n">logits</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">probabilities</span><span class="p">,</span> <span class="n">vc_head</span>
+
+        <span class="n">logits</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Dense</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_class_logits"</span><span class="p">,</span>
+        <span class="p">)(</span><span class="n">embedding</span><span class="p">)</span>
+        <span class="n">probabilities</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Softmax</span><span class="p">(</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_class_probabilities"</span>
+        <span class="p">)(</span><span class="n">logits</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">probabilities</span><span class="p">,</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="RNNClassifier.build">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier.build">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">build</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Build and compile a complete standalone RNN classifier."""</span>
+        <span class="n">x_in</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Input</span><span class="p">(</span>
+            <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_features</span><span class="p">),</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_input"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">recurrent_stack</span><span class="p">(</span><span class="n">x_in</span><span class="p">,</span> <span class="n">return_sequences</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">embedding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">temporal_embedding</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">output</span><span class="p">,</span> <span class="n">vc_head</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">classifier_head</span><span class="p">(</span><span class="n">embedding</span><span class="p">)</span>
+
+        <span class="n">model</span> <span class="o">=</span> <span class="n">Model</span><span class="p">(</span>
+            <span class="n">inputs</span><span class="o">=</span><span class="n">x_in</span><span class="p">,</span>
+            <span class="n">outputs</span><span class="o">=</span><span class="n">output</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">vc_head</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">model</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span>
+                <span class="n">optimizer</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span>
+                <span class="n">loss</span><span class="o">=</span><span class="n">vc_head</span><span class="o">.</span><span class="n">keras_loss</span><span class="p">(</span>
+                    <span class="n">alpha</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">alpha</span><span class="p">,</span>
+                    <span class="n">beta</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">beta</span><span class="p">,</span>
+                    <span class="n">gamma</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gamma</span><span class="p">,</span>
+                    <span class="n">lambda_</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">lambda_</span><span class="p">,</span>
+                <span class="p">),</span>
+                <span class="n">metrics</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">metrics</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">return</span> <span class="n">model</span>
+
+        <span class="n">model</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span>
+            <span class="n">optimizer</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span>
+            <span class="n">loss</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">resolve_loss</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">loss</span><span class="p">),</span>
+            <span class="n">metrics</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">metrics</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">model</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Allow builder instances to create standalone models when called."""</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">build</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="LSTMClassifier">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.LSTMClassifier">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">LSTMClassifier</span><span class="p">(</span><span class="n">RNNClassifier</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Unidirectional LSTM classifier for EEG sequence data."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">n_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">lstm_units</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">n_lstm_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">loss</span><span class="p">:</span> <span class="n">LossLike</span> <span class="o">=</span> <span class="s2">"softmax_crossentropy"</span><span class="p">,</span>
+        <span class="n">optimizer</span><span class="p">:</span> <span class="n">OptimizerLike</span> <span class="o">=</span> <span class="s2">"adam"</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"lstm_classifier"</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">beta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">gamma</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">lambda_</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">n_features</span><span class="o">=</span><span class="n">n_features</span><span class="p">,</span>
+            <span class="n">n_classes</span><span class="o">=</span><span class="n">n_classes</span><span class="p">,</span>
+            <span class="n">rnn_units</span><span class="o">=</span><span class="n">lstm_units</span><span class="p">,</span>
+            <span class="n">n_rnn_layers</span><span class="o">=</span><span class="n">n_lstm_layers</span><span class="p">,</span>
+            <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
+            <span class="n">loss</span><span class="o">=</span><span class="n">loss</span><span class="p">,</span>
+            <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span>
+            <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+            <span class="n">alpha</span><span class="o">=</span><span class="n">alpha</span><span class="p">,</span>
+            <span class="n">beta</span><span class="o">=</span><span class="n">beta</span><span class="p">,</span>
+            <span class="n">gamma</span><span class="o">=</span><span class="n">gamma</span><span class="p">,</span>
+            <span class="n">lambda_</span><span class="o">=</span><span class="n">lambda_</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">lstm_units</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_lstm_layers</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_lstm_layers</span><span class="p">)</span>
+
+<div class="viewcode-block" id="LSTMClassifier.recurrent_layer">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.LSTMClassifier.recurrent_layer">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recurrent_layer</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">layer_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">return_sequences</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">layers</span><span class="o">.</span><span class="n">Layer</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">layers</span><span class="o">.</span><span class="n">LSTM</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span><span class="p">[</span><span class="n">layer_index</span><span class="p">],</span>
+            <span class="n">return_sequences</span><span class="o">=</span><span class="n">return_sequences</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_lstm_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+        <span class="p">)</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="BiLSTMClassifier">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.BiLSTMClassifier">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">BiLSTMClassifier</span><span class="p">(</span><span class="n">RNNClassifier</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Bidirectional LSTM classifier for EEG sequence data."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">n_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">lstm_units</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">n_bilstm_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">loss</span><span class="p">:</span> <span class="n">LossLike</span> <span class="o">=</span> <span class="s2">"softmax_crossentropy"</span><span class="p">,</span>
+        <span class="n">optimizer</span><span class="p">:</span> <span class="n">OptimizerLike</span> <span class="o">=</span> <span class="s2">"adam"</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"bilstm_classifier"</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">beta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">gamma</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">lambda_</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">n_features</span><span class="o">=</span><span class="n">n_features</span><span class="p">,</span>
+            <span class="n">n_classes</span><span class="o">=</span><span class="n">n_classes</span><span class="p">,</span>
+            <span class="n">rnn_units</span><span class="o">=</span><span class="n">lstm_units</span><span class="p">,</span>
+            <span class="n">n_rnn_layers</span><span class="o">=</span><span class="n">n_bilstm_layers</span><span class="p">,</span>
+            <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
+            <span class="n">loss</span><span class="o">=</span><span class="n">loss</span><span class="p">,</span>
+            <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span>
+            <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+            <span class="n">alpha</span><span class="o">=</span><span class="n">alpha</span><span class="p">,</span>
+            <span class="n">beta</span><span class="o">=</span><span class="n">beta</span><span class="p">,</span>
+            <span class="n">gamma</span><span class="o">=</span><span class="n">gamma</span><span class="p">,</span>
+            <span class="n">lambda_</span><span class="o">=</span><span class="n">lambda_</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">lstm_units</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_bilstm_layers</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bilstm_layers</span><span class="p">)</span>
+
+<div class="viewcode-block" id="BiLSTMClassifier.recurrent_layer">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.BiLSTMClassifier.recurrent_layer">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recurrent_layer</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">layer_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">return_sequences</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">layers</span><span class="o">.</span><span class="n">Layer</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">layers</span><span class="o">.</span><span class="n">Bidirectional</span><span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">LSTM</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span><span class="p">[</span><span class="n">layer_index</span><span class="p">],</span>
+                <span class="n">return_sequences</span><span class="o">=</span><span class="n">return_sequences</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_lstm_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="p">),</span>
+            <span class="n">merge_mode</span><span class="o">=</span><span class="s2">"concat"</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_bilstm_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+        <span class="p">)</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="GRUClassifier">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.GRUClassifier">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">GRUClassifier</span><span class="p">(</span><span class="n">RNNClassifier</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Unidirectional GRU classifier for EEG sequence data."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">n_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">gru_units</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">n_gru_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">loss</span><span class="p">:</span> <span class="n">LossLike</span> <span class="o">=</span> <span class="s2">"softmax_crossentropy"</span><span class="p">,</span>
+        <span class="n">optimizer</span><span class="p">:</span> <span class="n">OptimizerLike</span> <span class="o">=</span> <span class="s2">"adam"</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"gru_classifier"</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">beta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">gamma</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">lambda_</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">n_features</span><span class="o">=</span><span class="n">n_features</span><span class="p">,</span>
+            <span class="n">n_classes</span><span class="o">=</span><span class="n">n_classes</span><span class="p">,</span>
+            <span class="n">rnn_units</span><span class="o">=</span><span class="n">gru_units</span><span class="p">,</span>
+            <span class="n">n_rnn_layers</span><span class="o">=</span><span class="n">n_gru_layers</span><span class="p">,</span>
+            <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
+            <span class="n">loss</span><span class="o">=</span><span class="n">loss</span><span class="p">,</span>
+            <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span>
+            <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+            <span class="n">alpha</span><span class="o">=</span><span class="n">alpha</span><span class="p">,</span>
+            <span class="n">beta</span><span class="o">=</span><span class="n">beta</span><span class="p">,</span>
+            <span class="n">gamma</span><span class="o">=</span><span class="n">gamma</span><span class="p">,</span>
+            <span class="n">lambda_</span><span class="o">=</span><span class="n">lambda_</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gru_units</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_gru_layers</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_gru_layers</span><span class="p">)</span>
+
+<div class="viewcode-block" id="GRUClassifier.recurrent_layer">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.GRUClassifier.recurrent_layer">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recurrent_layer</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">layer_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">return_sequences</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">layers</span><span class="o">.</span><span class="n">Layer</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">layers</span><span class="o">.</span><span class="n">GRU</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span><span class="p">[</span><span class="n">layer_index</span><span class="p">],</span>
+            <span class="n">return_sequences</span><span class="o">=</span><span class="n">return_sequences</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_gru_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+        <span class="p">)</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="BiGRUClassifier">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.BiGRUClassifier">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">BiGRUClassifier</span><span class="p">(</span><span class="n">RNNClassifier</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Bidirectional GRU classifier for EEG sequence data."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">n_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">gru_units</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">n_bigru_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">loss</span><span class="p">:</span> <span class="n">LossLike</span> <span class="o">=</span> <span class="s2">"softmax_crossentropy"</span><span class="p">,</span>
+        <span class="n">optimizer</span><span class="p">:</span> <span class="n">OptimizerLike</span> <span class="o">=</span> <span class="s2">"adam"</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"bigru_classifier"</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">beta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">gamma</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">lambda_</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">n_features</span><span class="o">=</span><span class="n">n_features</span><span class="p">,</span>
+            <span class="n">n_classes</span><span class="o">=</span><span class="n">n_classes</span><span class="p">,</span>
+            <span class="n">rnn_units</span><span class="o">=</span><span class="n">gru_units</span><span class="p">,</span>
+            <span class="n">n_rnn_layers</span><span class="o">=</span><span class="n">n_bigru_layers</span><span class="p">,</span>
+            <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
+            <span class="n">loss</span><span class="o">=</span><span class="n">loss</span><span class="p">,</span>
+            <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span>
+            <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+            <span class="n">alpha</span><span class="o">=</span><span class="n">alpha</span><span class="p">,</span>
+            <span class="n">beta</span><span class="o">=</span><span class="n">beta</span><span class="p">,</span>
+            <span class="n">gamma</span><span class="o">=</span><span class="n">gamma</span><span class="p">,</span>
+            <span class="n">lambda_</span><span class="o">=</span><span class="n">lambda_</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gru_units</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_bigru_layers</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bigru_layers</span><span class="p">)</span>
+
+<div class="viewcode-block" id="BiGRUClassifier.recurrent_layer">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.BiGRUClassifier.recurrent_layer">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recurrent_layer</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">layer_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">return_sequences</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">layers</span><span class="o">.</span><span class="n">Layer</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">layers</span><span class="o">.</span><span class="n">Bidirectional</span><span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">GRU</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">rnn_units_by_layer</span><span class="p">[</span><span class="n">layer_index</span><span class="p">],</span>
+                <span class="n">return_sequences</span><span class="o">=</span><span class="n">return_sequences</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_gru_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="p">),</span>
+            <span class="n">merge_mode</span><span class="o">=</span><span class="s2">"concat"</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">_bigru_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+        <span class="p">)</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

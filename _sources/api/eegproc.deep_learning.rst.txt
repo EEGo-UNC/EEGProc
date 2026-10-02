@@ -1,0 +1,27 @@
+eegproc.deep\_learning package
+==============================
+
+.. automodule:: eegproc.deep_learning
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+Subpackages
+-----------
+
+.. toctree::
+   :maxdepth: 4
+
+   eegproc.deep_learning.cross_validation
+   eegproc.deep_learning.domain_generalization
+   eegproc.deep_learning.supervised
+   eegproc.deep_learning.unsupervised
+
+Submodules
+----------
+
+.. toctree::
+   :maxdepth: 4
+
+   eegproc.deep_learning.prepare_datasets
+   eegproc.deep_learning.training_outputs

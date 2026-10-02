@@ -1,0 +1,1076 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.cross_validation.loso &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.cross_validation.loso</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.deep_learning.cross_validation.loso</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Leave-one-subject-out cross-validation entry points."""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pprint</span><span class="w"> </span><span class="kn">import</span> <span class="n">pformat</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">TYPE_CHECKING</span>
+
+<span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>  <span class="c1"># annotations only</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.arrays</span><span class="w"> </span><span class="kn">import</span> <span class="n">_python_scalar</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.constants</span><span class="w"> </span><span class="kn">import</span> <span class="n">_CLASSIFICATION_METRICS</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.workers</span><span class="w"> </span><span class="kn">import</span> <span class="n">_auto_assign_gpu_ids</span><span class="p">,</span> <span class="n">_run_spawned_fold_pool</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.probabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">_normalize_decision_thresholds</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.reporting</span><span class="w"> </span><span class="kn">import</span> <span class="n">_print_config</span><span class="p">,</span> <span class="n">_validate_evaluation_level</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.search</span><span class="w"> </span><span class="kn">import</span> <span class="n">_aggregate_loso_config_result</span><span class="p">,</span> <span class="n">_choose_best_loso_config_index</span><span class="p">,</span> <span class="n">_expand_hyperparameter_grid</span><span class="p">,</span> <span class="n">_loso_config_sort_key</span><span class="p">,</span> <span class="n">_warn_if_joint_loss_weights_vary</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.loso_fold</span><span class="w"> </span><span class="kn">import</span> <span class="n">_loso_fold_process_main</span><span class="p">,</span> <span class="n">_run_loso_fold</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_loso_cv_arguments</span><span class="p">(</span>
+    <span class="n">subject_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">trial_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">selection_metric</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">selection_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">],</span>
+    <span class="n">maximize_metric</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">metrics</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+    <span class="n">n_prediction_latent_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">ci_level</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">n_jobs</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">cpus_per_worker</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">validation_subjects_per_fold</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">alternate_subject_sets</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">use_mldg</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">mldg_meta_train_subjects</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">mldg_meta_test_subjects</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">mldg_samples_per_subject</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">mldg_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">validation_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">early_stopping_patience</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">early_stopping_min_delta</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">early_stopping_monitor</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">early_stopping_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"auto"</span><span class="p">,</span> <span class="s2">"min"</span><span class="p">,</span> <span class="s2">"max"</span><span class="p">],</span>
+    <span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_max_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_threshold_tolerance</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">decision_thresholds</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+    <span class="n">threshold_selection_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">],</span>
+    <span class="n">max_folds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""Validate user-facing LOSO CV options and return normalized values."""</span>
+    <span class="k">if</span> <span class="n">n_jobs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_jobs must be &gt;= 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">cpus_per_worker</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cpus_per_worker</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"cpus_per_worker must be &gt;= 1 when provided."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">validation_subjects_per_fold</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"validation_subjects_per_fold must be &gt;= 0."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">alternate_subject_sets</span> <span class="ow">and</span> <span class="n">use_mldg</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"alternate_subject_sets and use_mldg are mutually exclusive."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">mldg_meta_train_subjects</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">mldg_meta_test_subjects</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"MLDG A/B subject counts must both be at least 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">mldg_samples_per_subject</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"mldg_samples_per_subject must be at least 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">mldg_seed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">mldg_seed</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"mldg_seed must be &gt;= 0 or None."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">validation_seed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">validation_seed</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"validation_seed must be &gt;= 0 or None."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">early_stopping_patience</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">early_stopping_patience</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_patience must be &gt;= 0 or None."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">early_stopping_min_delta</span> <span class="o">&lt;</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_min_delta must be &gt;= 0."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">early_stopping_mode</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"auto"</span><span class="p">,</span> <span class="s2">"min"</span><span class="p">,</span> <span class="s2">"max"</span><span class="p">}:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_mode must be 'auto', 'min', or 'max'."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">early_stopping_monitor</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_monitor must be a non-empty string."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">prediction_diagnostics_every_n_epochs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"prediction_diagnostics_every_n_epochs must be at least 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">prediction_diagnostics_max_samples</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"prediction_diagnostics_max_samples must be at least 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">prediction_diagnostics_threshold_tolerance</span> <span class="o">&lt;</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"prediction_diagnostics_threshold_tolerance must be non-negative."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">n_prediction_latent_samples</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_prediction_latent_samples must be &gt;= 0."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="mf">0.0</span> <span class="o">&lt;</span> <span class="n">ci_level</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ci_level must be between 0 and 1."</span><span class="p">)</span>
+
+    <span class="n">decision_thresholds</span> <span class="o">=</span> <span class="n">_normalize_decision_thresholds</span><span class="p">(</span><span class="n">decision_thresholds</span><span class="p">)</span>
+    <span class="n">_validate_evaluation_level</span><span class="p">(</span><span class="n">threshold_selection_level</span><span class="p">,</span> <span class="s2">"threshold_selection_level"</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">decision_thresholds</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">validation_subjects_per_fold</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"Testing multiple decision thresholds requires fold-local validation "</span>
+            <span class="s2">"subjects. Set validation_subjects_per_fold &gt;= 1."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="n">early_stopping_monitor</span>
+        <span class="ow">in</span> <span class="p">{</span><span class="s2">"val_trial_f1"</span><span class="p">,</span> <span class="s2">"val_trial_balanced_accuracy"</span><span class="p">,</span> <span class="s2">"val_trial_loss"</span><span class="p">}</span>
+        <span class="ow">and</span> <span class="n">validation_subjects_per_fold</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="ow">and</span> <span class="n">early_stopping_patience</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+    <span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">early_stopping_monitor</span><span class="si">}</span><span class="s2"> requires at least one fold-local "</span>
+            <span class="s2">"validation subject. Set validation_subjects_per_fold &gt;= 1."</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">selection_metric</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"loss"</span><span class="p">,</span> <span class="s2">"joint_loss"</span><span class="p">,</span> <span class="o">*</span><span class="n">metrics</span><span class="p">}:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"selection_metric=</span><span class="si">{</span><span class="n">selection_metric</span><span class="si">!r}</span><span class="s2"> is unavailable. "</span>
+            <span class="sa">f</span><span class="s2">"Use 'loss', 'joint_loss', or one of metrics=</span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">maximize_metric</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">maximize_metric</span> <span class="o">=</span> <span class="n">selection_metric</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"loss"</span><span class="p">,</span> <span class="s2">"joint_loss"</span><span class="p">}</span>
+
+    <span class="n">unique_subjects</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">subject_id_array</span><span class="p">))</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"LOSO CV requires at least two unique subjects. "</span>
+            <span class="sa">f</span><span class="s2">"Got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">validation_subjects_per_fold</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"validation_subjects_per_fold must leave at least one gradient-"</span>
+            <span class="s2">"training subject after the LOSO test subject is removed. Got "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">validation_subjects_per_fold</span><span class="si">}</span><span class="s2"> validation subjects for "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span><span class="si">}</span><span class="s2"> total subjects."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">use_mldg</span><span class="p">:</span>
+        <span class="n">available_mldg_subjects</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">validation_subjects_per_fold</span>
+        <span class="n">required_mldg_subjects</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">mldg_meta_train_subjects</span><span class="p">)</span> <span class="o">+</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="n">mldg_meta_test_subjects</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">required_mldg_subjects</span> <span class="o">&gt;</span> <span class="n">available_mldg_subjects</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"MLDG requires "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">required_mldg_subjects</span><span class="si">}</span><span class="s2"> episodic subjects, but each LOSO "</span>
+                <span class="sa">f</span><span class="s2">"fold leaves only </span><span class="si">{</span><span class="n">available_mldg_subjects</span><span class="si">}</span><span class="s2"> gradient-training "</span>
+                <span class="s2">"subjects after removing test and validation subjects."</span>
+            <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">max_folds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">max_folds</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"max_folds must be &gt;= 1 when provided."</span><span class="p">)</span>
+
+    <span class="n">test_subjects</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">unique_subjects</span><span class="p">[:</span> <span class="nb">min</span><span class="p">(</span><span class="n">max_folds</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">))]</span>
+        <span class="k">if</span> <span class="n">max_folds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">unique_subjects</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">maximize_metric</span><span class="p">,</span> <span class="n">decision_thresholds</span><span class="p">,</span> <span class="n">test_subjects</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_print_loso_cv_summary</span><span class="p">(</span>
+    <span class="n">num_configs</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">total_folds</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">num_subjects</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">max_folds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">metrics</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+    <span class="n">selection_level</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">selection_metric</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">maximize_metric</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">evaluation_level</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">log_predictions</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">log_variational_intervals</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">decision_thresholds</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+    <span class="n">threshold_selection_level</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">threshold_selection_metric</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">n_prediction_latent_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">validation_subjects_per_fold</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">validation_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">early_stopping_monitor</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">early_stopping_patience</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">restore_best_weights</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">use_mldg</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">mldg_meta_train_subjects</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">mldg_meta_test_subjects</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">mldg_samples_per_subject</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">mldg_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">alternate_subject_sets</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">effective_n_jobs</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">normalized_gpu_ids</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Flat LOSO hyperparameter search — </span><span class="si">{</span><span class="n">num_configs</span><span class="si">}</span><span class="s2"> "</span>
+        <span class="sa">f</span><span class="s2">"configuration</span><span class="si">{</span><span class="s1">'s'</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">num_configs</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">''</span><span class="si">}</span><span class="s2">, "</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">total_folds</span><span class="si">}</span><span class="s2"> fold</span><span class="si">{</span><span class="s1">'s'</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">total_folds</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">''</span><span class="si">}</span><span class="s2"> each"</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Total available subjects: </span><span class="si">{</span><span class="n">num_subjects</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Total LOSO model fits: </span><span class="si">{</span><span class="n">num_configs</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">total_folds</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">max_folds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"Smoke-test fold limit: </span><span class="si">{</span><span class="n">total_folds</span><span class="si">}</span><span class="s2"> of "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">num_subjects</span><span class="si">}</span><span class="s2"> subjects per configuration"</span>
+        <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Requested metrics: </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"Configuration selection: </span><span class="si">{</span><span class="n">selection_level</span><span class="si">}</span><span class="s2">-level "</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">selection_metric</span><span class="si">}</span><span class="s2"> "</span>
+        <span class="sa">f</span><span class="s2">"(</span><span class="si">{</span><span class="s1">'maximize'</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">maximize_metric</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">'minimize'</span><span class="si">}</span><span class="s2">)"</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Primary reported metrics: </span><span class="si">{</span><span class="n">evaluation_level</span><span class="si">}</span><span class="s2">-level"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Prediction logging: </span><span class="si">{</span><span class="n">log_predictions</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Prediction diagnostics: </span><span class="si">{</span><span class="n">prediction_diagnostics</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Variational interval logging: </span><span class="si">{</span><span class="n">log_variational_intervals</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="s2">"Decision thresholds: "</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">decision_thresholds</span><span class="p">)</span><span class="si">}</span><span class="s2">; selection="</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">threshold_selection_level</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">threshold_selection_metric</span><span class="si">}</span><span class="s2">"</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="s2">"Prediction latent mode: "</span>
+        <span class="o">+</span> <span class="p">(</span>
+            <span class="s2">"posterior mean"</span>
+            <span class="k">if</span> <span class="n">n_prediction_latent_samples</span> <span class="o">==</span> <span class="mi">0</span>
+            <span class="k">else</span> <span class="sa">f</span><span class="s2">"MC average over </span><span class="si">{</span><span class="n">n_prediction_latent_samples</span><span class="si">}</span><span class="s2"> latent sample(s)"</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">validation_subjects_per_fold</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="s2">"Per-fold validation: "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">validation_subjects_per_fold</span><span class="si">}</span><span class="s2"> seeded subject(s), "</span>
+            <span class="sa">f</span><span class="s2">"seed=</span><span class="si">{</span><span class="n">validation_seed</span><span class="si">}</span><span class="s2">, monitor=</span><span class="si">{</span><span class="n">early_stopping_monitor</span><span class="si">}</span><span class="s2">, "</span>
+            <span class="sa">f</span><span class="s2">"patience=</span><span class="si">{</span><span class="n">early_stopping_patience</span><span class="si">}</span><span class="s2">, "</span>
+            <span class="sa">f</span><span class="s2">"restore_best_weights=</span><span class="si">{</span><span class="n">restore_best_weights</span><span class="si">}</span><span class="s2">"</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Per-fold validation: disabled"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">use_mldg</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="s2">"Optimization: first-order MLDG with natural within-subject labels "</span>
+            <span class="sa">f</span><span class="s2">"(A=</span><span class="si">{</span><span class="n">mldg_meta_train_subjects</span><span class="si">}</span><span class="s2"> subjects, "</span>
+            <span class="sa">f</span><span class="s2">"B=</span><span class="si">{</span><span class="n">mldg_meta_test_subjects</span><span class="si">}</span><span class="s2"> subjects, "</span>
+            <span class="sa">f</span><span class="s2">"samples/subject=</span><span class="si">{</span><span class="n">mldg_samples_per_subject</span><span class="si">}</span><span class="s2">, seed=</span><span class="si">{</span><span class="n">mldg_seed</span><span class="si">}</span><span class="s2">)"</span>
+        <span class="p">)</span>
+    <span class="k">elif</span> <span class="n">alternate_subject_sets</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Optimization: alternating fixed subject sets"</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Optimization: ordinary shuffled minibatches"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Fold workers: </span><span class="si">{</span><span class="n">effective_n_jobs</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">effective_n_jobs</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">normalized_gpu_ids</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Worker devices: CPU-only"</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">normalized_gpu_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Worker devices: GPUs </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Worker device: current TensorFlow default"</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="loso_cv">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.cross_validation.loso.html#eegproc.deep_learning.cross_validation.loso.loso_cv">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">loso_cv</span><span class="p">(</span>
+    <span class="n">model_builder_function</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">],</span>
+    <span class="n">feature_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">label_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">subject_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">trial_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">n_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">50</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+    <span class="n">hyperparameters</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">preprocessing_strategy</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">evaluation_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"trial"</span><span class="p">,</span>
+    <span class="n">selection_metric</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"f1"</span><span class="p">,</span>
+    <span class="n">selection_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"trial"</span><span class="p">,</span>
+    <span class="n">maximize_metric</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">"accuracy"</span><span class="p">,</span>
+        <span class="s2">"f1"</span><span class="p">,</span>
+        <span class="s2">"precision"</span><span class="p">,</span>
+        <span class="s2">"recall"</span><span class="p">,</span>
+        <span class="s2">"macro_f1"</span><span class="p">,</span>
+        <span class="s2">"macro_precision"</span><span class="p">,</span>
+        <span class="s2">"macro_recall"</span><span class="p">,</span>
+        <span class="s2">"balanced_accuracy"</span><span class="p">,</span>
+        <span class="s2">"roc_auc"</span><span class="p">,</span>
+    <span class="p">),</span>
+    <span class="n">log_predictions</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">log_variational_intervals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">n_prediction_latent_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">latent_sampling_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">n_uncertainty_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">30</span><span class="p">,</span>
+    <span class="n">ci_level</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span><span class="p">,</span>
+    <span class="n">validation_subjects_per_fold</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">validation_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">early_stopping_patience</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+    <span class="n">early_stopping_min_delta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">early_stopping_monitor</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"val_loss"</span><span class="p">,</span>
+    <span class="n">early_stopping_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"auto"</span><span class="p">,</span> <span class="s2">"min"</span><span class="p">,</span> <span class="s2">"max"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"min"</span><span class="p">,</span>
+    <span class="n">restore_best_weights</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_max_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_threshold_tolerance</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">decision_thresholds</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.5</span><span class="p">,),</span>
+    <span class="n">threshold_selection_metric</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span>
+        <span class="s2">"accuracy"</span><span class="p">,</span> <span class="s2">"f1"</span><span class="p">,</span> <span class="s2">"balanced_accuracy"</span><span class="p">,</span> <span class="s2">"binary_f1"</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="s2">"f1"</span><span class="p">,</span>
+    <span class="n">threshold_selection_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"trial"</span><span class="p">,</span>
+    <span class="n">verbose</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">extra_fit_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">n_jobs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">gpu_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">cpus_per_worker</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">max_folds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">alternate_subject_sets</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">alternating_subject_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">use_mldg</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">mldg_meta_train_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span>
+    <span class="n">mldg_meta_test_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+    <span class="n">mldg_samples_per_subject</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="n">mldg_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Run a flat hyperparameter search using complete LOSO evaluations.</span>
+
+<span class="sd">    For every Cartesian-product hyperparameter configuration, each unique</span>
+<span class="sd">    subject is held out exactly once. The configuration is therefore evaluated</span>
+<span class="sd">    on the same complete set of subject-wise folds. After all configurations</span>
+<span class="sd">    finish, one global configuration is selected from its mean LOSO metric.</span>
+
+<span class="sd">    This is *not* nested cross-validation: the held-out LOSO results are used</span>
+<span class="sd">    both to compare configurations and to report the selected configuration's</span>
+<span class="sd">    cross-validation performance. This behavior is intentional for a practical</span>
+<span class="sd">    flat LOSO hyperparameter search.</span>
+
+<span class="sd">    Hyperparameter grid</span>
+<span class="sd">    -------------------</span>
+<span class="sd">    Scalar values may be supplied directly or as candidate lists/tuples. The</span>
+<span class="sd">    Cartesian product is evaluated with a complete LOSO run per configuration.</span>
+
+<span class="sd">    Sequence-valued encoder settings preserve one complete architecture before</span>
+<span class="sd">    the Cartesian product is expanded. ``sequence_hyperparameter_depths``</span>
+<span class="sd">    specifies the nesting depth of one value, resolving CNN1D/CNN2D ambiguity</span>
+<span class="sd">    for keys such as ``kernel_sizes``. GCN ``gcn_units`` and temporal/spatial</span>
+<span class="sd">    pooling schedules are preserved in the same way. One additional outer list</span>
+<span class="sd">    level enumerates multiple architecture candidates.</span>
+
+<span class="sd">    ``n_epochs`` and ``batch_size`` provide defaults and are overridden when</span>
+<span class="sd">    ``hyperparameters`` contains ``epochs`` or ``batch_size``.</span>
+
+<span class="sd">    Seeded validation and early stopping</span>
+<span class="sd">    ------------------------------------</span>
+<span class="sd">    When ``validation_subjects_per_fold`` is positive, that many subjects are</span>
+<span class="sd">    sampled deterministically from each outer-training pool. They are excluded</span>
+<span class="sd">    from gradient updates and passed to ``model.fit`` as ``validation_data``.</span>
+<span class="sd">    The same fold-local validation subjects are reused for every hyperparameter</span>
+<span class="sd">    configuration, while the LOSO test subject remains untouched. This adds no</span>
+<span class="sd">    extra fits; it only changes each fit from train/test to train/validation/test.</span>
+
+<span class="sd">    Selection</span>
+<span class="sd">    ---------</span>
+<span class="sd">    ``selection_level`` determines whether configurations are ranked using</span>
+<span class="sd">    window- or trial-level scores. Hierarchical rank-4 inputs require trial-level</span>
+<span class="sd">    selection. For binary tasks, ``selection_metric='f1'`` uses the binary</span>
+<span class="sd">    convention: class 1 is positive. ``precision`` and ``recall`` follow the same</span>
+<span class="sd">    convention. Explicit ``macro_*`` metrics and ``balanced_accuracy`` remain</span>
+<span class="sd">    available for class-balanced diagnostics, while ``roc_auc`` uses the class-1</span>
+<span class="sd">    probability.</span>
+<span class="sd">    Classification metrics are maximized; probability loss and joint loss are minimized unless</span>
+<span class="sd">    ``maximize_metric`` is explicitly supplied. Ties use lower between-subject</span>
+<span class="sd">    standard deviation, lower mean log loss, then the earlier grid index.</span>
+
+<span class="sd">    Returned results</span>
+<span class="sd">    ----------------</span>
+<span class="sd">    ``config_results`` contains per-fold and aggregate metrics for every</span>
+<span class="sd">    configuration. Top-level prediction logs, user metrics, and fold metadata</span>
+<span class="sd">    correspond only to the globally selected configuration. Selected fold</span>
+<span class="sd">    metrics remain available through ``config_results[best_config_index]``.</span>
+
+<span class="sd">    Concurrency</span>
+<span class="sd">    -----------</span>
+<span class="sd">    LOSO folds for one configuration run concurrently. The next configuration</span>
+<span class="sd">    starts after the current configuration's folds complete. With one worker per</span>
+<span class="sd">    GPU, this prevents multiple models from competing for the same GPU while</span>
+<span class="sd">    bounding parent-process memory to approximately one configuration's logs.</span>
+
+<span class="sd">    Smoke testing</span>
+<span class="sd">    -------------</span>
+<span class="sd">    ``max_folds`` deterministically limits every configuration to the first N</span>
+<span class="sd">    sorted subjects. Leave it as ``None`` for complete LOSO evaluation.</span>
+<span class="sd">    """</span>
+    <span class="n">extra_fit_kwargs</span> <span class="o">=</span> <span class="n">extra_fit_kwargs</span> <span class="ow">or</span> <span class="p">{}</span>
+
+    <span class="k">if</span> <span class="s2">"validation_data"</span> <span class="ow">in</span> <span class="n">extra_fit_kwargs</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"Do not pass a fixed validation_data array to loso_cv. It would not "</span>
+            <span class="s2">"be reconstructed fold-locally and could create leakage."</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">subject_id_array</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"subject_id_array is required for LOSO CV."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">trial_id_array</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"trial_id_array is required for trial-level prediction and metrics. "</span>
+            <span class="s2">"Pass one trial ID per sample, aligned with feature_array."</span>
+        <span class="p">)</span>
+
+    <span class="n">_validate_evaluation_level</span><span class="p">(</span><span class="n">evaluation_level</span><span class="p">,</span> <span class="s2">"evaluation_level"</span><span class="p">)</span>
+    <span class="n">_validate_evaluation_level</span><span class="p">(</span><span class="n">selection_level</span><span class="p">,</span> <span class="s2">"selection_level"</span><span class="p">)</span>
+
+    <span class="n">feature_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">feature_array</span><span class="p">)</span>
+    <span class="n">label_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">label_array</span><span class="p">)</span>
+    <span class="n">subject_id_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">subject_id_array</span><span class="p">)</span>
+    <span class="n">trial_id_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">trial_id_array</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">}:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"feature_array must be rank 3 for window samples or rank 4 for "</span>
+            <span class="sa">f</span><span class="s2">"grouped trial samples; got </span><span class="si">{</span><span class="n">feature_array</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">selection_level</span> <span class="o">!=</span> <span class="s2">"trial"</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Grouped rank-4 trial inputs require selection_level='trial'."</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">evaluation_level</span> <span class="o">!=</span> <span class="s2">"trial"</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Grouped rank-4 trial inputs require evaluation_level='trial'."</span>
+            <span class="p">)</span>
+
+    <span class="n">input_lengths</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">feature_array</span><span class="p">),</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">label_array</span><span class="p">),</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">subject_id_array</span><span class="p">),</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">trial_id_array</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">input_lengths</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"feature_array, label_array, subject_id_array, and trial_id_array "</span>
+            <span class="s2">"must have the same first dimension. Got lengths "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">input_lengths</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+
+    <span class="n">metrics</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">metric</span> <span class="ow">in</span> <span class="n">metrics</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">metric</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_CLASSIFICATION_METRICS</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Unsupported metric: </span><span class="si">{</span><span class="n">metric</span><span class="si">}</span><span class="s2">. Supported metrics: "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">_CLASSIFICATION_METRICS</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+            <span class="p">)</span>
+
+    <span class="n">unique_subjects</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">subject_id_array</span><span class="p">))</span>
+
+    <span class="n">maximize_metric</span><span class="p">,</span> <span class="n">decision_thresholds</span><span class="p">,</span> <span class="n">test_subjects</span> <span class="o">=</span> <span class="n">_validate_loso_cv_arguments</span><span class="p">(</span>
+        <span class="n">subject_id_array</span><span class="o">=</span><span class="n">subject_id_array</span><span class="p">,</span>
+        <span class="n">trial_id_array</span><span class="o">=</span><span class="n">trial_id_array</span><span class="p">,</span>
+        <span class="n">selection_metric</span><span class="o">=</span><span class="n">selection_metric</span><span class="p">,</span>
+        <span class="n">selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+        <span class="n">maximize_metric</span><span class="o">=</span><span class="n">maximize_metric</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+        <span class="n">n_prediction_latent_samples</span><span class="o">=</span><span class="n">n_prediction_latent_samples</span><span class="p">,</span>
+        <span class="n">ci_level</span><span class="o">=</span><span class="n">ci_level</span><span class="p">,</span>
+        <span class="n">n_jobs</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">,</span>
+        <span class="n">cpus_per_worker</span><span class="o">=</span><span class="n">cpus_per_worker</span><span class="p">,</span>
+        <span class="n">validation_subjects_per_fold</span><span class="o">=</span><span class="n">validation_subjects_per_fold</span><span class="p">,</span>
+        <span class="n">alternate_subject_sets</span><span class="o">=</span><span class="n">alternate_subject_sets</span><span class="p">,</span>
+        <span class="n">use_mldg</span><span class="o">=</span><span class="n">use_mldg</span><span class="p">,</span>
+        <span class="n">mldg_meta_train_subjects</span><span class="o">=</span><span class="n">mldg_meta_train_subjects</span><span class="p">,</span>
+        <span class="n">mldg_meta_test_subjects</span><span class="o">=</span><span class="n">mldg_meta_test_subjects</span><span class="p">,</span>
+        <span class="n">mldg_samples_per_subject</span><span class="o">=</span><span class="n">mldg_samples_per_subject</span><span class="p">,</span>
+        <span class="n">mldg_seed</span><span class="o">=</span><span class="n">mldg_seed</span><span class="p">,</span>
+        <span class="n">validation_seed</span><span class="o">=</span><span class="n">validation_seed</span><span class="p">,</span>
+        <span class="n">early_stopping_patience</span><span class="o">=</span><span class="n">early_stopping_patience</span><span class="p">,</span>
+        <span class="n">early_stopping_min_delta</span><span class="o">=</span><span class="n">early_stopping_min_delta</span><span class="p">,</span>
+        <span class="n">early_stopping_monitor</span><span class="o">=</span><span class="n">early_stopping_monitor</span><span class="p">,</span>
+        <span class="n">early_stopping_mode</span><span class="o">=</span><span class="n">early_stopping_mode</span><span class="p">,</span>
+        <span class="n">prediction_diagnostics_every_n_epochs</span><span class="o">=</span><span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">,</span>
+        <span class="n">prediction_diagnostics_max_samples</span><span class="o">=</span><span class="n">prediction_diagnostics_max_samples</span><span class="p">,</span>
+        <span class="n">prediction_diagnostics_threshold_tolerance</span><span class="o">=</span><span class="n">prediction_diagnostics_threshold_tolerance</span><span class="p">,</span>
+        <span class="n">decision_thresholds</span><span class="o">=</span><span class="n">decision_thresholds</span><span class="p">,</span>
+        <span class="n">threshold_selection_level</span><span class="o">=</span><span class="n">threshold_selection_level</span><span class="p">,</span>
+        <span class="n">max_folds</span><span class="o">=</span><span class="n">max_folds</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">effective_hyperparameters</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"epochs"</span><span class="p">:</span> <span class="n">n_epochs</span><span class="p">,</span>
+        <span class="s2">"batch_size"</span><span class="p">:</span> <span class="n">batch_size</span><span class="p">,</span>
+        <span class="o">**</span><span class="p">(</span><span class="n">hyperparameters</span> <span class="ow">or</span> <span class="p">{}),</span>
+    <span class="p">}</span>
+    <span class="n">sequence_hyperparameter_depths</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span>
+        <span class="n">model_builder_function</span><span class="p">,</span>
+        <span class="s2">"_sequence_hyperparameter_depths"</span><span class="p">,</span>
+        <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">grid_configs</span> <span class="o">=</span> <span class="n">_expand_hyperparameter_grid</span><span class="p">(</span>
+        <span class="n">effective_hyperparameters</span><span class="p">,</span>
+        <span class="n">sequence_hyperparameter_depths</span><span class="o">=</span><span class="n">sequence_hyperparameter_depths</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">_warn_if_joint_loss_weights_vary</span><span class="p">(</span><span class="n">grid_configs</span><span class="p">,</span> <span class="n">selection_metric</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">grid_configs</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"The hyperparameter grid produced no configurations."</span><span class="p">)</span>
+
+    <span class="n">total_folds</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">test_subjects</span><span class="p">)</span>
+    <span class="n">total_model_fits</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">grid_configs</span><span class="p">)</span> <span class="o">*</span> <span class="n">total_folds</span>
+    <span class="n">effective_n_jobs</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">n_jobs</span><span class="p">,</span> <span class="n">total_folds</span><span class="p">)</span>
+
+    <span class="n">normalized_gpu_ids</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">gpu_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">effective_n_jobs</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">normalized_gpu_ids</span> <span class="o">=</span> <span class="n">_auto_assign_gpu_ids</span><span class="p">(</span><span class="n">effective_n_jobs</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">normalized_gpu_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">effective_n_jobs</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">gpu_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">normalized_gpu_ids</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">gpu_id</span><span class="p">)</span> <span class="k">for</span> <span class="n">gpu_id</span> <span class="ow">in</span> <span class="n">gpu_ids</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">normalized_gpu_ids</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"gpu_ids must contain at least one GPU index."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">))</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"gpu_ids must not contain duplicate GPU indices."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">effective_n_jobs</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"n_jobs=</span><span class="si">{</span><span class="n">effective_n_jobs</span><span class="si">}</span><span class="s2"> requires at least that many GPU IDs, "</span>
+                <span class="sa">f</span><span class="s2">"but gpu_ids=</span><span class="si">{</span><span class="n">normalized_gpu_ids</span><span class="si">}</span><span class="s2">. Use one GPU per worker."</span>
+            <span class="p">)</span>
+
+        <span class="n">normalized_gpu_ids</span> <span class="o">=</span> <span class="n">normalized_gpu_ids</span><span class="p">[:</span><span class="n">effective_n_jobs</span><span class="p">]</span>
+
+    <span class="n">_print_loso_cv_summary</span><span class="p">(</span>
+        <span class="n">num_configs</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">grid_configs</span><span class="p">),</span>
+        <span class="n">total_folds</span><span class="o">=</span><span class="n">total_folds</span><span class="p">,</span>
+        <span class="n">num_subjects</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">),</span>
+        <span class="n">max_folds</span><span class="o">=</span><span class="n">max_folds</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+        <span class="n">selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+        <span class="n">selection_metric</span><span class="o">=</span><span class="n">selection_metric</span><span class="p">,</span>
+        <span class="n">maximize_metric</span><span class="o">=</span><span class="n">maximize_metric</span><span class="p">,</span>
+        <span class="n">evaluation_level</span><span class="o">=</span><span class="n">evaluation_level</span><span class="p">,</span>
+        <span class="n">log_predictions</span><span class="o">=</span><span class="n">log_predictions</span><span class="p">,</span>
+        <span class="n">prediction_diagnostics</span><span class="o">=</span><span class="n">prediction_diagnostics</span><span class="p">,</span>
+        <span class="n">log_variational_intervals</span><span class="o">=</span><span class="n">log_variational_intervals</span><span class="p">,</span>
+        <span class="n">decision_thresholds</span><span class="o">=</span><span class="n">decision_thresholds</span><span class="p">,</span>
+        <span class="n">threshold_selection_level</span><span class="o">=</span><span class="n">threshold_selection_level</span><span class="p">,</span>
+        <span class="n">threshold_selection_metric</span><span class="o">=</span><span class="n">threshold_selection_metric</span><span class="p">,</span>
+        <span class="n">n_prediction_latent_samples</span><span class="o">=</span><span class="n">n_prediction_latent_samples</span><span class="p">,</span>
+        <span class="n">validation_subjects_per_fold</span><span class="o">=</span><span class="n">validation_subjects_per_fold</span><span class="p">,</span>
+        <span class="n">validation_seed</span><span class="o">=</span><span class="n">validation_seed</span><span class="p">,</span>
+        <span class="n">early_stopping_monitor</span><span class="o">=</span><span class="n">early_stopping_monitor</span><span class="p">,</span>
+        <span class="n">early_stopping_patience</span><span class="o">=</span><span class="n">early_stopping_patience</span><span class="p">,</span>
+        <span class="n">restore_best_weights</span><span class="o">=</span><span class="n">restore_best_weights</span><span class="p">,</span>
+        <span class="n">use_mldg</span><span class="o">=</span><span class="n">use_mldg</span><span class="p">,</span>
+        <span class="n">mldg_meta_train_subjects</span><span class="o">=</span><span class="n">mldg_meta_train_subjects</span><span class="p">,</span>
+        <span class="n">mldg_meta_test_subjects</span><span class="o">=</span><span class="n">mldg_meta_test_subjects</span><span class="p">,</span>
+        <span class="n">mldg_samples_per_subject</span><span class="o">=</span><span class="n">mldg_samples_per_subject</span><span class="p">,</span>
+        <span class="n">mldg_seed</span><span class="o">=</span><span class="n">mldg_seed</span><span class="p">,</span>
+        <span class="n">alternate_subject_sets</span><span class="o">=</span><span class="n">alternate_subject_sets</span><span class="p">,</span>
+        <span class="n">effective_n_jobs</span><span class="o">=</span><span class="n">effective_n_jobs</span><span class="p">,</span>
+        <span class="n">normalized_gpu_ids</span><span class="o">=</span><span class="n">normalized_gpu_ids</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">tasks</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="n">fold_number</span><span class="p">,</span> <span class="n">_python_scalar</span><span class="p">(</span><span class="n">test_subject</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">fold_number</span><span class="p">,</span> <span class="n">test_subject</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">test_subjects</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="p">]</span>
+
+    <span class="n">common_worker_state</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"total_folds"</span><span class="p">:</span> <span class="n">total_folds</span><span class="p">,</span>
+        <span class="s2">"model_builder_function"</span><span class="p">:</span> <span class="n">model_builder_function</span><span class="p">,</span>
+        <span class="s2">"feature_array"</span><span class="p">:</span> <span class="n">feature_array</span><span class="p">,</span>
+        <span class="s2">"label_array"</span><span class="p">:</span> <span class="n">label_array</span><span class="p">,</span>
+        <span class="s2">"subject_id_array"</span><span class="p">:</span> <span class="n">subject_id_array</span><span class="p">,</span>
+        <span class="s2">"trial_id_array"</span><span class="p">:</span> <span class="n">trial_id_array</span><span class="p">,</span>
+        <span class="s2">"batch_size"</span><span class="p">:</span> <span class="n">batch_size</span><span class="p">,</span>
+        <span class="s2">"preprocessing_strategy"</span><span class="p">:</span> <span class="n">preprocessing_strategy</span><span class="p">,</span>
+        <span class="s2">"evaluation_level"</span><span class="p">:</span> <span class="n">evaluation_level</span><span class="p">,</span>
+        <span class="s2">"metrics"</span><span class="p">:</span> <span class="n">metrics</span><span class="p">,</span>
+        <span class="s2">"log_predictions"</span><span class="p">:</span> <span class="n">log_predictions</span><span class="p">,</span>
+        <span class="s2">"log_variational_intervals"</span><span class="p">:</span> <span class="n">log_variational_intervals</span><span class="p">,</span>
+        <span class="s2">"n_prediction_latent_samples"</span><span class="p">:</span> <span class="n">n_prediction_latent_samples</span><span class="p">,</span>
+        <span class="s2">"latent_sampling_seed"</span><span class="p">:</span> <span class="n">latent_sampling_seed</span><span class="p">,</span>
+        <span class="s2">"n_uncertainty_samples"</span><span class="p">:</span> <span class="n">n_uncertainty_samples</span><span class="p">,</span>
+        <span class="s2">"ci_level"</span><span class="p">:</span> <span class="n">ci_level</span><span class="p">,</span>
+        <span class="s2">"validation_subjects_per_fold"</span><span class="p">:</span> <span class="n">validation_subjects_per_fold</span><span class="p">,</span>
+        <span class="s2">"validation_seed"</span><span class="p">:</span> <span class="n">validation_seed</span><span class="p">,</span>
+        <span class="s2">"early_stopping_patience"</span><span class="p">:</span> <span class="n">early_stopping_patience</span><span class="p">,</span>
+        <span class="s2">"early_stopping_min_delta"</span><span class="p">:</span> <span class="n">early_stopping_min_delta</span><span class="p">,</span>
+        <span class="s2">"early_stopping_monitor"</span><span class="p">:</span> <span class="n">early_stopping_monitor</span><span class="p">,</span>
+        <span class="s2">"early_stopping_mode"</span><span class="p">:</span> <span class="n">early_stopping_mode</span><span class="p">,</span>
+        <span class="s2">"restore_best_weights"</span><span class="p">:</span> <span class="n">restore_best_weights</span><span class="p">,</span>
+        <span class="s2">"prediction_diagnostics"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">prediction_diagnostics</span><span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_every_n_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="n">prediction_diagnostics_every_n_epochs</span>
+        <span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_max_samples"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">prediction_diagnostics_max_samples</span><span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_threshold_tolerance"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+            <span class="n">prediction_diagnostics_threshold_tolerance</span>
+        <span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_seed"</span><span class="p">:</span> <span class="n">prediction_diagnostics_seed</span><span class="p">,</span>
+        <span class="s2">"decision_thresholds"</span><span class="p">:</span> <span class="n">decision_thresholds</span><span class="p">,</span>
+        <span class="s2">"threshold_selection_metric"</span><span class="p">:</span> <span class="n">threshold_selection_metric</span><span class="p">,</span>
+        <span class="s2">"threshold_selection_level"</span><span class="p">:</span> <span class="n">threshold_selection_level</span><span class="p">,</span>
+        <span class="s2">"verbose"</span><span class="p">:</span> <span class="n">verbose</span><span class="p">,</span>
+        <span class="s2">"extra_fit_kwargs"</span><span class="p">:</span> <span class="n">extra_fit_kwargs</span><span class="p">,</span>
+        <span class="s2">"alternate_subject_sets"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">alternate_subject_sets</span><span class="p">),</span>
+        <span class="s2">"alternating_subject_seed"</span><span class="p">:</span> <span class="n">alternating_subject_seed</span><span class="p">,</span>
+        <span class="s2">"use_mldg"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">use_mldg</span><span class="p">),</span>
+        <span class="s2">"mldg_meta_train_subjects"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">mldg_meta_train_subjects</span><span class="p">),</span>
+        <span class="s2">"mldg_meta_test_subjects"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">mldg_meta_test_subjects</span><span class="p">),</span>
+        <span class="s2">"mldg_samples_per_subject"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">mldg_samples_per_subject</span><span class="p">),</span>
+        <span class="s2">"mldg_seed"</span><span class="p">:</span> <span class="n">mldg_seed</span><span class="p">,</span>
+    <span class="p">}</span>
+
+    <span class="n">config_results</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">best_so_far_result</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">best_fold_outputs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">for</span> <span class="n">config_index</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">grid_configs</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span> <span class="o">+</span> <span class="s2">"#"</span> <span class="o">*</span> <span class="mi">80</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"Configuration </span><span class="si">{</span><span class="n">config_index</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">grid_configs</span><span class="p">)</span><span class="si">}</span><span class="s2"> "</span>
+            <span class="sa">f</span><span class="s2">"(</span><span class="si">{</span><span class="n">total_folds</span><span class="si">}</span><span class="s2"> LOSO fits)"</span>
+        <span class="p">)</span>
+        <span class="n">_print_config</span><span class="p">(</span><span class="s2">"Configuration:"</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
+
+        <span class="n">worker_state</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="o">**</span><span class="n">common_worker_state</span><span class="p">,</span>
+            <span class="s2">"fixed_config"</span><span class="p">:</span> <span class="n">config</span><span class="p">,</span>
+        <span class="p">}</span>
+
+        <span class="k">if</span> <span class="n">effective_n_jobs</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">normalized_gpu_ids</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">fold_outputs</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">_run_loso_fold</span><span class="p">(</span>
+                    <span class="n">fold_number</span><span class="o">=</span><span class="n">fold_number</span><span class="p">,</span>
+                    <span class="n">test_subject</span><span class="o">=</span><span class="n">test_subject</span><span class="p">,</span>
+                    <span class="o">**</span><span class="n">worker_state</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">for</span> <span class="n">fold_number</span><span class="p">,</span> <span class="n">test_subject</span> <span class="ow">in</span> <span class="n">tasks</span>
+            <span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">fold_outputs</span> <span class="o">=</span> <span class="n">_run_spawned_fold_pool</span><span class="p">(</span>
+                <span class="n">worker_target</span><span class="o">=</span><span class="n">_loso_fold_process_main</span><span class="p">,</span>
+                <span class="n">worker_state</span><span class="o">=</span><span class="n">worker_state</span><span class="p">,</span>
+                <span class="n">tasks</span><span class="o">=</span><span class="n">tasks</span><span class="p">,</span>
+                <span class="n">n_workers</span><span class="o">=</span><span class="n">effective_n_jobs</span><span class="p">,</span>
+                <span class="n">gpu_ids</span><span class="o">=</span><span class="n">normalized_gpu_ids</span><span class="p">,</span>
+                <span class="n">cpus_per_worker</span><span class="o">=</span><span class="n">cpus_per_worker</span><span class="p">,</span>
+                <span class="n">worker_name_prefix</span><span class="o">=</span><span class="sa">f</span><span class="s2">"LOSOConfig</span><span class="si">{</span><span class="n">config_index</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">Worker"</span><span class="p">,</span>
+                <span class="n">worker_description</span><span class="o">=</span><span class="p">(</span><span class="sa">f</span><span class="s2">"LOSO-fold for configuration </span><span class="si">{</span><span class="n">config_index</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">"</span><span class="p">),</span>
+            <span class="p">)</span>
+
+        <span class="n">fold_outputs</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">row</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">"outer_fold_number"</span><span class="p">])</span>
+        <span class="n">config_result</span> <span class="o">=</span> <span class="n">_aggregate_loso_config_result</span><span class="p">(</span>
+            <span class="n">config_index</span><span class="o">=</span><span class="n">config_index</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+            <span class="n">fold_outputs</span><span class="o">=</span><span class="n">fold_outputs</span><span class="p">,</span>
+            <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+            <span class="n">selection_metric</span><span class="o">=</span><span class="n">selection_metric</span><span class="p">,</span>
+            <span class="n">selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">config_results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">config_result</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">best_so_far_result</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">_loso_config_sort_key</span><span class="p">(</span>
+            <span class="n">config_result</span><span class="o">=</span><span class="n">config_result</span><span class="p">,</span>
+            <span class="n">selection_metric</span><span class="o">=</span><span class="n">selection_metric</span><span class="p">,</span>
+            <span class="n">selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+            <span class="n">maximize_metric</span><span class="o">=</span><span class="nb">bool</span><span class="p">(</span><span class="n">maximize_metric</span><span class="p">),</span>
+        <span class="p">)</span> <span class="o">&lt;</span> <span class="n">_loso_config_sort_key</span><span class="p">(</span>
+            <span class="n">config_result</span><span class="o">=</span><span class="n">best_so_far_result</span><span class="p">,</span>
+            <span class="n">selection_metric</span><span class="o">=</span><span class="n">selection_metric</span><span class="p">,</span>
+            <span class="n">selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+            <span class="n">maximize_metric</span><span class="o">=</span><span class="nb">bool</span><span class="p">(</span><span class="n">maximize_metric</span><span class="p">),</span>
+        <span class="p">):</span>
+            <span class="n">best_so_far_result</span> <span class="o">=</span> <span class="n">config_result</span>
+            <span class="n">best_fold_outputs</span> <span class="o">=</span> <span class="n">fold_outputs</span>
+
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Configuration </span><span class="si">{</span><span class="n">config_index</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2"> complete: "</span>
+            <span class="sa">f</span><span class="s2">"mean </span><span class="si">{</span><span class="n">selection_level</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">selection_metric</span><span class="si">}</span><span class="s2">="</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">config_result</span><span class="p">[</span><span class="s1">'selection_score'</span><span class="p">]</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2"> ± "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">config_result</span><span class="p">[</span><span class="s1">'selection_score_std'</span><span class="p">]</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">best_config_index</span> <span class="o">=</span> <span class="n">_choose_best_loso_config_index</span><span class="p">(</span>
+        <span class="n">config_results</span><span class="o">=</span><span class="n">config_results</span><span class="p">,</span>
+        <span class="n">selection_metric</span><span class="o">=</span><span class="n">selection_metric</span><span class="p">,</span>
+        <span class="n">selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+        <span class="n">maximize_metric</span><span class="o">=</span><span class="nb">bool</span><span class="p">(</span><span class="n">maximize_metric</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="n">best_config_result</span> <span class="o">=</span> <span class="n">config_results</span><span class="p">[</span><span class="n">best_config_index</span><span class="p">]</span>
+    <span class="n">best_config</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">best_config_result</span><span class="p">[</span><span class="s2">"config"</span><span class="p">])</span>
+
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="n">best_so_far_result</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="ow">or</span> <span class="n">best_fold_outputs</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="ow">or</span> <span class="nb">int</span><span class="p">(</span><span class="n">best_so_far_result</span><span class="p">[</span><span class="s2">"config_index"</span><span class="p">])</span> <span class="o">!=</span> <span class="n">best_config_index</span>
+    <span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+            <span class="s2">"Internal LOSO grid-search error: selected configuration logs "</span>
+            <span class="s2">"were not retained correctly."</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Surface one canonical copy of each selected-configuration artifact.</span>
+    <span class="n">results</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"cv_strategy"</span><span class="p">:</span> <span class="s2">"flat_loso_hyperparameter_search"</span><span class="p">,</span>
+        <span class="s2">"hyperparameter_search"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="s2">"n_configs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">grid_configs</span><span class="p">)),</span>
+        <span class="s2">"n_subjects"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)),</span>
+        <span class="s2">"n_evaluated_folds_per_config"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">total_folds</span><span class="p">),</span>
+        <span class="s2">"n_total_loso_fits"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">total_model_fits</span><span class="p">),</span>
+        <span class="s2">"max_folds"</span><span class="p">:</span> <span class="n">max_folds</span><span class="p">,</span>
+        <span class="s2">"selection_metric"</span><span class="p">:</span> <span class="n">selection_metric</span><span class="p">,</span>
+        <span class="s2">"selection_level"</span><span class="p">:</span> <span class="n">selection_level</span><span class="p">,</span>
+        <span class="s2">"evaluation_level"</span><span class="p">:</span> <span class="n">evaluation_level</span><span class="p">,</span>
+        <span class="s2">"maximize_metric"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">maximize_metric</span><span class="p">),</span>
+        <span class="s2">"selection_score"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">best_config_result</span><span class="p">[</span><span class="s2">"selection_score"</span><span class="p">]),</span>
+        <span class="s2">"selection_score_std"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">best_config_result</span><span class="p">[</span><span class="s2">"selection_score_std"</span><span class="p">]),</span>
+        <span class="s2">"n_prediction_latent_samples"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_prediction_latent_samples</span><span class="p">),</span>
+        <span class="s2">"latent_sampling_seed"</span><span class="p">:</span> <span class="n">latent_sampling_seed</span><span class="p">,</span>
+        <span class="s2">"validation_subjects_per_fold"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">validation_subjects_per_fold</span><span class="p">),</span>
+        <span class="s2">"validation_seed"</span><span class="p">:</span> <span class="n">validation_seed</span><span class="p">,</span>
+        <span class="s2">"early_stopping_patience"</span><span class="p">:</span> <span class="n">early_stopping_patience</span><span class="p">,</span>
+        <span class="s2">"early_stopping_min_delta"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">early_stopping_min_delta</span><span class="p">),</span>
+        <span class="s2">"early_stopping_monitor"</span><span class="p">:</span> <span class="n">early_stopping_monitor</span><span class="p">,</span>
+        <span class="s2">"early_stopping_mode"</span><span class="p">:</span> <span class="n">early_stopping_mode</span><span class="p">,</span>
+        <span class="s2">"restore_best_weights"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">restore_best_weights</span><span class="p">),</span>
+        <span class="s2">"use_mldg"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">use_mldg</span><span class="p">),</span>
+        <span class="s2">"mldg_meta_train_subjects"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">mldg_meta_train_subjects</span><span class="p">)</span> <span class="k">if</span> <span class="n">use_mldg</span> <span class="k">else</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">"mldg_meta_test_subjects"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">mldg_meta_test_subjects</span><span class="p">)</span> <span class="k">if</span> <span class="n">use_mldg</span> <span class="k">else</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">"mldg_samples_per_subject"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">mldg_samples_per_subject</span><span class="p">)</span> <span class="k">if</span> <span class="n">use_mldg</span> <span class="k">else</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">"mldg_seed"</span><span class="p">:</span> <span class="n">mldg_seed</span> <span class="k">if</span> <span class="n">use_mldg</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="s2">"config_results"</span><span class="p">:</span> <span class="n">config_results</span><span class="p">,</span>
+        <span class="s2">"best_config_index"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">best_config_index</span><span class="p">),</span>
+        <span class="s2">"best_config"</span><span class="p">:</span> <span class="n">best_config</span><span class="p">,</span>
+        <span class="s2">"user_metrics"</span><span class="p">:</span> <span class="p">[],</span>
+        <span class="s2">"fold_results"</span><span class="p">:</span> <span class="p">[],</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="n">log_predictions</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"window_prediction_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"trial_prediction_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">if</span> <span class="n">log_variational_intervals</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"window_variational_interval_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"trial_variational_interval_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">if</span> <span class="n">prediction_diagnostics</span><span class="p">:</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"prediction_diagnostics_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">fold_output</span> <span class="ow">in</span> <span class="n">best_fold_outputs</span><span class="p">:</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"user_metrics"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">fold_output</span><span class="p">[</span><span class="s2">"user_metrics"</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">log_predictions</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+                <span class="n">results</span><span class="p">[</span><span class="s2">"window_prediction_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                    <span class="n">fold_output</span><span class="p">[</span><span class="s2">"window_prediction_log"</span><span class="p">]</span>
+                <span class="p">)</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"trial_prediction_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">fold_output</span><span class="p">[</span><span class="s2">"trial_prediction_log"</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">log_variational_intervals</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+                <span class="n">results</span><span class="p">[</span><span class="s2">"window_variational_interval_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                    <span class="n">fold_output</span><span class="p">[</span><span class="s2">"window_variational_interval_log"</span><span class="p">]</span>
+                <span class="p">)</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"trial_variational_interval_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                <span class="n">fold_output</span><span class="p">[</span><span class="s2">"trial_variational_interval_log"</span><span class="p">]</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">prediction_diagnostics</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"prediction_diagnostics_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                <span class="n">fold_output</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"prediction_diagnostics_log"</span><span class="p">,</span> <span class="p">[])</span>
+            <span class="p">)</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"fold_results"</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">dict</span><span class="p">(</span><span class="n">fold_output</span><span class="p">[</span><span class="s2">"fold_record"</span><span class="p">]))</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Flat LOSO hyperparameter search complete"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">80</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"Selected configuration </span><span class="si">{</span><span class="n">best_config_index</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2"> / "</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">grid_configs</span><span class="p">)</span><span class="si">}</span><span class="s2"> using </span><span class="si">{</span><span class="n">selection_level</span><span class="si">}</span><span class="s2">-level "</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">selection_metric</span><span class="si">}</span><span class="s2">."</span>
+    <span class="p">)</span>
+    <span class="n">_print_config</span><span class="p">(</span><span class="s2">"Best configuration:"</span><span class="p">,</span> <span class="n">best_config</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"Selection score: </span><span class="si">{</span><span class="n">best_config_result</span><span class="p">[</span><span class="s1">'selection_score'</span><span class="p">]</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2"> ± "</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">best_config_result</span><span class="p">[</span><span class="s1">'selection_score_std'</span><span class="p">]</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">"</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Selected configuration primary mean scores:"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="n">pformat</span><span class="p">(</span>
+            <span class="n">best_config_result</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">evaluation_level</span><span class="si">}</span><span class="s2">_mean_scores"</span><span class="p">],</span>
+            <span class="n">indent</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+            <span class="n">width</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span>
+            <span class="n">sort_dicts</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Selected configuration primary score standard deviations:"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="n">pformat</span><span class="p">(</span>
+            <span class="n">best_config_result</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">evaluation_level</span><span class="si">}</span><span class="s2">_std_scores"</span><span class="p">],</span>
+            <span class="n">indent</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+            <span class="n">width</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span>
+            <span class="n">sort_dicts</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Selected configuration window-level mean scores:"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="n">pformat</span><span class="p">(</span>
+            <span class="n">best_config_result</span><span class="p">[</span><span class="s2">"window_mean_scores"</span><span class="p">],</span>
+            <span class="n">indent</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+            <span class="n">width</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span>
+            <span class="n">sort_dicts</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Selected configuration trial-level mean scores:"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="n">pformat</span><span class="p">(</span>
+            <span class="n">best_config_result</span><span class="p">[</span><span class="s2">"trial_mean_scores"</span><span class="p">],</span>
+            <span class="n">indent</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+            <span class="n">width</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span>
+            <span class="n">sort_dicts</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">results</span></div>
+
+
+
+<div class="viewcode-block" id="fixed_loso_cv">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.cross_validation.loso.html#eegproc.deep_learning.cross_validation.loso.fixed_loso_cv">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fixed_loso_cv</span><span class="p">(</span>
+    <span class="n">model_builder_function</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">],</span>
+    <span class="n">feature_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">label_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">subject_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">trial_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">fixed_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+    <span class="n">n_epochs</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">preprocessing_strategy</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">evaluation_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"trial"</span><span class="p">,</span>
+    <span class="n">selection_metric</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"balanced_accuracy"</span><span class="p">,</span>
+    <span class="n">selection_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"trial"</span><span class="p">,</span>
+    <span class="n">maximize_metric</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">"accuracy"</span><span class="p">,</span>
+        <span class="s2">"f1"</span><span class="p">,</span>
+        <span class="s2">"precision"</span><span class="p">,</span>
+        <span class="s2">"recall"</span><span class="p">,</span>
+        <span class="s2">"macro_f1"</span><span class="p">,</span>
+        <span class="s2">"macro_precision"</span><span class="p">,</span>
+        <span class="s2">"macro_recall"</span><span class="p">,</span>
+        <span class="s2">"balanced_accuracy"</span><span class="p">,</span>
+    <span class="p">),</span>
+    <span class="n">log_predictions</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">log_variational_intervals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">n_prediction_latent_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">latent_sampling_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">n_uncertainty_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">30</span><span class="p">,</span>
+    <span class="n">ci_level</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span><span class="p">,</span>
+    <span class="n">decision_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_max_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_threshold_tolerance</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">verbose</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">extra_fit_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">n_jobs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">gpu_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">cpus_per_worker</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">max_folds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">alternate_subject_sets</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">alternating_subject_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">use_mldg</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">mldg_meta_train_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span>
+    <span class="n">mldg_meta_test_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+    <span class="n">mldg_samples_per_subject</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="n">mldg_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Evaluate one fixed configuration with strict LOSOCV and no validation.</span>
+
+<span class="sd">    Every fold trains for exactly ``n_epochs`` on all non-test subjects. No</span>
+<span class="sd">    validation subjects are removed, no validation data are passed to Keras,</span>
+<span class="sd">    no early-stopping callback is installed, and the supplied decision</span>
+<span class="sd">    threshold is applied unchanged to every held-out subject.</span>
+
+<span class="sd">    This is intended as a post-selection diagnostic after another CV run has</span>
+<span class="sd">    already chosen the hyperparameters, epoch count, and threshold. It does not</span>
+<span class="sd">    perform another hyperparameter or threshold search.</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">n_epochs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_epochs must be at least 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">batch_size</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"batch_size must be at least 1."</span><span class="p">)</span>
+    <span class="n">decision_threshold</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">decision_threshold</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="n">decision_threshold</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"decision_threshold must be strictly between 0 and 1."</span><span class="p">)</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">fixed_config</span><span class="p">)</span>
+    <span class="c1"># The explicit post-selection values must override anything retained from</span>
+    <span class="c1"># the original search result.</span>
+    <span class="n">model_config</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">"epochs"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">model_config</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">"batch_size"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="s2">"</span><span class="se">\n</span><span class="s2">Fixed-config no-validation LOSOCV — "</span>
+        <span class="sa">f</span><span class="s2">"epochs=</span><span class="si">{</span><span class="nb">int</span><span class="p">(</span><span class="n">n_epochs</span><span class="p">)</span><span class="si">}</span><span class="s2">, batch_size=</span><span class="si">{</span><span class="nb">int</span><span class="p">(</span><span class="n">batch_size</span><span class="p">)</span><span class="si">}</span><span class="s2">, "</span>
+        <span class="sa">f</span><span class="s2">"decision_threshold=</span><span class="si">{</span><span class="n">decision_threshold</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+        <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">results</span> <span class="o">=</span> <span class="n">loso_cv</span><span class="p">(</span>
+        <span class="n">model_builder_function</span><span class="o">=</span><span class="n">model_builder_function</span><span class="p">,</span>
+        <span class="n">feature_array</span><span class="o">=</span><span class="n">feature_array</span><span class="p">,</span>
+        <span class="n">label_array</span><span class="o">=</span><span class="n">label_array</span><span class="p">,</span>
+        <span class="n">subject_id_array</span><span class="o">=</span><span class="n">subject_id_array</span><span class="p">,</span>
+        <span class="n">trial_id_array</span><span class="o">=</span><span class="n">trial_id_array</span><span class="p">,</span>
+        <span class="n">n_epochs</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">n_epochs</span><span class="p">),</span>
+        <span class="n">batch_size</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">batch_size</span><span class="p">),</span>
+        <span class="n">hyperparameters</span><span class="o">=</span><span class="n">model_config</span><span class="p">,</span>
+        <span class="n">preprocessing_strategy</span><span class="o">=</span><span class="n">preprocessing_strategy</span><span class="p">,</span>
+        <span class="n">evaluation_level</span><span class="o">=</span><span class="n">evaluation_level</span><span class="p">,</span>
+        <span class="n">selection_metric</span><span class="o">=</span><span class="n">selection_metric</span><span class="p">,</span>
+        <span class="n">selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+        <span class="n">maximize_metric</span><span class="o">=</span><span class="n">maximize_metric</span><span class="p">,</span>
+        <span class="n">metrics</span><span class="o">=</span><span class="n">metrics</span><span class="p">,</span>
+        <span class="n">log_predictions</span><span class="o">=</span><span class="n">log_predictions</span><span class="p">,</span>
+        <span class="n">log_variational_intervals</span><span class="o">=</span><span class="n">log_variational_intervals</span><span class="p">,</span>
+        <span class="n">n_prediction_latent_samples</span><span class="o">=</span><span class="n">n_prediction_latent_samples</span><span class="p">,</span>
+        <span class="n">latent_sampling_seed</span><span class="o">=</span><span class="n">latent_sampling_seed</span><span class="p">,</span>
+        <span class="n">n_uncertainty_samples</span><span class="o">=</span><span class="n">n_uncertainty_samples</span><span class="p">,</span>
+        <span class="n">ci_level</span><span class="o">=</span><span class="n">ci_level</span><span class="p">,</span>
+        <span class="n">validation_subjects_per_fold</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+        <span class="n">validation_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">early_stopping_patience</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">early_stopping_min_delta</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">early_stopping_monitor</span><span class="o">=</span><span class="s2">"loss"</span><span class="p">,</span>
+        <span class="n">early_stopping_mode</span><span class="o">=</span><span class="s2">"min"</span><span class="p">,</span>
+        <span class="n">restore_best_weights</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">prediction_diagnostics</span><span class="o">=</span><span class="n">prediction_diagnostics</span><span class="p">,</span>
+        <span class="n">prediction_diagnostics_every_n_epochs</span><span class="o">=</span><span class="p">(</span><span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">),</span>
+        <span class="n">prediction_diagnostics_max_samples</span><span class="o">=</span><span class="n">prediction_diagnostics_max_samples</span><span class="p">,</span>
+        <span class="n">prediction_diagnostics_threshold_tolerance</span><span class="o">=</span><span class="p">(</span>
+            <span class="n">prediction_diagnostics_threshold_tolerance</span>
+        <span class="p">),</span>
+        <span class="n">prediction_diagnostics_seed</span><span class="o">=</span><span class="n">prediction_diagnostics_seed</span><span class="p">,</span>
+        <span class="n">decision_thresholds</span><span class="o">=</span><span class="p">(</span><span class="n">decision_threshold</span><span class="p">,),</span>
+        <span class="n">threshold_selection_metric</span><span class="o">=</span><span class="s2">"balanced_accuracy"</span><span class="p">,</span>
+        <span class="n">threshold_selection_level</span><span class="o">=</span><span class="n">selection_level</span><span class="p">,</span>
+        <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">,</span>
+        <span class="n">extra_fit_kwargs</span><span class="o">=</span><span class="n">extra_fit_kwargs</span><span class="p">,</span>
+        <span class="n">n_jobs</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">,</span>
+        <span class="n">gpu_ids</span><span class="o">=</span><span class="n">gpu_ids</span><span class="p">,</span>
+        <span class="n">cpus_per_worker</span><span class="o">=</span><span class="n">cpus_per_worker</span><span class="p">,</span>
+        <span class="n">max_folds</span><span class="o">=</span><span class="n">max_folds</span><span class="p">,</span>
+        <span class="n">alternate_subject_sets</span><span class="o">=</span><span class="n">alternate_subject_sets</span><span class="p">,</span>
+        <span class="n">alternating_subject_seed</span><span class="o">=</span><span class="n">alternating_subject_seed</span><span class="p">,</span>
+        <span class="n">use_mldg</span><span class="o">=</span><span class="n">use_mldg</span><span class="p">,</span>
+        <span class="n">mldg_meta_train_subjects</span><span class="o">=</span><span class="n">mldg_meta_train_subjects</span><span class="p">,</span>
+        <span class="n">mldg_meta_test_subjects</span><span class="o">=</span><span class="n">mldg_meta_test_subjects</span><span class="p">,</span>
+        <span class="n">mldg_samples_per_subject</span><span class="o">=</span><span class="n">mldg_samples_per_subject</span><span class="p">,</span>
+        <span class="n">mldg_seed</span><span class="o">=</span><span class="n">mldg_seed</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">results</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"n_configs"</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+            <span class="s2">"fixed_loso_cv expected exactly one configuration, but loso_cv "</span>
+            <span class="sa">f</span><span class="s2">"reported </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'n_configs'</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+
+    <span class="n">results</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">"cv_strategy"</span><span class="p">:</span> <span class="s2">"fixed_loso_no_validation"</span><span class="p">,</span>
+            <span class="s2">"hyperparameter_search"</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="s2">"post_selection_diagnostic"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+            <span class="s2">"fixed_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_epochs</span><span class="p">),</span>
+            <span class="s2">"fixed_batch_size"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">batch_size</span><span class="p">),</span>
+            <span class="s2">"fixed_decision_threshold"</span><span class="p">:</span> <span class="n">decision_threshold</span><span class="p">,</span>
+            <span class="s2">"validation_subjects_per_fold"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="s2">"early_stopping_patience"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">"restore_best_weights"</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">results</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

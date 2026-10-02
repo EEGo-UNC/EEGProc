@@ -1,0 +1,808 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.unsupervised.Convolutions.CNN2D &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.unsupervised.Convolutions.CNN2D</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.deep_learning.unsupervised.Convolutions.CNN2D</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tensorflow.keras</span><span class="w"> </span><span class="kn">import</span> <span class="n">layers</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">..BaseEncoder</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseEncoder</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">..utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">_product</span>
+
+
+<div class="viewcode-block" id="CNN2DEncoder">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DEncoder">[docs]</a>
+<span class="nd">@tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">register_keras_serializable</span><span class="p">(</span><span class="n">package</span><span class="o">=</span><span class="s2">"EEGProc"</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">CNN2DEncoder</span><span class="p">(</span><span class="n">BaseEncoder</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""2D CNN encoder that preserves channel-band position information.</span>
+
+<span class="sd">    Inputs are reshaped from ``(batch, time, channels * bands)`` to</span>
+<span class="sd">    ``(batch, time, channels, bands, 1)``. Spatial Conv2D blocks operate on</span>
+<span class="sd">    each timestep independently. The remaining spatial grid is flattened in a</span>
+<span class="sd">    fixed order and projected to ``emb_dim`` instead of being globally</span>
+<span class="sd">    averaged, so electrode and frequency-band location remain available to the</span>
+<span class="sd">    latent sequence.</span>
+<span class="sd">    """</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">t_down</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">14</span><span class="p">,</span>
+        <span class="n">n_bands</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="n">conv_filters</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span>
+        <span class="n">kernel_sizes</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+            <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+            <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+        <span class="p">),</span>
+        <span class="n">spatial_pool_sizes</span><span class="p">:</span> <span class="p">(</span>
+            <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+            <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+            <span class="o">|</span> <span class="kc">None</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">temporal_pool_sizes</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">emb_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">activation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relu"</span><span class="p">,</span>
+        <span class="n">use_batch_norm</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"encoder_2dcnn"</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">emb_dim</span><span class="o">=</span><span class="n">emb_dim</span><span class="p">,</span>
+            <span class="n">t_down</span><span class="o">=</span><span class="n">t_down</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+            <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">timesteps</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"timesteps must be positive, got </span><span class="si">{</span><span class="n">timesteps</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_channels</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"n_channels must be positive, got </span><span class="si">{</span><span class="n">n_channels</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_bands</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"n_bands must be positive, got </span><span class="si">{</span><span class="n">n_bands</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">conv_filters</span> <span class="ow">or</span> <span class="nb">any</span><span class="p">(</span><span class="n">filters</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">filters</span> <span class="ow">in</span> <span class="n">conv_filters</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"conv_filters must contain positive values, got </span><span class="si">{</span><span class="n">conv_filters</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">dropout</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"dropout must be in [0, 1), got </span><span class="si">{</span><span class="n">dropout</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_channels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bands</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">conv_filters</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_sizes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_normalize_2d_kernel_sizes</span><span class="p">(</span>
+            <span class="n">kernel_sizes</span><span class="p">,</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_normalize_2d_pool_sizes</span><span class="p">(</span>
+            <span class="n">spatial_pool_sizes</span><span class="p">,</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_normalize_temporal_pool_sizes</span><span class="p">(</span>
+            <span class="n">temporal_pool_sizes</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">use_batch_norm</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_shapes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compute_spatial_shapes</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">encoded_spatial_shape</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_shapes</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">to_grid</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Reshape</span><span class="p">(</span>
+            <span class="p">(</span><span class="n">timesteps</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">,</span> <span class="n">n_bands</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"to_grid"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bn_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">activation_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dropout_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_layers</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">filters</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">spatial_pool_size</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
+            <span class="nb">zip</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">kernel_sizes</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">conv_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">Conv2D</span><span class="p">(</span>
+                        <span class="n">filters</span><span class="p">,</span>
+                        <span class="n">kernel_size</span><span class="p">,</span>
+                        <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+                        <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"enc_conv2d_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bn_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">BatchNormalization</span><span class="p">(),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"enc_bn2d_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">use_batch_norm</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">activation_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">Activation</span><span class="p">(</span><span class="n">activation</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"enc_activation2d_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dropout_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"enc_do2d_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">MaxPool2D</span><span class="p">(</span>
+                        <span class="n">pool_size</span><span class="o">=</span><span class="n">spatial_pool_size</span><span class="p">,</span>
+                        <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"enc_spool2d_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">spatial_pool_size</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_flatten</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">Flatten</span><span class="p">(),</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"enc_spatial_flatten"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_projection</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">Dense</span><span class="p">(</span><span class="n">emb_dim</span><span class="p">,</span> <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">),</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"enc_spatial_projection"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_projection_bn</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">BatchNormalization</span><span class="p">(),</span>
+                <span class="n">name</span><span class="o">=</span><span class="s2">"enc_spatial_projection_bn"</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">use_batch_norm</span>
+            <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_projection_activation</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Activation</span><span class="p">(</span>
+            <span class="n">activation</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"enc_spatial_projection_activation"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">MaxPool1D</span><span class="p">(</span>
+                <span class="n">pool_size</span><span class="p">,</span>
+                <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"enc_tpool_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">pool_size</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">)</span>
+        <span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"enc_tdo_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">)</span>
+        <span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">seq_emb</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Conv1D</span><span class="p">(</span>
+            <span class="n">emb_dim</span><span class="p">,</span>
+            <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+            <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"seq_emb"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_temporal_pool_sizes</span><span class="p">(</span><span class="n">pool_sizes</span><span class="p">,</span> <span class="n">t_down</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">pool_sizes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">normalized</span> <span class="o">=</span> <span class="p">()</span> <span class="k">if</span> <span class="n">t_down</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">t_down</span><span class="p">),)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">normalized</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">pool_sizes</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">value</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"All temporal pool sizes must be &gt;= 1, got </span><span class="si">{</span><span class="n">normalized</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">effective_t_down</span> <span class="o">=</span> <span class="n">_product</span><span class="p">(</span><span class="n">normalized</span><span class="p">)</span> <span class="k">if</span> <span class="n">normalized</span> <span class="k">else</span> <span class="mi">1</span>
+        <span class="k">if</span> <span class="n">effective_t_down</span> <span class="o">!=</span> <span class="n">t_down</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"t_down=</span><span class="si">{</span><span class="n">t_down</span><span class="si">}</span><span class="s2">, but temporal_pool_sizes produces "</span>
+                <span class="sa">f</span><span class="s2">"a downsampling factor of </span><span class="si">{</span><span class="n">effective_t_down</span><span class="si">}</span><span class="s2">. "</span>
+                <span class="s2">"Set t_down equal to product(temporal_pool_sizes)."</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">normalized</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_2d_kernel_sizes</span><span class="p">(</span><span class="n">kernel_sizes</span><span class="p">,</span> <span class="n">n_layers</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Return one validated ``(height, width)`` pair per layer."""</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="nb">isinstance</span><span class="p">(</span><span class="n">kernel_sizes</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">))</span>
+            <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">kernel_sizes</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span>
+            <span class="ow">and</span> <span class="nb">all</span><span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">kernel_sizes</span><span class="p">)</span>
+        <span class="p">):</span>
+            <span class="n">pair</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">kernel_sizes</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">value</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">pair</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Kernel dimensions must be &gt;= 1, got </span><span class="si">{</span><span class="n">pair</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">pair</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_layers</span><span class="p">))</span>
+
+        <span class="n">values</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">kernel_sizes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="o">!=</span> <span class="n">n_layers</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"kernel_sizes must have length </span><span class="si">{</span><span class="n">n_layers</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">normalized</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">values</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">))</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"Each kernel size must be a pair of integers; "</span>
+                    <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">value</span><span class="si">!r}</span><span class="s2">."</span>
+                <span class="p">)</span>
+            <span class="n">pair</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">dimension</span><span class="p">)</span> <span class="k">for</span> <span class="n">dimension</span> <span class="ow">in</span> <span class="n">value</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">dimension</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">dimension</span> <span class="ow">in</span> <span class="n">pair</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Kernel dimensions must be &gt;= 1, got </span><span class="si">{</span><span class="n">pair</span><span class="si">!r}</span><span class="s2">."</span>
+                <span class="p">)</span>
+            <span class="n">normalized</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pair</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">normalized</span><span class="p">)</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_2d_pool_sizes</span><span class="p">(</span><span class="n">pool_sizes</span><span class="p">,</span> <span class="n">n_layers</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Return one optional spatial-pool pair per convolutional layer."""</span>
+        <span class="k">if</span> <span class="n">pool_sizes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="kc">None</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_layers</span><span class="p">))</span>
+
+        <span class="n">values</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">pool_sizes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">values</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="kc">None</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_layers</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="nb">all</span><span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">values</span><span class="p">):</span>
+            <span class="n">pair</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">values</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">value</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">pair</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Spatial pool dimensions must be &gt;= 1, got </span><span class="si">{</span><span class="n">pair</span><span class="si">!r}</span><span class="s2">."</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">pair</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_layers</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="o">!=</span> <span class="n">n_layers</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"spatial_pool_sizes must be one pair, empty/None, or contain "</span>
+                <span class="sa">f</span><span class="s2">"one pair per Conv2D layer (</span><span class="si">{</span><span class="n">n_layers</span><span class="si">}</span><span class="s2">); got </span><span class="si">{</span><span class="n">values</span><span class="si">!r}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">normalized</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">values</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">normalized</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+                <span class="k">continue</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">))</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"Each spatial pool size must be None or a pair of integers; "</span>
+                    <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">value</span><span class="si">!r}</span><span class="s2">."</span>
+                <span class="p">)</span>
+            <span class="n">pair</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">dimension</span><span class="p">)</span> <span class="k">for</span> <span class="n">dimension</span> <span class="ow">in</span> <span class="n">value</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">dimension</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">dimension</span> <span class="ow">in</span> <span class="n">pair</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Spatial pool dimensions must be &gt;= 1, got </span><span class="si">{</span><span class="n">pair</span><span class="si">!r}</span><span class="s2">."</span>
+                <span class="p">)</span>
+            <span class="n">normalized</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pair</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">normalized</span><span class="p">)</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_compute_spatial_shapes</span><span class="p">(</span><span class="n">n_channels</span><span class="p">,</span> <span class="n">n_bands</span><span class="p">,</span> <span class="n">pool_sizes</span><span class="p">):</span>
+        <span class="n">shapes</span> <span class="o">=</span> <span class="p">[(</span><span class="nb">int</span><span class="p">(</span><span class="n">n_channels</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bands</span><span class="p">))]</span>
+        <span class="n">height</span><span class="p">,</span> <span class="n">width</span> <span class="o">=</span> <span class="n">shapes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">pool_size</span> <span class="ow">in</span> <span class="n">pool_sizes</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">pool_size</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">height</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">height</span> <span class="o">/</span> <span class="n">pool_size</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+                <span class="n">width</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">width</span> <span class="o">/</span> <span class="n">pool_size</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+            <span class="n">shapes</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">shapes</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">n_features</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span>
+
+<div class="viewcode-block" id="CNN2DEncoder.call">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DEncoder.call">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_grid</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">conv</span><span class="p">,</span> <span class="n">bn</span><span class="p">,</span> <span class="n">activation</span><span class="p">,</span> <span class="n">dropout</span><span class="p">,</span> <span class="n">spatial_pool</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">conv_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bn_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">activation_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dropout_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_layers</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">conv</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">bn</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">x</span> <span class="o">=</span> <span class="n">bn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">activation</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">spatial_pool</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">x</span> <span class="o">=</span> <span class="n">spatial_pool</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_flatten</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_projection</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_projection_bn</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_projection_bn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_projection_activation</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">pool</span><span class="p">,</span> <span class="n">dropout</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">pool</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">seq_emb</span><span class="p">(</span><span class="n">x</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CNN2DEncoder.get_config">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DEncoder.get_config">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_config</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">"n_channels"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+                <span class="s2">"n_bands"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+                <span class="s2">"conv_filters"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">,</span>
+                <span class="s2">"kernel_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_sizes</span><span class="p">,</span>
+                <span class="s2">"spatial_pool_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span><span class="p">,</span>
+                <span class="s2">"temporal_pool_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">,</span>
+                <span class="s2">"dropout"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span>
+                <span class="s2">"activation"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+                <span class="s2">"use_batch_norm"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">config</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="CNN2DDecoder">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DDecoder">[docs]</a>
+<span class="nd">@tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">register_keras_serializable</span><span class="p">(</span><span class="n">package</span><span class="o">=</span><span class="s2">"EEGProc"</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">CNN2DDecoder</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Spatially structured mirror decoder for :class:`CNN2DEncoder`."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_bands</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">t_down</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">conv_filters</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+        <span class="n">temporal_pool_sizes</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">emb_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">activation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relu"</span><span class="p">,</span>
+        <span class="n">use_batch_norm</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">kernel_sizes</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+        <span class="n">spatial_pool_sizes</span><span class="p">:</span> <span class="p">(</span>
+            <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+            <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+            <span class="o">|</span> <span class="kc">None</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"decoder_2dcnn"</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">timesteps</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"timesteps must be positive, got </span><span class="si">{</span><span class="n">timesteps</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_channels</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"n_channels must be positive, got </span><span class="si">{</span><span class="n">n_channels</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_bands</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"n_bands must be positive, got </span><span class="si">{</span><span class="n">n_bands</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">conv_filters</span> <span class="ow">or</span> <span class="nb">any</span><span class="p">(</span><span class="n">filters</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">filters</span> <span class="ow">in</span> <span class="n">conv_filters</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"conv_filters must contain positive values, got </span><span class="si">{</span><span class="n">conv_filters</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">dropout</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"dropout must be in [0, 1), got </span><span class="si">{</span><span class="n">dropout</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">timesteps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_channels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bands</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">t_down</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">conv_filters</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_sizes</span> <span class="o">=</span> <span class="n">CNN2DEncoder</span><span class="o">.</span><span class="n">_normalize_2d_kernel_sizes</span><span class="p">(</span>
+            <span class="n">kernel_sizes</span><span class="p">,</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span> <span class="o">=</span> <span class="n">CNN2DEncoder</span><span class="o">.</span><span class="n">_normalize_2d_pool_sizes</span><span class="p">(</span>
+            <span class="n">spatial_pool_sizes</span><span class="p">,</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span> <span class="o">=</span> <span class="n">CNN2DEncoder</span><span class="o">.</span><span class="n">_normalize_temporal_pool_sizes</span><span class="p">(</span>
+            <span class="n">temporal_pool_sizes</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">emb_dim</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">emb_dim</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">use_batch_norm</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_shapes</span> <span class="o">=</span> <span class="n">CNN2DEncoder</span><span class="o">.</span><span class="n">_compute_spatial_shapes</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">encoded_spatial_shape</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_shapes</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">grid_height</span><span class="p">,</span> <span class="n">grid_width</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoded_spatial_shape</span>
+        <span class="n">grid_filters</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">input_projection</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Conv1D</span><span class="p">(</span>
+            <span class="n">emb_dim</span><span class="p">,</span>
+            <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+            <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"dec_input_projection"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">input_bn</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">BatchNormalization</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"dec_input_bn"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">use_batch_norm</span>
+            <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">input_activation</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Activation</span><span class="p">(</span>
+            <span class="n">activation</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"dec_input_activation"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">upsample_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_conv_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_bn_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_activation_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">pool_size</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">reversed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">)):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">upsample_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">UpSampling1D</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="n">pool_size</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_upsample_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_conv_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">Conv1D</span><span class="p">(</span>
+                    <span class="n">emb_dim</span><span class="p">,</span>
+                    <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                    <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+                    <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_temporal_conv_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_bn_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">BatchNormalization</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_temporal_bn_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">use_batch_norm</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_activation_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">Activation</span><span class="p">(</span>
+                    <span class="n">activation</span><span class="p">,</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_temporal_activation_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_temporal_do_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">grid_seed_projection</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Dense</span><span class="p">(</span>
+            <span class="n">grid_height</span> <span class="o">*</span> <span class="n">grid_width</span> <span class="o">*</span> <span class="n">grid_filters</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"dec_grid_seed_projection"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">grid_seed_bn</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">BatchNormalization</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"dec_grid_seed_bn"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">use_batch_norm</span>
+            <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">grid_seed_activation</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Activation</span><span class="p">(</span>
+            <span class="n">activation</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"dec_grid_seed_activation"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_upsample_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_conv_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_bn_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_activation_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spatial_dropout_layers</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">for</span> <span class="n">decoder_index</span><span class="p">,</span> <span class="n">encoder_index</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
+            <span class="nb">reversed</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">)))</span>
+        <span class="p">):</span>
+            <span class="n">pool_size</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span><span class="p">[</span><span class="n">encoder_index</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_upsample_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">UpSampling2D</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="n">pool_size</span><span class="p">),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_spatial_upsample_</span><span class="si">{</span><span class="n">decoder_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">pool_size</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+
+            <span class="n">output_filters</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">[</span><span class="n">encoder_index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">encoder_index</span> <span class="o">&gt;</span> <span class="mi">0</span>
+                <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_conv_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">Conv2D</span><span class="p">(</span>
+                        <span class="n">output_filters</span><span class="p">,</span>
+                        <span class="n">kernel_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">kernel_sizes</span><span class="p">[</span><span class="n">encoder_index</span><span class="p">],</span>
+                        <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+                        <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_conv2d_</span><span class="si">{</span><span class="n">decoder_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_bn_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">BatchNormalization</span><span class="p">(),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_bn2d_</span><span class="si">{</span><span class="n">decoder_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">use_batch_norm</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_activation_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">Activation</span><span class="p">(</span>
+                    <span class="n">activation</span><span class="p">,</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_activation2d_</span><span class="si">{</span><span class="n">decoder_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_dropout_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+                    <span class="n">layers</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">),</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"dec_do2d_</span><span class="si">{</span><span class="n">decoder_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">x_hat_grid</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">TimeDistributed</span><span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">Conv2D</span><span class="p">(</span>
+                <span class="mi">1</span><span class="p">,</span>
+                <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+                <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="p">),</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"x_hat_grid"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">n_features</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span>
+
+<div class="viewcode-block" id="CNN2DDecoder.from_encoder">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DDecoder.from_encoder">[docs]</a>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">from_encoder</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span>
+        <span class="n">encoder</span><span class="p">:</span> <span class="n">CNN2DEncoder</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"decoder_2dcnn"</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"CNN2DDecoder"</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">encoder</span><span class="p">,</span> <span class="n">CNN2DEncoder</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+                <span class="s2">"CNN2DDecoder.from_encoder only supports CNN2DEncoder. "</span>
+                <span class="sa">f</span><span class="s2">"Got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">encoder</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">n_channels</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+            <span class="n">n_bands</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+            <span class="n">t_down</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">t_down</span><span class="p">,</span>
+            <span class="n">conv_filters</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">,</span>
+            <span class="n">kernel_sizes</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">kernel_sizes</span><span class="p">,</span>
+            <span class="n">spatial_pool_sizes</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">spatial_pool_sizes</span><span class="p">,</span>
+            <span class="n">temporal_pool_sizes</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">,</span>
+            <span class="n">emb_dim</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">emb_dim</span><span class="p">,</span>
+            <span class="n">dropout</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+            <span class="n">use_batch_norm</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">use_batch_norm</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+        <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CNN2DDecoder.fix_length">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DDecoder.fix_length">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">fix_length</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span> <span class="p">:]</span>
+        <span class="n">current_timesteps</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">x</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">pad_amount</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span> <span class="o">-</span> <span class="n">current_timesteps</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">paddings</span><span class="o">=</span><span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">pad_amount</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]])</span></div>
+
+
+<div class="viewcode-block" id="CNN2DDecoder.call">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DDecoder.call">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_projection</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_bn</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_bn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_activation</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">upsample</span><span class="p">,</span> <span class="n">conv</span><span class="p">,</span> <span class="n">bn</span><span class="p">,</span> <span class="n">activation</span><span class="p">,</span> <span class="n">dropout</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">upsample_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_conv_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_bn_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_activation_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">upsample</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">residual</span> <span class="o">=</span> <span class="n">x</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">conv</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">bn</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">x</span> <span class="o">=</span> <span class="n">bn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">activation</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="n">residual</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">grid_seed_projection</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">grid_seed_bn</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">grid_seed_bn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">grid_seed_activation</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="n">batch_size</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">x</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">time_steps</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">x</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">grid_height</span><span class="p">,</span> <span class="n">grid_width</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoded_spatial_shape</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="n">x</span><span class="p">,</span>
+            <span class="p">[</span>
+                <span class="n">batch_size</span><span class="p">,</span>
+                <span class="n">time_steps</span><span class="p">,</span>
+                <span class="n">grid_height</span><span class="p">,</span>
+                <span class="n">grid_width</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+            <span class="p">],</span>
+        <span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">upsample</span><span class="p">,</span> <span class="n">conv</span><span class="p">,</span> <span class="n">bn</span><span class="p">,</span> <span class="n">activation</span><span class="p">,</span> <span class="n">dropout</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_upsample_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_conv_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_bn_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_activation_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spatial_dropout_layers</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="k">if</span> <span class="n">upsample</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">x</span> <span class="o">=</span> <span class="n">upsample</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">conv</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">bn</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">x</span> <span class="o">=</span> <span class="n">bn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">activation</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span> <span class="p">:,</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span> <span class="p">:]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">x_hat_grid</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">time_steps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_features</span><span class="p">])</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fix_length</span><span class="p">(</span><span class="n">x</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CNN2DDecoder.compute_output_shape">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DDecoder.compute_output_shape">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">compute_output_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">input_shape</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">input_shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_features</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CNN2DDecoder.get_config">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html#eegproc.deep_learning.unsupervised.Convolutions.CNN2D.CNN2DDecoder.get_config">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_config</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">"timesteps"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span>
+                <span class="s2">"n_channels"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+                <span class="s2">"n_bands"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+                <span class="s2">"t_down"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span><span class="p">,</span>
+                <span class="s2">"conv_filters"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">conv_filters</span><span class="p">,</span>
+                <span class="s2">"kernel_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_sizes</span><span class="p">,</span>
+                <span class="s2">"spatial_pool_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">spatial_pool_sizes</span><span class="p">,</span>
+                <span class="s2">"temporal_pool_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">,</span>
+                <span class="s2">"emb_dim"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">emb_dim</span><span class="p">,</span>
+                <span class="s2">"dropout"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span>
+                <span class="s2">"activation"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+                <span class="s2">"use_batch_norm"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span><span class="p">,</span>
+                <span class="s2">"name"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">config</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
