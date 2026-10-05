@@ -1,0 +1,435 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.model_explainability.model_agnostic.adapter &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.model_explainability.model_agnostic.adapter</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.model_explainability.model_agnostic.adapter</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Model and dataset contracts for architecture-agnostic counterfactuals.</span>
+
+<span class="sd">Adapters isolate model-specific state initialization, classification, decoding,</span>
+<span class="sd">and optional validity metrics from the optimizer. External projects can provide</span>
+<span class="sd">an adapter factory without changing EEGProc; factories are addressed as</span>
+<span class="sd">``package.module:function`` and receive ``model_path``, ``config``, and one</span>
+<span class="sd">sample trial.</span>
+<span class="sd">"""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span><span class="p">,</span> <span class="n">abstractmethod</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Mapping</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+
+
+<div class="viewcode-block" id="TrialDataset">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.TrialDataset">[docs]</a>
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">TrialDataset</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Prepared trials and optional metadata needed to restore source units."""</span>
+
+    <span class="n">features</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+    <span class="n">subject_ids</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+    <span class="n">trial_ids</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+    <span class="n">labels</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">normalization_offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">normalization_scale</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">channel_names</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">band_names</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">channel_positions</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">feature_order</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">signal_unit</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="CounterfactualAdapter">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">CounterfactualAdapter</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Minimal differentiable interface consumed by the generic optimizer."""</span>
+
+    <span class="n">name</span> <span class="o">=</span> <span class="s2">"custom"</span>
+    <span class="n">optimization_space</span> <span class="o">=</span> <span class="s2">"latent"</span>
+    <span class="n">default_state_weight</span> <span class="o">=</span> <span class="mf">0.1</span>
+    <span class="n">default_signal_weight</span> <span class="o">=</span> <span class="mf">0.1</span>
+
+<div class="viewcode-block" id="CounterfactualAdapter.initial_state">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.initial_state">[docs]</a>
+    <span class="nd">@abstractmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initial_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inputs</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return the tensor that should be optimized for one input trial."""</span></div>
+
+
+<div class="viewcode-block" id="CounterfactualAdapter.logits_from_state">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.logits_from_state">[docs]</a>
+    <span class="nd">@abstractmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">logits_from_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return unnormalized class logits for the optimizable state."""</span></div>
+
+
+<div class="viewcode-block" id="CounterfactualAdapter.reconstruct">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.reconstruct">[docs]</a>
+    <span class="nd">@abstractmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">reconstruct</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">reference_input</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""Map state to one or more input-shaped differentiable signals."""</span></div>
+
+
+<div class="viewcode-block" id="CounterfactualAdapter.constraint">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.constraint">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">constraint</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">signal</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return one scalar validity metric; subclasses opt in by name."""</span>
+
+        <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Adapter </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> does not provide constraint </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2">."</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CounterfactualAdapter.metadata">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.metadata">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">"adapter"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+            <span class="s2">"optimization_space"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">optimization_space</span><span class="p">,</span>
+        <span class="p">}</span></div>
+</div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_resolve_object</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+    <span class="k">if</span> <span class="s2">":"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">spec</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Object specifications must use 'package.module:name'."</span><span class="p">)</span>
+    <span class="n">module_name</span><span class="p">,</span> <span class="n">object_name</span> <span class="o">=</span> <span class="n">spec</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">":"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">module_name</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">object_name</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Object specifications must use 'package.module:name'."</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="n">module_name</span><span class="p">),</span> <span class="n">object_name</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="load_json_mapping">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.load_json_mapping">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_json_mapping</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""Load a JSON object from inline text or a JSON file path."""</span>
+
+    <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{}</span>
+    <span class="n">candidate</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">candidate</span><span class="o">.</span><span class="n">is_file</span><span class="p">():</span>
+        <span class="n">payload</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">candidate</span><span class="o">.</span><span class="n">read_text</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">))</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">payload</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Configuration JSON must contain an object."</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">payload</span></div>
+
+
+
+<div class="viewcode-block" id="create_adapter">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.create_adapter">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">create_adapter</span><span class="p">(</span>
+    <span class="n">factory_spec</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">model_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+    <span class="n">sample_input</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CounterfactualAdapter</span><span class="p">:</span>
+    <span class="n">factory</span> <span class="o">=</span> <span class="n">_resolve_object</span><span class="p">(</span><span class="n">factory_spec</span><span class="p">)</span>
+    <span class="n">adapter</span> <span class="o">=</span> <span class="n">factory</span><span class="p">(</span>
+        <span class="n">model_path</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="n">model_path</span><span class="p">),</span>
+        <span class="n">config</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
+        <span class="n">sample_input</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">sample_input</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">adapter</span><span class="p">,</span> <span class="n">CounterfactualAdapter</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"Adapter factory </span><span class="si">{</span><span class="n">factory_spec</span><span class="si">!r}</span><span class="s2"> returned </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">adapter</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">, "</span>
+            <span class="s2">"not CounterfactualAdapter."</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">adapter</span></div>
+
+
+
+<div class="viewcode-block" id="load_trial_dataset">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.load_trial_dataset">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_trial_dataset</span><span class="p">(</span>
+    <span class="n">npz_path</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">loader_spec</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">loader_config</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TrialDataset</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Load a standard NPZ or delegate dataset construction to a plug-in."""</span>
+
+    <span class="k">if</span> <span class="n">loader_spec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">loaded</span> <span class="o">=</span> <span class="n">_resolve_object</span><span class="p">(</span><span class="n">loader_spec</span><span class="p">)(</span><span class="nb">dict</span><span class="p">(</span><span class="n">loader_config</span> <span class="ow">or</span> <span class="p">{}))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">loaded</span><span class="p">,</span> <span class="n">TrialDataset</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Dataset loader </span><span class="si">{</span><span class="n">loader_spec</span><span class="si">!r}</span><span class="s2"> must return TrialDataset."</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">validate_trial_dataset</span><span class="p">(</span><span class="n">loaded</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">npz_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Provide either an NPZ path or a dataset loader."</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="n">np</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">npz_path</span><span class="p">),</span> <span class="n">allow_pickle</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="k">as</span> <span class="n">data</span><span class="p">:</span>
+        <span class="n">required</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"features"</span><span class="p">,</span> <span class="s2">"subject_ids"</span><span class="p">,</span> <span class="s2">"trial_ids"</span><span class="p">}</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">required</span><span class="o">.</span><span class="n">issubset</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">files</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Prepared NPZ requires keys </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">required</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">optional_array</span><span class="p">(</span><span class="n">name</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">name</span><span class="p">])</span> <span class="k">if</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">files</span> <span class="k">else</span> <span class="kc">None</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">optional_strings</span><span class="p">(</span><span class="n">name</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">files</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">None</span>
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span>
+                <span class="n">value</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">)</span> <span class="k">else</span> <span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">name</span><span class="p">])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+            <span class="p">)</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">optional_scalar</span><span class="p">(</span><span class="n">name</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">files</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">None</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">name</span><span class="p">])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">None</span> <span class="k">if</span> <span class="ow">not</span> <span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="k">else</span> <span class="nb">str</span><span class="p">(</span><span class="n">values</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+        <span class="n">dataset</span> <span class="o">=</span> <span class="n">TrialDataset</span><span class="p">(</span>
+            <span class="n">features</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">"features"</span><span class="p">]),</span>
+            <span class="n">subject_ids</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">"subject_ids"</span><span class="p">]),</span>
+            <span class="n">trial_ids</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">"trial_ids"</span><span class="p">]),</span>
+            <span class="n">labels</span><span class="o">=</span><span class="n">optional_array</span><span class="p">(</span><span class="s2">"labels"</span><span class="p">),</span>
+            <span class="n">normalization_offset</span><span class="o">=</span><span class="n">optional_array</span><span class="p">(</span><span class="s2">"normalization_offset"</span><span class="p">),</span>
+            <span class="n">normalization_scale</span><span class="o">=</span><span class="n">optional_array</span><span class="p">(</span><span class="s2">"normalization_scale"</span><span class="p">),</span>
+            <span class="n">channel_names</span><span class="o">=</span><span class="n">optional_strings</span><span class="p">(</span><span class="s2">"channel_names"</span><span class="p">),</span>
+            <span class="n">band_names</span><span class="o">=</span><span class="n">optional_strings</span><span class="p">(</span><span class="s2">"band_names"</span><span class="p">),</span>
+            <span class="n">channel_positions</span><span class="o">=</span><span class="n">optional_array</span><span class="p">(</span><span class="s2">"channel_positions"</span><span class="p">),</span>
+            <span class="n">feature_order</span><span class="o">=</span><span class="n">optional_scalar</span><span class="p">(</span><span class="s2">"feature_order"</span><span class="p">),</span>
+            <span class="n">signal_unit</span><span class="o">=</span><span class="n">optional_scalar</span><span class="p">(</span><span class="s2">"signal_unit"</span><span class="p">),</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">validate_trial_dataset</span><span class="p">(</span><span class="n">dataset</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="validate_trial_dataset">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.validate_trial_dataset">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">validate_trial_dataset</span><span class="p">(</span><span class="n">dataset</span><span class="p">:</span> <span class="n">TrialDataset</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TrialDataset</span><span class="p">:</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">features</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&lt;</span> <span class="mi">3</span> <span class="ow">or</span> <span class="ow">not</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"features must be finite, nonempty, and include a trial axis."</span><span class="p">)</span>
+    <span class="n">n_trials</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"subject_ids"</span><span class="p">,</span> <span class="s2">"trial_ids"</span><span class="p">,</span> <span class="s2">"labels"</span><span class="p">):</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">values</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="p">(</span><span class="n">n_trials</span><span class="p">,)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">issubdtype</span><span class="p">(</span><span class="n">values</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">integer</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must contain one integer per trial."</span><span class="p">)</span>
+        <span class="nb">setattr</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">values</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">subject_ids</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span> <span class="n">dataset</span><span class="o">.</span><span class="n">trial_ids</span><span class="o">.</span><span class="n">tolist</span><span class="p">())))</span> <span class="o">!=</span> <span class="n">n_trials</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Each (subject_id, trial_id) pair must be unique."</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"normalization_offset"</span><span class="p">,</span> <span class="s2">"normalization_scale"</span><span class="p">):</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">values</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">n_trials</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">values</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must be finite and start with the trial axis."</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">broadcast_shapes</span><span class="p">(</span><span class="n">values</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+        <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> shape </span><span class="si">{</span><span class="n">values</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> cannot broadcast to features </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">error</span>
+        <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"normalization_scale"</span> <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">values</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"normalization_scale values must be positive."</span><span class="p">)</span>
+        <span class="nb">setattr</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">values</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">dataset</span><span class="o">.</span><span class="n">channel_positions</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">positions</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">channel_positions</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">positions</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">positions</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"channel_positions must be finite and shaped (channels, 2)."</span><span class="p">)</span>
+        <span class="n">dataset</span><span class="o">.</span><span class="n">channel_positions</span> <span class="o">=</span> <span class="n">positions</span>
+    <span class="n">dataset</span><span class="o">.</span><span class="n">features</span> <span class="o">=</span> <span class="n">x</span>
+    <span class="k">return</span> <span class="n">dataset</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_model_output</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">output_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">):</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">inputs</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">output_key</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Model returned a mapping; set adapter_config.output_key."</span><span class="p">)</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="n">output_key</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">convert_to_tensor</span><span class="p">(</span><span class="n">output</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_as_logits</span><span class="p">(</span><span class="n">output</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">output_kind</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">output_kind</span> <span class="o">==</span> <span class="s2">"logits"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">output</span>
+    <span class="k">if</span> <span class="n">output_kind</span> <span class="o">!=</span> <span class="s2">"probabilities"</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"output_kind must be 'logits' or 'probabilities'."</span><span class="p">)</span>
+    <span class="n">probabilities</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">clip_by_value</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="mf">1e-7</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">probabilities</span> <span class="o">=</span> <span class="n">probabilities</span> <span class="o">/</span> <span class="n">tf</span><span class="o">.</span><span class="n">reduce_sum</span><span class="p">(</span><span class="n">probabilities</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">probabilities</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="KerasInputAdapter">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">KerasInputAdapter</span><span class="p">(</span><span class="n">CounterfactualAdapter</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Input-space gradients for differentiable Keras models without decoders."""</span>
+
+    <span class="n">name</span> <span class="o">=</span> <span class="s2">"keras-input"</span>
+    <span class="n">optimization_space</span> <span class="o">=</span> <span class="s2">"input"</span>
+    <span class="n">default_state_weight</span> <span class="o">=</span> <span class="mf">0.1</span>
+    <span class="n">default_signal_weight</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">output_kind</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">output_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span> <span class="o">=</span> <span class="n">model</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_kind</span> <span class="o">=</span> <span class="n">output_kind</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_key</span> <span class="o">=</span> <span class="n">output_key</span>
+
+<div class="viewcode-block" id="KerasInputAdapter.initial_state">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.initial_state">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initial_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inputs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">inputs</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="KerasInputAdapter.logits_from_state">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.logits_from_state">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">logits_from_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">_as_logits</span><span class="p">(</span>
+            <span class="n">_model_output</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">output_key</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">output_key</span><span class="p">),</span>
+            <span class="n">output_kind</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">output_kind</span><span class="p">,</span>
+        <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="KerasInputAdapter.reconstruct">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.reconstruct">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">reconstruct</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">reference_input</span><span class="p">):</span>
+        <span class="k">del</span> <span class="n">reference_input</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">"input"</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)}</span></div>
+
+
+<div class="viewcode-block" id="KerasInputAdapter.metadata">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.metadata">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="o">**</span><span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">metadata</span><span class="p">(),</span>
+            <span class="s2">"output_kind"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">output_kind</span><span class="p">,</span>
+            <span class="s2">"output_key"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">output_key</span><span class="p">,</span>
+        <span class="p">}</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="create_keras_input_adapter">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.adapter.html#eegproc.model_explainability.model_agnostic.adapter.create_keras_input_adapter">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">create_keras_input_adapter</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">model_path</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">sample_input</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Built-in factory for arbitrary differentiable input-space Keras models."""</span>
+
+    <span class="k">for</span> <span class="n">module_name</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"registration_modules"</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">module_name</span><span class="p">))</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">models</span><span class="o">.</span><span class="n">load_model</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">model_path</span><span class="p">),</span> <span class="nb">compile</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">safe_mode</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">adapter</span> <span class="o">=</span> <span class="n">KerasInputAdapter</span><span class="p">(</span>
+        <span class="n">model</span><span class="p">,</span>
+        <span class="n">output_kind</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"output_kind"</span><span class="p">,</span> <span class="s2">"logits"</span><span class="p">)),</span>
+        <span class="n">output_key</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"output_key"</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="k">del</span> <span class="n">sample_input</span>
+    <span class="k">return</span> <span class="n">adapter</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

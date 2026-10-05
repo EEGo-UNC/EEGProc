@@ -1,0 +1,406 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.preprocessing module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Convert public datasets to CSV" href="../datasets.html" />
+    <link rel="prev" title="eegproc.featurization module" href="eegproc.featurization.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#submodules">Submodules</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.featurization.html">eegproc.featurization module</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">eegproc.preprocessing module</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+      <li class="breadcrumb-item active">eegproc.preprocessing module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.preprocessing.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.preprocessing">
+<span id="eegproc-preprocessing-module"></span><h1>eegproc.preprocessing module<a class="headerlink" href="#module-eegproc.preprocessing" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.preprocessing.apply_detrend">
+<span class="sig-prename descclassname"><span class="pre">eegproc.preprocessing.</span></span><span class="sig-name descname"><span class="pre">apply_detrend</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">detrend</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">df</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/preprocessing.html#apply_detrend"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.preprocessing.apply_detrend" title="Link to this definition"></a></dt>
+<dd><p>Apply interpolation and (optionally) remove a trend from each numeric column.</p>
+<p>This is a small convenience wrapper that first ensures numeric columns are
+float and linearly interpolated (forward/backward) via <a class="reference internal" href="#eegproc.preprocessing.numeric_interp" title="eegproc.preprocessing.numeric_interp"><code class="xref py py-func docutils literal notranslate"><span class="pre">numeric_interp()</span></code></a>,
+then, depending on <code class="docutils literal notranslate"><span class="pre">detrend</span></code>, optionally removes a trend from each column
+using <code class="xref py py-func docutils literal notranslate"><span class="pre">detrend_df()</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>detrend</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>) – Which trend to remove. Accepted values are:
+- <code class="docutils literal notranslate"><span class="pre">&quot;constant&quot;</span></code>: remove the mean from each series (demean).
+- <code class="docutils literal notranslate"><span class="pre">&quot;linear&quot;</span></code>: remove a best-fit linear trend from each series.
+- <code class="docutils literal notranslate"><span class="pre">None</span></code>: do not detrend; only interpolate numeric columns.</p></li>
+<li><p><strong>df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Input dataframe. Non-numeric columns are ignored for interpolation
+and detrending (they are effectively dropped by the pipeline).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pd.DataFrame</em> – A dataframe with only numeric columns, interpolated, and
+optionally detrended according to <code class="docutils literal notranslate"><span class="pre">detrend</span></code>. Index and column names
+are preserved for the remaining numeric columns.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If <code class="docutils literal notranslate"><span class="pre">detrend</span></code> is not one of <code class="docutils literal notranslate"><span class="pre">{&quot;constant&quot;,</span> <span class="pre">&quot;linear&quot;,</span> <span class="pre">None}</span></code>.</p>
+</dd>
+</dl>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<p>numeric_interp: Coerces numeric columns to float and bi-directionally interpolates.
+detrend_df: Applies SciPy detrending (constant or linear) column-wise.</p>
+</div>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span><span class="o">,</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">"a"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">],</span> <span class="s2">"b"</span><span class="p">:</span> <span class="p">[</span><span class="mf">10.0</span><span class="p">,</span> <span class="mf">11.0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">],</span> <span class="s2">"c"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"x"</span><span class="p">,</span> <span class="s2">"y"</span><span class="p">,</span> <span class="s2">"z"</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">apply_detrend</span><span class="p">(</span><span class="s2">"constant"</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>  <span class="c1"># demean numeric columns after interpolation</span>
+<span class="go">         a     b</span>
+<span class="go">0 -1.000000 -0.5</span>
+<span class="go">1  0.000000  0.5</span>
+<span class="go">2  1.000000  0.0</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">apply_detrend</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>  <span class="c1"># only numeric interpolation</span>
+<span class="go">     a     b</span>
+<span class="go">0  1.0  10.0</span>
+<span class="go">1  2.0  11.0</span>
+<span class="go">2  3.0  11.0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.preprocessing.apply_notch_once">
+<span class="sig-prename descclassname"><span class="pre">eegproc.preprocessing.</span></span><span class="sig-name descname"><span class="pre">apply_notch_once</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dfin</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">notch_hz</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">notch_q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nyq</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/preprocessing.html#apply_notch_once"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.preprocessing.apply_notch_once" title="Link to this definition"></a></dt>
+<dd><p>Apply single-pass IIR notch filtering (and optional 2x harmonic) to each column
+to remove narrow amplitude readings over selected frequencies.</p>
+<p>Builds one or more IIR notch filters at the requested fundamental frequencies,
+optionally adding a 2x harmonic notch when it is safely below Nyquist, and applies
+zero-phase filtering (<code class="docutils literal notranslate"><span class="pre">scipy.signal.filtfilt</span></code>, <code class="docutils literal notranslate"><span class="pre">method=&quot;gust&quot;</span></code>) column-wise.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>dfin</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Raw data EEG dataframe. Numeric columns.</p></li>
+<li><p><strong>notch_hz</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>) – Fundamental notch frequency (e.g., 50 or 60), or a list/tuple of such
+frequencies. If <code class="docutils literal notranslate"><span class="pre">None</span></code>, no notch filtering is applied.</p></li>
+<li><p><strong>notch_q</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Quality factor for <code class="docutils literal notranslate"><span class="pre">scipy.signal.iirnotch</span></code> (higher = narrower notch).</p></li>
+<li><p><strong>nyq</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>) – Nyquist frequency (<code class="docutils literal notranslate"><span class="pre">fs/2</span></code>), used to normalize the notch frequency.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pandas.DataFrame</em> – Copy of the input with the notch (and eligible 2x harmonic) applied
+to all columns with sufficient length.</p>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>A 2x harmonic is added for each fundamental <code class="docutils literal notranslate"><span class="pre">f0</span></code> when <code class="docutils literal notranslate"><span class="pre">2*f0</span> <span class="pre">&lt;</span> <span class="pre">nyq</span> <span class="pre">-</span> <span class="pre">1.0</span></code>.</p></li>
+<li><p>Columns shorter than <code class="docutils literal notranslate"><span class="pre">max(15,</span> <span class="pre">3</span> <span class="pre">*</span> <span class="pre">max(len(a),</span> <span class="pre">len(b)))</span></code> samples are skipped
+for stability.</p></li>
+<li><p>Frequencies are normalized as <code class="docutils literal notranslate"><span class="pre">w0</span> <span class="pre">=</span> <span class="pre">f0</span> <span class="pre">/</span> <span class="pre">nyq</span></code> for <code class="docutils literal notranslate"><span class="pre">iirnotch</span></code>.</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.preprocessing.bandpass_filter">
+<span class="sig-prename descclassname"><span class="pre">eegproc.preprocessing.</span></span><span class="sig-name descname"><span class="pre">bandpass_filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bands</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0)}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">notch_hz</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">[60,</span> <span class="pre">120]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">notch_q</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">30.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reref</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">detrend</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/preprocessing.html#bandpass_filter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.preprocessing.bandpass_filter" title="Link to this definition"></a></dt>
+<dd><p>Applies band-pass filtering over raw EEG data on each channel.</p>
+<section id="pipeline">
+<h2>Pipeline<a class="headerlink" href="#pipeline" title="Link to this heading"></a></h2>
+<ol class="arabic simple">
+<li><p>Coerce to numeric (with interpolation).</p></li>
+<li><p>Optional common average reference (CAR) across channels (<code class="docutils literal notranslate"><span class="pre">reref=True</span></code>).</p></li>
+<li><p>Optional notch filtering at <code class="docutils literal notranslate"><span class="pre">notch_hz</span></code> (and 2x harmonics when safe).</p></li>
+</ol>
+<dl class="simple">
+<dt>4a) If <code class="docutils literal notranslate"><span class="pre">bands</span></code> is a dict: apply a per-band Butterworth band-pass (SOS) and</dt><dd><p>return columns named <code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code>.</p>
+</dd>
+<dt>4b) Else: require <code class="docutils literal notranslate"><span class="pre">(low,</span> <span class="pre">high)</span></code> and apply a single band-pass to each channel,</dt><dd><p>returning the original channel names.</p>
+</dd>
+</dl>
+<ol class="arabic simple" start="5">
+<li><p>Optional constant detrending per output column.</p></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">param df<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Raw data EEG dataframe. Numeric columns; NaNs are
+interpolated internally by <code class="docutils literal notranslate"><span class="pre">numeric_interp</span></code> before filtering.</p>
+</dd>
+<dt class="field-even">type df<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">param fs<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Sampling rate in Hz.</p>
+</dd>
+<dt class="field-even">type fs<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span></p>
+</dd>
+<dt class="field-odd">param bands<span class="colon">:</span></dt>
+<dd class="field-odd"><p>If provided, a mapping from band name to (low, high) in Hz. When given,
+one output column per <code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code> is produced. If <code class="docutils literal notranslate"><span class="pre">None</span></code>,
+<code class="docutils literal notranslate"><span class="pre">low</span></code> and <code class="docutils literal notranslate"><span class="pre">high</span></code> must be provided to define a single passband.</p>
+</dd>
+<dt class="field-even">type bands<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span>, default: <code class="docutils literal notranslate"><span class="pre">{'delta':</span> <span class="pre">(0.5,</span> <span class="pre">4.0),</span> <span class="pre">'theta':</span> <span class="pre">(4.0,</span> <span class="pre">8.0),</span> <span class="pre">'alpha':</span> <span class="pre">(8.0,</span> <span class="pre">13.0),</span> <span class="pre">'betaL':</span> <span class="pre">(13.0,</span> <span class="pre">20.0),</span> <span class="pre">'betaH':</span> <span class="pre">(20.0,</span> <span class="pre">30.0),</span> <span class="pre">'gamma':</span> <span class="pre">(30.0,</span> <span class="pre">45.0)}</span></code></p>
+</dd>
+<dt class="field-odd">param low<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Low cutoff in Hz for the single band-pass path (ignored if <code class="docutils literal notranslate"><span class="pre">bands</span></code> provided).</p>
+</dd>
+<dt class="field-even">type low<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+</dd>
+<dt class="field-odd">param high<span class="colon">:</span></dt>
+<dd class="field-odd"><p>High cutoff in Hz for the single band-pass path (ignored if <code class="docutils literal notranslate"><span class="pre">bands</span></code> provided).</p>
+</dd>
+<dt class="field-even">type high<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+</dd>
+<dt class="field-odd">param order<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Butterworth filter order for band-pass design.</p>
+</dd>
+<dt class="field-even">type order<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">4</span></code></p>
+</dd>
+<dt class="field-odd">param notch_hz<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Fundamental notch frequency/frequencies. <code class="docutils literal notranslate"><span class="pre">None</span></code> disables notch filtering.</p>
+</dd>
+<dt class="field-even">type notch_hz<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">[60,</span> <span class="pre">120]</span></code></p>
+</dd>
+<dt class="field-odd">param notch_q<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Quality factor for the notch (higher = narrower).</p>
+</dd>
+<dt class="field-even">type notch_q<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">30.0</span></code></p>
+</dd>
+<dt class="field-odd">param reref<span class="colon">:</span></dt>
+<dd class="field-odd"><p>If True and there are ≥2 channels, apply common average reference (CAR).</p>
+</dd>
+<dt class="field-even">type reref<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code></p>
+</dd>
+<dt class="field-odd">param detrend<span class="colon">:</span></dt>
+<dd class="field-odd"><p>If True, remove the mean (constant detrend) after filtering.</p>
+</dd>
+<dt class="field-even">type detrend<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code></p>
+</dd>
+<dt class="field-odd">rtype<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-even">returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><em>pandas.DataFrame</em> – Filtered dataframe indexed like the input. If <code class="docutils literal notranslate"><span class="pre">bands</span></code> is provided,
+columns are <code class="docutils literal notranslate"><span class="pre">{channel}_{band}</span></code>; otherwise, the original channel names
+are preserved.</p>
+</dd>
+<dt class="field-odd">raises ValueError<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p>When <code class="docutils literal notranslate"><span class="pre">bands</span></code> is <code class="docutils literal notranslate"><span class="pre">None</span></code> and either <code class="docutils literal notranslate"><span class="pre">low</span></code> or <code class="docutils literal notranslate"><span class="pre">high</span></code> is missing.
+    - When any cutoff does not satisfy <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;</span> <span class="pre">low</span> <span class="pre">&lt;</span> <span class="pre">high</span> <span class="pre">&lt;</span> <span class="pre">fs/2</span></code>.
+    - When a band in <code class="docutils literal notranslate"><span class="pre">bands</span></code> violates Nyquist constraints.</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<dl class="simple">
+<dt>RuntimeWarning</dt><dd><p>Emitted when <code class="docutils literal notranslate"><span class="pre">reref=True</span></code> but only one channel is present (CAR requires ≥2).</p>
+</dd>
+</dl>
+</div>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>Band-pass filters are designed with <code class="docutils literal notranslate"><span class="pre">scipy.signal.butter(...,</span> <span class="pre">output=&quot;sos&quot;)</span></code> and
+applied with a NaN-robust zero-phase filter via <code class="xref py py-func docutils literal notranslate"><span class="pre">_sosfiltfilt_safe()</span></code>.</p></li>
+<li><p>Notch filtering is applied once before band-pass filtering.</p></li>
+<li><p>Constant detrend uses <code class="docutils literal notranslate"><span class="pre">scipy.signal.detrend(...,</span> <span class="pre">type=&quot;constant&quot;)</span></code>.</p></li>
+<li><p>For stability, very short columns may be skipped inside helper routines.</p></li>
+</ul>
+</section>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.preprocessing.numeric_interp">
+<span class="sig-prename descclassname"><span class="pre">eegproc.preprocessing.</span></span><span class="sig-name descname"><span class="pre">numeric_interp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/preprocessing.html#numeric_interp"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.preprocessing.numeric_interp" title="Link to this definition"></a></dt>
+<dd><p>Select numeric columns, cast to float, and interpolate missing values.</p>
+<dl class="simple">
+<dt>The function:</dt><dd><ol class="arabic simple">
+<li><p>keeps only numeric dtypes,</p></li>
+<li><p>casts them to <code class="docutils literal notranslate"><span class="pre">float</span></code> (to allow NaNs and interpolation),</p></li>
+<li><p>fills missing values with linear interpolation along the index,
+using <code class="docutils literal notranslate"><span class="pre">limit_direction='both'</span></code> to also fill leading/trailing gaps.</p></li>
+</ol>
+</dd>
+</dl>
+<p>Non-numeric columns are dropped.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>df</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span>) – Input dataframe containing numeric and/or non-numeric columns.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></span></p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>pd.DataFrame</em> – A <em>copy</em> containing only the numeric columns as floats,
+with missing values linearly interpolated forward and backward.</p>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>Interpolation is performed independently per column.</p></li>
+<li><p>If a column is entirely NaN, it will remain NaN.</p></li>
+</ul>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span><span class="o">,</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">"x"</span><span class="p">:</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">],</span> <span class="s2">"y"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"a"</span><span class="p">,</span> <span class="s2">"b"</span><span class="p">,</span> <span class="s2">"c"</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">numeric_interp</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+<span class="go">     x</span>
+<span class="go">0  1.0</span>
+<span class="go">1  2.0</span>
+<span class="go">2  3.0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.preprocessing.sosfiltfilt_safe">
+<span class="sig-prename descclassname"><span class="pre">eegproc.preprocessing.</span></span><span class="sig-name descname"><span class="pre">sosfiltfilt_safe</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sos</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/preprocessing.html#sosfiltfilt_safe"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.preprocessing.sosfiltfilt_safe" title="Link to this definition"></a></dt>
+<dd><p>Zero-phase Second-order Section (SOS) filter,
+handles NaNs and short signals.</p>
+<p>Applies <code class="docutils literal notranslate"><span class="pre">scipy.signal.sosfiltfilt</span></code> to a 1-D array.
+Linearly interpolates internal NaNs (or fills with 0.0 if
+too few finite samples to interpolate).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>sos</strong> (<em>array-like</em>) – Second-order-sections filter coefficients as produced by
+<code class="docutils literal notranslate"><span class="pre">scipy.signal.butter(...,</span> <span class="pre">output=&quot;sos&quot;)</span></code>.</p></li>
+<li><p><strong>y</strong> (<em>array-like</em><em> of </em><em>shape</em><em> (</em><em>n_samples</em><em>,</em><em>)</em>) – Input signal (1-D). May contain NaNs.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><em>numpy.ndarray</em> – Filtered signal. If the input is all-NaN or too short, returns a
+copy of the input (with NaNs interpolated when possible).</p>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>NaNs at the edges are handled by linear interpolation using the nearest
+finite samples when available; otherwise they are set to 0.0.</p></li>
+<li><p>The minimum-length guard (15) prevents filtfilt endpoint artifacts
+and poor padding when the window is too small.</p></li>
+</ul>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.featurization.html" class="btn btn-neutral float-left" title="eegproc.featurization module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../datasets.html" class="btn btn-neutral float-right" title="Convert public datasets to CSV" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

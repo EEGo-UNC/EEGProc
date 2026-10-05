@@ -1,0 +1,377 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.training_outputs module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.model_explainability package" href="eegproc.model_explainability.html" />
+    <link rel="prev" title="eegproc.deep_learning.prepare_datasets module" href="eegproc.deep_learning.prepare_datasets.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.data.html">eegproc.data package</a></li>
+<li class="toctree-l4 current"><a class="reference internal" href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.plotting.html">eegproc.plotting package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.training_outputs module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.deep_learning.training_outputs.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.deep_learning.training_outputs">
+<span id="eegproc-deep-learning-training-outputs-module"></span><h1>eegproc.deep_learning.training_outputs module<a class="headerlink" href="#module-eegproc.deep_learning.training_outputs" title="Link to this heading"></a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.CompactEpochLogger">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.training_outputs.</span></span><span class="sig-name descname"><span class="pre">CompactEpochLogger</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fold_number</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">context</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#CompactEpochLogger"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.CompactEpochLogger" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">Callback</span></code></p>
+<p>Print one consolidated training-diagnostics row per epoch.</p>
+<p>Keras’ built-in <code class="docutils literal notranslate"><span class="pre">verbose=2</span></code> logger places every metric on one very long
+line. This callback retains the readable metric/class/loss groupings without
+emitting several separate rows and leaves <code class="docutils literal notranslate"><span class="pre">history.history</span></code> unchanged.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>fold_number</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>context</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.CompactEpochLogger.on_epoch_end">
+<span class="sig-name descname"><span class="pre">on_epoch_end</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">epoch</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#CompactEpochLogger.on_epoch_end"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.CompactEpochLogger.on_epoch_end" title="Link to this definition"></a></dt>
+<dd><p>Called at the end of an epoch.</p>
+<p>Subclasses should override for any actions to run. This function should
+only be called during TRAIN mode.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>epoch</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Integer, index of epoch.</p></li>
+<li><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict, metric results for this training epoch, and for the
+validation epoch if validation is performed. Validation result
+keys are prefixed with <cite>val_</cite>. For training epoch, the values of
+the <cite>Model</cite>’s metrics are returned. Example:
+<cite>{‘loss’: 0.2, ‘accuracy’: 0.7}</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.CompactEpochLogger.on_train_begin">
+<span class="sig-name descname"><span class="pre">on_train_begin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#CompactEpochLogger.on_train_begin"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.CompactEpochLogger.on_train_begin" title="Link to this definition"></a></dt>
+<dd><p>Called at the beginning of training.</p>
+<p>Subclasses should override for any actions to run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict. Currently no data is passed to this argument for this
+method but that may change in the future.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.CompactEpochLogger.on_train_end">
+<span class="sig-name descname"><span class="pre">on_train_end</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#CompactEpochLogger.on_train_end"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.CompactEpochLogger.on_train_end" title="Link to this definition"></a></dt>
+<dd><p>Called at the end of training.</p>
+<p>Subclasses should override for any actions to run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict. Currently the output of the last call to
+<cite>on_epoch_end()</cite> is passed to this argument for this method but
+that may change in the future.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.training_outputs.</span></span><span class="sig-name descname"><span class="pre">HeldOutUserOracleMetrics</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">X_target</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_target</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subject_ids_target</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">trial_ids_target</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_subject</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evaluation_level</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">decision_threshold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">diagnostic_thresholds</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ece_bins</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">15</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">calibration_shots</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">calibration_fold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#HeldOutUserOracleMetrics"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference internal" href="eegproc.deep_learning.cross_validation.callbacks.html#eegproc.deep_learning.cross_validation.callbacks.HeldOutUserOracleMetrics" title="eegproc.deep_learning.cross_validation.callbacks.HeldOutUserOracleMetrics"><code class="xref py py-class docutils literal notranslate"><span class="pre">HeldOutUserOracleMetrics</span></code></a></p>
+<p>Emit one complete reporting-only oracle-prediction row per epoch.</p>
+<p>The parent callback previously printed decoder and classification values on
+separate rows. This replacement preserves its initialization contract and
+reporting-only history while computing the complete classification suite,
+probability log loss, and both branch-specific reconstruction suites in one
+memory-bounded pass per output type.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>X_target</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>y_target</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>subject_ids_target</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>trial_ids_target</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>evaluation_level</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Literal</span></code>[<code class="docutils literal notranslate"><span class="pre">'window'</span></code>, <code class="docutils literal notranslate"><span class="pre">'trial'</span></code>]</span>)</p></li>
+<li><p><strong>batch_size</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>decision_threshold</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.5</span></code>)</p></li>
+<li><p><strong>diagnostic_thresholds</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>] | <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>ece_bins</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">15</span></code>)</p></li>
+<li><p><strong>calibration_shots</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>calibration_fold</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_epoch_end">
+<span class="sig-name descname"><span class="pre">on_epoch_end</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">epoch</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#HeldOutUserOracleMetrics.on_epoch_end"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_epoch_end" title="Link to this definition"></a></dt>
+<dd><p>Called at the end of an epoch.</p>
+<p>Subclasses should override for any actions to run. This function should
+only be called during TRAIN mode.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>epoch</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Integer, index of epoch.</p></li>
+<li><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict, metric results for this training epoch, and for the
+validation epoch if validation is performed. Validation result
+keys are prefixed with <cite>val_</cite>. For training epoch, the values of
+the <cite>Model</cite>’s metrics are returned. Example:
+<cite>{‘loss’: 0.2, ‘accuracy’: 0.7}</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_train_begin">
+<span class="sig-name descname"><span class="pre">on_train_begin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#HeldOutUserOracleMetrics.on_train_begin"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_train_begin" title="Link to this definition"></a></dt>
+<dd><p>Called at the beginning of training.</p>
+<p>Subclasses should override for any actions to run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict. Currently no data is passed to this argument for this
+method but that may change in the future.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_train_end">
+<span class="sig-name descname"><span class="pre">on_train_end</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#HeldOutUserOracleMetrics.on_train_end"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_train_end" title="Link to this definition"></a></dt>
+<dd><p>Called at the end of training.</p>
+<p>Subclasses should override for any actions to run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict. Currently the output of the last call to
+<cite>on_epoch_end()</cite> is passed to this argument for this method but
+that may change in the future.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.PredictionDiagnostics">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.training_outputs.</span></span><span class="sig-name descname"><span class="pre">PredictionDiagnostics</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">X_train</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_train</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">X_val</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_val</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fold_number</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">every_n_epochs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_samples</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">256</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold_tolerance</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.01</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reported_metric</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'accuracy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">decision_threshold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">decision_thresholds</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ece_bins</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">15</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">42</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#PredictionDiagnostics"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.PredictionDiagnostics" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">Callback</span></code></p>
+<p>Print one complete deterministic training-diagnostics row per epoch.</p>
+<p>Only a fixed, approximately class-balanced subset is evaluated, so the
+callback remains inexpensive relative to a full validation pass. The row
+combines the existing Keras epoch metrics/losses with exact probability
+metrics on that fixed subset, including ROC-AUC and macro F1. Decoder values
+come from the epoch-wide Keras logs when available; a memory-bounded
+inference fallback is used only for models that expose a decoder without
+tracking its metrics.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>X_train</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>y_train</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>X_val</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>y_val</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>fold_number</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>batch_size</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>every_n_epochs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1</span></code>)</p></li>
+<li><p><strong>max_samples</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">256</span></code>)</p></li>
+<li><p><strong>threshold_tolerance</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.01</span></code>)</p></li>
+<li><p><strong>reported_metric</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'accuracy'</span></code>)</p></li>
+<li><p><strong>decision_threshold</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.5</span></code>)</p></li>
+<li><p><strong>decision_thresholds</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">Sequence</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>ece_bins</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">15</span></code>)</p></li>
+<li><p><strong>seed</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">42</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_epoch_end">
+<span class="sig-name descname"><span class="pre">on_epoch_end</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">epoch</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#PredictionDiagnostics.on_epoch_end"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_epoch_end" title="Link to this definition"></a></dt>
+<dd><p>Called at the end of an epoch.</p>
+<p>Subclasses should override for any actions to run. This function should
+only be called during TRAIN mode.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>epoch</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Integer, index of epoch.</p></li>
+<li><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict, metric results for this training epoch, and for the
+validation epoch if validation is performed. Validation result
+keys are prefixed with <cite>val_</cite>. For training epoch, the values of
+the <cite>Model</cite>’s metrics are returned. Example:
+<cite>{‘loss’: 0.2, ‘accuracy’: 0.7}</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_train_begin">
+<span class="sig-name descname"><span class="pre">on_train_begin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#PredictionDiagnostics.on_train_begin"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_train_begin" title="Link to this definition"></a></dt>
+<dd><p>Called at the beginning of training.</p>
+<p>Subclasses should override for any actions to run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict. Currently no data is passed to this argument for this
+method but that may change in the future.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_train_end">
+<span class="sig-name descname"><span class="pre">on_train_end</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/training_outputs.html#PredictionDiagnostics.on_train_end"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_train_end" title="Link to this definition"></a></dt>
+<dd><p>Called at the end of training.</p>
+<p>Subclasses should override for any actions to run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>logs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Dict. Currently the output of the last call to
+<cite>on_epoch_end()</cite> is passed to this argument for this method but
+that may change in the future.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.deep_learning.prepare_datasets.html" class="btn btn-neutral float-left" title="eegproc.deep_learning.prepare_datasets module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.model_explainability.html" class="btn btn-neutral float-right" title="eegproc.model_explainability package" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

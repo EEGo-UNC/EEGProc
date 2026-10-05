@@ -1,0 +1,453 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.model_explainability.model_agnostic.optimizer &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.model_explainability.model_agnostic.optimizer</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.model_explainability.model_agnostic.optimizer</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Gradient counterfactuals over the small CounterfactualAdapter contract."""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Iterable</span><span class="p">,</span> <span class="n">Mapping</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.adapter</span><span class="w"> </span><span class="kn">import</span> <span class="n">CounterfactualAdapter</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_mean_mse</span><span class="p">(</span><span class="n">left</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+    <span class="n">left</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">right</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">right</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+    <span class="n">tf</span><span class="o">.</span><span class="n">debugging</span><span class="o">.</span><span class="n">assert_equal</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">left</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">right</span><span class="p">),</span> <span class="n">message</span><span class="o">=</span><span class="s2">"MSE shapes differ."</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">reduce_mean</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">left</span> <span class="o">-</span> <span class="n">right</span><span class="p">))</span>
+
+
+<div class="viewcode-block" id="ModelAgnosticCounterfactualOptimizer">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.optimizer.html#eegproc.model_explainability.model_agnostic.optimizer.ModelAgnosticCounterfactualOptimizer">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">ModelAgnosticCounterfactualOptimizer</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Optimize adapter state while leaving all model parameters unchanged."""</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">adapter</span><span class="p">:</span> <span class="n">CounterfactualAdapter</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">target_probability</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.8</span><span class="p">,</span>
+        <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+        <span class="n">max_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">200</span><span class="p">,</span>
+        <span class="n">gradient_clip_norm</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">5.0</span><span class="p">,</span>
+        <span class="n">target_weight</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">state_weight</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">signal_weight</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">constraint_weights</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">report_constraints</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+        <span class="n">stop_on_success</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;</span> <span class="nb">float</span><span class="p">(</span><span class="n">target_probability</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"target_probability must be strictly between 0 and 1."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">float</span><span class="p">(</span><span class="n">learning_rate</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">learning_rate</span><span class="p">)):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"learning_rate must be finite and positive."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">max_steps</span><span class="p">,</span> <span class="nb">bool</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_steps</span><span class="p">)</span> <span class="o">!=</span> <span class="n">max_steps</span> <span class="ow">or</span> <span class="n">max_steps</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"max_steps must be a nonnegative integer."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">gradient_clip_norm</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="p">(</span>
+            <span class="n">gradient_clip_norm</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">gradient_clip_norm</span><span class="p">))</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"gradient_clip_norm must be positive or None."</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">adapter</span> <span class="o">=</span> <span class="n">adapter</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_probability</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">target_probability</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">learning_rate</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_steps</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_steps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gradient_clip_norm</span> <span class="o">=</span> <span class="n">gradient_clip_norm</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_weight</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_weight</span><span class="p">(</span><span class="s2">"target_weight"</span><span class="p">,</span> <span class="n">target_weight</span><span class="p">,</span> <span class="n">positive</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_weight</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_weight</span><span class="p">(</span>
+            <span class="s2">"state_weight"</span><span class="p">,</span>
+            <span class="n">adapter</span><span class="o">.</span><span class="n">default_state_weight</span> <span class="k">if</span> <span class="n">state_weight</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">state_weight</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">signal_weight</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_weight</span><span class="p">(</span>
+            <span class="s2">"signal_weight"</span><span class="p">,</span>
+            <span class="n">adapter</span><span class="o">.</span><span class="n">default_signal_weight</span> <span class="k">if</span> <span class="n">signal_weight</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">signal_weight</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">constraint_weights</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="nb">str</span><span class="p">(</span><span class="n">name</span><span class="p">):</span> <span class="bp">self</span><span class="o">.</span><span class="n">_weight</span><span class="p">(</span><span class="sa">f</span><span class="s2">"constraint </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2">"</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="nb">dict</span><span class="p">(</span><span class="n">constraint_weights</span> <span class="ow">or</span> <span class="p">{})</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">report_constraints</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">report_constraints</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_on_success</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">stop_on_success</span><span class="p">)</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_weight</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">positive</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="ow">or</span> <span class="n">value</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="p">(</span><span class="n">positive</span> <span class="ow">and</span> <span class="n">value</span> <span class="o">==</span> <span class="mi">0</span><span class="p">):</span>
+            <span class="n">qualifier</span> <span class="o">=</span> <span class="s2">"positive"</span> <span class="k">if</span> <span class="n">positive</span> <span class="k">else</span> <span class="s2">"nonnegative"</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must be finite and </span><span class="si">{</span><span class="n">qualifier</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">value</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_prediction</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">logits</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">target_class</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">probabilities</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">numpy</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">probabilities</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">probabilities</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">FloatingPointError</span><span class="p">(</span><span class="s2">"Model returned invalid class probabilities."</span><span class="p">)</span>
+        <span class="n">predicted</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">probabilities</span><span class="p">))</span>
+        <span class="n">target_probability</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">probabilities</span><span class="p">[</span><span class="n">target_class</span><span class="p">])</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">"probabilities"</span><span class="p">:</span> <span class="n">probabilities</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+            <span class="s2">"predicted_class"</span><span class="p">:</span> <span class="n">predicted</span><span class="p">,</span>
+            <span class="s2">"target_probability"</span><span class="p">:</span> <span class="n">target_probability</span><span class="p">,</span>
+            <span class="s2">"success"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span>
+                <span class="n">predicted</span> <span class="o">==</span> <span class="n">target_class</span>
+                <span class="ow">and</span> <span class="n">target_probability</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_probability</span>
+            <span class="p">),</span>
+        <span class="p">}</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_constraints</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">reconstructions</span><span class="p">,</span> <span class="n">names</span><span class="p">):</span>
+        <span class="n">by_output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_constraints_by_output</span><span class="p">(</span><span class="n">reconstructions</span><span class="p">,</span> <span class="n">names</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="n">name</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">add_n</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">output_values</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">output_values</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">output_values</span> <span class="ow">in</span> <span class="n">by_output</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_constraints_by_output</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">reconstructions</span><span class="p">,</span> <span class="n">names</span><span class="p">):</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span><span class="p">:</span>
+            <span class="n">values</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">output_name</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">constraint</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">output_value</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span>
+                <span class="p">)</span>
+                <span class="k">for</span> <span class="n">output_name</span><span class="p">,</span> <span class="n">output_value</span> <span class="ow">in</span> <span class="n">reconstructions</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
+        <span class="k">return</span> <span class="n">values</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_objective</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">variable</span><span class="p">,</span> <span class="n">original_state</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">target_class</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">baseline_reconstructions</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">logits</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">logits_from_state</span><span class="p">(</span><span class="n">variable</span><span class="p">)</span>
+        <span class="n">reconstructions</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">reconstruct</span><span class="p">(</span><span class="n">variable</span><span class="p">,</span> <span class="n">inputs</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">reconstructions</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Adapter reconstruct() must return at least one signal."</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">reconstructions</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">tf</span><span class="o">.</span><span class="n">debugging</span><span class="o">.</span><span class="n">assert_equal</span><span class="p">(</span>
+                <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">value</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">inputs</span><span class="p">),</span>
+                <span class="n">message</span><span class="o">=</span><span class="sa">f</span><span class="s2">"Reconstruction </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> must match the input shape."</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="n">log_probability</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">log_softmax</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)[</span><span class="mi">0</span><span class="p">,</span> <span class="n">target_class</span><span class="p">]</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span>
+            <span class="n">tf</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_probability</span><span class="p">,</span> <span class="n">logits</span><span class="o">.</span><span class="n">dtype</span><span class="p">))</span>
+            <span class="o">-</span> <span class="n">log_probability</span>
+        <span class="p">)</span>
+        <span class="n">state</span> <span class="o">=</span> <span class="n">_mean_mse</span><span class="p">(</span><span class="n">variable</span><span class="p">,</span> <span class="n">original_state</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">baseline_reconstructions</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">baseline_reconstructions</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">reconstruct</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">original_state</span><span class="p">),</span> <span class="n">inputs</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="nb">set</span><span class="p">(</span><span class="n">reconstructions</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">set</span><span class="p">(</span><span class="n">baseline_reconstructions</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Candidate and original reconstruction paths must match."</span><span class="p">)</span>
+        <span class="n">signal_by_output</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">name</span><span class="p">:</span> <span class="n">_mean_mse</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">baseline_reconstructions</span><span class="p">[</span><span class="n">name</span><span class="p">])</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">reconstructions</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="n">signal</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">add_n</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">signal_by_output</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal_by_output</span><span class="p">)</span>
+        <span class="n">active_constraint_names</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">name</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">weight</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">constraint_weights</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">weight</span> <span class="o">&gt;</span> <span class="mi">0</span>
+        <span class="p">]</span>
+        <span class="n">constraints</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_constraints</span><span class="p">(</span><span class="n">reconstructions</span><span class="p">,</span> <span class="n">active_constraint_names</span><span class="p">)</span>
+        <span class="n">weighted_constraints</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">name</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">constraint_weights</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">*</span> <span class="n">value</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">constraints</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="n">weighted_target</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_weight</span> <span class="o">*</span> <span class="n">target</span>
+        <span class="n">weighted_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_weight</span> <span class="o">*</span> <span class="n">state</span>
+        <span class="n">weighted_signal</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_weight</span> <span class="o">*</span> <span class="n">signal</span>
+        <span class="n">total</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">add_n</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">weighted_target</span><span class="p">,</span> <span class="n">weighted_state</span><span class="p">,</span> <span class="n">weighted_signal</span><span class="p">,</span> <span class="o">*</span><span class="n">weighted_constraints</span><span class="o">.</span><span class="n">values</span><span class="p">()]</span>
+        <span class="p">)</span>
+        <span class="n">terms</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"total"</span><span class="p">:</span> <span class="n">total</span><span class="p">,</span>
+            <span class="s2">"target"</span><span class="p">:</span> <span class="n">target</span><span class="p">,</span>
+            <span class="s2">"state"</span><span class="p">:</span> <span class="n">state</span><span class="p">,</span>
+            <span class="s2">"signal"</span><span class="p">:</span> <span class="n">signal</span><span class="p">,</span>
+            <span class="s2">"weighted_target"</span><span class="p">:</span> <span class="n">weighted_target</span><span class="p">,</span>
+            <span class="s2">"weighted_state"</span><span class="p">:</span> <span class="n">weighted_state</span><span class="p">,</span>
+            <span class="s2">"weighted_signal"</span><span class="p">:</span> <span class="n">weighted_signal</span><span class="p">,</span>
+            <span class="o">**</span><span class="p">{</span><span class="sa">f</span><span class="s2">"signal_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">value</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">signal_by_output</span><span class="o">.</span><span class="n">items</span><span class="p">()},</span>
+            <span class="o">**</span><span class="p">{</span><span class="sa">f</span><span class="s2">"constraint_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">value</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">constraints</span><span class="o">.</span><span class="n">items</span><span class="p">()},</span>
+            <span class="o">**</span><span class="p">{</span>
+                <span class="sa">f</span><span class="s2">"weighted_constraint_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">value</span>
+                <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">weighted_constraints</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">},</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">logits</span><span class="p">,</span> <span class="n">reconstructions</span><span class="p">,</span> <span class="n">terms</span>
+
+<div class="viewcode-block" id="ModelAgnosticCounterfactualOptimizer.optimize">
+<a class="viewcode-back" href="../../../../api/eegproc.model_explainability.model_agnostic.optimizer.html#eegproc.model_explainability.model_agnostic.optimizer.ModelAgnosticCounterfactualOptimizer.optimize">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">optimize</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">inputs</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">target_class</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">progress</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">dict</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">started</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">convert_to_tensor</span><span class="p">(</span><span class="n">inputs</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="o">.</span><span class="n">rank</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="o">.</span><span class="n">rank</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"inputs must include a batch axis and feature axes."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Optimize exactly one trial at a time."</span><span class="p">)</span>
+        <span class="n">tf</span><span class="o">.</span><span class="n">debugging</span><span class="o">.</span><span class="n">assert_all_finite</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="s2">"Input trial must be finite."</span><span class="p">)</span>
+
+        <span class="n">original_state</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">initial_state</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+        <span class="n">original_logits</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">logits_from_state</span><span class="p">(</span><span class="n">original_state</span><span class="p">),</span> <span class="n">tf</span><span class="o">.</span><span class="n">float32</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">original_logits</span><span class="o">.</span><span class="n">shape</span><span class="o">.</span><span class="n">rank</span> <span class="o">!=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">original_logits</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Adapter logits must be shaped (1, n_classes)."</span><span class="p">)</span>
+        <span class="n">n_classes</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">original_logits</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">original_class</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">original_logits</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">numpy</span><span class="p">())</span>
+        <span class="k">if</span> <span class="n">target_class</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">n_classes</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Multiclass models require an explicit target_class."</span><span class="p">)</span>
+            <span class="n">target_class</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">original_class</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">target_class</span><span class="p">,</span> <span class="nb">bool</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="nb">int</span><span class="p">(</span><span class="n">target_class</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">n_classes</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"target_class must be an integer in [0, </span><span class="si">{</span><span class="n">n_classes</span><span class="si">}</span><span class="s2">)."</span><span class="p">)</span>
+        <span class="n">target_class</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">target_class</span><span class="p">)</span>
+        <span class="n">original_prediction</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prediction</span><span class="p">(</span><span class="n">original_logits</span><span class="p">,</span> <span class="n">target_class</span><span class="p">)</span>
+        <span class="n">baseline_reconstructions</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">name</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">reconstruct</span><span class="p">(</span><span class="n">original_state</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+
+        <span class="n">variable</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">Variable</span><span class="p">(</span><span class="n">original_state</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"counterfactual_state"</span><span class="p">)</span>
+        <span class="n">descent</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">optimizers</span><span class="o">.</span><span class="n">Adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">)</span>
+        <span class="n">history</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">best_key</span> <span class="o">=</span> <span class="n">best_state</span> <span class="o">=</span> <span class="n">selected_step</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">stop_reason</span> <span class="o">=</span> <span class="s2">"max_steps"</span>
+        <span class="n">steps_completed</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="k">for</span> <span class="n">step</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">max_steps</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="k">with</span> <span class="n">tf</span><span class="o">.</span><span class="n">GradientTape</span><span class="p">(</span><span class="n">watch_accessed_variables</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="k">as</span> <span class="n">tape</span><span class="p">:</span>
+                <span class="n">tape</span><span class="o">.</span><span class="n">watch</span><span class="p">(</span><span class="n">variable</span><span class="p">)</span>
+                <span class="n">logits</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">tensor_terms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_objective</span><span class="p">(</span>
+                    <span class="n">variable</span><span class="p">,</span> <span class="n">original_state</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">target_class</span><span class="p">,</span>
+                    <span class="n">baseline_reconstructions</span><span class="o">=</span><span class="n">baseline_reconstructions</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="n">gradient</span> <span class="o">=</span> <span class="n">tape</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">tensor_terms</span><span class="p">[</span><span class="s2">"total"</span><span class="p">],</span> <span class="n">variable</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">gradient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">"No objective gradient reached the adapted state."</span><span class="p">)</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">numpy</span><span class="p">())</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">tensor_terms</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">values</span><span class="o">.</span><span class="n">values</span><span class="p">()):</span>
+                <span class="k">if</span> <span class="n">best_state</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">FloatingPointError</span><span class="p">(</span><span class="s2">"The initial objective is non-finite."</span><span class="p">)</span>
+                <span class="n">stop_reason</span> <span class="o">=</span> <span class="s2">"non_finite_loss"</span>
+                <span class="k">break</span>
+            <span class="n">prediction</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prediction</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">target_class</span><span class="p">)</span>
+            <span class="n">proximity</span> <span class="o">=</span> <span class="n">values</span><span class="p">[</span><span class="s2">"weighted_state"</span><span class="p">]</span> <span class="o">+</span> <span class="n">values</span><span class="p">[</span><span class="s2">"weighted_signal"</span><span class="p">]</span> <span class="o">+</span> <span class="nb">sum</span><span class="p">(</span>
+                <span class="n">values</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">values</span>
+                <span class="k">if</span> <span class="n">name</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"weighted_constraint_"</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="n">key</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="ow">not</span> <span class="n">prediction</span><span class="p">[</span><span class="s2">"success"</span><span class="p">],</span>
+                <span class="n">proximity</span> <span class="k">if</span> <span class="n">prediction</span><span class="p">[</span><span class="s2">"success"</span><span class="p">]</span> <span class="k">else</span> <span class="n">values</span><span class="p">[</span><span class="s2">"total"</span><span class="p">],</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">best_key</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">key</span> <span class="o">&lt;</span> <span class="n">best_key</span><span class="p">:</span>
+                <span class="n">best_key</span> <span class="o">=</span> <span class="n">key</span>
+                <span class="n">best_state</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">identity</span><span class="p">(</span><span class="n">variable</span><span class="p">)</span>
+                <span class="n">selected_step</span> <span class="o">=</span> <span class="n">step</span>
+            <span class="n">gradient_norm</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">global_norm</span><span class="p">([</span><span class="n">gradient</span><span class="p">])</span><span class="o">.</span><span class="n">numpy</span><span class="p">())</span>
+            <span class="n">finite_gradient</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">gradient_norm</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">bool</span><span class="p">(</span>
+                <span class="n">tf</span><span class="o">.</span><span class="n">reduce_all</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">is_finite</span><span class="p">(</span><span class="n">gradient</span><span class="p">))</span>
+            <span class="p">)</span>
+            <span class="n">row</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">"step"</span><span class="p">:</span> <span class="n">step</span><span class="p">,</span>
+                <span class="s2">"signal_distance_reference"</span><span class="p">:</span> <span class="s2">"original_reconstruction"</span><span class="p">,</span>
+                <span class="o">**</span><span class="n">values</span><span class="p">,</span>
+                <span class="o">**</span><span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">value</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">prediction</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">key</span> <span class="o">!=</span> <span class="s2">"probabilities"</span><span class="p">},</span>
+                <span class="o">**</span><span class="p">{</span>
+                    <span class="sa">f</span><span class="s2">"probability_</span><span class="si">{</span><span class="n">index</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">value</span>
+                    <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">prediction</span><span class="p">[</span><span class="s2">"probabilities"</span><span class="p">])</span>
+                <span class="p">},</span>
+                <span class="s2">"gradient_norm"</span><span class="p">:</span> <span class="n">gradient_norm</span> <span class="k">if</span> <span class="n">finite_gradient</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="p">}</span>
+            <span class="n">history</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">progress</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">progress</span><span class="p">(</span><span class="nb">dict</span><span class="p">(</span><span class="n">row</span><span class="p">))</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">finite_gradient</span><span class="p">:</span>
+                <span class="n">stop_reason</span> <span class="o">=</span> <span class="s2">"non_finite_gradient"</span>
+                <span class="k">break</span>
+            <span class="k">if</span> <span class="n">prediction</span><span class="p">[</span><span class="s2">"success"</span><span class="p">]</span> <span class="ow">and</span> <span class="p">(</span><span class="n">step</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">stop_on_success</span><span class="p">):</span>
+                <span class="n">stop_reason</span> <span class="o">=</span> <span class="s2">"already_satisfied"</span> <span class="k">if</span> <span class="n">step</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">"target_reached"</span>
+                <span class="k">break</span>
+            <span class="k">if</span> <span class="n">step</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_steps</span><span class="p">:</span>
+                <span class="k">break</span>
+            <span class="k">if</span> <span class="n">gradient_norm</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">stop_reason</span> <span class="o">=</span> <span class="s2">"zero_gradient"</span>
+                <span class="k">break</span>
+            <span class="n">update</span> <span class="o">=</span> <span class="n">gradient</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gradient_clip_norm</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">update</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">clip_by_norm</span><span class="p">(</span><span class="n">update</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gradient_clip_norm</span><span class="p">)</span>
+            <span class="n">descent</span><span class="o">.</span><span class="n">apply_gradients</span><span class="p">([(</span><span class="n">update</span><span class="p">,</span> <span class="n">variable</span><span class="p">)])</span>
+            <span class="n">steps_completed</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="n">final_logits</span><span class="p">,</span> <span class="n">reconstructions</span><span class="p">,</span> <span class="n">final_terms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_objective</span><span class="p">(</span>
+            <span class="n">best_state</span><span class="p">,</span> <span class="n">original_state</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">target_class</span><span class="p">,</span>
+            <span class="n">baseline_reconstructions</span><span class="o">=</span><span class="n">baseline_reconstructions</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">final_prediction</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prediction</span><span class="p">(</span><span class="n">final_logits</span><span class="p">,</span> <span class="n">target_class</span><span class="p">)</span>
+        <span class="n">all_constraint_names</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+            <span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">((</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">constraint_weights</span><span class="p">,</span> <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">report_constraints</span><span class="p">))</span>
+        <span class="p">)</span>
+        <span class="n">baseline_constraints</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_constraints_by_output</span><span class="p">(</span>
+            <span class="n">baseline_reconstructions</span><span class="p">,</span> <span class="n">all_constraint_names</span>
+        <span class="p">)</span>
+        <span class="n">final_constraints</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_constraints_by_output</span><span class="p">(</span>
+            <span class="n">reconstructions</span><span class="p">,</span> <span class="n">all_constraint_names</span>
+        <span class="p">)</span>
+        <span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"x"</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span>
+            <span class="s2">"state"</span><span class="p">:</span> <span class="n">original_state</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span>
+            <span class="s2">"state_prime"</span><span class="p">:</span> <span class="n">best_state</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span>
+        <span class="p">}</span>
+        <span class="n">decoded_results</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">reconstruction</span> <span class="ow">in</span> <span class="n">reconstructions</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">baseline</span> <span class="o">=</span> <span class="n">baseline_reconstructions</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+            <span class="n">arrays</span><span class="p">[</span><span class="sa">f</span><span class="s2">"x_reconstructed_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">]</span> <span class="o">=</span> <span class="n">baseline</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+            <span class="n">arrays</span><span class="p">[</span><span class="sa">f</span><span class="s2">"x_prime_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">]</span> <span class="o">=</span> <span class="n">reconstruction</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+            <span class="n">decoded_results</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">"original_reconstruction_mse"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">_mean_mse</span><span class="p">(</span><span class="n">baseline</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">numpy</span><span class="p">()),</span>
+                <span class="s2">"counterfactual_to_original_mse"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+                    <span class="n">_mean_mse</span><span class="p">(</span><span class="n">reconstruction</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+                <span class="p">),</span>
+                <span class="s2">"decoded_change_mse"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">_mean_mse</span><span class="p">(</span><span class="n">reconstruction</span><span class="p">,</span> <span class="n">baseline</span><span class="p">)</span><span class="o">.</span><span class="n">numpy</span><span class="p">()),</span>
+                <span class="s2">"constraints"</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="n">constraint_name</span><span class="p">:</span> <span class="p">{</span>
+                        <span class="s2">"reference"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+                            <span class="n">baseline_constraints</span><span class="p">[</span><span class="n">constraint_name</span><span class="p">][</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+                        <span class="p">),</span>
+                        <span class="s2">"counterfactual"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+                            <span class="n">final_constraints</span><span class="p">[</span><span class="n">constraint_name</span><span class="p">][</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+                        <span class="p">),</span>
+                        <span class="s2">"delta"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+                            <span class="p">(</span>
+                                <span class="n">final_constraints</span><span class="p">[</span><span class="n">constraint_name</span><span class="p">][</span><span class="n">name</span><span class="p">]</span>
+                                <span class="o">-</span> <span class="n">baseline_constraints</span><span class="p">[</span><span class="n">constraint_name</span><span class="p">][</span><span class="n">name</span><span class="p">]</span>
+                            <span class="p">)</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+                        <span class="p">),</span>
+                        <span class="s2">"weight"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">constraint_weights</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">constraint_name</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+                    <span class="p">}</span>
+                    <span class="k">for</span> <span class="n">constraint_name</span> <span class="ow">in</span> <span class="n">all_constraint_names</span>
+                <span class="p">},</span>
+            <span class="p">}</span>
+        <span class="n">summary</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"adapter"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">adapter</span><span class="o">.</span><span class="n">metadata</span><span class="p">(),</span>
+            <span class="s2">"signal_distance_reference"</span><span class="p">:</span> <span class="s2">"original_reconstruction"</span><span class="p">,</span>
+            <span class="s2">"target_class"</span><span class="p">:</span> <span class="n">target_class</span><span class="p">,</span>
+            <span class="s2">"required_target_probability"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_probability</span><span class="p">,</span>
+            <span class="s2">"original"</span><span class="p">:</span> <span class="n">original_prediction</span><span class="p">,</span>
+            <span class="s2">"counterfactual"</span><span class="p">:</span> <span class="n">final_prediction</span><span class="p">,</span>
+            <span class="s2">"reconstructed_outputs"</span><span class="p">:</span> <span class="n">decoded_results</span><span class="p">,</span>
+            <span class="s2">"selected_losses"</span><span class="p">:</span> <span class="p">{</span>
+                <span class="n">name</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">numpy</span><span class="p">())</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">final_terms</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">},</span>
+            <span class="s2">"selected_step"</span><span class="p">:</span> <span class="n">selected_step</span><span class="p">,</span>
+            <span class="s2">"steps_completed"</span><span class="p">:</span> <span class="n">steps_completed</span><span class="p">,</span>
+            <span class="s2">"stop_reason"</span><span class="p">:</span> <span class="n">stop_reason</span><span class="p">,</span>
+            <span class="s2">"elapsed_seconds"</span><span class="p">:</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">started</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">"history"</span><span class="p">:</span> <span class="n">history</span><span class="p">,</span> <span class="s2">"summary"</span><span class="p">:</span> <span class="n">summary</span><span class="p">,</span> <span class="s2">"arrays"</span><span class="p">:</span> <span class="n">arrays</span><span class="p">}</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

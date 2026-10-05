@@ -1,0 +1,340 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Convert public datasets to CSV &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=51b770b3"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="prev" title="eegproc.preprocessing module" href="api/eegproc.preprocessing.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="getting-started.html">Getting Started</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Convert public datasets to CSV</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#get-the-datasets">Get the datasets</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#common-behavior">Common behavior</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#amigos">AMIGOS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#dreamer">DREAMER</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#eegemotions-27">EEGEmotions-27</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#cowen-27-emotion-mapping">Cowen 27 emotion mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#deap">DEAP</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#use-the-result">Use the result</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Convert public datasets to CSV</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/datasets.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="convert-public-datasets-to-csv">
+<h1>Convert public datasets to CSV<a class="headerlink" href="#convert-public-datasets-to-csv" title="Link to this heading"></a></h1>
+<p>Install EEGProc and use one command for the supported dataset formats:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>eegproc
+eegproc-to-csv<span class="w"> </span>--dataset<span class="w"> </span>amigos<span class="w"> </span>--input<span class="w"> </span>/data/AMIGOS/data_preprocessed<span class="w"> </span>--output<span class="w"> </span>/data/csv/amigos_joined.csv.gz
+</pre></div>
+</div>
+<p>From a source checkout, install it with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span></code>. The equivalent module
+command is <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">eegproc.data.to_csv</span></code>. Conversion uses the base installation;
+TensorFlow is not required.</p>
+<section id="get-the-datasets">
+<h2>Get the datasets<a class="headerlink" href="#get-the-datasets" title="Link to this heading"></a></h2>
+<p>Download and extract datasets separately. EEGProc includes conversion code and
+links only: no recordings, videos, rating matrices, or generated CSVs are bundled.
+Use each provider’s access process and citation requirements.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Dataset</p></th>
+<th class="head"><p>Source and access</p></th>
+<th class="head"><p>Supported input</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>AMIGOS</p></td>
+<td><p><a class="reference external" href="https://www.eecs.qmul.ac.uk/mmv/datasets/amigos/">QMUL dataset page</a>, also linked from the <a class="reference external" href="https://sites.google.com/view/ioannispatras/datasets-and-code">author’s dataset directory</a></p></td>
+<td><p>Extracted <code class="docutils literal notranslate"><span class="pre">Data_Preprocessed_P*.mat</span></code> files, recursively under the input folder, or one file</p></td>
+</tr>
+<tr class="row-odd"><td><p>DREAMER</p></td>
+<td><p><a class="reference external" href="https://zenodo.org/records/546113">Official Zenodo record and access request</a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DREAMER.mat</span></code>, or the three exported CSV files described below</p></td>
+</tr>
+<tr class="row-even"><td><p>EEGEmotions-27</p></td>
+<td><p><a class="reference external" href="https://github.com/huytungst/EEGEmotions-27">Authors’ dataset repository</a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">eeg_raw/*.txt</span></code>, <code class="docutils literal notranslate"><span class="pre">participants_info.csv</span></code>, and optional feature/label CSV</p></td>
+</tr>
+<tr class="row-odd"><td><p>Cowen/Keltner emotion ratings</p></td>
+<td><p><a class="reference external" href="https://github.com/KamitaniLab/EmotionVideoNeuralRepresentation#data-fmri-data-and-features">KamitaniLab data instructions</a> and <a class="reference external" href="https://doi.org/10.6084/m9.figshare.11988351">feature archive on Figshare</a></p></td>
+<td><p>Extracted <code class="docutils literal notranslate"><span class="pre">features.zip</span></code>, specifically <code class="docutils literal notranslate"><span class="pre">amt/mean_score_concat/category</span></code> and <code class="docutils literal notranslate"><span class="pre">dimension</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>DEAP</p></td>
+<td><p><a class="reference external" href="https://www.eecs.qmul.ac.uk/mmv/datasets/deap/">QMUL dataset page</a>, also linked from the <a class="reference external" href="https://sites.google.com/view/ioannispatras/datasets-and-code">author’s dataset directory</a></p></td>
+<td><p>Official preprocessed Python <code class="docutils literal notranslate"><span class="pre">s*.dat</span></code> files, or one file</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="common-behavior">
+<h2>Common behavior<a class="headerlink" href="#common-behavior" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Outputs can end in <code class="docutils literal notranslate"><span class="pre">.csv</span></code> or <code class="docutils literal notranslate"><span class="pre">.csv.gz</span></code> (gzip compression).</p></li>
+<li><p>Existing output files require <code class="docutils literal notranslate"><span class="pre">--overwrite</span></code>. A failed conversion leaves an
+existing output intact, and input files cannot be used as the output.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--chunksize</span> <span class="pre">100000</span></code> controls text/CSV batches. MATLAB and DEAP inputs load one
+source file at a time; <code class="docutils literal notranslate"><span class="pre">DREAMER.mat</span></code> contains the entire dataset, so enough RAM
+for that file is required. The DREAMER CSV join uses temporary disk space for
+both signal tables. Cowen loads the small rating matrices.</p></li>
+<li><p>EEG outputs use one row per EEG sample with <code class="docutils literal notranslate"><span class="pre">subject_id</span></code>, <code class="docutils literal notranslate"><span class="pre">trial_id</span></code>, <code class="docutils literal notranslate"><span class="pre">segment</span></code>,
+<code class="docutils literal notranslate"><span class="pre">sample_idx</span></code>, channel values, and dataset-specific labels/metadata. Subject and
+trial boundaries are preserved. No subjects are selected for a research split.</p></li>
+<li><p>Values are not normalized, filtered, windowed, or binarized. Original rating
+precision is retained. The native DREAMER reader aligns ECG to EEG as described
+below; the Cowen command computes a derived mapping rather than an EEG table.</p></li>
+<li><p>Missing metadata generates warnings. Malformed layouts and duplicate join keys
+fail explicitly. Headerless EEG text must have exactly 14 columns; headered
+files may include extra columns, which are ignored after selecting the EEG names.</p></li>
+<li><p>MATLAB v7.3/HDF5 files are unsupported. Use the original preprocessed MAT
+release or the supported CSV export layout.</p></li>
+</ul>
+</section>
+<section id="amigos">
+<h2>AMIGOS<a class="headerlink" href="#amigos" title="Link to this heading"></a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>eegproc-to-csv<span class="w"> </span>--dataset<span class="w"> </span>amigos<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--input<span class="w"> </span>/data/AMIGOS/data_preprocessed<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/data/csv/amigos_joined.csv
+</pre></div>
+</div>
+<p>Reads <code class="docutils literal notranslate"><span class="pre">joined_data</span></code> and <code class="docutils literal notranslate"><span class="pre">labels_selfassessment</span></code>. Each trial can be sample-major
+or channel-major (16 or 17 channels). Output retains the 14 Emotiv EEG channels
+and <code class="docutils literal notranslate"><span class="pre">ECG1</span></code>, <code class="docutils literal notranslate"><span class="pre">ECG2</span></code>; GSR is omitted, matching the existing joined CSV format.
+Self-assessment <code class="docutils literal notranslate"><span class="pre">[arousal,</span> <span class="pre">valence,</span> <span class="pre">dominance,</span> <span class="pre">...]</span></code> is exported as
+<code class="docutils literal notranslate"><span class="pre">valence,</span> <span class="pre">arousal,</span> <span class="pre">dominance</span></code> without rounding.</p>
+<p>The first 640 samples are marked <code class="docutils literal notranslate"><span class="pre">baseline</span></code>, matching the existing converter;
+remaining samples are <code class="docutils literal notranslate"><span class="pre">stimulus</span></code>. Use <code class="docutils literal notranslate"><span class="pre">--amigos-baseline-samples</span> <span class="pre">0</span></code> if your input
+already excludes the baseline. Trial IDs and sample indices are one-based;
+sample indices restart within each segment. Empty trials are skipped with a
+warning; malformed nonempty trials stop conversion.</p>
+</section>
+<section id="dreamer">
+<h2>DREAMER<a class="headerlink" href="#dreamer" title="Link to this heading"></a></h2>
+<p>Convert the original MATLAB file:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>eegproc-to-csv<span class="w"> </span>--dataset<span class="w"> </span>dreamer<span class="w"> </span>--input<span class="w"> </span>/data/DREAMER.mat<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/data/csv/dreamer_joined.csv.gz
+</pre></div>
+</div>
+<p>Output has the same 14 EEG channels, <code class="docutils literal notranslate"><span class="pre">ECG1</span></code>, <code class="docutils literal notranslate"><span class="pre">ECG2</span></code>, and three ratings as AMIGOS.
+EEG values are unchanged. ECG is resampled to the EEG time grid using the file’s
+<code class="docutils literal notranslate"><span class="pre">ECG_SamplingRate</span></code> and <code class="docutils literal notranslate"><span class="pre">EEG_SamplingRate</span></code>, assuming the streams start together
+within each segment. Duration disagreements greater than one EEG sample cause
+an error; a final missing ECG sample is blank. IDs/indices are one-based and
+MATLAB <code class="docutils literal notranslate"><span class="pre">stimuli</span></code> segments become <code class="docutils literal notranslate"><span class="pre">stimulus</span></code>.</p>
+<p>The existing three-file workflow is also supported:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>/data/dreamer_exports/
+  dreamer_eeg.csv      # subject_id, trial_id, segment, sample_idx, AF3 ... AF4
+  dreamer_ecg.csv      # subject_id, trial_id, segment, sample_idx, ECG1, ECG2
+  dreamer_labels.csv   # subject_id, trial_id, valence, arousal, dominance
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>eegproc-to-csv<span class="w"> </span>--dataset<span class="w"> </span>dreamer<span class="w"> </span>--input<span class="w"> </span>/data/dreamer_exports<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/data/csv/dreamer_joined.csv
+</pre></div>
+</div>
+<p>Each source CSV may instead be <code class="docutils literal notranslate"><span class="pre">.csv.gz</span></code>. The join preserves EEG row order and
+existing index values, matching the original <code class="docutils literal notranslate"><span class="pre">join_dreamer.py</span></code>: ECG joins on the
+four sample keys and ratings on subject/trial. Missing ECG becomes blank with a
+warning; missing trial labels cause an error. Exported CSVs must already use a
+common time grid: this join does not resample them. If both exports and
+<code class="docutils literal notranslate"><span class="pre">DREAMER.mat</span></code> are present, the CSV exports take precedence; select the MAT file
+explicitly to use the native reader.</p>
+</section>
+<section id="eegemotions-27">
+<h2>EEGEmotions-27<a class="headerlink" href="#eegemotions-27" title="Link to this heading"></a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>eegproc-to-csv<span class="w"> </span>--dataset<span class="w"> </span>eegemotions<span class="w"> </span>--input<span class="w"> </span>/data/EEGEmotions-27<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/data/csv/eegemotions_labeled.csv.gz
+</pre></div>
+</div>
+<p>This combines the existing extraction, numeric subject/trial sorting, and label
+attachment workflow without loading the full joined CSV. It retains:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>subject_id, trial_id, segment, sample_idx,
+AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4,
+age, gender, nation, source_file, source_file_label,
+emo_label_cowen_27, emo_label_ekman_6
+</pre></div>
+</div>
+<p>Files such as <code class="docutils literal notranslate"><span class="pre">12_5.0.txt</span></code> supply participant 12 and emotion/trial 5. Filename
+IDs are preserved exactly, including zero if it exists in a downloaded release;
+no automatic shift is applied. Samples start at zero within each file and
+<code class="docutils literal notranslate"><span class="pre">segment</span></code> is <code class="docutils literal notranslate"><span class="pre">eeg_raw</span></code>. Demographic codes are retained as supplied.</p>
+<p><code class="docutils literal notranslate"><span class="pre">training/eeg_features_extracted.csv</span></code> supplies the secondary emotion system.
+Use <code class="docutils literal notranslate"><span class="pre">--labels</span> <span class="pre">/path/to/labels.csv</span></code> to select another table containing
+<code class="docutils literal notranslate"><span class="pre">ParticipantID</span></code>, <code class="docutils literal notranslate"><span class="pre">Emo_Label_Cowen(27)</span></code>, and <code class="docutils literal notranslate"><span class="pre">Emo_Label_Ekman(6)</span></code>. Without that table,
+the filename label remains available and the secondary label is blank. Repeated
+participant/emotion mappings use the mode (lowest label on a tie), matching the
+original script; conflicting mappings emit a warning.</p>
+<p>For a release whose filenames encode Ekman labels, add
+<code class="docutils literal notranslate"><span class="pre">--source-label-kind</span> <span class="pre">ekman</span></code>. The default is <code class="docutils literal notranslate"><span class="pre">cowen</span></code>; choose according to your
+release’s metadata rather than inferring from the numeric range. These emotion
+IDs are not trial-level valence/arousal self-reports.</p>
+</section>
+<section id="cowen-27-emotion-mapping">
+<h2>Cowen 27 emotion mapping<a class="headerlink" href="#cowen-27-emotion-mapping" title="Link to this heading"></a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>eegproc-to-csv<span class="w"> </span>--dataset<span class="w"> </span>cowen27<span class="w"> </span>--input<span class="w"> </span>/data/Cowen27<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/data/csv/cowen_27_valence_arousal.csv
+</pre></div>
+</div>
+<p>Accepts the <code class="docutils literal notranslate"><span class="pre">Cowen27</span></code> root with <code class="docutils literal notranslate"><span class="pre">data/features/amt/mean_score_concat</span></code>, an extracted
+<code class="docutils literal notranslate"><span class="pre">features</span></code> folder, or <code class="docutils literal notranslate"><span class="pre">mean_score_concat</span></code> itself. Matching category/dimension MAT
+files must contain a unique numeric vector of lengths 34 and 14, respectively.</p>
+<p>The output preserves the previous mapping script: 27 emotion rows with weighted
+valence/arousal means and standard deviations, rating weights, video counts, and
+quadrants. It uses dimension indices 13 (valence) and 1 (arousal), zero-based,
+and excludes seven categories outside the final 27. Quadrants use the medians of
+all video ratings. <strong>This is a derived mapping, not official participant-level
+EEGEmotions ratings or official high/low thresholds.</strong> No videos or fMRI data are
+needed for this conversion.</p>
+</section>
+<section id="deap">
+<h2>DEAP<a class="headerlink" href="#deap" title="Link to this heading"></a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>eegproc-to-csv<span class="w"> </span>--dataset<span class="w"> </span>deap<span class="w"> </span>--input<span class="w"> </span>/data/DEAP/data_preprocessed_python<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/data/csv/deap.csv.gz
+</pre></div>
+</div>
+<p>Exports the first 32 EEG channels and <code class="docutils literal notranslate"><span class="pre">valence,</span> <span class="pre">arousal,</span> <span class="pre">dominance,</span> <span class="pre">liking</span></code>.
+The 8064-sample format retains its first 384 samples as <code class="docutils literal notranslate"><span class="pre">baseline</span></code> and remaining
+7680 as <code class="docutils literal notranslate"><span class="pre">stimulus</span></code>; the already-trimmed 7680-sample format contains only stimulus.
+Trial and segment sample indices start at one. Other sample counts are rejected
+rather than guessing where the stimulus begins. Peripheral channels are omitted.
+DEAP <code class="docutils literal notranslate"><span class="pre">.dat</span></code> files use Python pickle: open only trusted official dataset files.</p>
+</section>
+<section id="use-the-result">
+<h2>Use the result<a class="headerlink" href="#use-the-result" title="Link to this heading"></a></h2>
+<p>Read manageable outputs with pandas, or stream large files:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">eegproc.data.to_csv</span><span class="w"> </span><span class="kn">import</span> <span class="n">convert_dataset</span>
+
+<span class="n">rows</span> <span class="o">=</span> <span class="n">convert_dataset</span><span class="p">(</span><span class="s2">"amigos"</span><span class="p">,</span> <span class="s2">"/data/AMIGOS"</span><span class="p">,</span> <span class="s2">"/data/csv/amigos_joined.csv.gz"</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">frame</span> <span class="ow">in</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s2">"/data/csv/amigos_joined.csv.gz"</span><span class="p">,</span> <span class="n">chunksize</span><span class="o">=</span><span class="mi">100_000</span><span class="p">):</span>
+    <span class="n">stimulus</span> <span class="o">=</span> <span class="n">frame</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">frame</span><span class="p">[</span><span class="s2">"segment"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"stimulus"</span><span class="p">]</span>
+    <span class="c1"># Apply your own filtering, feature extraction, or trial-safe windowing.</span>
+</pre></div>
+</div>
+<p>To cross-validate directly from a converted table, name the EEG columns
+explicitly. Otherwise every other numeric column (the remaining ratings, ECG,
+<code class="docutils literal notranslate"><span class="pre">sample_idx</span></code>, and for EEGEmotions the demographics) becomes a model input, and
+predicting valence would silently train on arousal and dominance too:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">eegproc.deep_learning.cross_validation</span><span class="w"> </span><span class="kn">import</span> <span class="n">cross_validate_dataframe</span>
+
+<span class="n">EEG_CHANNELS</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"AF3"</span><span class="p">,</span> <span class="s2">"F7"</span><span class="p">,</span> <span class="s2">"F3"</span><span class="p">,</span> <span class="s2">"FC5"</span><span class="p">,</span> <span class="s2">"T7"</span><span class="p">,</span> <span class="s2">"P7"</span><span class="p">,</span> <span class="s2">"O1"</span><span class="p">,</span>
+                <span class="s2">"O2"</span><span class="p">,</span> <span class="s2">"P8"</span><span class="p">,</span> <span class="s2">"T8"</span><span class="p">,</span> <span class="s2">"FC6"</span><span class="p">,</span> <span class="s2">"F4"</span><span class="p">,</span> <span class="s2">"F8"</span><span class="p">,</span> <span class="s2">"AF4"</span><span class="p">)</span>
+
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s2">"/data/csv/dreamer_joined.csv.gz"</span><span class="p">)</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">"segment"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"stimulus"</span><span class="p">]</span>
+<span class="n">df</span><span class="p">[</span><span class="s2">"label"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">"valence"</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+
+<span class="n">results</span> <span class="o">=</span> <span class="n">cross_validate_dataframe</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span> <span class="n">build_model</span><span class="p">,</span> <span class="n">strategy</span><span class="o">=</span><span class="s2">"loso"</span><span class="p">,</span>          <span class="c1"># build_model: see the README</span>
+    <span class="n">kind</span><span class="o">=</span><span class="s2">"signal"</span><span class="p">,</span> <span class="n">fs</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">window_sec</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">subject_columns</span><span class="o">=</span><span class="p">(</span><span class="s2">"subject_id"</span><span class="p">,),</span> <span class="n">trial_columns</span><span class="o">=</span><span class="p">(</span><span class="s2">"trial_id"</span><span class="p">,),</span>
+    <span class="n">time_column</span><span class="o">=</span><span class="s2">"sample_idx"</span><span class="p">,</span> <span class="n">feature_columns</span><span class="o">=</span><span class="n">EEG_CHANNELS</span><span class="p">,</span>
+    <span class="n">label_column</span><span class="o">=</span><span class="s2">"label"</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>For AMIGOS, also drop the <code class="docutils literal notranslate"><span class="pre">baseline</span></code> segment as above; the sample index
+restarts within each segment.</p>
+<p>The DREAMER, AMIGOS, and EEGEmotions column names match the existing
+<code class="docutils literal notranslate"><span class="pre">eegproc.deep_learning.prepare_datasets</span></code> readers. For that older NumPy preparation
+command, write <strong>uncompressed</strong> <code class="docutils literal notranslate"><span class="pre">dreamer_joined.csv</span></code>, <code class="docutils literal notranslate"><span class="pre">amigos_joined.csv</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">eegemotions_labeled.csv</span></code> (and the Cowen mapping where needed), using the filenames
+it expects. Its DEAP reader continues to consume original <code class="docutils literal notranslate"><span class="pre">.dat</span></code> inputs.
+Sampling rates are not embedded in these legacy CSV schemas; retain the dataset
+metadata and pass the correct rate to downstream processing.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="api/eegproc.preprocessing.html" class="btn btn-neutral float-left" title="eegproc.preprocessing module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,286 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.unsupervised.Convolutions.CNN1D module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.deep_learning.unsupervised.Convolutions.CNN2D module" href="eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html" />
+    <link rel="prev" title="eegproc.deep_learning.unsupervised.Convolutions package" href="eegproc.deep_learning.unsupervised.Convolutions.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.data.html">eegproc.data package</a></li>
+<li class="toctree-l4 current"><a class="reference internal" href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.plotting.html">eegproc.plotting package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.unsupervised.html">eegproc.deep_learning.unsupervised package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.unsupervised.Convolutions.html">eegproc.deep_learning.unsupervised.Convolutions package</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.unsupervised.Convolutions.CNN1D module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.deep_learning.unsupervised.Convolutions.CNN1D.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.deep_learning.unsupervised.Convolutions.CNN1D">
+<span id="eegproc-deep-learning-unsupervised-convolutions-cnn1d-module"></span><h1>eegproc.deep_learning.unsupervised.Convolutions.CNN1D module<a class="headerlink" href="#module-eegproc.deep_learning.unsupervised.Convolutions.CNN1D" title="Link to this heading"></a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.unsupervised.Convolutions.CNN1D.</span></span><span class="sig-name descname"><span class="pre">CNN1DDecoder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timesteps</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_features</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">t_down</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conv_filters</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kernel_sizes</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pool_after_layers</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pool_sizes</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">emb_dim</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dropout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activation</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'relu'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_batch_norm</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'decoder_mirror'</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DDecoder"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">Model</span></code></p>
+<p>Mirror decoder for <code class="docutils literal notranslate"><span class="pre">CNN1DEncoder</span></code>.</p>
+<p>This decoder expects a latent sequence of shape
+<code class="docutils literal notranslate"><span class="pre">(batch,</span> <span class="pre">ceil(timesteps</span> <span class="pre">/</span> <span class="pre">t_down),</span> <span class="pre">emb_dim)</span></code> and reconstructs a sequence
+of shape <code class="docutils literal notranslate"><span class="pre">(batch,</span> <span class="pre">timesteps,</span> <span class="pre">n_features)</span></code>.</p>
+<p>The decoder mirrors the encoder by reversing the convolutional filter
+schedule and replacing temporal pooling with temporal upsampling.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>timesteps</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>)</p></li>
+<li><p><strong>n_features</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>)</p></li>
+<li><p><strong>t_down</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>)</p></li>
+<li><p><strong>conv_filters</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</span>)</p></li>
+<li><p><strong>kernel_sizes</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</span>)</p></li>
+<li><p><strong>pool_after_layers</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</span>)</p></li>
+<li><p><strong>pool_sizes</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</span>)</p></li>
+<li><p><strong>emb_dim</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>)</p></li>
+<li><p><strong>dropout</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.1</span></code>)</p></li>
+<li><p><strong>activation</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'relu'</span></code>)</p></li>
+<li><p><strong>use_batch_norm</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code>)</p></li>
+<li><p><strong>name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'decoder_mirror'</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.call">
+<span class="sig-name descname"><span class="pre">call</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">inputs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DDecoder.call"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.call" title="Link to this definition"></a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>training</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">False</span></code>)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.compute_output_shape">
+<span class="sig-name descname"><span class="pre">compute_output_shape</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_shape</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DDecoder.compute_output_shape"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.compute_output_shape" title="Link to this definition"></a></dt>
+<dd><p>Return the decoder output shape.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.fix_length">
+<span class="sig-name descname"><span class="pre">fix_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DDecoder.fix_length"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.fix_length" title="Link to this definition"></a></dt>
+<dd><p>Trim or pad sequence to exactly <code class="docutils literal notranslate"><span class="pre">timesteps</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>x</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.from_encoder">
+<span class="property"><span class="k"><span class="pre">classmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">from_encoder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">encoder</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'decoder_mirror'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DDecoder.from_encoder"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.from_encoder" title="Link to this definition"></a></dt>
+<dd><p>Create a mirror decoder from a configured <code class="docutils literal notranslate"><span class="pre">CNN1DEncoder</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'decoder_mirror'</span></code>)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.get_config">
+<span class="sig-name descname"><span class="pre">get_config</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DDecoder.get_config"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.get_config" title="Link to this definition"></a></dt>
+<dd><p>Return serializable configuration for the decoder.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.n_features">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">n_features</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">int</span></span><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DDecoder.n_features" title="Link to this definition"></a></dt>
+<dd><p>Flattened number of reconstructed channel-band features.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.unsupervised.Convolutions.CNN1D.</span></span><span class="sig-name descname"><span class="pre">CNN1DEncoder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timesteps</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_features</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">t_down</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conv_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(64,</span> <span class="pre">128,</span> <span class="pre">256)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kernel_sizes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(7,</span> <span class="pre">5,</span> <span class="pre">3)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pool_after_layers</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pool_sizes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">emb_dim</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">128</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dropout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activation</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'relu'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_batch_norm</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'encoder_1dcnn'</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DEncoder"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference internal" href="eegproc.deep_learning.unsupervised.BaseEncoder.html#eegproc.deep_learning.unsupervised.BaseEncoder.BaseEncoder" title="eegproc.deep_learning.unsupervised.BaseEncoder.BaseEncoder"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseEncoder</span></code></a></p>
+<p>Configurable-depth 1D convolutional encoder for EEG sequence data.</p>
+<p>This encoder treats each timestep’s feature vector as a flat representation
+and learns temporal patterns using a designer-defined stack of <code class="docutils literal notranslate"><span class="pre">Conv1D</span></code>
+layers.</p>
+<p>The number of convolutional layers is determined by <code class="docutils literal notranslate"><span class="pre">len(conv_filters)</span></code>.
+Temporal downsampling is controlled by <code class="docutils literal notranslate"><span class="pre">pool_after_layers</span></code> and
+<code class="docutils literal notranslate"><span class="pre">pool_sizes</span></code>. The product of the pooling sizes must equal <code class="docutils literal notranslate"><span class="pre">t_down</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>timesteps</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Number of timesteps in each input sequence.</p></li>
+<li><p><strong>n_features</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Number of features per timestep.</p></li>
+<li><p><strong>t_down</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Temporal downsampling factor.</p></li>
+<li><p><strong>conv_filters</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</span>, default: <code class="docutils literal notranslate"><span class="pre">(64,</span> <span class="pre">128,</span> <span class="pre">256)</span></code>) – Number of filters for each Conv1D layer. The length of this tuple
+defines the number of convolutional layers.</p></li>
+<li><p><strong>kernel_sizes</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</span>, default: <code class="docutils literal notranslate"><span class="pre">(7,</span> <span class="pre">5,</span> <span class="pre">3)</span></code>) – Kernel size for each Conv1D layer. If an int is given, the same kernel
+size is used for every layer.</p></li>
+<li><p><strong>pool_after_layers</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Zero-indexed convolutional layer indices after which <code class="docutils literal notranslate"><span class="pre">MaxPool1D</span></code> is
+applied. When both pooling arguments are omitted, one pooling operation
+with size <code class="docutils literal notranslate"><span class="pre">t_down</span></code> is placed after the first convolution.</p></li>
+<li><p><strong>pool_sizes</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code> | <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Pool size for each pooling operation. If an int is given, the same pool
+size is used after every layer listed in <code class="docutils literal notranslate"><span class="pre">pool_after_layers</span></code>.</p></li>
+<li><p><strong>emb_dim</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">128</span></code>) – Dimensionality of the latent embedding at each output timestep.</p></li>
+<li><p><strong>dropout</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.1</span></code>) – Dropout rate applied after each convolutional block.</p></li>
+<li><p><strong>activation</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'relu'</span></code>) – Activation function used by convolutional layers.</p></li>
+<li><p><strong>use_batch_norm</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code>) – Whether to apply batch normalization after each convolution.</p></li>
+<li><p><strong>name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'encoder_1dcnn'</span></code>) – Name of the Keras model.</p></li>
+<li><p><strong>**kwargs</strong> – Additional keyword arguments passed to <code class="docutils literal notranslate"><span class="pre">tf.keras.Model</span></code>.</p></li>
+</ul>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<p>Inputs have shape <code class="docutils literal notranslate"><span class="pre">(batch,</span> <span class="pre">timesteps,</span> <span class="pre">n_features)</span></code>; outputs have shape
+<code class="docutils literal notranslate"><span class="pre">(batch,</span> <span class="pre">ceil(timesteps</span> <span class="pre">/</span> <span class="pre">t_down),</span> <span class="pre">emb_dim)</span></code>.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder.call">
+<span class="sig-name descname"><span class="pre">call</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">inputs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DEncoder.call"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder.call" title="Link to this definition"></a></dt>
+<dd><p>Run the configurable-depth 1D CNN encoder forward pass.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>training</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">False</span></code>)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder.get_config">
+<span class="sig-name descname"><span class="pre">get_config</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/Convolutions/CNN1D.html#CNN1DEncoder.get_config"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder.get_config" title="Link to this definition"></a></dt>
+<dd><p>Return serializable configuration for the encoder.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder.n_features">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">n_features</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">int</span></span><a class="headerlink" href="#eegproc.deep_learning.unsupervised.Convolutions.CNN1D.CNN1DEncoder.n_features" title="Link to this definition"></a></dt>
+<dd><p>Number of input features per timestep.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.deep_learning.unsupervised.Convolutions.html" class="btn btn-neutral float-left" title="eegproc.deep_learning.unsupervised.Convolutions package" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.deep_learning.unsupervised.Convolutions.CNN2D.html" class="btn btn-neutral float-right" title="eegproc.deep_learning.unsupervised.Convolutions.CNN2D module" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,15 @@
+eegproc.plotting package
+========================
+
+.. automodule:: eegproc.plotting
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+Submodules
+----------
+
+.. toctree::
+   :maxdepth: 4
+
+   eegproc.plotting.plots

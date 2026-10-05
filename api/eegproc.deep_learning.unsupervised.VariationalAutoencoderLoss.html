@@ -1,0 +1,310 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.deep_learning.unsupervised.utils module" href="eegproc.deep_learning.unsupervised.utils.html" />
+    <link rel="prev" title="eegproc.deep_learning.unsupervised.BaseEncoder module" href="eegproc.deep_learning.unsupervised.BaseEncoder.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.data.html">eegproc.data package</a></li>
+<li class="toctree-l4 current"><a class="reference internal" href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.plotting.html">eegproc.plotting package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.unsupervised.html">eegproc.deep_learning.unsupervised package</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss">
+<span id="eegproc-deep-learning-unsupervised-variationalautoencoderloss-module"></span><h1>eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss module<a class="headerlink" href="#module-eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss" title="Link to this heading"></a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.</span></span><span class="sig-name descname"><span class="pre">GradientReversal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">adversarial_weight</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#GradientReversal"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">Layer</span></code></p>
+<p>Identity layer in the forward pass that reverses encoder gradients.</p>
+<p>The layer returns its input unchanged during the forward pass. During
+backpropagation, the incoming gradient is multiplied by
+<code class="docutils literal notranslate"><span class="pre">-adversarial_weight</span></code>. Place it between the encoder representation and
+the subject-identification head:</p>
+<p><code class="docutils literal notranslate"><span class="pre">subject_logits</span> <span class="pre">=</span> <span class="pre">subject_head(GradientReversal(weight)(z_mean))</span></code></p>
+<p>The subject head can then minimize ordinary subject cross-entropy, while
+the encoder receives the opposite gradient and learns to make subject
+identity harder to recover.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>adversarial_weight</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1.0</span></code>) – Non-negative strength of the reversed gradient reaching the encoder.
+This is the main hyperparameter controlling subject invariance. A
+value of 0.0 disables the adversarial encoder gradient; 1.0 reverses
+it at full strength.</p>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal.call">
+<span class="sig-name descname"><span class="pre">call</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">inputs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#GradientReversal.call"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal.call" title="Link to this definition"></a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>inputs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal.get_config">
+<span class="sig-name descname"><span class="pre">get_config</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#GradientReversal.get_config"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal.get_config" title="Link to this definition"></a></dt>
+<dd><p>Returns the config of the object.</p>
+<p>An object config is a Python dictionary (serializable)
+containing the information needed to re-instantiate it.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.</span></span><span class="sig-name descname"><span class="pre">VariationalAutoencoderLoss</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">reconstruction</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'mse'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">feature_reduction</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'mean'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kl_reduction</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">huber_delta</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">log_var_clip_min</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">-20.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">log_var_clip_max</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">20.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subject_loss_weight</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subject_from_logits</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#VariationalAutoencoderLoss"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Compute a configurable VAE objective with optional subject adversity.</p>
+<p>For each sample, the implemented scalar objective is</p>
+<p><code class="docutils literal notranslate"><span class="pre">reconstruction</span> <span class="pre">+</span> <span class="pre">beta</span> <span class="pre">*</span> <span class="pre">latent_kl</span> <span class="pre">+</span> <span class="pre">subject_loss_weight</span> <span class="pre">*</span> <span class="pre">subject_ce</span></code>.</p>
+<p>The subject term is deliberately <em>positive</em>. To make it adversarial for
+the encoder, <code class="docutils literal notranslate"><span class="pre">subject_pred</span></code> must be produced by a subject head whose
+input passes through <a class="reference internal" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal" title="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal"><code class="xref py py-class docutils literal notranslate"><span class="pre">GradientReversal</span></code></a>. This gives the desired
+parameter-specific optimization:</p>
+<ul class="simple">
+<li><p>the subject head minimizes subject cross-entropy;</p></li>
+<li><p>the encoder maximizes subject cross-entropy, scaled by the gradient-
+reversal <code class="docutils literal notranslate"><span class="pre">adversarial_weight</span></code>;</p></li>
+<li><p>the decoder is unaffected by the subject term.</p></li>
+</ul>
+<p>Both VAE terms can be reduced with either <code class="docutils literal notranslate"><span class="pre">&quot;sum&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;mean&quot;</span></code> across
+their non-batch coordinates:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">sum/sum</span></code> is the usual summed ELBO convention;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">mean/mean</span></code> is a dimension-normalized objective that is often easier
+to combine with O(1) classifier losses.</p></li>
+</ul>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>reconstruction</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Literal</span></code>[<code class="docutils literal notranslate"><span class="pre">'mse'</span></code>, <code class="docutils literal notranslate"><span class="pre">'mae'</span></code>, <code class="docutils literal notranslate"><span class="pre">'huber'</span></code>]</span>, default: <code class="docutils literal notranslate"><span class="pre">'mse'</span></code>) – Element-wise reconstruction penalty: <code class="docutils literal notranslate"><span class="pre">&quot;mse&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;mae&quot;</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">&quot;huber&quot;</span></code>.</p></li>
+<li><p><strong>beta</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1.0</span></code>) – Non-negative multiplier on the reduced KL term.</p></li>
+<li><p><strong>feature_reduction</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Literal</span></code>[<code class="docutils literal notranslate"><span class="pre">'sum'</span></code>, <code class="docutils literal notranslate"><span class="pre">'mean'</span></code>]</span>, default: <code class="docutils literal notranslate"><span class="pre">'mean'</span></code>) – Reduction across every non-batch reconstruction dimension.</p></li>
+<li><p><strong>kl_reduction</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Literal</span></code>[<code class="docutils literal notranslate"><span class="pre">'sum'</span></code>, <code class="docutils literal notranslate"><span class="pre">'mean'</span></code>]]</span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>) – Reduction across latent coordinates. When omitted, defaults to
+<code class="docutils literal notranslate"><span class="pre">feature_reduction</span></code>.</p></li>
+<li><p><strong>huber_delta</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1.0</span></code>) – Positive transition point for Huber loss.</p></li>
+<li><p><strong>log_var_clip_min</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">-20.0</span></code>) – Bounds applied to log variance before exponentiation.</p></li>
+<li><p><strong>log_var_clip_max</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">20.0</span></code>) – Bounds applied to log variance before exponentiation.</p></li>
+<li><p><strong>subject_loss_weight</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.0</span></code>) – Non-negative multiplier on subject cross-entropy in the scalar loss.
+Keep this at 1.0 in the usual gradient-reversal setup so the subject
+head remains strong. Control the encoder-side adversarial pressure
+primarily through <code class="docutils literal notranslate"><span class="pre">GradientReversal(adversarial_weight=...)</span></code>.
+Set this to 0.0 to exclude the subject term from the objective.</p></li>
+<li><p><strong>subject_from_logits</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code>) – Whether <code class="docutils literal notranslate"><span class="pre">subject_pred</span></code> contains unnormalized logits. Using logits is
+recommended for numerical stability.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_huber_loss">
+<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">compute_huber_loss</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">error</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delta</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#VariationalAutoencoderLoss.compute_huber_loss"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_huber_loss" title="Link to this definition"></a></dt>
+<dd><p>Return element-wise Huber loss.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>error</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+<li><p><strong>delta</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">1.0</span></code>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_kl_loss">
+<span class="sig-name descname"><span class="pre">compute_kl_loss</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">z_mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">z_log_var</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#VariationalAutoencoderLoss.compute_kl_loss"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_kl_loss" title="Link to this definition"></a></dt>
+<dd><p>Compute one reduced KL value for every sample.</p>
+<p><code class="docutils literal notranslate"><span class="pre">z_log_var</span></code> must contain <code class="docutils literal notranslate"><span class="pre">log(sigma**2)</span></code>, not <code class="docutils literal notranslate"><span class="pre">log(sigma)</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>z_mean</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+<li><p><strong>z_log_var</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_reconstruction_loss">
+<span class="sig-name descname"><span class="pre">compute_reconstruction_loss</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x_true</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_pred</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#VariationalAutoencoderLoss.compute_reconstruction_loss"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_reconstruction_loss" title="Link to this definition"></a></dt>
+<dd><p>Compute one reduced reconstruction loss for every sample.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x_true</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+<li><p><strong>x_pred</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_subject_loss">
+<span class="sig-name descname"><span class="pre">compute_subject_loss</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">subject_true</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subject_pred</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#VariationalAutoencoderLoss.compute_subject_loss"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.compute_subject_loss" title="Link to this definition"></a></dt>
+<dd><p>Compute sparse subject cross-entropy for every batch sample.</p>
+<p>Subject targets are ordinary integer subject IDs. They are not
+inverted, randomized, or replaced with uniform targets. The gradient
+reversal applied before the subject head creates the adversarial
+encoder update.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>subject_true</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+<li><p><strong>subject_pred</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.get_config">
+<span class="sig-name descname"><span class="pre">get_config</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/VariationalAutoencoderLoss.html#VariationalAutoencoderLoss.get_config"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss.get_config" title="Link to this definition"></a></dt>
+<dd><p>Return a Keras-serializable configuration.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.deep_learning.unsupervised.BaseEncoder.html" class="btn btn-neutral float-left" title="eegproc.deep_learning.unsupervised.BaseEncoder module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.deep_learning.unsupervised.utils.html" class="btn btn-neutral float-right" title="eegproc.deep_learning.unsupervised.utils module" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

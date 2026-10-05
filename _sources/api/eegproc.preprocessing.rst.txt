@@ -1,0 +1,7 @@
+eegproc.preprocessing module
+============================
+
+.. automodule:: eegproc.preprocessing
+   :members:
+   :show-inheritance:
+   :undoc-members:

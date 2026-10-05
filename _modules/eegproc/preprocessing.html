@@ -1,0 +1,470 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.preprocessing &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.preprocessing</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.preprocessing</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.signal</span><span class="w"> </span><span class="kn">import</span> <span class="n">butter</span><span class="p">,</span> <span class="n">sosfiltfilt</span><span class="p">,</span> <span class="n">iirnotch</span><span class="p">,</span> <span class="n">filtfilt</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.signal</span><span class="w"> </span><span class="kn">import</span> <span class="n">detrend</span> <span class="k">as</span> <span class="n">scipy_detrend</span>
+
+
+<span class="n">FREQUENCY_BANDS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"delta"</span><span class="p">:</span> <span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">),</span>
+    <span class="s2">"theta"</span><span class="p">:</span> <span class="p">(</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">8.0</span><span class="p">),</span>
+    <span class="s2">"alpha"</span><span class="p">:</span> <span class="p">(</span><span class="mf">8.0</span><span class="p">,</span> <span class="mf">13.0</span><span class="p">),</span>
+    <span class="s2">"betaL"</span><span class="p">:</span> <span class="p">(</span><span class="mf">13.0</span><span class="p">,</span> <span class="mf">20.0</span><span class="p">),</span>
+    <span class="s2">"betaH"</span><span class="p">:</span> <span class="p">(</span><span class="mf">20.0</span><span class="p">,</span> <span class="mf">30.0</span><span class="p">),</span>
+    <span class="s2">"gamma"</span><span class="p">:</span> <span class="p">(</span><span class="mf">30.0</span><span class="p">,</span> <span class="mf">45.0</span><span class="p">),</span>
+<span class="p">}</span>
+
+
+
+
+<div class="viewcode-block" id="apply_detrend">
+<a class="viewcode-back" href="../../api/eegproc.preprocessing.html#eegproc.preprocessing.apply_detrend">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">apply_detrend</span><span class="p">(</span><span class="n">detrend</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Apply interpolation and (optionally) remove a trend from each numeric column.</span>
+
+<span class="sd">    This is a small convenience wrapper that first ensures numeric columns are</span>
+<span class="sd">    float and linearly interpolated (forward/backward) via :func:`numeric_interp`,</span>
+<span class="sd">    then, depending on ``detrend``, optionally removes a trend from each column</span>
+<span class="sd">    using :func:`detrend_df`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        detrend: Which trend to remove. Accepted values are:</span>
+<span class="sd">            - ``"constant"``: remove the mean from each series (demean).</span>
+<span class="sd">            - ``"linear"``: remove a best-fit linear trend from each series.</span>
+<span class="sd">            - ``None``: do not detrend; only interpolate numeric columns.</span>
+<span class="sd">        df: Input dataframe. Non-numeric columns are ignored for interpolation</span>
+<span class="sd">            and detrending (they are effectively dropped by the pipeline).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: A dataframe with only numeric columns, interpolated, and</span>
+<span class="sd">        optionally detrended according to ``detrend``. Index and column names</span>
+<span class="sd">        are preserved for the remaining numeric columns.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If ``detrend`` is not one of ``{"constant", "linear", None}``.</span>
+
+<span class="sd">    See Also:</span>
+<span class="sd">        numeric_interp: Coerces numeric columns to float and bi-directionally interpolates.</span>
+<span class="sd">        detrend_df: Applies SciPy detrending (constant or linear) column-wise.</span>
+
+<span class="sd">    Examples:</span>
+<span class="sd">        &gt;&gt;&gt; import pandas as pd, numpy as np</span>
+<span class="sd">        &gt;&gt;&gt; df = pd.DataFrame({"a": [1.0, np.nan, 3.0], "b": [10.0, 11.0, np.nan], "c": ["x", "y", "z"]})</span>
+<span class="sd">        &gt;&gt;&gt; apply_detrend("constant", df)  # demean numeric columns after interpolation</span>
+<span class="sd">                 a     b</span>
+<span class="sd">        0 -1.000000 -0.5</span>
+<span class="sd">        1  0.000000  0.5</span>
+<span class="sd">        2  1.000000  0.0</span>
+
+<span class="sd">        &gt;&gt;&gt; apply_detrend(None, df)  # only numeric interpolation</span>
+<span class="sd">             a     b</span>
+<span class="sd">        0  1.0  10.0</span>
+<span class="sd">        1  2.0  11.0</span>
+<span class="sd">        2  3.0  11.0</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">detrend</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"constant"</span><span class="p">,</span> <span class="s2">"linear"</span><span class="p">}:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">_detrend_df</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="n">detrend</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">detrend</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">numeric_interp</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"detrend must be 'constant', 'linear', or None"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="numeric_interp">
+<a class="viewcode-back" href="../../api/eegproc.preprocessing.html#eegproc.preprocessing.numeric_interp">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">numeric_interp</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Select numeric columns, cast to float, and interpolate missing values.</span>
+
+<span class="sd">    The function:</span>
+<span class="sd">      1) keeps only numeric dtypes,</span>
+<span class="sd">      2) casts them to ``float`` (to allow NaNs and interpolation),</span>
+<span class="sd">      3) fills missing values with linear interpolation along the index,</span>
+<span class="sd">         using ``limit_direction='both'`` to also fill leading/trailing gaps.</span>
+
+<span class="sd">    Non-numeric columns are dropped.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        df: Input dataframe containing numeric and/or non-numeric columns.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: A *copy* containing only the numeric columns as floats,</span>
+<span class="sd">        with missing values linearly interpolated forward and backward.</span>
+
+<span class="sd">    Notes:</span>
+<span class="sd">        - Interpolation is performed independently per column.</span>
+<span class="sd">        - If a column is entirely NaN, it will remain NaN.</span>
+
+<span class="sd">    Examples:</span>
+<span class="sd">        &gt;&gt;&gt; import pandas as pd, numpy as np</span>
+<span class="sd">        &gt;&gt;&gt; df = pd.DataFrame({"x": [1.0, np.nan, 3.0], "y": ["a", "b", "c"]})</span>
+<span class="sd">        &gt;&gt;&gt; numeric_interp(df)</span>
+<span class="sd">             x</span>
+<span class="sd">        0  1.0</span>
+<span class="sd">        1  2.0</span>
+<span class="sd">        2  3.0</span>
+<span class="sd">    """</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">select_dtypes</span><span class="p">(</span><span class="n">include</span><span class="o">=</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">number</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">df</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="n">s</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="n">limit_direction</span><span class="o">=</span><span class="s2">"both"</span><span class="p">))</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_detrend_df</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">kind</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"linear"</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">kind</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"linear"</span><span class="p">,</span> <span class="s2">"constant"</span><span class="p">}:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"kind must be 'linear' or 'constant'"</span><span class="p">)</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">numeric_interp</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+    <span class="n">arr</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">arr</span> <span class="o">=</span> <span class="n">scipy_detrend</span><span class="p">(</span><span class="n">arr</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="n">kind</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">arr</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="sosfiltfilt_safe">
+<a class="viewcode-back" href="../../api/eegproc.preprocessing.html#eegproc.preprocessing.sosfiltfilt_safe">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">sosfiltfilt_safe</span><span class="p">(</span><span class="n">sos</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Zero-phase Second-order Section (SOS) filter,</span>
+<span class="sd">    handles NaNs and short signals.</span>
+
+<span class="sd">    Applies ``scipy.signal.sosfiltfilt`` to a 1-D array.</span>
+<span class="sd">    Linearly interpolates internal NaNs (or fills with 0.0 if</span>
+<span class="sd">    too few finite samples to interpolate).</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    sos : array-like</span>
+<span class="sd">        Second-order-sections filter coefficients as produced by</span>
+<span class="sd">        ``scipy.signal.butter(..., output="sos")``.</span>
+<span class="sd">    y : array-like of shape (n_samples,)</span>
+<span class="sd">        Input signal (1-D). May contain NaNs.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    numpy.ndarray</span>
+<span class="sd">        Filtered signal. If the input is all-NaN or too short, returns a</span>
+<span class="sd">        copy of the input (with NaNs interpolated when possible).</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    - NaNs at the edges are handled by linear interpolation using the nearest</span>
+<span class="sd">      finite samples when available; otherwise they are set to 0.0.</span>
+<span class="sd">    - The minimum-length guard (15) prevents filtfilt endpoint artifacts</span>
+<span class="sd">      and poor padding when the window is too small.</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">y</span><span class="p">)):</span>
+        <span class="k">return</span> <span class="n">y</span>
+    <span class="n">y</span> <span class="o">=</span> <span class="n">y</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">nans</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">nans</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+        <span class="n">iddf</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="o">~</span><span class="n">nans</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">iddf</span><span class="o">.</span><span class="n">size</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">y</span><span class="p">[</span><span class="n">nans</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">interp</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">flatnonzero</span><span class="p">(</span><span class="n">nans</span><span class="p">),</span> <span class="n">iddf</span><span class="p">,</span> <span class="n">y</span><span class="p">[</span><span class="n">iddf</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">y</span><span class="p">[</span><span class="n">nans</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="k">if</span> <span class="n">y</span><span class="o">.</span><span class="n">size</span> <span class="o">&lt;</span> <span class="mi">15</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">y</span>
+    <span class="k">return</span> <span class="n">sosfiltfilt</span><span class="p">(</span><span class="n">sos</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="apply_notch_once">
+<a class="viewcode-back" href="../../api/eegproc.preprocessing.html#eegproc.preprocessing.apply_notch_once">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">apply_notch_once</span><span class="p">(</span>
+    <span class="n">dfin</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">notch_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">list</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">notch_q</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">nyq</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Apply single-pass IIR notch filtering (and optional 2x harmonic) to each column</span>
+<span class="sd">    to remove narrow amplitude readings over selected frequencies.</span>
+
+<span class="sd">    Builds one or more IIR notch filters at the requested fundamental frequencies,</span>
+<span class="sd">    optionally adding a 2x harmonic notch when it is safely below Nyquist, and applies</span>
+<span class="sd">    zero-phase filtering (``scipy.signal.filtfilt``, ``method="gust"``) column-wise.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    dfin : pandas.DataFrame</span>
+<span class="sd">        Raw data EEG dataframe. Numeric columns.</span>
+<span class="sd">    notch_hz : float | int | list | tuple | None</span>
+<span class="sd">        Fundamental notch frequency (e.g., 50 or 60), or a list/tuple of such</span>
+<span class="sd">        frequencies. If ``None``, no notch filtering is applied.</span>
+<span class="sd">    notch_q : float</span>
+<span class="sd">        Quality factor for ``scipy.signal.iirnotch`` (higher = narrower notch).</span>
+<span class="sd">    nyq : float</span>
+<span class="sd">        Nyquist frequency (``fs/2``), used to normalize the notch frequency.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pandas.DataFrame</span>
+<span class="sd">        Copy of the input with the notch (and eligible 2x harmonic) applied</span>
+<span class="sd">        to all columns with sufficient length.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    - A 2x harmonic is added for each fundamental ``f0`` when ``2*f0 &lt; nyq - 1.0``.</span>
+<span class="sd">    - Columns shorter than ``max(15, 3 * max(len(a), len(b)))`` samples are skipped</span>
+<span class="sd">      for stability.</span>
+<span class="sd">    - Frequencies are normalized as ``w0 = f0 / nyq`` for ``iirnotch``.</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">notch_hz</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">dfin</span>
+    <span class="n">freqs</span> <span class="o">=</span> <span class="n">notch_hz</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">notch_hz</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">))</span> <span class="k">else</span> <span class="p">[</span><span class="n">notch_hz</span><span class="p">]</span>
+    <span class="n">edfpanded</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">f0</span> <span class="ow">in</span> <span class="n">freqs</span><span class="p">:</span>
+        <span class="n">edfpanded</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">f0</span><span class="p">))</span>
+        <span class="k">if</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">f0</span> <span class="o">&lt;</span> <span class="n">nyq</span> <span class="o">-</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="n">edfpanded</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">f0</span><span class="p">))</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">dfin</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">f0</span> <span class="ow">in</span> <span class="n">edfpanded</span><span class="p">:</span>
+        <span class="n">w0</span> <span class="o">=</span> <span class="n">f0</span> <span class="o">/</span> <span class="n">nyq</span>
+        <span class="k">if</span> <span class="mi">0</span> <span class="o">&lt;</span> <span class="n">w0</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">b</span><span class="p">,</span> <span class="n">a</span> <span class="o">=</span> <span class="n">iirnotch</span><span class="p">(</span><span class="n">w0</span><span class="p">,</span> <span class="n">notch_q</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">dfin</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+                <span class="n">y</span> <span class="o">=</span> <span class="n">out</span><span class="p">[</span><span class="n">c</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">y</span><span class="o">.</span><span class="n">size</span> <span class="o">&gt;=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">15</span><span class="p">,</span> <span class="mi">3</span> <span class="o">*</span> <span class="nb">max</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">b</span><span class="p">))):</span>
+                    <span class="n">out</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">=</span> <span class="n">filtfilt</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">"gust"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">out</span></div>
+
+
+
+<div class="viewcode-block" id="bandpass_filter">
+<a class="viewcode-back" href="../../api/eegproc.preprocessing.html#eegproc.preprocessing.bandpass_filter">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">bandpass_filter</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">fs</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">bands</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="n">FREQUENCY_BANDS</span><span class="p">,</span>
+    <span class="n">low</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">high</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">order</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="n">notch_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">list</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="p">[</span><span class="mi">60</span><span class="p">,</span> <span class="mi">120</span><span class="p">],</span>
+    <span class="n">notch_q</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">30.0</span><span class="p">,</span>
+    <span class="n">reref</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">detrend</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Applies band-pass filtering over raw EEG data on each channel.</span>
+
+<span class="sd">    Pipeline</span>
+<span class="sd">    --------</span>
+<span class="sd">    1) Coerce to numeric (with interpolation).</span>
+
+<span class="sd">    2) Optional common average reference (CAR) across channels (``reref=True``).</span>
+
+<span class="sd">    3) Optional notch filtering at ``notch_hz`` (and 2x harmonics when safe).</span>
+
+<span class="sd">    4a) If ``bands`` is a dict: apply a per-band Butterworth band-pass (SOS) and</span>
+<span class="sd">        return columns named ``{channel}_{band}``.</span>
+
+<span class="sd">    4b) Else: require ``(low, high)`` and apply a single band-pass to each channel,</span>
+<span class="sd">        returning the original channel names.</span>
+
+<span class="sd">    5) Optional constant detrending per output column.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pandas.DataFrame</span>
+<span class="sd">        Raw data EEG dataframe. Numeric columns; NaNs are</span>
+<span class="sd">        interpolated internally by ``numeric_interp`` before filtering.</span>
+<span class="sd">    fs : float</span>
+<span class="sd">        Sampling rate in Hz.</span>
+<span class="sd">    bands : dict[str, tuple[float, float]] or None, default=FREQUENCY_BANDS</span>
+<span class="sd">        If provided, a mapping from band name to (low, high) in Hz. When given,</span>
+<span class="sd">        one output column per ``{channel}_{band}`` is produced. If ``None``,</span>
+<span class="sd">        ``low`` and ``high`` must be provided to define a single passband.</span>
+<span class="sd">    low : float or None, default=None</span>
+<span class="sd">        Low cutoff in Hz for the single band-pass path (ignored if ``bands`` provided).</span>
+<span class="sd">    high : float or None, default=None</span>
+<span class="sd">        High cutoff in Hz for the single band-pass path (ignored if ``bands`` provided).</span>
+<span class="sd">    order : int, default=4</span>
+<span class="sd">        Butterworth filter order for band-pass design.</span>
+<span class="sd">    notch_hz : float | int | list | tuple | None, default=[60, 120]</span>
+<span class="sd">        Fundamental notch frequency/frequencies. ``None`` disables notch filtering.</span>
+<span class="sd">    notch_q : float, default=30.0</span>
+<span class="sd">        Quality factor for the notch (higher = narrower).</span>
+<span class="sd">    reref : bool, default=True</span>
+<span class="sd">        If True and there are ≥2 channels, apply common average reference (CAR).</span>
+<span class="sd">    detrend : bool, default=True</span>
+<span class="sd">        If True, remove the mean (constant detrend) after filtering.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pandas.DataFrame</span>
+<span class="sd">        Filtered dataframe indexed like the input. If ``bands`` is provided,</span>
+<span class="sd">        columns are ``{channel}_{band}``; otherwise, the original channel names</span>
+<span class="sd">        are preserved.</span>
+
+<span class="sd">    Raises</span>
+<span class="sd">    ------</span>
+<span class="sd">    ValueError</span>
+<span class="sd">        - When ``bands`` is ``None`` and either ``low`` or ``high`` is missing.</span>
+<span class="sd">        - When any cutoff does not satisfy ``0 &lt; low &lt; high &lt; fs/2``.</span>
+<span class="sd">        - When a band in ``bands`` violates Nyquist constraints.</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    RuntimeWarning</span>
+<span class="sd">        Emitted when ``reref=True`` but only one channel is present (CAR requires ≥2).</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    - Band-pass filters are designed with ``scipy.signal.butter(..., output="sos")`` and</span>
+<span class="sd">      applied with a NaN-robust zero-phase filter via :func:`_sosfiltfilt_safe`.</span>
+<span class="sd">    - Notch filtering is applied once before band-pass filtering.</span>
+<span class="sd">    - Constant detrend uses ``scipy.signal.detrend(..., type="constant")``.</span>
+<span class="sd">    - For stability, very short columns may be skipped inside helper routines.</span>
+<span class="sd">    """</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">numeric_interp</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">to_numeric</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s2">"coerce"</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">"float64"</span><span class="p">)</span>
+    <span class="n">nyq</span> <span class="o">=</span> <span class="n">fs</span> <span class="o">/</span> <span class="mf">2.0</span>
+    <span class="n">cols</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">reref</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">cols</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">car</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">cols</span><span class="p">:</span>
+            <span class="n">df</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">-</span> <span class="n">car</span>
+    <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">cols</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+            <span class="s2">"reref=True ignored: only one channel present; CAR requires &gt;= 2 channels."</span><span class="p">,</span>
+            <span class="ne">RuntimeWarning</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">apply_notch_once</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">notch_hz</span><span class="p">,</span> <span class="n">notch_q</span><span class="p">,</span> <span class="n">nyq</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">bands</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">low</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">high</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Provide (low, high) or a bands dict."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="mi">0</span> <span class="o">&lt;</span> <span class="n">low</span> <span class="o">&lt;</span> <span class="n">high</span> <span class="o">&lt;</span> <span class="n">nyq</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Cutoffs must satisfy 0 &lt; low &lt; high &lt; fs/2=</span><span class="si">{</span><span class="n">nyq</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="n">sos</span> <span class="o">=</span> <span class="n">butter</span><span class="p">(</span><span class="n">order</span><span class="p">,</span> <span class="p">[</span><span class="n">low</span> <span class="o">/</span> <span class="n">nyq</span><span class="p">,</span> <span class="n">high</span> <span class="o">/</span> <span class="n">nyq</span><span class="p">],</span> <span class="n">btype</span><span class="o">=</span><span class="s2">"bandpass"</span><span class="p">,</span> <span class="n">output</span><span class="o">=</span><span class="s2">"sos"</span><span class="p">)</span>
+        <span class="n">Y</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">cols</span><span class="p">:</span>
+            <span class="n">Y</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">=</span> <span class="n">sosfiltfilt_safe</span><span class="p">(</span><span class="n">sos</span><span class="p">,</span> <span class="n">df</span><span class="p">[</span><span class="n">c</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">())</span>
+        <span class="k">if</span> <span class="n">detrend</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">cols</span><span class="p">:</span>
+                <span class="n">Y</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">=</span> <span class="n">scipy_detrend</span><span class="p">(</span><span class="n">Y</span><span class="p">[</span><span class="n">c</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="nb">type</span><span class="o">=</span><span class="s2">"constant"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">Y</span>
+
+    <span class="n">out</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">band_sos</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="p">(</span><span class="n">lo</span><span class="p">,</span> <span class="n">hi</span><span class="p">)</span> <span class="ow">in</span> <span class="n">bands</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="mi">0</span> <span class="o">&lt;</span> <span class="n">lo</span> <span class="o">&lt;</span> <span class="n">hi</span> <span class="o">&lt;</span> <span class="n">nyq</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Bad band </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">lo</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">hi</span><span class="si">}</span><span class="s2"> vs fs/2=</span><span class="si">{</span><span class="n">nyq</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">band_sos</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">butter</span><span class="p">(</span>
+            <span class="n">order</span><span class="p">,</span> <span class="p">[</span><span class="n">lo</span> <span class="o">/</span> <span class="n">nyq</span><span class="p">,</span> <span class="n">hi</span> <span class="o">/</span> <span class="n">nyq</span><span class="p">],</span> <span class="n">btype</span><span class="o">=</span><span class="s2">"bandpass"</span><span class="p">,</span> <span class="n">output</span><span class="o">=</span><span class="s2">"sos"</span>
+        <span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">cols</span><span class="p">:</span>
+        <span class="n">y0</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">c</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">sos</span> <span class="ow">in</span> <span class="n">band_sos</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">yb</span> <span class="o">=</span> <span class="n">sosfiltfilt_safe</span><span class="p">(</span><span class="n">sos</span><span class="p">,</span> <span class="n">y0</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">detrend</span><span class="p">:</span>
+                <span class="n">yb</span> <span class="o">=</span> <span class="n">scipy_detrend</span><span class="p">(</span><span class="n">yb</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="s2">"constant"</span><span class="p">)</span>
+            <span class="n">out</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">c</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">]</span> <span class="o">=</span> <span class="n">yb</span>
+
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

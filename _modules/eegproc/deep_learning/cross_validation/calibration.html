@@ -1,0 +1,896 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.cross_validation.calibration &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.cross_validation.calibration</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.deep_learning.cross_validation.calibration</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Subject-calibration cross-validation entry point."""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">TYPE_CHECKING</span>
+
+<span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>  <span class="c1"># annotations only</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.arrays</span><span class="w"> </span><span class="kn">import</span> <span class="n">_python_scalar</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.constants</span><span class="w"> </span><span class="kn">import</span> <span class="n">_CLASSIFICATION_METRICS</span><span class="p">,</span> <span class="n">_DECODER_SCORE_NAMES</span><span class="p">,</span> <span class="n">_DEFAULT_ECE_BINS</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.workers</span><span class="w"> </span><span class="kn">import</span> <span class="n">_auto_assign_gpu_ids</span><span class="p">,</span> <span class="n">_run_spawned_fold_pool</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.probabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">_normalize_decision_thresholds</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.reporting</span><span class="w"> </span><span class="kn">import</span> <span class="n">_mean_std_rows</span><span class="p">,</span> <span class="n">_validate_evaluation_level</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.calibration_subject</span><span class="w"> </span><span class="kn">import</span> <span class="n">_run_subject_calibration_subject</span><span class="p">,</span> <span class="n">_subject_calibration_process_main</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_normalize_calibration_levels</span><span class="p">(</span>
+    <span class="n">calibration_levels</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">calibration_trials</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">calibration_folds</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="o">...</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""Return unique ``(shots, folds)`` pairs in requested reporting order."""</span>
+    <span class="n">raw_levels</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="p">[(</span><span class="n">calibration_trials</span><span class="p">,</span> <span class="n">calibration_folds</span><span class="p">)]</span>
+        <span class="k">if</span> <span class="n">calibration_levels</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="nb">list</span><span class="p">(</span><span class="n">calibration_levels</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">raw_levels</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"calibration_levels must contain at least one pair."</span><span class="p">)</span>
+
+    <span class="n">normalized</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">seen_shots</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">pair</span> <span class="ow">in</span> <span class="n">raw_levels</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">pair</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">))</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">pair</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Each calibration level must be a (shots, folds) pair; "</span>
+                <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">pair</span><span class="si">!r}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="n">shots</span><span class="p">,</span> <span class="n">folds</span> <span class="o">=</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">pair</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="nb">int</span><span class="p">(</span><span class="n">pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="k">if</span> <span class="n">shots</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Calibration shots must be &gt;= 1."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">folds</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Calibration folds must be &gt;= 1."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">shots</span> <span class="ow">in</span> <span class="n">seen_shots</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Calibration shots must be unique; </span><span class="si">{</span><span class="n">shots</span><span class="si">}</span><span class="s2">-shot was repeated."</span>
+            <span class="p">)</span>
+        <span class="n">seen_shots</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">shots</span><span class="p">)</span>
+        <span class="n">normalized</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">shots</span><span class="p">,</span> <span class="n">folds</span><span class="p">))</span>
+    <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">normalized</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="subject_calibration_cv">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.cross_validation.calibration.html#eegproc.deep_learning.cross_validation.calibration.subject_calibration_cv">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">subject_calibration_cv</span><span class="p">(</span>
+    <span class="n">model_builder_function</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">feature_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">label_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">subject_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">trial_id_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">fixed_config</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">source_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
+    <span class="n">source_batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span>
+    <span class="n">calibration_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span>
+    <span class="n">calibration_batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">pretrained_model</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">calibration_trials</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span>
+    <span class="n">calibration_folds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="n">calibration_levels</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">calibration_selection_shots</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">calibration_learning_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-4</span><span class="p">,</span>
+    <span class="n">calibration_optimizer</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"adamw"</span><span class="p">,</span>
+    <span class="n">calibration_weight_decay</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">calibration_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">stratify_calibration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">allow_overlapping_calibration_folds</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">validation_subjects_per_fold</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">validation_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">early_stopping_patience</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">early_stopping_min_delta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">early_stopping_monitor</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"val_loss"</span><span class="p">,</span>
+    <span class="n">early_stopping_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"auto"</span><span class="p">,</span> <span class="s2">"min"</span><span class="p">,</span> <span class="s2">"max"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"auto"</span><span class="p">,</span>
+    <span class="n">restore_best_weights</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">evaluation_level</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"window"</span><span class="p">,</span> <span class="s2">"trial"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"trial"</span><span class="p">,</span>
+    <span class="n">metrics</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">"accuracy"</span><span class="p">,</span>
+        <span class="s2">"f1"</span><span class="p">,</span>
+        <span class="s2">"precision"</span><span class="p">,</span>
+        <span class="s2">"recall"</span><span class="p">,</span>
+        <span class="s2">"macro_f1"</span><span class="p">,</span>
+        <span class="s2">"macro_precision"</span><span class="p">,</span>
+        <span class="s2">"macro_recall"</span><span class="p">,</span>
+        <span class="s2">"balanced_accuracy"</span><span class="p">,</span>
+        <span class="s2">"roc_auc"</span><span class="p">,</span>
+        <span class="s2">"brier_score"</span><span class="p">,</span>
+        <span class="s2">"ece"</span><span class="p">,</span>
+    <span class="p">),</span>
+    <span class="n">ece_bins</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">_DEFAULT_ECE_BINS</span><span class="p">,</span>
+    <span class="n">decision_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_thresholds</span><span class="p">:</span> <span class="p">(</span>
+        <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="p">)</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_metric</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"accuracy"</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_max_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_threshold_tolerance</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">prediction_diagnostics_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">n_prediction_latent_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">latent_sampling_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">log_predictions</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">log_variational_intervals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">n_uncertainty_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">30</span><span class="p">,</span>
+    <span class="n">ci_level</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span><span class="p">,</span>
+    <span class="n">source_use_class_weight</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">calibration_use_class_weight</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">source_fit_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">calibration_fit_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">calibration_verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">calibration_print_every_n_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">verbose</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">n_jobs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">gpu_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">cpus_per_worker</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">max_subjects</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">target_subjects</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">source_model_output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Strict LOSO pretraining followed by one or more calibration levels.</span>
+
+<span class="sd">    Pass exactly one of ``model_builder_function`` and ``pretrained_model``.</span>
+<span class="sd">    The pretrained path accepts one already-loaded, target-specific LOSO model,</span>
+<span class="sd">    requires one explicit ``target_subjects`` entry, and skips source fitting.</span>
+
+<span class="sd">    For each target subject, a fresh subject-independent source model is first</span>
+<span class="sd">    trained using the other subjects. When ``validation_subjects_per_fold`` is</span>
+<span class="sd">    positive, a seeded subset of those source subjects is excluded from gradient</span>
+<span class="sd">    updates and used only for source checkpoint selection. The target subject is</span>
+<span class="sd">    never used to construct, optimize, or select that source model. This is</span>
+<span class="sd">    important for models that learn data-dependent adjacency: the four ``training_*``</span>
+<span class="sd">    arrays contain only gradient-training source subjects, so its fixed</span>
+<span class="sd">    mutual-information adjacency remains training-only.</span>
+
+<span class="sd">    The source model is evaluated zero-shot on all target trials once. Pass</span>
+<span class="sd">    ``calibration_levels=((3, 6), (6, 3), ...)`` to request ``(shots, folds)``</span>
+<span class="sd">    pairs. If omitted, the legacy ``calibration_trials``/``calibration_folds``</span>
+<span class="sd">    pair is used. The same source checkpoint is restored for every level and</span>
+<span class="sd">    fold; it is never retrained between calibration levels. Exact partitions</span>
+<span class="sd">    are used when ``shots * folds`` equals the retained trial count, otherwise</span>
+<span class="sd">    seeded repeated holdouts evaluate on every non-calibration trial. For each</span>
+<span class="sd">    fold:</span>
+
+<span class="sd">      1. restore the exact source-pretrained weights;</span>
+<span class="sd">      2. evaluate zero-shot on the trials not used for calibration;</span>
+<span class="sd">      3. call ``model.prepare_for_subject_calibration(...)``;</span>
+<span class="sd">      4. fine-tune only the model-defined calibration parameters, printing</span>
+<span class="sd">         reporting-only oracle predictions on every non-calibration trial</span>
+<span class="sd">         after each epoch;</span>
+<span class="sd">      5. evaluate the calibrated model on the same held-out target trials.</span>
+
+<span class="sd">    When ``source_model_output_dir`` is provided, the exact source-trained</span>
+<span class="sd">    0-shot model for every LOSO target is saved there in native ``.keras``</span>
+<span class="sd">    format before calibration begins. Calibrated fold continuations are not</span>
+<span class="sd">    saved. Load these source models with ``compile=False`` before calling the</span>
+<span class="sd">    model's calibration preparation hook, which installs a fresh optimizer.</span>
+<span class="sd">    Model-specific calibration settings may optionally keep reconstruction</span>
+<span class="sd">    decoders trainable and add their weighted loss to the calibration objective.</span>
+
+<span class="sd">    Thus the default DREAMER protocol remains 6 calibration trials + 12</span>
+<span class="sd">    evaluation trials repeated three times, while arbitrary valid shot/fold</span>
+<span class="sd">    pairs can be evaluated in the same LOSO run.</span>
+
+<span class="sd">    ``model_builder_function`` contract</span>
+<span class="sd">    ------------------------------------</span>
+<span class="sd">    In addition to ``fixed_config`` model kwargs, the builder must accept:</span>
+<span class="sd">    ``training_features``, ``training_labels``, ``training_subject_ids``, and</span>
+<span class="sd">    ``training_trial_ids``. The first of these is where v6 should estimate its</span>
+<span class="sd">    training-only MI graph.</span>
+
+<span class="sd">    ``prepare_for_subject_calibration`` contract</span>
+<span class="sd">    --------------------------------------------</span>
+<span class="sd">    The returned model must implement::</span>
+
+<span class="sd">        model.prepare_for_subject_calibration(</span>
+<span class="sd">            learning_rate=...,</span>
+<span class="sd">            optimizer_name=...,</span>
+<span class="sd">            weight_decay=...,</span>
+<span class="sd">        )</span>
+
+<span class="sd">    The method owns the architecture-specific freezing policy and must compile</span>
+<span class="sd">    a *fresh optimizer*. A typical policy freezes the shared representation</span>
+<span class="sd">    layers — graph, spectral and temporal encoders, plus any subject-invariance</span>
+<span class="sd">    machinery — while the classification head stays trainable; reconstruction</span>
+<span class="sd">    decoders may also remain trainable when the model's calibration settings</span>
+<span class="sd">    request it.</span>
+
+<span class="sd">    Aggregation</span>
+<span class="sd">    -----------</span>
+<span class="sd">    Metrics are first averaged across folds within each subject and shot level,</span>
+<span class="sd">    then across subjects. Calibration folds are never treated as independent</span>
+<span class="sd">    subjects. JSON output retains every requested metric at every shot level;</span>
+<span class="sd">    terminal output reports final mean accuracy, balanced accuracy, and Brier</span>
+<span class="sd">    score for 0-shot and each calibrated level.</span>
+<span class="sd">    """</span>
+    <span class="n">feature_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">feature_array</span><span class="p">)</span>
+    <span class="n">label_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">label_array</span><span class="p">)</span>
+    <span class="n">subject_id_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">subject_id_array</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">trial_id_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">trial_id_array</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">fixed_config</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">fixed_config</span> <span class="ow">or</span> <span class="p">{})</span>
+    <span class="n">source_fit_kwargs</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">source_fit_kwargs</span> <span class="ow">or</span> <span class="p">{})</span>
+    <span class="n">calibration_fit_kwargs</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">calibration_fit_kwargs</span> <span class="ow">or</span> <span class="p">{})</span>
+    <span class="n">calibration_levels</span> <span class="o">=</span> <span class="n">_normalize_calibration_levels</span><span class="p">(</span>
+        <span class="n">calibration_levels</span><span class="p">,</span>
+        <span class="n">calibration_trials</span><span class="o">=</span><span class="n">calibration_trials</span><span class="p">,</span>
+        <span class="n">calibration_folds</span><span class="o">=</span><span class="n">calibration_folds</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">calibration_level_shots</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">shots</span> <span class="k">for</span> <span class="n">shots</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">calibration_levels</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">calibration_selection_shots</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">calibration_selection_shots</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">calibration_level_shots</span><span class="p">)</span>
+    <span class="n">calibration_selection_shots</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_selection_shots</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">calibration_selection_shots</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">calibration_level_shots</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"calibration_selection_shots must match one configured shot level; "</span>
+            <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">calibration_selection_shots</span><span class="si">}</span><span class="s2">, available=</span><span class="si">{</span><span class="n">calibration_level_shots</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">}:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"feature_array must be rank 3 (window samples) or rank 4 "</span>
+            <span class="sa">f</span><span class="s2">"(grouped trial samples); got </span><span class="si">{</span><span class="n">feature_array</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+    <span class="n">lengths</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">feature_array</span><span class="p">),</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">label_array</span><span class="p">),</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">subject_id_array</span><span class="p">),</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">trial_id_array</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">lengths</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"feature_array, label_array, subject_id_array, and trial_id_array "</span>
+            <span class="sa">f</span><span class="s2">"must align; got lengths </span><span class="si">{</span><span class="n">lengths</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">model_builder_function</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">)</span> <span class="o">==</span> <span class="p">(</span><span class="n">pretrained_model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"Pass exactly one of model_builder_function or pretrained_model."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">fixed_config</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"fixed_config applies only when building a source model; configure "</span>
+            <span class="s2">"the loaded model before passing pretrained_model."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">source_epochs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"source_epochs must be &gt;= 1 when fitting a source model."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">calibration_epochs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"calibration_epochs must be &gt;= 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_print_every_n_epochs</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"calibration_print_every_n_epochs must be &gt;= 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">source_batch_size</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">calibration_batch_size</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"source_batch_size and calibration_batch_size must be &gt;= 1."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">validation_subjects_per_fold</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"validation_subjects_per_fold must be &gt;= 0."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">early_stopping_patience</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">early_stopping_patience</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_patience must be &gt;= 1 when provided."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">early_stopping_min_delta</span> <span class="o">&lt;</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_min_delta must be non-negative."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">early_stopping_mode</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"auto"</span><span class="p">,</span> <span class="s2">"min"</span><span class="p">,</span> <span class="s2">"max"</span><span class="p">}:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_mode must be 'auto', 'min', or 'max'."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">early_stopping_monitor</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">early_stopping_monitor</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early_stopping_monitor must be a non-empty string."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">calibration_learning_rate</span> <span class="o">&lt;=</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"calibration_learning_rate must be positive."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">calibration_weight_decay</span> <span class="o">&lt;</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"calibration_weight_decay must be non-negative."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">calibration_optimizer</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"adam"</span><span class="p">,</span> <span class="s2">"adamw"</span><span class="p">}:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"calibration_optimizer must be 'adam' or 'adamw'."</span><span class="p">)</span>
+    <span class="n">decision_threshold</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">decision_threshold</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="n">decision_threshold</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"decision_threshold must lie strictly between 0 and 1."</span><span class="p">)</span>
+    <span class="n">raw_diagnostic_thresholds</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="p">(</span><span class="n">decision_threshold</span><span class="p">,)</span>
+        <span class="k">if</span> <span class="n">prediction_diagnostics_thresholds</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="p">(</span><span class="o">*</span><span class="n">prediction_diagnostics_thresholds</span><span class="p">,</span> <span class="n">decision_threshold</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">normalized_diagnostic_thresholds</span> <span class="o">=</span> <span class="n">_normalize_decision_thresholds</span><span class="p">(</span>
+        <span class="n">raw_diagnostic_thresholds</span>
+    <span class="p">)</span>
+    <span class="n">prediction_diagnostics_thresholds</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">decision_threshold</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">(</span>
+            <span class="n">threshold</span>
+            <span class="k">for</span> <span class="n">threshold</span> <span class="ow">in</span> <span class="n">normalized_diagnostic_thresholds</span>
+            <span class="k">if</span> <span class="n">threshold</span> <span class="o">!=</span> <span class="n">decision_threshold</span>
+        <span class="p">),</span>
+    <span class="p">)</span>
+    <span class="n">prediction_diagnostics_metric</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span>
+        <span class="n">prediction_diagnostics_metric</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">prediction_diagnostics_metric</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_CLASSIFICATION_METRICS</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"prediction_diagnostics_metric must be one of "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">_CLASSIFICATION_METRICS</span><span class="p">)</span><span class="si">}</span><span class="s2">; got "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prediction_diagnostics_metric</span><span class="si">!r}</span><span class="s2">."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"prediction_diagnostics_every_n_epochs must be &gt;= 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">prediction_diagnostics_max_samples</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"prediction_diagnostics_max_samples must be &gt;= 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">float</span><span class="p">(</span><span class="n">prediction_diagnostics_threshold_tolerance</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"prediction_diagnostics_threshold_tolerance must be non-negative."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">n_prediction_latent_samples</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_prediction_latent_samples must be &gt;= 0."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">ece_bins</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ece_bins must be &gt;= 2."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="nb">float</span><span class="p">(</span><span class="n">ci_level</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ci_level must lie between 0 and 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">n_jobs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"n_jobs must be &gt;= 1."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">cpus_per_worker</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cpus_per_worker</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"cpus_per_worker must be &gt;= 1 when provided."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">max_subjects</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_subjects</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"max_subjects must be &gt;= 1 when provided."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">source_model_output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">source_model_output_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">fspath</span><span class="p">(</span><span class="n">source_model_output_dir</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">source_model_output_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">4</span> <span class="ow">and</span> <span class="n">evaluation_level</span> <span class="o">!=</span> <span class="s2">"trial"</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"Rank-4 grouped-trial inputs require evaluation_level='trial'."</span>
+        <span class="p">)</span>
+    <span class="n">_validate_evaluation_level</span><span class="p">(</span><span class="n">evaluation_level</span><span class="p">,</span> <span class="s2">"evaluation_level"</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">forbidden_key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"epochs"</span><span class="p">,</span> <span class="s2">"batch_size"</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">forbidden_key</span> <span class="ow">in</span> <span class="n">fixed_config</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Remove </span><span class="si">{</span><span class="n">forbidden_key</span><span class="si">!r}</span><span class="s2"> from fixed_config; "</span>
+                <span class="s2">"subject_calibration_cv has separate source/calibration values."</span>
+            <span class="p">)</span>
+    <span class="k">for</span> <span class="n">fit_name</span><span class="p">,</span> <span class="n">fit_kwargs</span> <span class="ow">in</span> <span class="p">(</span>
+        <span class="p">(</span><span class="s2">"source_fit_kwargs"</span><span class="p">,</span> <span class="n">source_fit_kwargs</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"calibration_fit_kwargs"</span><span class="p">,</span> <span class="n">calibration_fit_kwargs</span><span class="p">),</span>
+    <span class="p">):</span>
+        <span class="n">duplicates</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"epochs"</span><span class="p">,</span> <span class="s2">"batch_size"</span><span class="p">,</span> <span class="s2">"verbose"</span><span class="p">,</span> <span class="s2">"class_weight"</span><span class="p">}</span><span class="o">.</span><span class="n">intersection</span><span class="p">(</span>
+            <span class="n">fit_kwargs</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">duplicates</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">fit_name</span><span class="si">}</span><span class="s2"> must not override managed fit arguments: "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">duplicates</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="s2">"validation_data"</span> <span class="ow">in</span> <span class="n">fit_kwargs</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">fit_name</span><span class="si">}</span><span class="s2"> must not provide validation_data. Source-validation "</span>
+                <span class="s2">"subjects are managed by subject_calibration_cv, the target "</span>
+                <span class="s2">"subject cannot select the source model, and the six calibration "</span>
+                <span class="s2">"trials are intentionally used only for fitting."</span>
+            <span class="p">)</span>
+
+    <span class="n">metrics</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">metric</span> <span class="ow">in</span> <span class="n">metrics</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">metric</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_CLASSIFICATION_METRICS</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Unsupported metric </span><span class="si">{</span><span class="n">metric</span><span class="si">!r}</span><span class="s2">. Supported metrics: "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">_CLASSIFICATION_METRICS</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+            <span class="p">)</span>
+
+    <span class="n">unique_subjects</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">subject_id_array</span><span class="p">))</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"subject_calibration_cv requires at least two subjects."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="ow">and</span> <span class="n">validation_subjects_per_fold</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+    <span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"validation_subjects_per_fold must leave at least one non-target "</span>
+            <span class="s2">"subject for source fitting. Got "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">validation_subjects_per_fold</span><span class="si">}</span><span class="s2"> validation subjects with "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_subjects</span><span class="p">)</span><span class="si">}</span><span class="s2"> total subjects."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">target_subjects</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">target_subjects</span> <span class="o">=</span> <span class="n">unique_subjects</span>
+        <span class="k">if</span> <span class="n">max_subjects</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">target_subjects</span> <span class="o">=</span> <span class="n">target_subjects</span><span class="p">[:</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_subjects</span><span class="p">)]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">target_subjects</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">target_subjects</span><span class="p">)</span>
+        <span class="n">missing_subjects</span> <span class="o">=</span> <span class="n">target_subjects</span><span class="p">[</span>
+            <span class="o">~</span><span class="n">np</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">target_subjects</span><span class="p">,</span> <span class="n">unique_subjects</span><span class="p">)</span>
+        <span class="p">]</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">missing_subjects</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Unknown target subject IDs: </span><span class="si">{</span><span class="n">missing_subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span><span class="si">}</span><span class="s2">. "</span>
+                <span class="sa">f</span><span class="s2">"Available subjects: </span><span class="si">{</span><span class="n">unique_subjects</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+    <span class="n">total_subjects</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">target_subjects</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">total_subjects</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"A pretrained_model must be paired with exactly one explicit "</span>
+                <span class="s2">"target subject. Pass target_subjects=[USER_ID]."</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">validation_subjects_per_fold</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"validation_subjects_per_fold must be 0 when source fitting is skipped."</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_jobs</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"pretrained_model runs require n_jobs=1 because a live Keras "</span>
+                <span class="s2">"model is passed directly rather than serialized to workers."</span>
+            <span class="p">)</span>
+
+    <span class="c1"># Fail early if a usable calibration/evaluation split cannot be formed for</span>
+    <span class="c1"># any selected subject, rather than discovering it after pretraining.</span>
+    <span class="k">for</span> <span class="n">target_subject</span> <span class="ow">in</span> <span class="n">target_subjects</span><span class="p">:</span>
+        <span class="n">target_trial_count</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">trial_id_array</span><span class="p">[</span><span class="n">subject_id_array</span> <span class="o">==</span> <span class="n">target_subject</span><span class="p">])</span>
+        <span class="p">)</span>
+        <span class="n">invalid_shots</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">shots</span> <span class="k">for</span> <span class="n">shots</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">calibration_levels</span> <span class="k">if</span> <span class="n">shots</span> <span class="o">&gt;=</span> <span class="n">target_trial_count</span>
+        <span class="p">]</span>
+        <span class="k">if</span> <span class="n">invalid_shots</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Target subject </span><span class="si">{</span><span class="n">_python_scalar</span><span class="p">(</span><span class="n">target_subject</span><span class="p">)</span><span class="si">!r}</span><span class="s2"> has "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">target_trial_count</span><span class="si">}</span><span class="s2"> retained trials. Every calibration level "</span>
+                <span class="s2">"must leave at least one evaluation trial; invalid shot levels="</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">invalid_shots</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+    <span class="n">effective_n_jobs</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">n_jobs</span><span class="p">),</span> <span class="n">total_subjects</span><span class="p">)</span>
+    <span class="n">normalized_gpu_ids</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">gpu_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">effective_n_jobs</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">normalized_gpu_ids</span> <span class="o">=</span> <span class="n">_auto_assign_gpu_ids</span><span class="p">(</span><span class="n">effective_n_jobs</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">normalized_gpu_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">effective_n_jobs</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">gpu_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">normalized_gpu_ids</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">gpu_id</span><span class="p">)</span> <span class="k">for</span> <span class="n">gpu_id</span> <span class="ow">in</span> <span class="n">gpu_ids</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">normalized_gpu_ids</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"gpu_ids must contain at least one GPU index."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">))</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"gpu_ids must not contain duplicate GPU indices."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">effective_n_jobs</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_gpu_ids</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"n_jobs=</span><span class="si">{</span><span class="n">effective_n_jobs</span><span class="si">}</span><span class="s2"> requires at least that many GPU IDs; "</span>
+                <span class="sa">f</span><span class="s2">"got gpu_ids=</span><span class="si">{</span><span class="n">normalized_gpu_ids</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="n">normalized_gpu_ids</span> <span class="o">=</span> <span class="n">normalized_gpu_ids</span><span class="p">[:</span><span class="n">effective_n_jobs</span><span class="p">]</span>
+
+    <span class="n">tasks</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="n">subject_number</span><span class="p">,</span> <span class="n">target_subject</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">subject_number</span><span class="p">,</span> <span class="n">target_subject</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">target_subjects</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="p">]</span>
+    <span class="n">worker_state</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"total_subjects"</span><span class="p">:</span> <span class="n">total_subjects</span><span class="p">,</span>
+        <span class="s2">"model_builder_function"</span><span class="p">:</span> <span class="n">model_builder_function</span><span class="p">,</span>
+        <span class="s2">"pretrained_model"</span><span class="p">:</span> <span class="n">pretrained_model</span><span class="p">,</span>
+        <span class="s2">"feature_array"</span><span class="p">:</span> <span class="n">feature_array</span><span class="p">,</span>
+        <span class="s2">"label_array"</span><span class="p">:</span> <span class="n">label_array</span><span class="p">,</span>
+        <span class="s2">"subject_id_array"</span><span class="p">:</span> <span class="n">subject_id_array</span><span class="p">,</span>
+        <span class="s2">"trial_id_array"</span><span class="p">:</span> <span class="n">trial_id_array</span><span class="p">,</span>
+        <span class="s2">"fixed_config"</span><span class="p">:</span> <span class="n">fixed_config</span><span class="p">,</span>
+        <span class="s2">"source_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">source_epochs</span><span class="p">),</span>
+        <span class="s2">"source_batch_size"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">source_batch_size</span><span class="p">),</span>
+        <span class="s2">"validation_subjects_per_fold"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">validation_subjects_per_fold</span><span class="p">),</span>
+        <span class="s2">"validation_seed"</span><span class="p">:</span> <span class="n">validation_seed</span><span class="p">,</span>
+        <span class="s2">"early_stopping_patience"</span><span class="p">:</span> <span class="n">early_stopping_patience</span><span class="p">,</span>
+        <span class="s2">"early_stopping_min_delta"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">early_stopping_min_delta</span><span class="p">),</span>
+        <span class="s2">"early_stopping_monitor"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">early_stopping_monitor</span><span class="p">),</span>
+        <span class="s2">"early_stopping_mode"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">early_stopping_mode</span><span class="p">),</span>
+        <span class="s2">"restore_best_weights"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">restore_best_weights</span><span class="p">),</span>
+        <span class="s2">"calibration_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_epochs</span><span class="p">),</span>
+        <span class="s2">"calibration_batch_size"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_batch_size</span><span class="p">),</span>
+        <span class="s2">"calibration_trials"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_trials</span><span class="p">),</span>
+        <span class="s2">"calibration_folds"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_folds</span><span class="p">),</span>
+        <span class="s2">"calibration_levels"</span><span class="p">:</span> <span class="n">calibration_levels</span><span class="p">,</span>
+        <span class="s2">"calibration_learning_rate"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">calibration_learning_rate</span><span class="p">),</span>
+        <span class="s2">"calibration_optimizer"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">calibration_optimizer</span><span class="p">),</span>
+        <span class="s2">"calibration_weight_decay"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">calibration_weight_decay</span><span class="p">),</span>
+        <span class="s2">"calibration_seed"</span><span class="p">:</span> <span class="n">calibration_seed</span><span class="p">,</span>
+        <span class="s2">"stratify_calibration"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">stratify_calibration</span><span class="p">),</span>
+        <span class="s2">"allow_overlapping_calibration_folds"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span>
+            <span class="n">allow_overlapping_calibration_folds</span>
+        <span class="p">),</span>
+        <span class="s2">"evaluation_level"</span><span class="p">:</span> <span class="n">evaluation_level</span><span class="p">,</span>
+        <span class="s2">"metrics"</span><span class="p">:</span> <span class="n">metrics</span><span class="p">,</span>
+        <span class="s2">"ece_bins"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">ece_bins</span><span class="p">),</span>
+        <span class="s2">"decision_threshold"</span><span class="p">:</span> <span class="n">decision_threshold</span><span class="p">,</span>
+        <span class="s2">"prediction_diagnostics_thresholds"</span><span class="p">:</span> <span class="p">(</span>
+            <span class="n">prediction_diagnostics_thresholds</span>
+        <span class="p">),</span>
+        <span class="s2">"prediction_diagnostics"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">prediction_diagnostics</span><span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_metric"</span><span class="p">:</span> <span class="n">prediction_diagnostics_metric</span><span class="p">,</span>
+        <span class="s2">"prediction_diagnostics_every_n_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="n">prediction_diagnostics_every_n_epochs</span>
+        <span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_max_samples"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="n">prediction_diagnostics_max_samples</span>
+        <span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_threshold_tolerance"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+            <span class="n">prediction_diagnostics_threshold_tolerance</span>
+        <span class="p">),</span>
+        <span class="s2">"prediction_diagnostics_seed"</span><span class="p">:</span> <span class="n">prediction_diagnostics_seed</span><span class="p">,</span>
+        <span class="s2">"n_prediction_latent_samples"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_prediction_latent_samples</span><span class="p">),</span>
+        <span class="s2">"latent_sampling_seed"</span><span class="p">:</span> <span class="n">latent_sampling_seed</span><span class="p">,</span>
+        <span class="s2">"log_predictions"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">log_predictions</span><span class="p">),</span>
+        <span class="s2">"log_variational_intervals"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">log_variational_intervals</span><span class="p">),</span>
+        <span class="s2">"n_uncertainty_samples"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_uncertainty_samples</span><span class="p">),</span>
+        <span class="s2">"ci_level"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">ci_level</span><span class="p">),</span>
+        <span class="s2">"source_use_class_weight"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">source_use_class_weight</span><span class="p">),</span>
+        <span class="s2">"calibration_use_class_weight"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">calibration_use_class_weight</span><span class="p">),</span>
+        <span class="s2">"source_fit_kwargs"</span><span class="p">:</span> <span class="n">source_fit_kwargs</span><span class="p">,</span>
+        <span class="s2">"calibration_fit_kwargs"</span><span class="p">:</span> <span class="n">calibration_fit_kwargs</span><span class="p">,</span>
+        <span class="s2">"calibration_verbose"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">calibration_verbose</span><span class="p">),</span>
+        <span class="s2">"calibration_print_every_n_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="n">calibration_print_every_n_epochs</span>
+        <span class="p">),</span>
+        <span class="s2">"source_model_output_dir"</span><span class="p">:</span> <span class="n">source_model_output_dir</span><span class="p">,</span>
+        <span class="s2">"verbose"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">verbose</span><span class="p">),</span>
+    <span class="p">}</span>
+
+    <span class="k">if</span> <span class="n">effective_n_jobs</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">normalized_gpu_ids</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">subject_outputs</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">_run_subject_calibration_subject</span><span class="p">(</span>
+                <span class="n">subject_number</span><span class="o">=</span><span class="n">subject_number</span><span class="p">,</span>
+                <span class="n">target_subject</span><span class="o">=</span><span class="n">target_subject</span><span class="p">,</span>
+                <span class="o">**</span><span class="n">worker_state</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">subject_number</span><span class="p">,</span> <span class="n">target_subject</span> <span class="ow">in</span> <span class="n">tasks</span>
+        <span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">subject_outputs</span> <span class="o">=</span> <span class="n">_run_spawned_fold_pool</span><span class="p">(</span>
+            <span class="n">worker_target</span><span class="o">=</span><span class="n">_subject_calibration_process_main</span><span class="p">,</span>
+            <span class="n">worker_state</span><span class="o">=</span><span class="n">worker_state</span><span class="p">,</span>
+            <span class="n">tasks</span><span class="o">=</span><span class="n">tasks</span><span class="p">,</span>
+            <span class="n">n_workers</span><span class="o">=</span><span class="n">effective_n_jobs</span><span class="p">,</span>
+            <span class="n">gpu_ids</span><span class="o">=</span><span class="n">normalized_gpu_ids</span><span class="p">,</span>
+            <span class="n">cpus_per_worker</span><span class="o">=</span><span class="n">cpus_per_worker</span><span class="p">,</span>
+            <span class="n">worker_name_prefix</span><span class="o">=</span><span class="s2">"SubjectCalibrationWorker"</span><span class="p">,</span>
+            <span class="n">worker_description</span><span class="o">=</span><span class="s2">"target-subject calibration"</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="n">subject_outputs</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">row</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">"subject_number"</span><span class="p">]))</span>
+
+    <span class="n">metric_names</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"loss"</span><span class="p">,</span> <span class="o">*</span><span class="n">metrics</span><span class="p">,</span> <span class="s2">"joint_loss"</span><span class="p">,</span> <span class="o">*</span><span class="n">_DECODER_SCORE_NAMES</span><span class="p">)</span>
+    <span class="n">subject_summary_rows</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">zero_all_subject_rows</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">level_subject_rows</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="nb">str</span><span class="p">(</span><span class="n">shots</span><span class="p">):</span> <span class="p">{</span>
+            <span class="s2">"paired_zero"</span><span class="p">:</span> <span class="p">[],</span>
+            <span class="s2">"calibrated"</span><span class="p">:</span> <span class="p">[],</span>
+            <span class="s2">"delta"</span><span class="p">:</span> <span class="p">[],</span>
+        <span class="p">}</span>
+        <span class="k">for</span> <span class="n">shots</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">calibration_levels</span>
+    <span class="p">}</span>
+    <span class="n">total_calibration_folds</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">folds</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">folds</span> <span class="ow">in</span> <span class="n">calibration_levels</span><span class="p">)</span>
+
+    <span class="n">results</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"cv_strategy"</span><span class="p">:</span> <span class="p">(</span>
+            <span class="s2">"loaded_pretrained_model_with_subject_calibration"</span>
+            <span class="k">if</span> <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="s2">"subject_independent_pretraining_with_subject_calibration"</span>
+        <span class="p">),</span>
+        <span class="s2">"protocol_name"</span><span class="p">:</span> <span class="p">(</span>
+            <span class="s2">"target-specific loaded LOSO model with multi-level calibration"</span>
+            <span class="k">if</span> <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="s2">"strict LOSO with multi-level calibration continuation"</span>
+        <span class="p">),</span>
+        <span class="s2">"n_subjects"</span><span class="p">:</span> <span class="n">total_subjects</span><span class="p">,</span>
+        <span class="s2">"n_source_model_fits"</span><span class="p">:</span> <span class="p">(</span>
+            <span class="mi">0</span> <span class="k">if</span> <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">total_subjects</span>
+        <span class="p">),</span>
+        <span class="s2">"source_model_origin"</span><span class="p">:</span> <span class="p">(</span>
+            <span class="s2">"loaded_pretrained_model"</span>
+            <span class="k">if</span> <span class="n">pretrained_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="s2">"fit_in_cross_validation"</span>
+        <span class="p">),</span>
+        <span class="s2">"n_calibration_fits"</span><span class="p">:</span> <span class="n">total_subjects</span> <span class="o">*</span> <span class="nb">int</span><span class="p">(</span><span class="n">total_calibration_folds</span><span class="p">),</span>
+        <span class="s2">"calibration_plan"</span><span class="p">:</span> <span class="p">[</span>
+            <span class="p">{</span><span class="s2">"shots"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">shots</span><span class="p">),</span> <span class="s2">"folds"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">folds</span><span class="p">)}</span>
+            <span class="k">for</span> <span class="n">shots</span><span class="p">,</span> <span class="n">folds</span> <span class="ow">in</span> <span class="n">calibration_levels</span>
+        <span class="p">],</span>
+        <span class="s2">"calibration_selection_shots"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_selection_shots</span><span class="p">),</span>
+        <span class="s2">"calibration_seed"</span><span class="p">:</span> <span class="n">calibration_seed</span><span class="p">,</span>
+        <span class="s2">"stratify_calibration"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">stratify_calibration</span><span class="p">),</span>
+        <span class="s2">"allow_overlapping_calibration_folds"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span>
+            <span class="n">allow_overlapping_calibration_folds</span>
+        <span class="p">),</span>
+        <span class="s2">"source_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">source_epochs</span><span class="p">),</span>
+        <span class="s2">"source_batch_size"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">source_batch_size</span><span class="p">),</span>
+        <span class="s2">"validation_subjects_per_fold"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">validation_subjects_per_fold</span><span class="p">),</span>
+        <span class="s2">"validation_seed"</span><span class="p">:</span> <span class="n">validation_seed</span><span class="p">,</span>
+        <span class="s2">"early_stopping_patience"</span><span class="p">:</span> <span class="n">early_stopping_patience</span><span class="p">,</span>
+        <span class="s2">"early_stopping_min_delta"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">early_stopping_min_delta</span><span class="p">),</span>
+        <span class="s2">"early_stopping_monitor"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">early_stopping_monitor</span><span class="p">),</span>
+        <span class="s2">"early_stopping_mode"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">early_stopping_mode</span><span class="p">),</span>
+        <span class="s2">"restore_best_weights"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">restore_best_weights</span><span class="p">),</span>
+        <span class="s2">"calibration_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_epochs</span><span class="p">),</span>
+        <span class="s2">"calibration_batch_size"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_batch_size</span><span class="p">),</span>
+        <span class="s2">"calibration_learning_rate"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">calibration_learning_rate</span><span class="p">),</span>
+        <span class="s2">"calibration_optimizer"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">calibration_optimizer</span><span class="p">),</span>
+        <span class="s2">"calibration_weight_decay"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">calibration_weight_decay</span><span class="p">),</span>
+        <span class="s2">"calibration_verbose"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">calibration_verbose</span><span class="p">),</span>
+        <span class="s2">"calibration_print_every_n_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="n">calibration_print_every_n_epochs</span>
+        <span class="p">),</span>
+        <span class="s2">"decision_threshold"</span><span class="p">:</span> <span class="n">decision_threshold</span><span class="p">,</span>
+        <span class="s2">"prediction_diagnostics"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"enabled"</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">prediction_diagnostics</span><span class="p">),</span>
+            <span class="s2">"official_decision_threshold"</span><span class="p">:</span> <span class="n">decision_threshold</span><span class="p">,</span>
+            <span class="s2">"decision_thresholds"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">prediction_diagnostics_thresholds</span><span class="p">),</span>
+            <span class="s2">"reported_metric"</span><span class="p">:</span> <span class="n">prediction_diagnostics_metric</span><span class="p">,</span>
+            <span class="s2">"every_n_epochs"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">prediction_diagnostics_every_n_epochs</span><span class="p">),</span>
+            <span class="s2">"max_samples"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">prediction_diagnostics_max_samples</span><span class="p">),</span>
+            <span class="s2">"threshold_tolerance"</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+                <span class="n">prediction_diagnostics_threshold_tolerance</span>
+            <span class="p">),</span>
+            <span class="s2">"seed"</span><span class="p">:</span> <span class="n">prediction_diagnostics_seed</span><span class="p">,</span>
+        <span class="p">},</span>
+        <span class="s2">"evaluation_level"</span><span class="p">:</span> <span class="n">evaluation_level</span><span class="p">,</span>
+        <span class="s2">"metrics"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">metrics</span><span class="p">),</span>
+        <span class="s2">"ece_bins"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">ece_bins</span><span class="p">),</span>
+        <span class="s2">"fixed_config"</span><span class="p">:</span> <span class="n">fixed_config</span><span class="p">,</span>
+        <span class="s2">"zero_shot_source_models"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"saved"</span><span class="p">:</span> <span class="n">source_model_output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">"directory"</span><span class="p">:</span> <span class="n">source_model_output_dir</span><span class="p">,</span>
+            <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"keras"</span><span class="p">,</span>
+            <span class="s2">"load_with_compile"</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="s2">"models"</span><span class="p">:</span> <span class="p">[</span>
+                <span class="n">subject_output</span><span class="p">[</span><span class="s2">"zero_shot_model"</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">subject_output</span> <span class="ow">in</span> <span class="n">subject_outputs</span>
+                <span class="k">if</span> <span class="n">subject_output</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"zero_shot_model"</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="p">],</span>
+        <span class="p">},</span>
+        <span class="s2">"subject_results"</span><span class="p">:</span> <span class="n">subject_outputs</span><span class="p">,</span>
+        <span class="s2">"subject_summary_rows"</span><span class="p">:</span> <span class="n">subject_summary_rows</span><span class="p">,</span>
+        <span class="s2">"oracle_epoch_log"</span><span class="p">:</span> <span class="p">[],</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="n">prediction_diagnostics</span><span class="p">:</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"prediction_diagnostics_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">if</span> <span class="n">log_predictions</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"window_prediction_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"trial_prediction_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">if</span> <span class="n">log_variational_intervals</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"window_variational_interval_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"trial_variational_interval_log"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">subject_output</span> <span class="ow">in</span> <span class="n">subject_outputs</span><span class="p">:</span>
+        <span class="n">results</span><span class="p">[</span><span class="s2">"oracle_epoch_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+            <span class="n">subject_output</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"oracle_epoch_log"</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">prediction_diagnostics</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s2">"prediction_diagnostics_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                <span class="n">subject_output</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"prediction_diagnostics_log"</span><span class="p">,</span> <span class="p">[])</span>
+            <span class="p">)</span>
+        <span class="n">summary</span> <span class="o">=</span> <span class="n">subject_output</span><span class="p">[</span><span class="s2">"subject_summary"</span><span class="p">]</span>
+        <span class="n">zero_all</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">summary</span><span class="p">[</span><span class="s2">"zero_shot_all_trials_scores"</span><span class="p">])</span>
+        <span class="n">zero_all_subject_rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zero_all</span><span class="p">)</span>
+
+        <span class="n">flat_summary</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"target_subject"</span><span class="p">:</span> <span class="n">subject_output</span><span class="p">[</span><span class="s2">"target_subject"</span><span class="p">]}</span>
+        <span class="n">zero_shot_model</span> <span class="o">=</span> <span class="n">subject_output</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"zero_shot_model"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zero_shot_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">flat_summary</span><span class="p">[</span><span class="s2">"zero_shot_model_path"</span><span class="p">]</span> <span class="o">=</span> <span class="n">zero_shot_model</span><span class="p">[</span><span class="s2">"path"</span><span class="p">]</span>
+            <span class="n">flat_summary</span><span class="p">[</span><span class="s2">"zero_shot_model_filename"</span><span class="p">]</span> <span class="o">=</span> <span class="n">zero_shot_model</span><span class="p">[</span>
+                <span class="s2">"filename"</span>
+            <span class="p">]</span>
+        <span class="n">flat_summary</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="sa">f</span><span class="s2">"zero_shot_all_</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">zero_all</span><span class="o">.</span><span class="n">items</span><span class="p">()})</span>
+        <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">subject_output</span><span class="p">[</span><span class="s2">"calibration_levels"</span><span class="p">]:</span>
+            <span class="n">shots_key</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">level</span><span class="p">[</span><span class="s2">"calibration_shots"</span><span class="p">])</span>
+            <span class="n">level_summary</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">level</span><span class="p">[</span><span class="s2">"summary"</span><span class="p">])</span>
+            <span class="n">paired_zero</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">level_summary</span><span class="p">[</span><span class="s2">"paired_zero_shot_mean_scores"</span><span class="p">])</span>
+            <span class="n">calibrated</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">level_summary</span><span class="p">[</span><span class="s2">"calibrated_mean_scores"</span><span class="p">])</span>
+            <span class="n">delta</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">level_summary</span><span class="p">[</span><span class="s2">"delta_mean_scores"</span><span class="p">])</span>
+            <span class="n">level_subject_rows</span><span class="p">[</span><span class="n">shots_key</span><span class="p">][</span><span class="s2">"paired_zero"</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">paired_zero</span><span class="p">)</span>
+            <span class="n">level_subject_rows</span><span class="p">[</span><span class="n">shots_key</span><span class="p">][</span><span class="s2">"calibrated"</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">calibrated</span><span class="p">)</span>
+            <span class="n">level_subject_rows</span><span class="p">[</span><span class="n">shots_key</span><span class="p">][</span><span class="s2">"delta"</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">delta</span><span class="p">)</span>
+            <span class="n">flat_summary</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                <span class="p">{</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">shots_key</span><span class="si">}</span><span class="s2">_shot_paired_zero_</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">paired_zero</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+            <span class="p">)</span>
+            <span class="n">flat_summary</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                <span class="p">{</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">shots_key</span><span class="si">}</span><span class="s2">_shot_calibrated_</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">calibrated</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+            <span class="p">)</span>
+            <span class="n">flat_summary</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                <span class="p">{</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">shots_key</span><span class="si">}</span><span class="s2">_shot_delta_</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">delta</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+            <span class="p">)</span>
+        <span class="n">subject_summary_rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">flat_summary</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">log_predictions</span><span class="p">:</span>
+            <span class="n">evaluations</span> <span class="o">=</span> <span class="p">[</span><span class="n">subject_output</span><span class="p">[</span><span class="s2">"zero_shot_all_trials"</span><span class="p">]]</span>
+            <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">subject_output</span><span class="p">[</span><span class="s2">"calibration_levels"</span><span class="p">]:</span>
+                <span class="k">for</span> <span class="n">fold_output</span> <span class="ow">in</span> <span class="n">level</span><span class="p">[</span><span class="s2">"fold_outputs"</span><span class="p">]:</span>
+                    <span class="n">evaluations</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                        <span class="p">[</span><span class="n">fold_output</span><span class="p">[</span><span class="s2">"zero_shot"</span><span class="p">],</span> <span class="n">fold_output</span><span class="p">[</span><span class="s2">"calibrated"</span><span class="p">]]</span>
+                    <span class="p">)</span>
+            <span class="k">for</span> <span class="n">evaluation</span> <span class="ow">in</span> <span class="n">evaluations</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+                    <span class="n">results</span><span class="p">[</span><span class="s2">"window_prediction_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                        <span class="n">evaluation</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"window_prediction_log"</span><span class="p">,</span> <span class="p">[])</span>
+                    <span class="p">)</span>
+                <span class="n">results</span><span class="p">[</span><span class="s2">"trial_prediction_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                    <span class="n">evaluation</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"trial_prediction_log"</span><span class="p">,</span> <span class="p">[])</span>
+                <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">log_variational_intervals</span><span class="p">:</span>
+            <span class="n">evaluations</span> <span class="o">=</span> <span class="p">[</span><span class="n">subject_output</span><span class="p">[</span><span class="s2">"zero_shot_all_trials"</span><span class="p">]]</span>
+            <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">subject_output</span><span class="p">[</span><span class="s2">"calibration_levels"</span><span class="p">]:</span>
+                <span class="k">for</span> <span class="n">fold_output</span> <span class="ow">in</span> <span class="n">level</span><span class="p">[</span><span class="s2">"fold_outputs"</span><span class="p">]:</span>
+                    <span class="n">evaluations</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                        <span class="p">[</span><span class="n">fold_output</span><span class="p">[</span><span class="s2">"zero_shot"</span><span class="p">],</span> <span class="n">fold_output</span><span class="p">[</span><span class="s2">"calibrated"</span><span class="p">]]</span>
+                    <span class="p">)</span>
+            <span class="k">for</span> <span class="n">evaluation</span> <span class="ow">in</span> <span class="n">evaluations</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">feature_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+                    <span class="n">results</span><span class="p">[</span><span class="s2">"window_variational_interval_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                        <span class="n">evaluation</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"window_variational_interval_log"</span><span class="p">,</span> <span class="p">[])</span>
+                    <span class="p">)</span>
+                <span class="n">results</span><span class="p">[</span><span class="s2">"trial_variational_interval_log"</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                    <span class="n">evaluation</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"trial_variational_interval_log"</span><span class="p">,</span> <span class="p">[])</span>
+                <span class="p">)</span>
+
+    <span class="n">zero_all_mean</span><span class="p">,</span> <span class="n">zero_all_std</span> <span class="o">=</span> <span class="n">_mean_std_rows</span><span class="p">(</span>
+        <span class="n">zero_all_subject_rows</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">metric_names</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">overall_calibration_levels</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">shots</span><span class="p">,</span> <span class="n">folds</span> <span class="ow">in</span> <span class="n">calibration_levels</span><span class="p">:</span>
+        <span class="n">shots_key</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">shots</span><span class="p">)</span>
+        <span class="n">rows</span> <span class="o">=</span> <span class="n">level_subject_rows</span><span class="p">[</span><span class="n">shots_key</span><span class="p">]</span>
+        <span class="n">paired_zero_mean</span><span class="p">,</span> <span class="n">paired_zero_std</span> <span class="o">=</span> <span class="n">_mean_std_rows</span><span class="p">(</span>
+            <span class="n">rows</span><span class="p">[</span><span class="s2">"paired_zero"</span><span class="p">],</span> <span class="nb">list</span><span class="p">(</span><span class="n">metric_names</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">calibrated_mean</span><span class="p">,</span> <span class="n">calibrated_std</span> <span class="o">=</span> <span class="n">_mean_std_rows</span><span class="p">(</span>
+            <span class="n">rows</span><span class="p">[</span><span class="s2">"calibrated"</span><span class="p">],</span> <span class="nb">list</span><span class="p">(</span><span class="n">metric_names</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">delta_mean</span><span class="p">,</span> <span class="n">delta_std</span> <span class="o">=</span> <span class="n">_mean_std_rows</span><span class="p">(</span>
+            <span class="n">rows</span><span class="p">[</span><span class="s2">"delta"</span><span class="p">],</span> <span class="nb">list</span><span class="p">(</span><span class="n">metric_names</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">overall_calibration_levels</span><span class="p">[</span><span class="n">shots_key</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"calibration_shots"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">shots</span><span class="p">),</span>
+            <span class="s2">"calibration_folds"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">folds</span><span class="p">),</span>
+            <span class="s2">"paired_zero_shot_mean_scores"</span><span class="p">:</span> <span class="n">paired_zero_mean</span><span class="p">,</span>
+            <span class="s2">"paired_zero_shot_std_scores"</span><span class="p">:</span> <span class="n">paired_zero_std</span><span class="p">,</span>
+            <span class="s2">"calibrated_mean_scores"</span><span class="p">:</span> <span class="n">calibrated_mean</span><span class="p">,</span>
+            <span class="s2">"calibrated_std_scores"</span><span class="p">:</span> <span class="n">calibrated_std</span><span class="p">,</span>
+            <span class="s2">"delta_mean_scores"</span><span class="p">:</span> <span class="n">delta_mean</span><span class="p">,</span>
+            <span class="s2">"delta_std_scores"</span><span class="p">:</span> <span class="n">delta_std</span><span class="p">,</span>
+            <span class="s2">"delta_definition"</span><span class="p">:</span> <span class="s2">"post_calibration_minus_paired_zero_shot"</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="n">selected_level</span> <span class="o">=</span> <span class="n">overall_calibration_levels</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">calibration_selection_shots</span><span class="p">)]</span>
+    <span class="n">results</span><span class="p">[</span><span class="s2">"overall"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"aggregation_unit"</span><span class="p">:</span> <span class="s2">"subject"</span><span class="p">,</span>
+        <span class="s2">"n_subjects"</span><span class="p">:</span> <span class="n">total_subjects</span><span class="p">,</span>
+        <span class="s2">"zero_shot_all_trials_mean_scores"</span><span class="p">:</span> <span class="n">zero_all_mean</span><span class="p">,</span>
+        <span class="s2">"zero_shot_all_trials_std_scores"</span><span class="p">:</span> <span class="n">zero_all_std</span><span class="p">,</span>
+        <span class="s2">"calibration_selection_shots"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">calibration_selection_shots</span><span class="p">),</span>
+        <span class="s2">"calibration_levels"</span><span class="p">:</span> <span class="n">overall_calibration_levels</span><span class="p">,</span>
+        <span class="c1"># Compatibility aliases point to the explicitly selected shot level.</span>
+        <span class="s2">"paired_zero_shot_mean_scores"</span><span class="p">:</span> <span class="n">selected_level</span><span class="p">[</span><span class="s2">"paired_zero_shot_mean_scores"</span><span class="p">],</span>
+        <span class="s2">"paired_zero_shot_std_scores"</span><span class="p">:</span> <span class="n">selected_level</span><span class="p">[</span><span class="s2">"paired_zero_shot_std_scores"</span><span class="p">],</span>
+        <span class="s2">"calibrated_mean_scores"</span><span class="p">:</span> <span class="n">selected_level</span><span class="p">[</span><span class="s2">"calibrated_mean_scores"</span><span class="p">],</span>
+        <span class="s2">"calibrated_std_scores"</span><span class="p">:</span> <span class="n">selected_level</span><span class="p">[</span><span class="s2">"calibrated_std_scores"</span><span class="p">],</span>
+        <span class="s2">"delta_mean_scores"</span><span class="p">:</span> <span class="n">selected_level</span><span class="p">[</span><span class="s2">"delta_mean_scores"</span><span class="p">],</span>
+        <span class="s2">"delta_std_scores"</span><span class="p">:</span> <span class="n">selected_level</span><span class="p">[</span><span class="s2">"delta_std_scores"</span><span class="p">],</span>
+        <span class="s2">"delta_definition"</span><span class="p">:</span> <span class="s2">"post_calibration_minus_paired_zero_shot"</span><span class="p">,</span>
+    <span class="p">}</span>
+
+    <span class="n">final_metric_names</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"accuracy"</span><span class="p">,</span> <span class="s2">"balanced_accuracy"</span><span class="p">,</span> <span class="s2">"brier_score"</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_format_final_means</span><span class="p">(</span><span class="n">mean_scores</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="n">parts</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">metric_name</span> <span class="ow">in</span> <span class="n">final_metric_names</span><span class="p">:</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">mean_scores</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">metric_name</span><span class="p">)</span>
+            <span class="n">formatted_value</span> <span class="o">=</span> <span class="s2">"N/A"</span> <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">"</span>
+            <span class="n">parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">metric_name</span><span class="si">}</span><span class="s2">=</span><span class="si">{</span><span class="n">formatted_value</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="s2">", "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">parts</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Final mean metrics by calibration level"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">80</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"0-shot: </span><span class="si">{</span><span class="n">_format_final_means</span><span class="p">(</span><span class="n">zero_all_mean</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">shots</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">calibration_levels</span><span class="p">:</span>
+        <span class="n">calibrated_means</span> <span class="o">=</span> <span class="n">overall_calibration_levels</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">shots</span><span class="p">)][</span>
+            <span class="s2">"calibrated_mean_scores"</span>
+        <span class="p">]</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">shots</span><span class="si">}</span><span class="s2">-shot: </span><span class="si">{</span><span class="n">_format_final_means</span><span class="p">(</span><span class="n">calibrated_means</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">results</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

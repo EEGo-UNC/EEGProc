@@ -1,0 +1,934 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.unsupervised.GNN.GCNMTL &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.unsupervised.GNN.GCNMTL</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.deep_learning.unsupervised.GNN.GCNMTL</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Spatio-spectral GCN-GRU encoder adapted from MTLFuseNet.</span>
+
+<span class="sd">Electrodes are nodes of a graph whose adjacency ``A`` is fixed and estimated</span>
+<span class="sd">from mutual information. Frequency bands form an ordered sequence of graphs</span>
+<span class="sd">that share the same graph-convolution weights, and a GRU can read that band</span>
+<span class="sd">sequence at each timestep. Graph convolution uses the renormalized adjacency::</span>
+
+<span class="sd">    A_tilde = A + I</span>
+<span class="sd">    A_hat   = D_tilde^-1/2 A_tilde D_tilde^-1/2</span>
+<span class="sd">    H_B     = ReLU(A_hat V_B W + b)</span>
+
+<span class="sd">The same graph-convolution layers, and therefore the same ``W`` and ``b``, are</span>
+<span class="sd">reused for every band ``B``.</span>
+
+<span class="sd">MTLFuseNet uses differential-entropy node features. This encoder applies the</span>
+<span class="sd">same graph and weight-sharing mechanism to per-timestep channel-band values,</span>
+<span class="sd">so it returns ``(batch, ceil(timesteps / t_down), emb_dim)`` like the other</span>
+<span class="sd">EEGProc encoders. Feed differential-entropy features instead of filtered band</span>
+<span class="sd">amplitudes to follow the original method more closely. There is no learned</span>
+<span class="sd">projection after the spectral GRU: with ``use_spectral_gru=True`` the output</span>
+<span class="sd">dimension is exactly ``spectral_gru_units``.</span>
+
+<span class="sd">``BandSeparatedGCNEncoder`` (learned adjacency) lives in</span>
+<span class="sd">``GCN_band_separated.py``; the two can be swapped in the same model.</span>
+
+<span class="sd">Reference: R. Li et al., "MTLFuseNet: A novel emotion recognition model based</span>
+<span class="sd">on deep latent feature fusion of EEG signals and multi-task learning",</span>
+<span class="sd">Knowledge-Based Systems 276 (2023), 110756.</span>
+<span class="sd">"""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tensorflow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tensorflow.keras</span><span class="w"> </span><span class="kn">import</span> <span class="n">layers</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">..BaseEncoder</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseEncoder</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.GraphConvMTL</span><span class="w"> </span><span class="kn">import</span> <span class="n">GraphConvMTL</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">..utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">_product</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_as_channel_band_array</span><span class="p">(</span>
+    <span class="n">inputs</span><span class="p">,</span>
+    <span class="n">n_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">n_bands</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Normalize input to shape (observations, channels, bands)."""</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">inputs</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;=</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span> <span class="o">==</span> <span class="p">(</span><span class="n">n_channels</span><span class="p">,</span> <span class="n">n_bands</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">,</span> <span class="n">n_bands</span><span class="p">)</span>
+
+    <span class="n">expected_features</span> <span class="o">=</span> <span class="n">n_channels</span> <span class="o">*</span> <span class="n">n_bands</span>
+    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;=</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">expected_features</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">,</span> <span class="n">n_bands</span><span class="p">)</span>
+
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+        <span class="s2">"Expected input ending in (n_channels, n_bands) or in a flattened "</span>
+        <span class="sa">f</span><span class="s2">"channel-major feature axis of length </span><span class="si">{</span><span class="n">expected_features</span><span class="si">}</span><span class="s2">; got </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">."</span>
+    <span class="p">)</span>
+
+
+<div class="viewcode-block" id="compute_mi_adjacency_from_channels">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.compute_mi_adjacency_from_channels">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">compute_mi_adjacency_from_channels</span><span class="p">(</span>
+    <span class="n">channel_data</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">n_neighbors</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="n">random_state</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">zero_diagonal</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Compute a symmetric mutual-information channel adjacency.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    channel_data : array-like, shape (..., n_channels)</span>
+<span class="sd">        Samples/observations for each EEG channel. All leading dimensions are</span>
+<span class="sd">        flattened into the observation dimension.</span>
+<span class="sd">    n_neighbors : int, default=3</span>
+<span class="sd">        k used by sklearn's continuous mutual-information estimator.</span>
+<span class="sd">    random_state : int, default=42</span>
+<span class="sd">        Reproducibility seed for sklearn's MI estimator.</span>
+<span class="sd">    zero_diagonal : bool, default=False</span>
+<span class="sd">        The MTLFuseNet definition permits i=j, so the default preserves the</span>
+<span class="sd">        estimated MI diagonal. Set True only for an ablation where A contains</span>
+<span class="sd">        cross-channel MI and self-connectivity comes solely from A_tilde=A+I.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    Use TRAINING DATA ONLY. Computing A from validation/test subjects leaks</span>
+<span class="sd">    information into the graph used by the model.</span>
+<span class="sd">    """</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.feature_selection</span><span class="w"> </span><span class="kn">import</span> <span class="n">mutual_info_regression</span>
+    <span class="k">except</span> <span class="ne">ImportError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># pragma: no cover - environment dependent</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
+            <span class="s2">"scikit-learn is required to compute the MTLFuseNet MI adjacency."</span>
+        <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">exc</span>
+
+    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">channel_data</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"channel_data must have at least 2 dimensions (..., n_channels)."</span>
+        <span class="p">)</span>
+
+    <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;</span> <span class="nb">max</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">n_neighbors</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"Need more observations to estimate MI; got </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">x</span><span class="p">)):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"channel_data contains NaN or infinite values."</span><span class="p">)</span>
+
+    <span class="n">n_channels</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n_channels</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_channels</span><span class="p">):</span>
+        <span class="n">start_j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">zero_diagonal</span> <span class="k">else</span> <span class="n">i</span>
+        <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">start_j</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="n">j</span><span class="p">:</span>
+                <span class="c1"># sklearn MI(x, x) is estimator-dependent. Keep it only when</span>
+                <span class="c1"># explicitly requested; the paper's renormalization will still</span>
+                <span class="c1"># add another identity self-loop afterward.</span>
+                <span class="n">mi</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span>
+                    <span class="n">mutual_info_regression</span><span class="p">(</span>
+                        <span class="n">x</span><span class="p">[:,</span> <span class="n">i</span> <span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span>
+                        <span class="n">x</span><span class="p">[:,</span> <span class="n">j</span><span class="p">],</span>
+                        <span class="n">discrete_features</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                        <span class="n">n_neighbors</span><span class="o">=</span><span class="n">n_neighbors</span><span class="p">,</span>
+                        <span class="n">random_state</span><span class="o">=</span><span class="n">random_state</span><span class="p">,</span>
+                    <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># The theoretical MI is symmetric. kNN estimates need not be</span>
+                <span class="c1"># numerically identical in the two regression directions, so</span>
+                <span class="c1"># average them to enforce A_ij = A_ji.</span>
+                <span class="n">mi_ij</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span>
+                    <span class="n">mutual_info_regression</span><span class="p">(</span>
+                        <span class="n">x</span><span class="p">[:,</span> <span class="n">i</span> <span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span>
+                        <span class="n">x</span><span class="p">[:,</span> <span class="n">j</span><span class="p">],</span>
+                        <span class="n">discrete_features</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                        <span class="n">n_neighbors</span><span class="o">=</span><span class="n">n_neighbors</span><span class="p">,</span>
+                        <span class="n">random_state</span><span class="o">=</span><span class="n">random_state</span><span class="p">,</span>
+                    <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="p">)</span>
+                <span class="n">mi_ji</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span>
+                    <span class="n">mutual_info_regression</span><span class="p">(</span>
+                        <span class="n">x</span><span class="p">[:,</span> <span class="n">j</span> <span class="p">:</span> <span class="n">j</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span>
+                        <span class="n">x</span><span class="p">[:,</span> <span class="n">i</span><span class="p">],</span>
+                        <span class="n">discrete_features</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                        <span class="n">n_neighbors</span><span class="o">=</span><span class="n">n_neighbors</span><span class="p">,</span>
+                        <span class="n">random_state</span><span class="o">=</span><span class="n">random_state</span><span class="p">,</span>
+                    <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="p">)</span>
+                <span class="n">mi</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">mi_ij</span> <span class="o">+</span> <span class="n">mi_ji</span><span class="p">)</span>
+
+            <span class="n">A</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="n">mi</span>
+            <span class="n">A</span><span class="p">[</span><span class="n">j</span><span class="p">,</span> <span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">mi</span>
+
+    <span class="k">if</span> <span class="n">zero_diagonal</span><span class="p">:</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">fill_diagonal</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">A</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="compute_mtl_shared_mi_adjacency">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.compute_mtl_shared_mi_adjacency">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">compute_mtl_shared_mi_adjacency</span><span class="p">(</span>
+    <span class="n">inputs</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">n_channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">14</span><span class="p">,</span>
+    <span class="n">n_bands</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="n">n_neighbors</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="n">random_state</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+    <span class="n">zero_diagonal</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">band_reduction</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"mean"</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Estimate one shared MTL adjacency from EEGProc channel-band data.</span>
+
+<span class="sd">    The MTLFuseNet text uses a single A in every graph G_B while the node</span>
+<span class="sd">    features V'_B vary by band. If only already-band-separated EEGProc inputs</span>
+<span class="sd">    are available, this helper estimates MI independently in each band and</span>
+<span class="sd">    reduces the band-wise MI matrices to ONE shared A.</span>
+
+<span class="sd">    ``band_reduction='mean'`` is the default compatibility approximation.</span>
+<span class="sd">    If you have the pre-band-split channel signals x_i that MTLFuseNet uses to</span>
+<span class="sd">    construct A, prefer ``compute_mi_adjacency_from_channels`` directly.</span>
+<span class="sd">    """</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">_as_channel_band_array</span><span class="p">(</span><span class="n">inputs</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">,</span> <span class="n">n_bands</span><span class="p">)</span>
+
+    <span class="n">band_adjacencies</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">band_index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_bands</span><span class="p">):</span>
+        <span class="n">band_adjacencies</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">compute_mi_adjacency_from_channels</span><span class="p">(</span>
+                <span class="n">x</span><span class="p">[:,</span> <span class="p">:,</span> <span class="n">band_index</span><span class="p">],</span>
+                <span class="n">n_neighbors</span><span class="o">=</span><span class="n">n_neighbors</span><span class="p">,</span>
+                <span class="n">random_state</span><span class="o">=</span><span class="n">random_state</span><span class="p">,</span>
+                <span class="n">zero_diagonal</span><span class="o">=</span><span class="n">zero_diagonal</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+
+    <span class="n">stacked</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">band_adjacencies</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">band_reduction</span> <span class="o">==</span> <span class="s2">"mean"</span><span class="p">:</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">stacked</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">band_reduction</span> <span class="o">==</span> <span class="s2">"max"</span><span class="p">:</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">stacked</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">band_reduction</span> <span class="o">==</span> <span class="s2">"median"</span><span class="p">:</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">stacked</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"band_reduction must be one of {'mean', 'max', 'median'}, "</span>
+            <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">band_reduction</span><span class="si">!r}</span><span class="s2">."</span>
+        <span class="p">)</span>
+
+    <span class="n">A</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">A</span> <span class="o">+</span> <span class="n">A</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">zero_diagonal</span><span class="p">:</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">fill_diagonal</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">A</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="GCNMTLEncoder">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLEncoder">[docs]</a>
+<span class="nd">@tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">register_keras_serializable</span><span class="p">(</span><span class="n">package</span><span class="o">=</span><span class="s2">"eegproc"</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">GCNMTLEncoder</span><span class="p">(</span><span class="n">BaseEncoder</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Shared-parameter spatio-spectral GCN-GRU encoder (after MTLFuseNet).</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    Inputs have shape ``(batch, timesteps, n_channels * n_bands)`` in</span>
+<span class="sd">    channel-major order (``ch0_band0, ch0_band1, ..., ch1_band0, ...``).</span>
+<span class="sd">    Outputs have shape ``(batch, ceil(timesteps / t_down), spectral_gru_units)``</span>
+<span class="sd">    when ``use_spectral_gru=True``; there is no projection after the GRU.</span>
+
+<span class="sd">    The adjacency is fixed and must be computed from training data only;</span>
+<span class="sd">    estimating it from validation or test subjects leaks their data into the</span>
+<span class="sd">    model.</span>
+<span class="sd">    """</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">t_down</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">adjacency</span><span class="p">,</span>
+        <span class="n">n_channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">14</span><span class="p">,</span>
+        <span class="n">n_bands</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+        <span class="n">gcn_units</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span>
+        <span class="n">temporal_pool_sizes</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">emb_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">activation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relu"</span><span class="p">,</span>
+        <span class="n">use_batch_norm</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+        <span class="n">use_spectral_gru</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">spectral_gru_units</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">384</span><span class="p">,</span>
+        <span class="n">spectral_gru_dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">graph_add_self_loops</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">graph_symmetrize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">graph_epsilon</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-8</span><span class="p">,</span>
+        <span class="c1"># Compatibility-only parameters accepted so JSON/constructor argument</span>
+        <span class="c1"># sets used by BandSeparatedGCNEncoder do not crash when comparing.</span>
+        <span class="n">graph_self_loop_bias</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">graph_identity_mix</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">graph_adjacency_reg_weight</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"encoder_gcn_mtl"</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="k">del</span> <span class="n">graph_self_loop_bias</span><span class="p">,</span> <span class="n">graph_identity_mix</span><span class="p">,</span> <span class="n">graph_adjacency_reg_weight</span>
+
+        <span class="c1"># With the post-GRU projection removed, BaseEncoder.emb_dim must</span>
+        <span class="c1"># describe the representation that is actually returned.</span>
+        <span class="n">gcn_units_tuple</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">u</span><span class="p">)</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="n">gcn_units</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">use_spectral_gru</span><span class="p">:</span>
+            <span class="n">output_dim</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">spectral_gru_units</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">output_dim</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bands</span><span class="p">)</span> <span class="o">*</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_channels</span><span class="p">)</span> <span class="o">*</span> <span class="n">gcn_units_tuple</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="n">emb_dim</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">int</span><span class="p">(</span><span class="n">emb_dim</span><span class="p">)</span> <span class="o">!=</span> <span class="n">output_dim</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"GCNMTLEncoder no longer applies a post-GRU projection: "</span>
+                <span class="sa">f</span><span class="s2">"emb_dim=</span><span class="si">{</span><span class="n">emb_dim</span><span class="si">}</span><span class="s2"> must equal the actual output dimension "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">output_dim</span><span class="si">}</span><span class="s2">. Set emb_dim=None (recommended) or match it."</span>
+            <span class="p">)</span>
+
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">emb_dim</span><span class="o">=</span><span class="n">output_dim</span><span class="p">,</span>
+            <span class="n">t_down</span><span class="o">=</span><span class="n">t_down</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+            <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">timesteps</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"timesteps must be positive, got </span><span class="si">{</span><span class="n">timesteps</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_channels</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"n_channels must be positive, got </span><span class="si">{</span><span class="n">n_channels</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n_bands</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"n_bands must be positive, got </span><span class="si">{</span><span class="n">n_bands</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">gcn_units</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="nb">any</span><span class="p">(</span><span class="n">u</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="n">gcn_units</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"gcn_units must be positive, got </span><span class="si">{</span><span class="n">gcn_units</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">dropout</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"dropout must be in [0, 1), got </span><span class="si">{</span><span class="n">dropout</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">spectral_gru_units</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"spectral_gru_units must be positive, got </span><span class="si">{</span><span class="n">spectral_gru_units</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">spectral_gru_dropout</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"spectral_gru_dropout must be in [0, 1), got "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">spectral_gru_dropout</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">adjacency_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">adjacency</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">adjacency_array</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="p">(</span><span class="n">n_channels</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"adjacency must be (</span><span class="si">{</span><span class="n">n_channels</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">n_channels</span><span class="si">}</span><span class="s2">), "</span>
+                <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">adjacency_array</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_channels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bands</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span> <span class="o">=</span> <span class="n">gcn_units_tuple</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_normalize_temporal_pool_sizes</span><span class="p">(</span>
+            <span class="n">temporal_pool_sizes</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">use_batch_norm</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">use_spectral_gru</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">use_spectral_gru</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru_units</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">spectral_gru_units</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru_dropout</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">spectral_gru_dropout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_add_self_loops</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">graph_add_self_loops</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_symmetrize</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">graph_symmetrize</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_epsilon</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">graph_epsilon</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_adjacency_init</span> <span class="o">=</span> <span class="n">adjacency_array</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">to_nodes</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Reshape</span><span class="p">(</span>
+            <span class="p">(</span><span class="n">timesteps</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">,</span> <span class="n">n_bands</span><span class="p">),</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"mtl_to_channel_band_grid"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># IMPORTANT: one layer object per depth, reused for every band.</span>
+        <span class="c1"># Therefore W and b are shared across theta/alpha/beta(/gamma), as</span>
+        <span class="c1"># described by MTLFuseNet.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shared_gcn_layers</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">GraphConvMTL</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shared_bn_layers</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">layers</span><span class="o">.</span><span class="n">Layer</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shared_dropout_layers</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">layers</span><span class="o">.</span><span class="n">Layer</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">for</span> <span class="n">layer_index</span><span class="p">,</span> <span class="n">units</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">shared_gcn_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">GraphConvMTL</span><span class="p">(</span>
+                    <span class="n">units</span><span class="o">=</span><span class="n">units</span><span class="p">,</span>
+                    <span class="n">n_nodes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+                    <span class="n">adjacency</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_adjacency_init</span><span class="p">,</span>
+                    <span class="n">activation</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+                    <span class="n">add_self_loops</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_add_self_loops</span><span class="p">,</span>
+                    <span class="n">symmetrize</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_symmetrize</span><span class="p">,</span>
+                    <span class="n">epsilon</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_epsilon</span><span class="p">,</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_shared_gcn_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">shared_bn_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">BatchNormalization</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_shared_gcn_bn_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">shared_dropout_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">SpatialDropout2D</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_shared_gcn_spatial_do_</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">GRU</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru_units</span><span class="p">,</span>
+                <span class="n">return_sequences</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                <span class="n">dropout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru_dropout</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="s2">"mtl_spectral_gru"</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_spectral_gru</span>
+            <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">MaxPool1D</span><span class="p">(</span><span class="n">pool_size</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_tpool_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">pool_size</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">)</span>
+        <span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_tdo_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">)</span>
+        <span class="p">]</span>
+
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_temporal_pool_sizes</span><span class="p">(</span>
+        <span class="n">pool_sizes</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">t_down</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">pool_sizes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">normalized</span> <span class="o">=</span> <span class="p">()</span> <span class="k">if</span> <span class="n">t_down</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">t_down</span><span class="p">),)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">normalized</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">pool_sizes</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">value</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"All temporal pool sizes must be &gt;= 1, got </span><span class="si">{</span><span class="n">normalized</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">effective_t_down</span> <span class="o">=</span> <span class="n">_product</span><span class="p">(</span><span class="n">normalized</span><span class="p">)</span> <span class="k">if</span> <span class="n">normalized</span> <span class="k">else</span> <span class="mi">1</span>
+        <span class="k">if</span> <span class="n">effective_t_down</span> <span class="o">!=</span> <span class="n">t_down</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"t_down=</span><span class="si">{</span><span class="n">t_down</span><span class="si">}</span><span class="s2">, but temporal_pool_sizes gives "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">effective_t_down</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">normalized</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">n_features</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_encode_one_band</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">x</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">band_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">training</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="c1"># (batch, time, channels, 1)</span>
+        <span class="n">band_x</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">band_index</span> <span class="p">:</span> <span class="n">band_index</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+
+        <span class="k">for</span> <span class="n">gcn</span><span class="p">,</span> <span class="n">bn</span><span class="p">,</span> <span class="n">dropout</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">shared_gcn_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">shared_bn_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">shared_dropout_layers</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="c1"># No residual block here: MTLFuseNet Eq. (15) is directly</span>
+            <span class="c1"># ReLU(A_hat V W + b).</span>
+            <span class="n">band_x</span> <span class="o">=</span> <span class="n">gcn</span><span class="p">(</span><span class="n">band_x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">bn</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">band_x</span> <span class="o">=</span> <span class="n">bn</span><span class="p">(</span><span class="n">band_x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+            <span class="n">band_x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">band_x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">band_x</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_spectral_sequence_to_temporal_features</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">band_node_features</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
+        <span class="n">training</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="c1"># Each band: (B, T, C, U) -&gt; (B, T, C*U)</span>
+        <span class="n">band_feature_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">flattened</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">tf</span><span class="o">.</span><span class="n">ensure_shape</span><span class="p">(</span>
+                <span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+                    <span class="n">band_x</span><span class="p">,</span>
+                    <span class="p">(</span>
+                        <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">band_x</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                        <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">band_x</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+                        <span class="n">band_feature_dim</span><span class="p">,</span>
+                    <span class="p">),</span>
+                <span class="p">),</span>
+                <span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">band_feature_dim</span><span class="p">),</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">band_x</span> <span class="ow">in</span> <span class="n">band_node_features</span>
+        <span class="p">]</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_spectral_gru</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">flattened</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># MTLFuseNet graph sequence GS=(G_theta,G_alpha,G_beta,G_gamma).</span>
+        <span class="c1"># Here we create that spectral sequence independently at each EEG</span>
+        <span class="c1"># timestep so EEGProc keeps a temporal output sequence.</span>
+        <span class="n">spectral_sequence</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">flattened</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+        <span class="c1"># (B, T, Bands, C*U) -&gt; (B*T, Bands, C*U)</span>
+        <span class="n">batch_size</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">spectral_sequence</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">time_steps</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">spectral_sequence</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">spectral_sequence</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="n">spectral_sequence</span><span class="p">,</span>
+            <span class="p">(</span>
+                <span class="n">batch_size</span> <span class="o">*</span> <span class="n">time_steps</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+            <span class="p">),</span>
+        <span class="p">)</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru</span><span class="p">(</span><span class="n">spectral_sequence</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="n">x</span><span class="p">,</span>
+            <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">time_steps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru_units</span><span class="p">),</span>
+        <span class="p">)</span>
+
+<div class="viewcode-block" id="GCNMTLEncoder.call">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLEncoder.call">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
+        <span class="n">inputs</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">convert_to_tensor</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">inputs</span><span class="o">.</span><span class="n">shape</span><span class="o">.</span><span class="n">rank</span> <span class="o">!=</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"GCNMTLEncoder expects (batch, timesteps, channels*bands); "</span>
+                <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">inputs</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">expected_features</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span>
+        <span class="n">static_features</span> <span class="o">=</span> <span class="n">inputs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">static_features</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">int</span><span class="p">(</span><span class="n">static_features</span><span class="p">)</span> <span class="o">!=</span> <span class="n">expected_features</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Expected </span><span class="si">{</span><span class="n">expected_features</span><span class="si">}</span><span class="s2"> features, got </span><span class="si">{</span><span class="n">static_features</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_nodes</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
+        <span class="n">band_node_features</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_encode_one_band</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">band_index</span><span class="p">,</span> <span class="n">training</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">band_index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">)</span>
+        <span class="p">]</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_spectral_sequence_to_temporal_features</span><span class="p">(</span>
+            <span class="n">band_node_features</span><span class="p">,</span> <span class="n">training</span>
+        <span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">pool</span><span class="p">,</span> <span class="n">dropout</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">pool</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+
+        <span class="c1"># Return the GRU representation directly: no post-GRU projection.</span>
+        <span class="k">return</span> <span class="n">x</span></div>
+
+
+<div class="viewcode-block" id="GCNMTLEncoder.get_adjacency_matrix">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLEncoder.get_adjacency_matrix">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_adjacency_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return the MTL-normalized shared adjacency used by the GCN."""</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_gcn_layers</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">"No GCN layers are configured."</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_gcn_layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">normalized_adjacency</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="GCNMTLEncoder.get_raw_adjacency_matrix">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLEncoder.get_raw_adjacency_matrix">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_raw_adjacency_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return the fixed pre-self-loop MI adjacency A."""</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_gcn_layers</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">"No GCN layers are configured."</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_gcn_layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">raw_adjacency</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="GCNMTLEncoder.get_band_features">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLEncoder.get_band_features">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_band_features</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">inputs</span><span class="p">,</span>
+        <span class="n">training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_nodes</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">convert_to_tensor</span><span class="p">(</span><span class="n">inputs</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="sa">f</span><span class="s2">"band_</span><span class="si">{</span><span class="n">band_index</span><span class="si">}</span><span class="s2">"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_encode_one_band</span><span class="p">(</span>
+                <span class="n">x</span><span class="p">,</span> <span class="n">band_index</span><span class="p">,</span> <span class="n">training</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">band_index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">)</span>
+        <span class="p">}</span></div>
+
+
+<div class="viewcode-block" id="GCNMTLEncoder.get_config">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLEncoder.get_config">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_config</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">"adjacency"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_adjacency_init</span><span class="p">,</span>
+                <span class="s2">"n_channels"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+                <span class="s2">"n_bands"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+                <span class="s2">"gcn_units"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">,</span>
+                <span class="s2">"temporal_pool_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">,</span>
+                <span class="s2">"dropout"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span>
+                <span class="s2">"activation"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+                <span class="s2">"use_batch_norm"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span><span class="p">,</span>
+                <span class="s2">"use_spectral_gru"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_spectral_gru</span><span class="p">,</span>
+                <span class="s2">"spectral_gru_units"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru_units</span><span class="p">,</span>
+                <span class="s2">"spectral_gru_dropout"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">spectral_gru_dropout</span><span class="p">,</span>
+                <span class="s2">"graph_add_self_loops"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_add_self_loops</span><span class="p">,</span>
+                <span class="s2">"graph_symmetrize"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_symmetrize</span><span class="p">,</span>
+                <span class="s2">"graph_epsilon"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_epsilon</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">config</span></div>
+</div>
+
+
+
+<span class="c1"># Convenient import alias matching EEGProc's existing GCN modules.</span>
+<span class="n">GCNEncoder</span> <span class="o">=</span> <span class="n">GCNMTLEncoder</span>
+
+
+<div class="viewcode-block" id="GCNMTLDecoder">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLDecoder">[docs]</a>
+<span class="nd">@tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">register_keras_serializable</span><span class="p">(</span><span class="n">package</span><span class="o">=</span><span class="s2">"eegproc"</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">GCNMTLDecoder</span><span class="p">(</span><span class="n">tf</span><span class="o">.</span><span class="n">keras</span><span class="o">.</span><span class="n">Model</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Graph-aware decoder for :class:`GCNMTLEncoder` latent sequences.</span>
+
+<span class="sd">    It maps latents back to channel-band signals, for example for autoencoder</span>
+<span class="sd">    or reconstruction objectives, using the encoder's fixed mutual-information</span>
+<span class="sd">    adjacency and renormalization. MTLFuseNet does not define a decoder; this</span>
+<span class="sd">    is an EEGProc addition.</span>
+<span class="sd">    """</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">timesteps</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">n_bands</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">t_down</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">gcn_units</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+        <span class="n">temporal_pool_sizes</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">adjacency</span><span class="p">,</span>
+        <span class="n">emb_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.10</span><span class="p">,</span>
+        <span class="n">activation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"relu"</span><span class="p">,</span>
+        <span class="n">use_batch_norm</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+        <span class="n">graph_add_self_loops</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">graph_symmetrize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">graph_epsilon</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-8</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"decoder_gcn_mtl"</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">timesteps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_channels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_bands</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">t_down</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">u</span><span class="p">)</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="n">gcn_units</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span> <span class="o">=</span> <span class="n">GCNMTLEncoder</span><span class="o">.</span><span class="n">_normalize_temporal_pool_sizes</span><span class="p">(</span>
+            <span class="n">temporal_pool_sizes</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">emb_dim</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">emb_dim</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">use_batch_norm</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_add_self_loops</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">graph_add_self_loops</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_symmetrize</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">graph_symmetrize</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_epsilon</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">graph_epsilon</span><span class="p">)</span>
+
+        <span class="n">adjacency_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">adjacency</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">adjacency_array</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"adjacency must be (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="si">}</span><span class="s2">), "</span>
+                <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">adjacency_array</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_adjacency_init</span> <span class="o">=</span> <span class="n">adjacency_array</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+
+        <span class="n">graph_seed_units</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">input_projection</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Conv1D</span><span class="p">(</span>
+            <span class="n">graph_seed_units</span><span class="p">,</span>
+            <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+            <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"mtl_dec_input_projection"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">upsample_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_conv_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">pool_size</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">reversed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">)):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">upsample_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">UpSampling1D</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="n">pool_size</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_dec_upsample_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_conv_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">Conv1D</span><span class="p">(</span>
+                    <span class="n">graph_seed_units</span><span class="p">,</span>
+                    <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                    <span class="n">padding</span><span class="o">=</span><span class="s2">"same"</span><span class="p">,</span>
+                    <span class="n">activation</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+                    <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_dec_temporal_conv_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">layers</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_dec_temporal_do_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">node_seed_projection</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Dense</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="n">graph_seed_units</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"mtl_dec_node_seed_projection"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">decoder_units</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">reversed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">GraphConvMTL</span><span class="p">(</span>
+                <span class="n">units</span><span class="o">=</span><span class="n">units</span><span class="p">,</span>
+                <span class="n">n_nodes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+                <span class="n">adjacency</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_adjacency_init</span><span class="p">,</span>
+                <span class="n">activation</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+                <span class="n">add_self_loops</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_add_self_loops</span><span class="p">,</span>
+                <span class="n">symmetrize</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_symmetrize</span><span class="p">,</span>
+                <span class="n">epsilon</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_epsilon</span><span class="p">,</span>
+                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_dec_gcn_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">units</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">decoder_units</span><span class="p">)</span>
+        <span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_dropout_layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">layers</span><span class="o">.</span><span class="n">SpatialDropout2D</span><span class="p">(</span><span class="n">dropout</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"mtl_dec_graph_do_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">decoder_units</span><span class="p">)</span>
+        <span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_graph</span> <span class="o">=</span> <span class="n">GraphConvMTL</span><span class="p">(</span>
+            <span class="n">units</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+            <span class="n">n_nodes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+            <span class="n">adjacency</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_adjacency_init</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">add_self_loops</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_add_self_loops</span><span class="p">,</span>
+            <span class="n">symmetrize</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_symmetrize</span><span class="p">,</span>
+            <span class="n">epsilon</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_epsilon</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"mtl_dec_output_graph"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_local</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">Dense</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="s2">"mtl_dec_output_local"</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">n_features</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span>
+
+<div class="viewcode-block" id="GCNMTLDecoder.from_encoder">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLDecoder.from_encoder">[docs]</a>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">from_encoder</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span>
+        <span class="n">encoder</span><span class="p">:</span> <span class="n">GCNMTLEncoder</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"decoder_gcn_mtl"</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"GCNMTLDecoder"</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">encoder</span><span class="p">,</span> <span class="n">GCNMTLEncoder</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+                <span class="s2">"GCNMTLDecoder.from_encoder requires GCNMTLEncoder, got "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">encoder</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span>
+            <span class="n">timesteps</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span>
+            <span class="n">n_channels</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+            <span class="n">n_bands</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+            <span class="n">t_down</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">t_down</span><span class="p">,</span>
+            <span class="n">gcn_units</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">,</span>
+            <span class="n">temporal_pool_sizes</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">,</span>
+            <span class="n">adjacency</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">_adjacency_init</span><span class="p">,</span>
+            <span class="n">emb_dim</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">emb_dim</span><span class="p">,</span>
+            <span class="n">dropout</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span>
+            <span class="n">activation</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+            <span class="n">use_batch_norm</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">use_batch_norm</span><span class="p">,</span>
+            <span class="n">graph_add_self_loops</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">graph_add_self_loops</span><span class="p">,</span>
+            <span class="n">graph_symmetrize</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">graph_symmetrize</span><span class="p">,</span>
+            <span class="n">graph_epsilon</span><span class="o">=</span><span class="n">encoder</span><span class="o">.</span><span class="n">graph_epsilon</span><span class="p">,</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+        <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="GCNMTLDecoder.fix_length">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLDecoder.fix_length">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">fix_length</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tf</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span> <span class="p">:]</span>
+        <span class="n">current_timesteps</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">x</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">pad_amount</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span> <span class="o">-</span> <span class="n">current_timesteps</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">pad_amount</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]])</span></div>
+
+
+<div class="viewcode-block" id="GCNMTLDecoder.call">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLDecoder.call">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_projection</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">upsample</span><span class="p">,</span> <span class="n">conv</span><span class="p">,</span> <span class="n">dropout</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">upsample_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_conv_layers</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">temporal_dropout_layers</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">upsample</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">conv</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">node_seed_projection</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">batch_size</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">x</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">time_steps</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">x</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="n">x</span><span class="p">,</span>
+            <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">time_steps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span>
+        <span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">gcn</span><span class="p">,</span> <span class="n">dropout</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_layers</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_dropout_layers</span><span class="p">):</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">gcn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">output_graph</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">training</span><span class="o">=</span><span class="n">training</span><span class="p">)</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">output_local</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">time_steps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_features</span><span class="p">))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fix_length</span><span class="p">(</span><span class="n">x</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="GCNMTLDecoder.get_config">
+<a class="viewcode-back" href="../../../../../api/eegproc.deep_learning.unsupervised.GNN.GCNMTL.html#eegproc.deep_learning.unsupervised.GNN.GCNMTL.GCNMTLDecoder.get_config">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_config</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">"timesteps"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span><span class="p">,</span>
+                <span class="s2">"n_channels"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_channels</span><span class="p">,</span>
+                <span class="s2">"n_bands"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_bands</span><span class="p">,</span>
+                <span class="s2">"t_down"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">t_down</span><span class="p">,</span>
+                <span class="s2">"gcn_units"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gcn_units</span><span class="p">,</span>
+                <span class="s2">"temporal_pool_sizes"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">temporal_pool_sizes</span><span class="p">,</span>
+                <span class="s2">"adjacency"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_adjacency_init</span><span class="p">,</span>
+                <span class="s2">"emb_dim"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">emb_dim</span><span class="p">,</span>
+                <span class="s2">"dropout"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout_rate</span><span class="p">,</span>
+                <span class="s2">"activation"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+                <span class="s2">"use_batch_norm"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_batch_norm</span><span class="p">,</span>
+                <span class="s2">"graph_add_self_loops"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_add_self_loops</span><span class="p">,</span>
+                <span class="s2">"graph_symmetrize"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_symmetrize</span><span class="p">,</span>
+                <span class="s2">"graph_epsilon"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_epsilon</span><span class="p">,</span>
+                <span class="s2">"name"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">config</span></div>
+</div>
+
+
+
+<span class="n">GCNDecoder</span> <span class="o">=</span> <span class="n">GCNMTLDecoder</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

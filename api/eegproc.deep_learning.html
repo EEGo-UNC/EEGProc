@@ -1,0 +1,290 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning package &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.deep_learning.cross_validation package" href="eegproc.deep_learning.cross_validation.html" />
+    <link rel="prev" title="eegproc.data.windowing module" href="eegproc.data.windowing.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.data.html">eegproc.data package</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">eegproc.deep_learning package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.plotting.html">eegproc.plotting package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning package</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.deep_learning.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.deep_learning">
+<span id="eegproc-deep-learning-package"></span><h1>eegproc.deep_learning package<a class="headerlink" href="#module-eegproc.deep_learning" title="Link to this heading"></a></h1>
+<section id="subpackages">
+<h2>Subpackages<a class="headerlink" href="#subpackages" title="Link to this heading"></a></h2>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="eegproc.deep_learning.cross_validation.html">eegproc.deep_learning.cross_validation package</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.cross_validation.html#submodules">Submodules</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.aggregation.html">eegproc.deep_learning.cross_validation.aggregation module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.arrays.html">eegproc.deep_learning.cross_validation.arrays module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.calibration.html">eegproc.deep_learning.cross_validation.calibration module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.calibration.html#eegproc.deep_learning.cross_validation.calibration.subject_calibration_cv"><code class="docutils literal notranslate"><span class="pre">subject_calibration_cv()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.calibration_subject.html">eegproc.deep_learning.cross_validation.calibration_subject module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.callbacks.html">eegproc.deep_learning.cross_validation.callbacks module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.callbacks.html#eegproc.deep_learning.cross_validation.callbacks.EvaluationLevelValidationMetrics"><code class="docutils literal notranslate"><span class="pre">EvaluationLevelValidationMetrics</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.callbacks.html#eegproc.deep_learning.cross_validation.callbacks.HeldOutUserOracleMetrics"><code class="docutils literal notranslate"><span class="pre">HeldOutUserOracleMetrics</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.callbacks.html#eegproc.deep_learning.cross_validation.callbacks.TrialValidationMetrics"><code class="docutils literal notranslate"><span class="pre">TrialValidationMetrics</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.constants.html">eegproc.deep_learning.cross_validation.constants module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.dataframe.html">eegproc.deep_learning.cross_validation.dataframe module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.dataframe.html#eegproc.deep_learning.cross_validation.dataframe.cross_validate_dataframe"><code class="docutils literal notranslate"><span class="pre">cross_validate_dataframe()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.evaluation.html">eegproc.deep_learning.cross_validation.evaluation module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.loso.html">eegproc.deep_learning.cross_validation.loso module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.loso.html#eegproc.deep_learning.cross_validation.loso.fixed_loso_cv"><code class="docutils literal notranslate"><span class="pre">fixed_loso_cv()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.loso.html#eegproc.deep_learning.cross_validation.loso.loso_cv"><code class="docutils literal notranslate"><span class="pre">loso_cv()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.loso_fold.html">eegproc.deep_learning.cross_validation.loso_fold module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.metrics.html">eegproc.deep_learning.cross_validation.metrics module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.nested.html">eegproc.deep_learning.cross_validation.nested module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.cross_validation.nested.html#eegproc.deep_learning.cross_validation.nested.nested_lnso_cv"><code class="docutils literal notranslate"><span class="pre">nested_lnso_cv()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.nested_fold.html">eegproc.deep_learning.cross_validation.nested_fold module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.probabilities.html">eegproc.deep_learning.cross_validation.probabilities module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.reporting.html">eegproc.deep_learning.cross_validation.reporting module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.search.html">eegproc.deep_learning.cross_validation.search module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.splits.html">eegproc.deep_learning.cross_validation.splits module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.cross_validation.workers.html">eegproc.deep_learning.cross_validation.workers module</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.html">eegproc.deep_learning.domain_generalization package</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.html#submodules">Submodules</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.alternating_group_learning.html">eegproc.deep_learning.domain_generalization.alternating_group_learning module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.alternating_group_learning.html#eegproc.deep_learning.domain_generalization.alternating_group_learning.AlternatingSubjectSetSequence"><code class="docutils literal notranslate"><span class="pre">AlternatingSubjectSetSequence</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.meta_learning.html">eegproc.deep_learning.domain_generalization.meta_learning module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.MLDGEpisodeSequence"><code class="docutils literal notranslate"><span class="pre">MLDGEpisodeSequence</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.MetaLearningSubjectSequence"><code class="docutils literal notranslate"><span class="pre">MetaLearningSubjectSequence</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.fit_mldg"><code class="docutils literal notranslate"><span class="pre">fit_mldg()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.domain_generalization.meta_learning.html#eegproc.deep_learning.domain_generalization.meta_learning.run_mldg_train_step"><code class="docutils literal notranslate"><span class="pre">run_mldg_train_step()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="eegproc.deep_learning.supervised.html">eegproc.deep_learning.supervised package</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.supervised.html#submodules">Submodules</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.supervised.rnn_architectures.html">eegproc.deep_learning.supervised.rnn_architectures module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.BiGRUClassifier"><code class="docutils literal notranslate"><span class="pre">BiGRUClassifier</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.BiLSTMClassifier"><code class="docutils literal notranslate"><span class="pre">BiLSTMClassifier</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.GRUClassifier"><code class="docutils literal notranslate"><span class="pre">GRUClassifier</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.LSTMClassifier"><code class="docutils literal notranslate"><span class="pre">LSTMClassifier</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.rnn_architectures.html#eegproc.deep_learning.supervised.rnn_architectures.RNNClassifier"><code class="docutils literal notranslate"><span class="pre">RNNClassifier</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.supervised.supervised_contrastive_loss.html">eegproc.deep_learning.supervised.supervised_contrastive_loss module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.supervised_contrastive_loss.html#eegproc.deep_learning.supervised.supervised_contrastive_loss.SupervisedContrastiveLoss"><code class="docutils literal notranslate"><span class="pre">SupervisedContrastiveLoss</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.supervised.variational_classifier.html">eegproc.deep_learning.supervised.variational_classifier module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.variational_classifier.html#eegproc.deep_learning.supervised.variational_classifier.DenseClassifier"><code class="docutils literal notranslate"><span class="pre">DenseClassifier</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.variational_classifier.html#eegproc.deep_learning.supervised.variational_classifier.HybridClassifier"><code class="docutils literal notranslate"><span class="pre">HybridClassifier</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.supervised.variational_classifier.html#eegproc.deep_learning.supervised.variational_classifier.VariationalClassifier"><code class="docutils literal notranslate"><span class="pre">VariationalClassifier</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="eegproc.deep_learning.unsupervised.html">eegproc.deep_learning.unsupervised package</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.unsupervised.html#subpackages">Subpackages</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.unsupervised.Convolutions.html">eegproc.deep_learning.unsupervised.Convolutions package</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.unsupervised.Convolutions.html#submodules">Submodules</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.unsupervised.GNN.html">eegproc.deep_learning.unsupervised.GNN package</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.unsupervised.GNN.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.unsupervised.html#submodules">Submodules</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.unsupervised.BaseEncoder.html">eegproc.deep_learning.unsupervised.BaseEncoder module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.unsupervised.BaseEncoder.html#eegproc.deep_learning.unsupervised.BaseEncoder.BaseEncoder"><code class="docutils literal notranslate"><span class="pre">BaseEncoder</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.html">eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.html#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.GradientReversal"><code class="docutils literal notranslate"><span class="pre">GradientReversal</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.html#eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss.VariationalAutoencoderLoss"><code class="docutils literal notranslate"><span class="pre">VariationalAutoencoderLoss</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.unsupervised.utils.html">eegproc.deep_learning.unsupervised.utils module</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+<section id="submodules">
+<h2>Submodules<a class="headerlink" href="#submodules" title="Link to this heading"></a></h2>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html">eegproc.deep_learning.prepare_datasets module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#prepare-datasets-py">prepare_datasets.py</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#usage">Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#dataset-structures">Dataset structures</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.load_amigos_joined_csv"><code class="docutils literal notranslate"><span class="pre">load_amigos_joined_csv()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.load_amigos_subject"><code class="docutils literal notranslate"><span class="pre">load_amigos_subject()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.load_cowen_27_mapping"><code class="docutils literal notranslate"><span class="pre">load_cowen_27_mapping()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.load_deap_subject"><code class="docutils literal notranslate"><span class="pre">load_deap_subject()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.load_eegemotions_joined_csv"><code class="docutils literal notranslate"><span class="pre">load_eegemotions_joined_csv()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.prepare_amigos"><code class="docutils literal notranslate"><span class="pre">prepare_amigos()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.prepare_deap"><code class="docutils literal notranslate"><span class="pre">prepare_deap()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.prepare_dreamer"><code class="docutils literal notranslate"><span class="pre">prepare_dreamer()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.prepare_eegemotions"><code class="docutils literal notranslate"><span class="pre">prepare_eegemotions()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.prepare_datasets.html#eegproc.deep_learning.prepare_datasets.verify_npy"><code class="docutils literal notranslate"><span class="pre">verify_npy()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html">eegproc.deep_learning.training_outputs module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.CompactEpochLogger"><code class="docutils literal notranslate"><span class="pre">CompactEpochLogger</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.CompactEpochLogger.on_epoch_end"><code class="docutils literal notranslate"><span class="pre">CompactEpochLogger.on_epoch_end()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.CompactEpochLogger.on_train_begin"><code class="docutils literal notranslate"><span class="pre">CompactEpochLogger.on_train_begin()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.CompactEpochLogger.on_train_end"><code class="docutils literal notranslate"><span class="pre">CompactEpochLogger.on_train_end()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics"><code class="docutils literal notranslate"><span class="pre">HeldOutUserOracleMetrics</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_epoch_end"><code class="docutils literal notranslate"><span class="pre">HeldOutUserOracleMetrics.on_epoch_end()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_train_begin"><code class="docutils literal notranslate"><span class="pre">HeldOutUserOracleMetrics.on_train_begin()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.HeldOutUserOracleMetrics.on_train_end"><code class="docutils literal notranslate"><span class="pre">HeldOutUserOracleMetrics.on_train_end()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.PredictionDiagnostics"><code class="docutils literal notranslate"><span class="pre">PredictionDiagnostics</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_epoch_end"><code class="docutils literal notranslate"><span class="pre">PredictionDiagnostics.on_epoch_end()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_train_begin"><code class="docutils literal notranslate"><span class="pre">PredictionDiagnostics.on_train_begin()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.deep_learning.training_outputs.html#eegproc.deep_learning.training_outputs.PredictionDiagnostics.on_train_end"><code class="docutils literal notranslate"><span class="pre">PredictionDiagnostics.on_train_end()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.data.windowing.html" class="btn btn-neutral float-left" title="eegproc.data.windowing module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.deep_learning.cross_validation.html" class="btn btn-neutral float-right" title="eegproc.deep_learning.cross_validation package" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,446 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.model_explainability.model_agnostic.adapter module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.model_explainability.model_agnostic.optimizer module" href="eegproc.model_explainability.model_agnostic.optimizer.html" />
+    <link rel="prev" title="eegproc.model_explainability.model_agnostic package" href="eegproc.model_explainability.model_agnostic.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.data.html">eegproc.data package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+<li class="toctree-l4 current"><a class="reference internal" href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.plotting.html">eegproc.plotting package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.model_explainability.model_agnostic.html">eegproc.model_explainability.model_agnostic package</a></li>
+      <li class="breadcrumb-item active">eegproc.model_explainability.model_agnostic.adapter module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.model_explainability.model_agnostic.adapter.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.model_explainability.model_agnostic.adapter">
+<span id="eegproc-model-explainability-model-agnostic-adapter-module"></span><h1>eegproc.model_explainability.model_agnostic.adapter module<a class="headerlink" href="#module-eegproc.model_explainability.model_agnostic.adapter" title="Link to this heading"></a></h1>
+<p>Model and dataset contracts for architecture-agnostic counterfactuals.</p>
+<p>Adapters isolate model-specific state initialization, classification, decoding,
+and optional validity metrics from the optimizer. External projects can provide
+an adapter factory without changing EEGProc; factories are addressed as
+<code class="docutils literal notranslate"><span class="pre">package.module:function</span></code> and receive <code class="docutils literal notranslate"><span class="pre">model_path</span></code>, <code class="docutils literal notranslate"><span class="pre">config</span></code>, and one
+sample trial.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">CounterfactualAdapter</span></span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#CounterfactualAdapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">ABC</span></code></p>
+<p>Minimal differentiable interface consumed by the generic optimizer.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.constraint">
+<span class="sig-name descname"><span class="pre">constraint</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">signal</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#CounterfactualAdapter.constraint"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.constraint" title="Link to this definition"></a></dt>
+<dd><p>Return one scalar validity metric; subclasses opt in by name.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>signal</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.default_signal_weight">
+<span class="sig-name descname"><span class="pre">default_signal_weight</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.1</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.default_signal_weight" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.default_state_weight">
+<span class="sig-name descname"><span class="pre">default_state_weight</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.1</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.default_state_weight" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.initial_state">
+<span class="property"><span class="k"><span class="pre">abstractmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">initial_state</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">inputs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#CounterfactualAdapter.initial_state"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.initial_state" title="Link to this definition"></a></dt>
+<dd><p>Return the tensor that should be optimized for one input trial.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>inputs</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.logits_from_state">
+<span class="property"><span class="k"><span class="pre">abstractmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">logits_from_state</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">state</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#CounterfactualAdapter.logits_from_state"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.logits_from_state" title="Link to this definition"></a></dt>
+<dd><p>Return unnormalized class logits for the optimizable state.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>state</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.metadata">
+<span class="sig-name descname"><span class="pre">metadata</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#CounterfactualAdapter.metadata"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.metadata" title="Link to this definition"></a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">Any</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.name">
+<span class="sig-name descname"><span class="pre">name</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'custom'</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.name" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.optimization_space">
+<span class="sig-name descname"><span class="pre">optimization_space</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'latent'</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.optimization_space" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.reconstruct">
+<span class="property"><span class="k"><span class="pre">abstractmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">reconstruct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">state</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reference_input</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#CounterfactualAdapter.reconstruct"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter.reconstruct" title="Link to this definition"></a></dt>
+<dd><p>Map state to one or more input-shaped differentiable signals.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>state</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+<li><p><strong>reference_input</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Mapping</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">KerasInputAdapter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_kind</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#KerasInputAdapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference internal" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter" title="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter"><code class="xref py py-class docutils literal notranslate"><span class="pre">CounterfactualAdapter</span></code></a></p>
+<p>Input-space gradients for differentiable Keras models without decoders.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>output_kind</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>output_key</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.default_signal_weight">
+<span class="sig-name descname"><span class="pre">default_signal_weight</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.0</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.default_signal_weight" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.default_state_weight">
+<span class="sig-name descname"><span class="pre">default_state_weight</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.1</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.default_state_weight" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.initial_state">
+<span class="sig-name descname"><span class="pre">initial_state</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">inputs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#KerasInputAdapter.initial_state"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.initial_state" title="Link to this definition"></a></dt>
+<dd><p>Return the tensor that should be optimized for one input trial.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.logits_from_state">
+<span class="sig-name descname"><span class="pre">logits_from_state</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">state</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#KerasInputAdapter.logits_from_state"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.logits_from_state" title="Link to this definition"></a></dt>
+<dd><p>Return unnormalized class logits for the optimizable state.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.metadata">
+<span class="sig-name descname"><span class="pre">metadata</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#KerasInputAdapter.metadata"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.metadata" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.name">
+<span class="sig-name descname"><span class="pre">name</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'keras-input'</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.name" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.optimization_space">
+<span class="sig-name descname"><span class="pre">optimization_space</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'input'</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.optimization_space" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.reconstruct">
+<span class="sig-name descname"><span class="pre">reconstruct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">state</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reference_input</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#KerasInputAdapter.reconstruct"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.KerasInputAdapter.reconstruct" title="Link to this definition"></a></dt>
+<dd><p>Map state to one or more input-shaped differentiable signals.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">TrialDataset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">features</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subject_ids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">trial_ids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">labels</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalization_offset</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalization_scale</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channel_names</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">band_names</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channel_positions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">feature_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">signal_unit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">&lt;factory&gt;</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#TrialDataset"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Prepared trials and optional metadata needed to restore source units.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>features</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>subject_ids</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>trial_ids</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+<li><p><strong>labels</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>normalization_offset</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>normalization_scale</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>channel_names</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>band_names</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>] | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>channel_positions</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>feature_order</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>signal_unit</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>metadata</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">Any</span></code>]</span>, default: <code class="docutils literal notranslate"><span class="pre">&lt;factory&gt;</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.band_names">
+<span class="sig-name descname"><span class="pre">band_names</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.band_names" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.channel_names">
+<span class="sig-name descname"><span class="pre">channel_names</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.channel_names" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.channel_positions">
+<span class="sig-name descname"><span class="pre">channel_positions</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.channel_positions" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.feature_order">
+<span class="sig-name descname"><span class="pre">feature_order</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.feature_order" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.features">
+<span class="sig-name descname"><span class="pre">features</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.features" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.labels">
+<span class="sig-name descname"><span class="pre">labels</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.labels" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.metadata">
+<span class="sig-name descname"><span class="pre">metadata</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.metadata" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.normalization_offset">
+<span class="sig-name descname"><span class="pre">normalization_offset</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.normalization_offset" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.normalization_scale">
+<span class="sig-name descname"><span class="pre">normalization_scale</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.normalization_scale" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.signal_unit">
+<span class="sig-name descname"><span class="pre">signal_unit</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.signal_unit" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.subject_ids">
+<span class="sig-name descname"><span class="pre">subject_ids</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.subject_ids" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.TrialDataset.trial_ids">
+<span class="sig-name descname"><span class="pre">trial_ids</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span></span><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset.trial_ids" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.create_adapter">
+<span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">create_adapter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">factory_spec</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sample_input</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#create_adapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.create_adapter" title="Link to this definition"></a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>factory_spec</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>)</p></li>
+<li><p><strong>model_path</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Path</span></code></span>)</p></li>
+<li><p><strong>config</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Mapping</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">Any</span></code>]</span>)</p></li>
+<li><p><strong>sample_input</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter" title="eegproc.model_explainability.model_agnostic.adapter.CounterfactualAdapter"><code class="xref py py-class docutils literal notranslate"><span class="pre">CounterfactualAdapter</span></code></a></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.create_keras_input_adapter">
+<span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">create_keras_input_adapter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sample_input</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#create_keras_input_adapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.create_keras_input_adapter" title="Link to this definition"></a></dt>
+<dd><p>Built-in factory for arbitrary differentiable input-space Keras models.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.load_json_mapping">
+<span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">load_json_mapping</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#load_json_mapping"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.load_json_mapping" title="Link to this definition"></a></dt>
+<dd><p>Load a JSON object from inline text or a JSON file path.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>value</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">Any</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.load_trial_dataset">
+<span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">load_trial_dataset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">npz_path</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">loader_spec</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">loader_config</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#load_trial_dataset"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.load_trial_dataset" title="Link to this definition"></a></dt>
+<dd><p>Load a standard NPZ or delegate dataset construction to a plug-in.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>npz_path</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Path</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>)</p></li>
+<li><p><strong>loader_spec</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+<li><p><strong>loader_config</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">Mapping</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">Any</span></code>]]</span>, default: <code class="docutils literal notranslate"><span class="pre">None</span></code>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset" title="eegproc.model_explainability.model_agnostic.adapter.TrialDataset"><code class="xref py py-class docutils literal notranslate"><span class="pre">TrialDataset</span></code></a></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="eegproc.model_explainability.model_agnostic.adapter.validate_trial_dataset">
+<span class="sig-prename descclassname"><span class="pre">eegproc.model_explainability.model_agnostic.adapter.</span></span><span class="sig-name descname"><span class="pre">validate_trial_dataset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dataset</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/model_explainability/model_agnostic/adapter.html#validate_trial_dataset"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.model_explainability.model_agnostic.adapter.validate_trial_dataset" title="Link to this definition"></a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>dataset</strong> (<span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset" title="eegproc.model_explainability.model_agnostic.adapter.TrialDataset"><code class="xref py py-class docutils literal notranslate"><span class="pre">TrialDataset</span></code></a></span>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#eegproc.model_explainability.model_agnostic.adapter.TrialDataset" title="eegproc.model_explainability.model_agnostic.adapter.TrialDataset"><code class="xref py py-class docutils literal notranslate"><span class="pre">TrialDataset</span></code></a></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.model_explainability.model_agnostic.html" class="btn btn-neutral float-left" title="eegproc.model_explainability.model_agnostic package" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.model_explainability.model_agnostic.optimizer.html" class="btn btn-neutral float-right" title="eegproc.model_explainability.model_agnostic.optimizer module" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

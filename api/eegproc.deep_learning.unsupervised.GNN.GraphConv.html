@@ -1,0 +1,199 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.unsupervised.GNN.GraphConv module &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="eegproc.deep_learning.unsupervised.GNN.GraphConvMTL module" href="eegproc.deep_learning.unsupervised.GNN.GraphConvMTL.html" />
+    <link rel="prev" title="eegproc.deep_learning.unsupervised.GNN.GCN_band_separated module" href="eegproc.deep_learning.unsupervised.GNN.GCN_band_separated.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">eegproc</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="eegproc.html">eegproc package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="eegproc.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="eegproc.data.html">eegproc.data package</a></li>
+<li class="toctree-l4 current"><a class="reference internal" href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.model_explainability.html">eegproc.model_explainability package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="eegproc.plotting.html">eegproc.plotting package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="eegproc.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../getting-started.html">Getting Started</a></li>
+          <li class="breadcrumb-item"><a href="modules.html">eegproc</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.html">eegproc package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.html">eegproc.deep_learning package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.unsupervised.html">eegproc.deep_learning.unsupervised package</a></li>
+          <li class="breadcrumb-item"><a href="eegproc.deep_learning.unsupervised.GNN.html">eegproc.deep_learning.unsupervised.GNN package</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.unsupervised.GNN.GraphConv module</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/eegproc.deep_learning.unsupervised.GNN.GraphConv.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-eegproc.deep_learning.unsupervised.GNN.GraphConv">
+<span id="eegproc-deep-learning-unsupervised-gnn-graphconv-module"></span><h1>eegproc.deep_learning.unsupervised.GNN.GraphConv module<a class="headerlink" href="#module-eegproc.deep_learning.unsupervised.GNN.GraphConv" title="Link to this heading"></a></h1>
+<p>Graph convolution layer used by EEGProc GCN encoders and decoders.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">eegproc.deep_learning.unsupervised.GNN.GraphConv.</span></span><span class="sig-name descname"><span class="pre">GraphConv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">units</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_nodes</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activation</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'relu'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_bias</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">self_loop_bias</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">identity_mix</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adjacency_reg_weight</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0001</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/GNN/GraphConv.html#GraphConv"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">Layer</span></code></p>
+<p>Graph convolution with a shared, learnable electrode adjacency matrix.</p>
+<p>The graph nodes are EEG electrodes. Any frequency bands are node features,
+so the same <code class="docutils literal notranslate"><span class="pre">n_nodes</span> <span class="pre">x</span> <span class="pre">n_nodes</span></code> electrode graph is applied to every band
+before the learned feature projection mixes the band/features dimension.
+Inputs may contain any number of leading dimensions, including the native
+sequence shape <code class="docutils literal notranslate"><span class="pre">(batch,</span> <span class="pre">time,</span> <span class="pre">n_nodes,</span> <span class="pre">features)</span></code>; graph operations are
+broadcast over all leading dimensions without <code class="docutils literal notranslate"><span class="pre">TimeDistributed</span></code>.</p>
+<p>The normalized adjacency is</p>
+<p><code class="docutils literal notranslate"><span class="pre">A</span> <span class="pre">=</span> <span class="pre">(1</span> <span class="pre">-</span> <span class="pre">identity_mix)</span> <span class="pre">*</span> <span class="pre">softmax(A_theta</span> <span class="pre">+</span> <span class="pre">self_loop_bias</span> <span class="pre">*</span> <span class="pre">I)</span></code>
+``    + identity_mix * I``.</p>
+<p><code class="docutils literal notranslate"><span class="pre">self_loop_bias</span></code> makes training start from an electrode-preserving graph,
+while <code class="docutils literal notranslate"><span class="pre">identity_mix</span></code> can guarantee a permanent local contribution. A
+small entropy penalty discourages the adjacency rows from remaining close
+to uniform global averaging.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>units</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Output feature dimensionality per electrode.</p></li>
+<li><p><strong>n_nodes</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></span>) – Number of graph nodes/electrodes.</p></li>
+<li><p><strong>activation</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> | <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">'relu'</span></code>) – Activation applied after graph aggregation and linear projection.</p></li>
+<li><p><strong>use_bias</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">bool</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">True</span></code>) – Whether to add a feature bias.</p></li>
+<li><p><strong>self_loop_bias</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">2.0</span></code>) – Positive value added to the diagonal adjacency logits before softmax.
+With 14 electrodes, 2.0 starts with a diagonal weight around 0.36
+before any optional identity mixture.</p></li>
+<li><p><strong>identity_mix</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.0</span></code>) – Fixed proportion of the identity matrix mixed into the learned graph.
+Must be in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1]</span></code>. The GCN already has residual blocks, so zero is
+the recommended initial setting.</p></li>
+<li><p><strong>adjacency_reg_weight</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span>, default: <code class="docutils literal notranslate"><span class="pre">0.0001</span></code>) – Weight of the mean row-entropy penalty added through <code class="docutils literal notranslate"><span class="pre">add_loss</span></code>.
+Set to zero to disable adjacency regularization.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.build">
+<span class="sig-name descname"><span class="pre">build</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_shape</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/GNN/GraphConv.html#GraphConv.build"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.build" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.call">
+<span class="sig-name descname"><span class="pre">call</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">X</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/GNN/GraphConv.html#GraphConv.call"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.call" title="Link to this definition"></a></dt>
+<dd><p>Apply graph aggregation and a learned feature projection.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.get_config">
+<span class="sig-name descname"><span class="pre">get_config</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/GNN/GraphConv.html#GraphConv.get_config"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.get_config" title="Link to this definition"></a></dt>
+<dd><p>Returns the config of the object.</p>
+<p>An object config is a Python dictionary (serializable)
+containing the information needed to re-instantiate it.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.normalized_adjacency">
+<span class="sig-name descname"><span class="pre">normalized_adjacency</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/eegproc/deep_learning/unsupervised/GNN/GraphConv.html#GraphConv.normalized_adjacency"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#eegproc.deep_learning.unsupervised.GNN.GraphConv.GraphConv.normalized_adjacency" title="Link to this definition"></a></dt>
+<dd><p>Return the normalized electrode adjacency used by this layer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">Tensor</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="eegproc.deep_learning.unsupervised.GNN.GCN_band_separated.html" class="btn btn-neutral float-left" title="eegproc.deep_learning.unsupervised.GNN.GCN_band_separated module" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eegproc.deep_learning.unsupervised.GNN.GraphConvMTL.html" class="btn btn-neutral float-right" title="eegproc.deep_learning.unsupervised.GNN.GraphConvMTL module" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

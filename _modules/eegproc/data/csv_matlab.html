@@ -1,0 +1,291 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.data.csv_matlab &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.data.csv_matlab</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.data.csv_matlab</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Readers for AMIGOS, DREAMER and preprocessed DEAP releases."""</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">contextlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">closing</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">fractions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Fraction</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sqlite3</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">tempfile</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">._csv_common</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">EEG_CHANNELS</span><span class="p">,</span> <span class="n">KEYS</span><span class="p">,</span> <span class="n">RATINGS</span><span class="p">,</span> <span class="n">load_mat</span><span class="p">,</span> <span class="n">mat_cells</span><span class="p">,</span> <span class="n">numeric</span><span class="p">,</span>
+    <span class="n">require_columns</span><span class="p">,</span> <span class="n">samples_by_channels</span><span class="p">,</span> <span class="n">signal_frames</span><span class="p">,</span> <span class="n">skip_empty</span><span class="p">,</span>
+<span class="p">)</span>
+
+
+<div class="viewcode-block" id="amigos_frames">
+<a class="viewcode-back" href="../../../api/eegproc.data.csv_matlab.html#eegproc.data.csv_matlab.amigos_frames">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">amigos_frames</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">baseline_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">640</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Read original AMIGOS preprocessed MATLAB cells, one participant at a time."""</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">subject</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
+        <span class="n">match</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="sa">r</span><span class="s2">"Data_Preprocessed_P(\d+)\.mat"</span><span class="p">,</span> <span class="n">path</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">match</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unrecognized AMIGOS filename: </span><span class="si">{</span><span class="n">path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">match</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="n">files</span> <span class="o">=</span> <span class="p">[</span><span class="n">root</span><span class="p">]</span> <span class="k">if</span> <span class="n">root</span><span class="o">.</span><span class="n">is_file</span><span class="p">()</span> <span class="k">else</span> <span class="nb">list</span><span class="p">(</span><span class="n">root</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">"Data_Preprocessed_P*.mat"</span><span class="p">))</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">files</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No Data_Preprocessed_P*.mat files under </span><span class="si">{</span><span class="n">root</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="n">seen</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">files</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">subject</span><span class="p">):</span>
+        <span class="n">sid</span> <span class="o">=</span> <span class="n">subject</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">sid</span> <span class="ow">in</span> <span class="n">seen</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Duplicate AMIGOS participant </span><span class="si">{</span><span class="n">sid</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">seen</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">sid</span><span class="p">)</span>
+        <span class="n">contents</span> <span class="o">=</span> <span class="n">load_mat</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+        <span class="n">trials</span> <span class="o">=</span> <span class="n">mat_cells</span><span class="p">(</span><span class="n">contents</span><span class="p">[</span><span class="s2">"joined_data"</span><span class="p">])</span>
+        <span class="n">labels</span> <span class="o">=</span> <span class="n">mat_cells</span><span class="p">(</span><span class="n">contents</span><span class="p">[</span><span class="s2">"labels_selfassessment"</span><span class="p">])</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">trials</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">labels</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">: signal and label trial counts differ"</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">tid</span><span class="p">,</span> <span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="n">rating</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">trials</span><span class="p">,</span> <span class="n">labels</span><span class="p">),</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="n">source</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">, trial </span><span class="si">{</span><span class="n">tid</span><span class="si">}</span><span class="s2">"</span>
+            <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">skip_empty</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>
+                <span class="k">continue</span>
+            <span class="n">signal</span> <span class="o">=</span> <span class="n">samples_by_channels</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">17</span><span class="p">),</span> <span class="n">source</span><span class="p">)[:,</span> <span class="p">:</span><span class="mi">16</span><span class="p">]</span>
+            <span class="n">rating</span> <span class="o">=</span> <span class="n">numeric</span><span class="p">(</span><span class="n">rating</span><span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">rating</span><span class="o">.</span><span class="n">size</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">: expected at least arousal, valence, dominance"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="n">baseline_samples</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">: no samples after the </span><span class="si">{</span><span class="n">baseline_samples</span><span class="si">}</span><span class="s2">-sample baseline"</span><span class="p">)</span>
+            <span class="n">label</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">RATINGS</span><span class="p">,</span> <span class="n">rating</span><span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">]]))</span>
+            <span class="k">for</span> <span class="n">segment</span><span class="p">,</span> <span class="n">block</span> <span class="ow">in</span> <span class="p">[(</span><span class="s2">"baseline"</span><span class="p">,</span> <span class="n">signal</span><span class="p">[:</span><span class="n">baseline_samples</span><span class="p">]),</span>
+                                   <span class="p">(</span><span class="s2">"stimulus"</span><span class="p">,</span> <span class="n">signal</span><span class="p">[</span><span class="n">baseline_samples</span><span class="p">:])]:</span>
+                <span class="k">yield from</span> <span class="n">signal_frames</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="n">sid</span><span class="p">,</span> <span class="n">tid</span><span class="p">,</span> <span class="n">segment</span><span class="p">,</span> <span class="n">EEG_CHANNELS</span> <span class="o">+</span> <span class="p">[</span><span class="s2">"ECG1"</span><span class="p">,</span> <span class="s2">"ECG2"</span><span class="p">],</span>
+                                         <span class="n">label</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_csv_path</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+    <span class="n">path</span> <span class="o">=</span> <span class="n">root</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.csv"</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">path</span><span class="o">.</span><span class="n">is_file</span><span class="p">():</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="n">root</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.csv.gz"</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">path</span><span class="o">.</span><span class="n">is_file</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Expected </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.csv or </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.csv.gz in </span><span class="si">{</span><span class="n">root</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">path</span>
+
+
+<div class="viewcode-block" id="dreamer_csv_frames">
+<a class="viewcode-back" href="../../../api/eegproc.data.csv_matlab.html#eegproc.data.csv_matlab.dreamer_csv_frames">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">dreamer_csv_frames</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Join existing DREAMER exports on disk, preserving EEG row order/indices."""</span>
+    <span class="c1"># SQLite keeps the large ECG lookup and EEG table out of Python's RAM.</span>
+    <span class="k">with</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">TemporaryDirectory</span><span class="p">(</span><span class="n">prefix</span><span class="o">=</span><span class="s2">"eegproc-dreamer-"</span><span class="p">)</span> <span class="k">as</span> <span class="n">tmp</span><span class="p">:</span>
+        <span class="k">with</span> <span class="n">closing</span><span class="p">(</span><span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">tmp</span><span class="p">)</span> <span class="o">/</span> <span class="s2">"join.sqlite"</span><span class="p">)))</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
+            <span class="n">specs</span> <span class="o">=</span> <span class="p">[(</span><span class="s2">"eeg"</span><span class="p">,</span> <span class="n">KEYS</span> <span class="o">+</span> <span class="n">EEG_CHANNELS</span><span class="p">),</span> <span class="p">(</span><span class="s2">"ecg"</span><span class="p">,</span> <span class="n">KEYS</span> <span class="o">+</span> <span class="p">[</span><span class="s2">"ECG1"</span><span class="p">,</span> <span class="s2">"ECG2"</span><span class="p">]),</span>
+                     <span class="p">(</span><span class="s2">"labels"</span><span class="p">,</span> <span class="n">KEYS</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="n">RATINGS</span><span class="p">)]</span>
+            <span class="k">for</span> <span class="n">table</span><span class="p">,</span> <span class="n">columns</span> <span class="ow">in</span> <span class="n">specs</span><span class="p">:</span>
+                <span class="n">path</span> <span class="o">=</span> <span class="n">_csv_path</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"dreamer_</span><span class="si">{</span><span class="n">table</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+                <span class="n">rows</span> <span class="o">=</span> <span class="mi">0</span>
+                <span class="k">for</span> <span class="n">frame</span> <span class="ow">in</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">chunksize</span><span class="o">=</span><span class="n">chunksize</span><span class="p">):</span>
+                    <span class="n">require_columns</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">columns</span><span class="p">,</span> <span class="n">path</span><span class="p">)</span>
+                    <span class="n">key_cols</span> <span class="o">=</span> <span class="n">KEYS</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="k">if</span> <span class="n">table</span> <span class="o">==</span> <span class="s2">"labels"</span> <span class="k">else</span> <span class="n">KEYS</span>
+                    <span class="k">if</span> <span class="n">frame</span><span class="p">[</span><span class="n">key_cols</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">any</span><span class="p">()</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">: empty join keys"</span><span class="p">)</span>
+                    <span class="n">frame</span><span class="p">[</span><span class="n">columns</span><span class="p">]</span><span class="o">.</span><span class="n">to_sql</span><span class="p">(</span><span class="n">table</span><span class="p">,</span> <span class="n">db</span><span class="p">,</span> <span class="n">if_exists</span><span class="o">=</span><span class="s2">"append"</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+                    <span class="n">rows</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">frame</span><span class="p">)</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">rows</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">: no rows"</span><span class="p">)</span>
+                <span class="n">keys</span> <span class="o">=</span> <span class="n">KEYS</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="k">if</span> <span class="n">table</span> <span class="o">==</span> <span class="s2">"labels"</span> <span class="k">else</span> <span class="n">KEYS</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s1">'CREATE UNIQUE INDEX </span><span class="si">{</span><span class="n">table</span><span class="si">}</span><span class="s1">_keys ON </span><span class="si">{</span><span class="n">table</span><span class="si">}</span><span class="s1"> (</span><span class="si">{</span><span class="s2">", "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">keys</span><span class="p">)</span><span class="si">}</span><span class="s1">)'</span><span class="p">)</span>
+                <span class="k">except</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">IntegrityError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">: duplicate join keys"</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">exc</span>
+            <span class="n">trial_join</span> <span class="o">=</span> <span class="s2">" AND "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">"eeg.</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2"> = labels.</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">"</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">KEYS</span><span class="p">[:</span><span class="mi">2</span><span class="p">])</span>
+            <span class="n">ecg_join</span> <span class="o">=</span> <span class="s2">" AND "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">"eeg.</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2"> = ecg.</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">"</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">KEYS</span><span class="p">)</span>
+            <span class="n">missing</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s2">"SELECT COUNT(*) FROM eeg LEFT JOIN labels ON </span><span class="si">{</span><span class="n">trial_join</span><span class="si">}</span><span class="s2"> "</span>
+                                 <span class="s2">"WHERE labels.subject_id IS NULL"</span><span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"DREAMER: </span><span class="si">{</span><span class="n">missing</span><span class="si">}</span><span class="s2"> EEG rows have no trial label"</span><span class="p">)</span>
+            <span class="n">missing</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s2">"SELECT COUNT(*) FROM eeg LEFT JOIN ecg ON </span><span class="si">{</span><span class="n">ecg_join</span><span class="si">}</span><span class="s2"> "</span>
+                                 <span class="s2">"WHERE ecg.subject_id IS NULL"</span><span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
+                <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="sa">f</span><span class="s2">"DREAMER: </span><span class="si">{</span><span class="n">missing</span><span class="si">}</span><span class="s2"> EEG rows have no matching ECG; writing blanks"</span><span class="p">)</span>
+            <span class="n">columns</span> <span class="o">=</span> <span class="n">KEYS</span> <span class="o">+</span> <span class="n">EEG_CHANNELS</span> <span class="o">+</span> <span class="p">[</span><span class="s2">"ECG1"</span><span class="p">,</span> <span class="s2">"ECG2"</span><span class="p">]</span> <span class="o">+</span> <span class="n">RATINGS</span>
+            <span class="n">selected</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s1">'eeg."</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s1">"'</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">KEYS</span> <span class="o">+</span> <span class="n">EEG_CHANNELS</span><span class="p">]</span>
+            <span class="n">selected</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"ecg.ECG1"</span><span class="p">,</span> <span class="s2">"ecg.ECG2"</span><span class="p">]</span> <span class="o">+</span> <span class="p">[</span><span class="sa">f</span><span class="s2">"labels.</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">"</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">RATINGS</span><span class="p">]</span>
+            <span class="n">cursor</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s1">'SELECT </span><span class="si">{</span><span class="s2">", "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">selected</span><span class="p">)</span><span class="si">}</span><span class="s1"> FROM eeg '</span>
+                                <span class="sa">f</span><span class="s1">'LEFT JOIN ecg ON </span><span class="si">{</span><span class="n">ecg_join</span><span class="si">}</span><span class="s1"> LEFT JOIN labels ON </span><span class="si">{</span><span class="n">trial_join</span><span class="si">}</span><span class="s1"> '</span>
+                                <span class="s1">'ORDER BY eeg.rowid'</span><span class="p">)</span>
+            <span class="k">while</span> <span class="n">rows</span> <span class="o">:=</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchmany</span><span class="p">(</span><span class="n">chunksize</span><span class="p">):</span>
+                <span class="k">yield</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="o">.</span><span class="n">from_records</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">columns</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="dreamer_mat_frames">
+<a class="viewcode-back" href="../../../api/eegproc.data.csv_matlab.html#eegproc.data.csv_matlab.dreamer_mat_frames">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">dreamer_mat_frames</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Read DREAMER.mat, aligning ECG to EEG time using the stored sample rates."""</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">scipy.signal</span><span class="w"> </span><span class="kn">import</span> <span class="n">resample_poly</span>
+
+    <span class="n">dreamer</span> <span class="o">=</span> <span class="n">load_mat</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">struct_as_record</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">squeeze_me</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">"DREAMER"</span><span class="p">][</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="n">eeg_fs</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">numeric</span><span class="p">(</span><span class="n">dreamer</span><span class="o">.</span><span class="n">EEG_SamplingRate</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+    <span class="n">ecg_fs</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">numeric</span><span class="p">(</span><span class="n">dreamer</span><span class="o">.</span><span class="n">ECG_SamplingRate</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+    <span class="k">if</span> <span class="n">eeg_fs</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">ecg_fs</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"DREAMER sampling rates must be positive"</span><span class="p">)</span>
+    <span class="n">ratio</span> <span class="o">=</span> <span class="n">Fraction</span><span class="p">(</span><span class="n">eeg_fs</span> <span class="o">/</span> <span class="n">ecg_fs</span><span class="p">)</span><span class="o">.</span><span class="n">limit_denominator</span><span class="p">(</span><span class="mi">10000</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">sid</span><span class="p">,</span> <span class="n">subject_cell</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">mat_cells</span><span class="p">(</span><span class="n">dreamer</span><span class="o">.</span><span class="n">Data</span><span class="p">),</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">subject</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">subject_cell</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+        <span class="n">eeg</span> <span class="o">=</span> <span class="n">subject</span><span class="o">.</span><span class="n">EEG</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        <span class="n">ecg</span> <span class="o">=</span> <span class="n">subject</span><span class="o">.</span><span class="n">ECG</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        <span class="n">ratings</span> <span class="o">=</span> <span class="p">[</span><span class="n">numeric</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">subject</span><span class="p">,</span> <span class="n">name</span><span class="p">))</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+                   <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"ScoreValence"</span><span class="p">,</span> <span class="s2">"ScoreArousal"</span><span class="p">,</span> <span class="s2">"ScoreDominance"</span><span class="p">]]</span>
+        <span class="k">for</span> <span class="n">segment</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"baseline"</span><span class="p">,</span> <span class="s2">"stimuli"</span><span class="p">]:</span>
+            <span class="n">eeg_trials</span> <span class="o">=</span> <span class="n">mat_cells</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">eeg</span><span class="p">,</span> <span class="n">segment</span><span class="p">))</span>
+            <span class="n">ecg_trials</span> <span class="o">=</span> <span class="n">mat_cells</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">ecg</span><span class="p">,</span> <span class="n">segment</span><span class="p">))</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">eeg_trials</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ecg_trials</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">any</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">eeg_trials</span><span class="p">)</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">ratings</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"DREAMER participant </span><span class="si">{</span><span class="n">sid</span><span class="si">}</span><span class="s2">: trial counts differ"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">tid</span><span class="p">,</span> <span class="p">(</span><span class="n">eeg_trial</span><span class="p">,</span> <span class="n">ecg_trial</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">eeg_trials</span><span class="p">,</span> <span class="n">ecg_trials</span><span class="p">),</span> <span class="mi">1</span><span class="p">):</span>
+                <span class="n">source</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"DREAMER participant </span><span class="si">{</span><span class="n">sid</span><span class="si">}</span><span class="s2">, trial </span><span class="si">{</span><span class="n">tid</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">segment</span><span class="si">}</span><span class="s2">"</span>
+                <span class="n">eeg_trial</span> <span class="o">=</span> <span class="n">samples_by_channels</span><span class="p">(</span><span class="n">eeg_trial</span><span class="p">,</span> <span class="p">(</span><span class="mi">14</span><span class="p">,),</span> <span class="n">source</span><span class="p">)</span>
+                <span class="n">ecg_trial</span> <span class="o">=</span> <span class="n">samples_by_channels</span><span class="p">(</span><span class="n">ecg_trial</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,),</span> <span class="n">source</span><span class="p">)</span>
+                <span class="n">aligned</span> <span class="o">=</span> <span class="n">resample_poly</span><span class="p">(</span><span class="n">ecg_trial</span><span class="p">,</span> <span class="n">ratio</span><span class="o">.</span><span class="n">numerator</span><span class="p">,</span> <span class="n">ratio</span><span class="o">.</span><span class="n">denominator</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">abs</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">aligned</span><span class="p">)</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">eeg_trial</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">: EEG/ECG durations disagree"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">aligned</span><span class="p">)</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">eeg_trial</span><span class="p">):</span>
+                    <span class="n">aligned</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">aligned</span><span class="p">,</span> <span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span> <span class="n">constant_values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+                <span class="n">signal</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">column_stack</span><span class="p">([</span><span class="n">eeg_trial</span><span class="p">,</span> <span class="n">aligned</span><span class="p">[:</span><span class="nb">len</span><span class="p">(</span><span class="n">eeg_trial</span><span class="p">)]])</span>
+                <span class="n">label</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">RATINGS</span><span class="p">,</span> <span class="p">[</span><span class="n">r</span><span class="p">[</span><span class="n">tid</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">ratings</span><span class="p">]))</span>
+                <span class="k">yield from</span> <span class="n">signal_frames</span><span class="p">(</span><span class="n">signal</span><span class="p">,</span> <span class="n">sid</span><span class="p">,</span> <span class="n">tid</span><span class="p">,</span> <span class="s2">"stimulus"</span> <span class="k">if</span> <span class="n">segment</span> <span class="o">==</span> <span class="s2">"stimuli"</span> <span class="k">else</span> <span class="n">segment</span><span class="p">,</span>
+                                         <span class="n">EEG_CHANNELS</span> <span class="o">+</span> <span class="p">[</span><span class="s2">"ECG1"</span><span class="p">,</span> <span class="s2">"ECG2"</span><span class="p">],</span> <span class="n">label</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="deap_frames">
+<a class="viewcode-back" href="../../../api/eegproc.data.csv_matlab.html#eegproc.data.csv_matlab.deap_frames">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">deap_frames</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Read official preprocessed Python DEAP files (trusted pickle inputs only)."""</span>
+    <span class="n">channels</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"Fp1"</span><span class="p">,</span> <span class="s2">"AF3"</span><span class="p">,</span> <span class="s2">"F3"</span><span class="p">,</span> <span class="s2">"F7"</span><span class="p">,</span> <span class="s2">"FC5"</span><span class="p">,</span> <span class="s2">"FC1"</span><span class="p">,</span> <span class="s2">"C3"</span><span class="p">,</span> <span class="s2">"T7"</span><span class="p">,</span> <span class="s2">"CP5"</span><span class="p">,</span> <span class="s2">"CP1"</span><span class="p">,</span> <span class="s2">"P3"</span><span class="p">,</span>
+                <span class="s2">"P7"</span><span class="p">,</span> <span class="s2">"PO3"</span><span class="p">,</span> <span class="s2">"O1"</span><span class="p">,</span> <span class="s2">"Oz"</span><span class="p">,</span> <span class="s2">"Pz"</span><span class="p">,</span> <span class="s2">"Fp2"</span><span class="p">,</span> <span class="s2">"AF4"</span><span class="p">,</span> <span class="s2">"Fz"</span><span class="p">,</span> <span class="s2">"F4"</span><span class="p">,</span> <span class="s2">"F8"</span><span class="p">,</span> <span class="s2">"FC6"</span><span class="p">,</span>
+                <span class="s2">"FC2"</span><span class="p">,</span> <span class="s2">"Cz"</span><span class="p">,</span> <span class="s2">"C4"</span><span class="p">,</span> <span class="s2">"T8"</span><span class="p">,</span> <span class="s2">"CP6"</span><span class="p">,</span> <span class="s2">"CP2"</span><span class="p">,</span> <span class="s2">"P4"</span><span class="p">,</span> <span class="s2">"P8"</span><span class="p">,</span> <span class="s2">"PO4"</span><span class="p">,</span> <span class="s2">"O2"</span><span class="p">]</span>
+    <span class="n">files</span> <span class="o">=</span> <span class="p">[</span><span class="n">root</span><span class="p">]</span> <span class="k">if</span> <span class="n">root</span><span class="o">.</span><span class="n">is_file</span><span class="p">()</span> <span class="k">else</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">root</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"s*.dat"</span><span class="p">))</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">files</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No DEAP s*.dat files in </span><span class="si">{</span><span class="n">root</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
+        <span class="n">match</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="sa">r</span><span class="s2">"s(\d+)\.dat"</span><span class="p">,</span> <span class="n">path</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">match</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unrecognized DEAP filename: </span><span class="si">{</span><span class="n">path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">path</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">"rb"</span><span class="p">)</span> <span class="k">as</span> <span class="n">handle</span><span class="p">:</span>
+            <span class="n">contents</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">handle</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"latin1"</span><span class="p">)</span>
+        <span class="n">signal</span><span class="p">,</span> <span class="n">labels</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">contents</span><span class="p">[</span><span class="s2">"data"</span><span class="p">]),</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">contents</span><span class="p">[</span><span class="s2">"labels"</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">signal</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">3</span> <span class="ow">or</span> <span class="n">signal</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">32</span> <span class="ow">or</span> <span class="n">labels</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">signal</span><span class="p">),</span> <span class="mi">4</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">: invalid DEAP data/labels shape"</span><span class="p">)</span>
+        <span class="n">n_samples</span> <span class="o">=</span> <span class="n">signal</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">n_samples</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">8064</span><span class="p">,</span> <span class="mi">7680</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">: expected 8064 samples (baseline included) or 7680 (removed)"</span><span class="p">)</span>
+        <span class="n">baseline</span> <span class="o">=</span> <span class="n">n_samples</span> <span class="o">-</span> <span class="mi">7680</span>
+        <span class="k">for</span> <span class="n">tid</span><span class="p">,</span> <span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">rating</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">signal</span><span class="p">,</span> <span class="n">labels</span><span class="p">),</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">segment</span><span class="p">,</span> <span class="n">block</span> <span class="ow">in</span> <span class="p">[(</span><span class="s2">"baseline"</span><span class="p">,</span> <span class="n">trial</span><span class="p">[:</span><span class="mi">32</span><span class="p">,</span> <span class="p">:</span><span class="n">baseline</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">),</span>
+                                   <span class="p">(</span><span class="s2">"stimulus"</span><span class="p">,</span> <span class="n">trial</span><span class="p">[:</span><span class="mi">32</span><span class="p">,</span> <span class="n">baseline</span><span class="p">:]</span><span class="o">.</span><span class="n">T</span><span class="p">)]:</span>
+                <span class="k">yield from</span> <span class="n">signal_frames</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">match</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span> <span class="n">tid</span><span class="p">,</span> <span class="n">segment</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span>
+                                         <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">RATINGS</span> <span class="o">+</span> <span class="p">[</span><span class="s2">"liking"</span><span class="p">],</span> <span class="n">rating</span><span class="p">)),</span> <span class="n">chunksize</span><span class="p">)</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

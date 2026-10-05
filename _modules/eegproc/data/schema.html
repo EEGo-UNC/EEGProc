@@ -1,0 +1,217 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.data.schema &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.data.schema</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.data.schema</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Column roles for signal samples and precomputed EEG features."""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">..preprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">FREQUENCY_BANDS</span>
+
+
+<div class="viewcode-block" id="FeatureColumn">
+<a class="viewcode-back" href="../../../api/eegproc.data.schema.html#eegproc.data.schema.FeatureColumn">[docs]</a>
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">FeatureColumn</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Channel, optional band, and optional statistic in a feature name."""</span>
+
+    <span class="n">channel</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">band</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">feature</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+
+
+<div class="viewcode-block" id="parse_feature_column">
+<a class="viewcode-back" href="../../../api/eegproc.data.schema.html#eegproc.data.schema.parse_feature_column">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">parse_feature_column</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FeatureColumn</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Parse ``channel[_band][_statistic]`` without substring matching."""</span>
+    <span class="n">tokens</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"_"</span><span class="p">)</span>
+    <span class="n">bands</span> <span class="o">=</span> <span class="p">{</span><span class="o">*</span><span class="n">FREQUENCY_BANDS</span><span class="p">,</span> <span class="s2">"beta"</span><span class="p">}</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">tokens</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="n">bands</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">FeatureColumn</span><span class="p">(</span><span class="n">tokens</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">tokens</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">"_"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">tokens</span><span class="p">[</span><span class="mi">2</span><span class="p">:])</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">FeatureColumn</span><span class="p">(</span><span class="n">tokens</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">"_"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">tokens</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="EEGFrame">
+<a class="viewcode-back" href="../../../api/eegproc.data.schema.html#eegproc.data.schema.EEGFrame">[docs]</a>
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">EEGFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""An EEG table with explicit subject, trial, label, and feature columns.</span>
+
+<span class="sd">    Rows within a trial are sorted by ``time_column`` when supplied. If it is</span>
+<span class="sd">    omitted, ``sample_index`` is used when present; otherwise row order is kept.</span>
+<span class="sd">    Label and identifier columns are always excluded from inferred features.</span>
+<span class="sd">    """</span>
+
+    <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span>
+    <span class="n">fs</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">kind</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"signal"</span><span class="p">,</span> <span class="s2">"features"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"signal"</span>
+    <span class="n">subject_columns</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"subject"</span><span class="p">,)</span>
+    <span class="n">trial_columns</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"trial"</span><span class="p">,)</span>
+    <span class="n">time_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">label_columns</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"label"</span><span class="p">,)</span>
+    <span class="n">feature_columns</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"data must be a nonempty pandas DataFrame."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="o">.</span><span class="n">is_unique</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"DataFrame column names must be unique."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">fs</span><span class="p">)</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">fs</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"fs must be finite and positive."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">kind</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"signal"</span><span class="p">,</span> <span class="s2">"features"</span><span class="p">}:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"kind must be 'signal' or 'features'."</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subject_columns</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_columns</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">trial_columns</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trial_columns</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">label_columns</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">label_columns</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">subject_columns</span> <span class="ow">or</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">trial_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Declare at least one subject and trial column."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_column</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="s2">"sample_index"</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">time_column</span> <span class="o">=</span> <span class="s2">"sample_index"</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="nb">set</span><span class="p">((</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">subject_columns</span><span class="p">,</span> <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">trial_columns</span><span class="p">,</span> <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">label_columns</span><span class="p">))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_column</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">metadata</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">time_column</span><span class="p">)</span>
+        <span class="n">missing</span> <span class="o">=</span> <span class="n">metadata</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Missing declared columns: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+                <span class="n">name</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span>
+                <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">metadata</span> <span class="ow">and</span> <span class="n">pd</span><span class="o">.</span><span class="n">api</span><span class="o">.</span><span class="n">types</span><span class="o">.</span><span class="n">is_numeric_dtype</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">name</span><span class="p">])</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">))</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Declare at least one feature, without duplicate columns."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">)</span> <span class="o">&amp;</span> <span class="n">metadata</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Feature columns cannot include labels or identifiers."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Some feature columns are absent from the DataFrame."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="n">metadata</span><span class="p">)]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">any</span><span class="p">()</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Identifiers, labels, and sample ordering must not be missing."</span><span class="p">)</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">)]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">values</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"EEG features must be finite numeric values."</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="median_split">
+<a class="viewcode-back" href="../../../api/eegproc.data.schema.html#eegproc.data.schema.median_split">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">median_split</span><span class="p">(</span><span class="n">label_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Create a fixed-threshold label transform; no threshold is fitted to data."""</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">threshold</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"threshold must be finite."</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">transform</span><span class="p">(</span><span class="n">values</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="n">values</span><span class="p">[</span><span class="n">label_column</span><span class="p">]</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">threshold</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">transform</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

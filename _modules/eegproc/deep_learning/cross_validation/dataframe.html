@@ -1,0 +1,298 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eegproc.deep_learning.cross_validation.dataframe &mdash; EEGProc 2.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=51b770b3"></script>
+      <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            EEGProc
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">Convert public datasets to CSV</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/modules.html">eegproc</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">EEGProc</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">eegproc.deep_learning.cross_validation.dataframe</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for eegproc.deep_learning.cross_validation.dataframe</h1><div class="highlight"><pre>
+<span></span><span class="sd">"""Run cross-validation directly from a tidy DataFrame.</span>
+
+<span class="sd">The array-level entry points (:func:`~.loso.loso_cv` and friends) stay the</span>
+<span class="sd">low-level API for callers who already hold tensors. This is the documented</span>
+<span class="sd">default: it takes the table featurization produces, derives the subject and trial</span>
+<span class="sd">arrays from columns, and maps the integer codes in the results back to the</span>
+<span class="sd">original identifiers so per-subject rows read ``"P07"`` rather than ``0``.</span>
+<span class="sd">"""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">inspect</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Literal</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">...data.schema</span><span class="w"> </span><span class="kn">import</span> <span class="n">EEGFrame</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">...data.windowing</span><span class="w"> </span><span class="kn">import</span> <span class="n">WindowedArrays</span><span class="p">,</span> <span class="n">to_supervised_arrays</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.calibration</span><span class="w"> </span><span class="kn">import</span> <span class="n">subject_calibration_cv</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.loso</span><span class="w"> </span><span class="kn">import</span> <span class="n">fixed_loso_cv</span><span class="p">,</span> <span class="n">loso_cv</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.nested</span><span class="w"> </span><span class="kn">import</span> <span class="n">nested_lnso_cv</span>
+
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"cross_validate_dataframe"</span><span class="p">]</span>
+
+<span class="n">_STRATEGIES</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"loso"</span><span class="p">:</span> <span class="n">loso_cv</span><span class="p">,</span>
+    <span class="s2">"fixed_loso"</span><span class="p">:</span> <span class="n">fixed_loso_cv</span><span class="p">,</span>
+    <span class="s2">"subject_calibration"</span><span class="p">:</span> <span class="n">subject_calibration_cv</span><span class="p">,</span>
+    <span class="s2">"nested_lnso"</span><span class="p">:</span> <span class="n">nested_lnso_cv</span><span class="p">,</span>
+<span class="p">}</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_remap</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">lookup</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">]):</span>
+<span class="w">    </span><span class="sd">"""Turn an integer code back into its original key (unwrapping 1-tuples)."""</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">key</span> <span class="o">=</span> <span class="n">lookup</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)]</span>
+    <span class="k">except</span> <span class="p">(</span><span class="ne">KeyError</span><span class="p">,</span> <span class="ne">TypeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span>
+    <span class="k">return</span> <span class="n">key</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">key</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_remap_results</span><span class="p">(</span><span class="n">results</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">windowed</span><span class="p">:</span> <span class="n">WindowedArrays</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Relabel subject codes in the result structure with the original ids."""</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">out</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"user_metrics"</span><span class="p">),</span> <span class="nb">list</span><span class="p">):</span>
+        <span class="n">out</span><span class="p">[</span><span class="s2">"user_metrics"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="p">{</span><span class="o">**</span><span class="n">row</span><span class="p">,</span> <span class="s2">"subject_id"</span><span class="p">:</span> <span class="n">_remap</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"subject_id"</span><span class="p">),</span> <span class="n">windowed</span><span class="o">.</span><span class="n">subject_lookup</span><span class="p">)}</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">row</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="n">row</span>
+            <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">out</span><span class="p">[</span><span class="s2">"user_metrics"</span><span class="p">]</span>
+        <span class="p">]</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">out</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"fold_results"</span><span class="p">),</span> <span class="nb">list</span><span class="p">):</span>
+        <span class="n">folds</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">fold</span> <span class="ow">in</span> <span class="n">out</span><span class="p">[</span><span class="s2">"fold_results"</span><span class="p">]:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">fold</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+                <span class="n">folds</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">fold</span><span class="p">)</span>
+                <span class="k">continue</span>
+            <span class="n">fold</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">fold</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"left_out_subjects"</span><span class="p">,</span> <span class="s2">"validation_subjects"</span><span class="p">,</span> <span class="s2">"subject_set_a"</span><span class="p">,</span> <span class="s2">"subject_set_b"</span><span class="p">):</span>
+                <span class="n">value</span> <span class="o">=</span> <span class="n">fold</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)):</span>
+                    <span class="n">fold</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">_remap</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">windowed</span><span class="o">.</span><span class="n">subject_lookup</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+                <span class="k">elif</span> <span class="n">value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">fold</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">_remap</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">windowed</span><span class="o">.</span><span class="n">subject_lookup</span><span class="p">)</span>
+            <span class="n">folds</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">fold</span><span class="p">)</span>
+        <span class="n">out</span><span class="p">[</span><span class="s2">"fold_results"</span><span class="p">]</span> <span class="o">=</span> <span class="n">folds</span>
+    <span class="c1"># expose the same unwrapped identifiers used in the remapped rows</span>
+    <span class="n">out</span><span class="p">[</span><span class="s2">"subject_lookup"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">code</span><span class="p">:</span> <span class="p">(</span><span class="n">key</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">key</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">code</span><span class="p">,</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">windowed</span><span class="o">.</span><span class="n">subject_lookup</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">out</span>
+
+
+<div class="viewcode-block" id="cross_validate_dataframe">
+<a class="viewcode-back" href="../../../../api/eegproc.deep_learning.cross_validation.dataframe.html#eegproc.deep_learning.cross_validation.dataframe.cross_validate_dataframe">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">cross_validate_dataframe</span><span class="p">(</span>
+    <span class="n">frame</span><span class="p">:</span> <span class="n">EEGFrame</span> <span class="o">|</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">model_builder_function</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">strategy</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"loso"</span><span class="p">,</span> <span class="s2">"fixed_loso"</span><span class="p">,</span> <span class="s2">"subject_calibration"</span><span class="p">,</span> <span class="s2">"nested_lnso"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"loso"</span><span class="p">,</span>
+    <span class="n">fs</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">kind</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"signal"</span><span class="p">,</span> <span class="s2">"features"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"features"</span><span class="p">,</span>
+    <span class="n">label_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"label"</span><span class="p">,</span>
+    <span class="n">subject_columns</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"subject"</span><span class="p">,),</span>
+    <span class="n">trial_columns</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"trial"</span><span class="p">,),</span>
+    <span class="n">time_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">feature_columns</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">window_sec</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">window_samples</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">window_rows</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">overlap</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">normalize</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">label_transform</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">on_short_trial</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"error"</span><span class="p">,</span>
+    <span class="n">return_arrays</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="o">**</span><span class="n">strategy_kwargs</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Cross-validate a model over a tidy EEG table.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    frame : EEGFrame or pandas.DataFrame</span>
+<span class="sd">        A plain DataFrame is wrapped using the column-role keywords below.</span>
+<span class="sd">    model_builder_function : callable</span>
+<span class="sd">        Passed through unchanged; see :func:`~.loso.loso_cv`.</span>
+<span class="sd">    strategy : {"loso", "fixed_loso", "subject_calibration", "nested_lnso"}</span>
+<span class="sd">        Which cross-validation scheme to run.</span>
+<span class="sd">    kind : {"signal", "features"}, default="features"</span>
+<span class="sd">        ``"features"`` treats each row as one already-computed window, which is</span>
+<span class="sd">        what :func:`~eegproc.featurization.feature_grouped_by_metadata` emits.</span>
+<span class="sd">        ``"signal"`` windows raw samples and needs ``time_column`` and a window length.</span>
+<span class="sd">    **strategy_kwargs</span>
+<span class="sd">        Forwarded to the chosen entry point, validated against its signature so a</span>
+<span class="sd">        typo raises instead of being silently ignored.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    dict</span>
+<span class="sd">        The chosen strategy's results, with subject codes mapped back to the</span>
+<span class="sd">        original identifiers and a ``subject_lookup`` entry added.</span>
+
+<span class="sd">    Examples</span>
+<span class="sd">    --------</span>
+<span class="sd">    &gt;&gt;&gt; feats = feature_grouped_by_metadata(          # doctest: +SKIP</span>
+<span class="sd">    ...     eeg_df, target_function=psd_bandpowers, fs=128,</span>
+<span class="sd">    ...     group_by_metadata_columns=["subject", "trial"],</span>
+<span class="sd">    ... )</span>
+<span class="sd">    &gt;&gt;&gt; feats["label"] = ...                          # doctest: +SKIP</span>
+<span class="sd">    &gt;&gt;&gt; results = cross_validate_dataframe(           # doctest: +SKIP</span>
+<span class="sd">    ...     feats, build_model, strategy="loso", fs=128,</span>
+<span class="sd">    ... )</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">strategy</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_STRATEGIES</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"unknown strategy </span><span class="si">{</span><span class="n">strategy</span><span class="si">!r}</span><span class="s2">; choose one of </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">_STRATEGIES</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
+    <span class="n">runner</span> <span class="o">=</span> <span class="n">_STRATEGIES</span><span class="p">[</span><span class="n">strategy</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">EEGFrame</span><span class="p">):</span>
+        <span class="n">eeg_frame</span> <span class="o">=</span> <span class="n">frame</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">fs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"fs is required when passing a plain DataFrame."</span><span class="p">)</span>
+        <span class="n">label_columns</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+            <span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="p">(</span><span class="n">label_column</span><span class="p">,)</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="s2">"columns"</span><span class="p">,</span> <span class="p">())</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">label_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"label column </span><span class="si">{</span><span class="n">label_column</span><span class="si">!r}</span><span class="s2"> is not in the frame; "</span>
+                <span class="sa">f</span><span class="s2">"available columns: </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">frame</span><span class="o">.</span><span class="n">columns</span><span class="p">)[:</span><span class="mi">12</span><span class="p">]</span><span class="si">}</span><span class="s2">..."</span>
+            <span class="p">)</span>
+        <span class="n">eeg_frame</span> <span class="o">=</span> <span class="n">EEGFrame</span><span class="p">(</span>
+            <span class="n">data</span><span class="o">=</span><span class="n">frame</span><span class="p">,</span>
+            <span class="n">fs</span><span class="o">=</span><span class="n">fs</span><span class="p">,</span>
+            <span class="n">kind</span><span class="o">=</span><span class="n">kind</span><span class="p">,</span>
+            <span class="n">subject_columns</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span><span class="n">subject_columns</span><span class="p">),</span>
+            <span class="n">trial_columns</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span><span class="n">trial_columns</span><span class="p">),</span>
+            <span class="n">time_column</span><span class="o">=</span><span class="n">time_column</span><span class="p">,</span>
+            <span class="n">label_columns</span><span class="o">=</span><span class="n">label_columns</span><span class="p">,</span>
+            <span class="n">feature_columns</span><span class="o">=</span><span class="n">feature_columns</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">windowed</span> <span class="o">=</span> <span class="n">to_supervised_arrays</span><span class="p">(</span>
+        <span class="n">eeg_frame</span><span class="p">,</span>
+        <span class="n">window_sec</span><span class="o">=</span><span class="n">window_sec</span><span class="p">,</span>
+        <span class="n">window_samples</span><span class="o">=</span><span class="n">window_samples</span><span class="p">,</span>
+        <span class="n">overlap</span><span class="o">=</span><span class="n">overlap</span><span class="p">,</span>
+        <span class="n">label_column</span><span class="o">=</span><span class="n">label_column</span><span class="p">,</span>
+        <span class="n">label_transform</span><span class="o">=</span><span class="n">label_transform</span><span class="p">,</span>
+        <span class="n">normalize</span><span class="o">=</span><span class="n">normalize</span><span class="p">,</span>
+        <span class="n">window_rows</span><span class="o">=</span><span class="n">window_rows</span><span class="p">,</span>
+        <span class="n">on_short_trial</span><span class="o">=</span><span class="n">on_short_trial</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">accepted</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">inspect</span><span class="o">.</span><span class="n">signature</span><span class="p">(</span><span class="n">runner</span><span class="p">)</span><span class="o">.</span><span class="n">parameters</span><span class="p">)</span>
+    <span class="n">unknown</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">strategy_kwargs</span><span class="p">)</span> <span class="o">-</span> <span class="n">accepted</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">unknown</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">runner</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">() got unexpected keyword argument(s) </span><span class="si">{</span><span class="n">unknown</span><span class="si">}</span><span class="s2">. "</span>
+            <span class="sa">f</span><span class="s2">"Accepted: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">accepted</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="ow">not</span><span class="w"> </span><span class="n">a</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">'_'</span><span class="p">))</span><span class="si">}</span><span class="s2">"</span>
+        <span class="p">)</span>
+
+    <span class="n">results</span> <span class="o">=</span> <span class="n">runner</span><span class="p">(</span>
+        <span class="n">model_builder_function</span><span class="p">,</span>
+        <span class="n">windowed</span><span class="o">.</span><span class="n">features</span><span class="p">,</span>
+        <span class="n">windowed</span><span class="o">.</span><span class="n">labels</span><span class="p">,</span>
+        <span class="n">windowed</span><span class="o">.</span><span class="n">subject_ids</span><span class="p">,</span>
+        <span class="n">windowed</span><span class="o">.</span><span class="n">trial_ids</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">strategy_kwargs</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">_remap_results</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="n">windowed</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">return_arrays</span><span class="p">:</span>
+        <span class="n">out</span><span class="p">[</span><span class="s2">"windowed_arrays"</span><span class="p">]</span> <span class="o">=</span> <span class="n">windowed</span>
+    <span class="k">return</span> <span class="n">out</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Vitor Inserra.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

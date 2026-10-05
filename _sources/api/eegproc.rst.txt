@@ -1,0 +1,27 @@
+eegproc package
+===============
+
+.. automodule:: eegproc
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+Subpackages
+-----------
+
+.. toctree::
+   :maxdepth: 4
+
+   eegproc.data
+   eegproc.deep_learning
+   eegproc.model_explainability
+   eegproc.plotting
+
+Submodules
+----------
+
+.. toctree::
+   :maxdepth: 4
+
+   eegproc.featurization
+   eegproc.preprocessing
