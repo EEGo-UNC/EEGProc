@@ -14,3 +14,4 @@ Submodules
 
    eegproc.deep_learning.unsupervised.Convolutions.CNN1D
    eegproc.deep_learning.unsupervised.Convolutions.CNN2D
+   eegproc.deep_learning.unsupervised.Convolutions.CNN3D

@@ -7,6 +7,11 @@ tf = pytest.importorskip("tensorflow", reason="models require eegproc[deep-learn
 
 from eegproc.deep_learning.unsupervised.Convolutions.CNN1D import CNN1DDecoder, CNN1DEncoder  # noqa: E402
 from eegproc.deep_learning.unsupervised.Convolutions.CNN2D import CNN2DDecoder, CNN2DEncoder  # noqa: E402
+from eegproc.deep_learning.unsupervised.Convolutions.CNN3D import (  # noqa: E402
+    CNN3DDecoder,
+    CNN3DEncoder,
+    DREAMER_ELECTRODE_GRID,
+)
 from eegproc.deep_learning.unsupervised.GNN import GCN, GCN_band_separated, GCNMTL  # noqa: E402
 from eegproc.deep_learning.unsupervised.VariationalAutoencoderLoss import (  # noqa: E402
     GradientReversal,
@@ -29,6 +34,16 @@ def _encoder_cases():
                                  n_bands=N_BANDS, conv_filters=(4, 8),
                                  kernel_sizes=((2, 2), (2, 2)), emb_dim=5),
             CNN2DDecoder, flat,
+        ),
+        "CNN3D": (
+            lambda: CNN3DEncoder(
+                timesteps=TIMESTEPS, t_down=T_DOWN, n_channels=N_CHANNELS,
+                n_bands=N_BANDS, grid_size=3,
+                electrode_grid=((0, 0), (0, 2), (2, 0), (2, 2)),
+                conv_filters=(4, 8), temporal_kernel_size=3,
+                spatial_pool_sizes=(2, 1), emb_dim=5, dropout=0.0,
+            ),
+            CNN3DDecoder, flat,
         ),
         "GCN": (
             lambda: GCN.GCNEncoder(timesteps=TIMESTEPS, t_down=T_DOWN, n_channels=N_CHANNELS,
@@ -88,6 +103,57 @@ def test_band_separated_autoencoder_survives_save_and_load(tmp_path):
 
     np.testing.assert_allclose(restored(x), model(x), atol=1e-6)
     assert type(restored.layers[-1]) is GCN_band_separated.GCNDecoder
+
+
+def test_dreamer_3dcnn_sums_channel_bands_and_uses_the_electrode_grid():
+    encoder = CNN3DEncoder(
+        timesteps=1,
+        n_channels=14,
+        n_bands=3,
+        conv_filters=(4,),
+        spatial_pool_sizes=(1,),
+        emb_dim=4,
+        dropout=0.0,
+    )
+    inputs = np.arange(42, dtype="float32").reshape(1, 1, 42)
+
+    grid = encoder.to_spatial_grid(inputs).numpy()
+
+    assert grid.shape == (1, 1, 9, 9, 1)
+    for channel, (row, column) in enumerate(DREAMER_ELECTRODE_GRID):
+        expected = inputs[0, 0, 3 * channel:3 * channel + 3].sum()
+        assert grid[0, 0, row, column, 0] == expected
+    assert np.count_nonzero(grid) == len(DREAMER_ELECTRODE_GRID)
+
+
+def test_dreamer_3dcnn_backpropagates_and_serializes(tmp_path):
+    encoder = CNN3DEncoder(
+        timesteps=TIMESTEPS,
+        n_channels=N_CHANNELS,
+        n_bands=N_BANDS,
+        grid_size=3,
+        electrode_grid=((0, 0), (0, 2), (2, 0), (2, 2)),
+        conv_filters=(4, 8),
+        temporal_kernel_size=3,
+        spatial_pool_sizes=(2, 1),
+        emb_dim=5,
+        dropout=0.0,
+    )
+    inputs = tf.random.normal((2, TIMESTEPS, N_CHANNELS * N_BANDS), seed=7)
+    with tf.GradientTape() as tape:
+        outputs = encoder(inputs, training=True)
+        loss = tf.reduce_sum(outputs)
+    gradients = tape.gradient(loss, encoder.trainable_variables)
+
+    assert outputs.shape == (2, TIMESTEPS, 5)
+    assert gradients and all(gradient is not None for gradient in gradients)
+
+    model_inputs = tf.keras.Input((TIMESTEPS, N_CHANNELS * N_BANDS))
+    model = tf.keras.Model(model_inputs, encoder(model_inputs))
+    path = tmp_path / "dreamer_3dcnn.keras"
+    model.save(path)
+    restored = tf.keras.models.load_model(path)
+    np.testing.assert_allclose(restored(inputs), model(inputs), atol=1e-6)
 
 
 def test_vae_loss_on_sequence_latents_gives_one_value_per_sample():

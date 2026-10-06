@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Port the DREAMER/MTLFuseNet spatiotemporal 3D CNN from the retired SIC
+  experiment branch into the reusable v2 encoder/decoder package.
+
 ## 2.0.0 — 2026-10-04
 
 ### Library structure
