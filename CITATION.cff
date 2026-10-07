@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use EEGProc in your research, please cite it."
+title: "EEGProc: EEG preprocessing, featurization and subject-wise cross-validation"
+abstract: >-
+  A Python library for EEG signal preprocessing, feature extraction, and
+  subject-held-out cross-validation, vectorized over pandas DataFrames.
+type: software
+license: GPL-2.0
+repository-code: "https://github.com/EEGo-UNC/EEGProc"
+url: "https://eego-unc.github.io/EEGProc/"
+version: 2.0.0
+keywords:
+  - EEG
+  - electroencephalography
+  - brain-computer interface
+  - feature extraction
+  - cross-validation
+authors:
+  - family-names: Inserra
+    given-names: Vitor

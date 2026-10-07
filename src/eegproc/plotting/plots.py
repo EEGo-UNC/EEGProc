@@ -1,24 +1,30 @@
-import re
-from typing import Optional
+"""Plotting for EEG feature tables."""
+
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from ..data.schema import parse_feature_column
 
 
-def plot_per_channel(
+
+def plot_eeg_features(
     input_data: pd.DataFrame,
-    title: str = "Entropy Plot",
-    xlabel: str = "Time",
+    title: str = "EEG Features",
+    xlabel: str = "Time (s)",
     seconds: float = 4.0,
+    overlap: float = 0.0,
     start_row: int = 0,
-    end_row: int = 1,
-    save_path: Optional[str] = None,
-    max_width: Optional[int] = None,
-    max_height_per_channel: Optional[int] = None,
-    channels: Optional[list[str]] = None,
-    frequency_bands: Optional[list[str]] = None,
-) -> None:
+    end_row: int | None = None,
+    save_path: str | None = None,
+    max_width: float = 12.0,
+    max_height_per_channel: float = 0.6,
+    max_subplots: int | None = 40,
+    channels: list[str] | None = None,
+    frequency_bands: list[str] | None = None,
+) -> tuple[plt.Figure, list[plt.Axes]]:
     """Plot stacked EEG feature traces per channel and/or band.
 
     This function creates a vertically stacked line plot showing channel-level features 
@@ -76,149 +82,133 @@ def plot_per_channel(
     Basic synthetic example:
 
     >>> import numpy as np, pandas as pd
-    >>> from matplotlib import pyplot as plt
-    >>> from eegproc.plotting import plot_per_channel
+    >>> from eegproc.plotting import plot_eeg_features
     >>>
-    >>> # Simulate 3 channels and 2 bands over 100 windows
+    >>> # Per-window band powers for two channels, as psd_bandpowers emits them
     >>> t = np.arange(100)
     >>> df = pd.DataFrame({
-    ...     "AF3_alpha_entropy": np.sin(0.1 * t) + 0.1*np.random.randn(100),
-    ...     "AF3_beta_entropy":  np.cos(0.1 * t) + 0.1*np.random.randn(100),
-    ...     "AF3_theta_entropy":  np.cos(0.1 * t) + 0.1*np.random.randn(100),
-    ...     "F7_alpha_entropy":  np.sin(0.1 * t + 1.0),
+    ...     "AF3_alpha": np.sin(0.1 * t),
+    ...     "AF3_betaL": np.cos(0.1 * t),
+    ...     "AF3_theta": np.cos(0.2 * t),
+    ...     "F7_alpha": np.sin(0.1 * t + 1.0),
     ... })
     >>>
-    >>> # Plot only AF3 alpha and beta band entropies, for the first 50 windows
-    >>> plot_per_channel(
+    >>> # Plot only AF3's alpha and betaL traces, for the first 50 windows
+    >>> plot_eeg_features(
     ...     df,
-    ...     title="AF3 Entropy (Synthetic Example)",
+    ...     title="AF3 Band Power (Synthetic Example)",
     ...     seconds=4,
     ...     start_row=0,
     ...     end_row=50,
     ...     channels=["AF3"],
-    ...     frequency_bands=["alpha", "beta"]
-    ... )
-    >>>
-    >>> # To save instead of showing:
-    >>> # plot_per_channel(df, save_path="entropy_AF3.png", channels=["AF3"])
+    ...     frequency_bands=["alpha", "betaL"],
+    ... )   # doctest: +SKIP
+
+    Note that band filtering only applies to features whose column names carry a
+    band token. ``shannons_entropy``, ``wavelet_entropy`` and ``imf_entropy``
+    emit one column per channel (``{channel}_entropy``) with no band, so pass
+    ``channels=`` alone for those.
 
     """
 
     if input_data is None or len(input_data) == 0:
         raise ValueError("input_data is empty.")
 
-    n = len(input_data)
-    s = max(0, int(start_row))
-    e = n if end_row is None else min(n, end_row)
-    if s >= e:
-        raise ValueError(f"Empty window [{s}:{e}) for n={n}.")
+    n_rows = len(input_data)
+    start = max(0, int(start_row))
+    stop = n_rows if end_row is None else min(n_rows, int(end_row))
+    if start >= stop:
+        raise ValueError(
+            f"empty row range [{start}:{stop}) for a frame with {n_rows} rows."
+        )
+    window = input_data.iloc[start:stop]
 
-    df = input_data.iloc[s:e].copy()
+    parsed = {c: parse_feature_column(str(c)) for c in window.columns}
 
+    # Match parsed structure, never a substring: `channels=["F3"]` must not also
+    # select AF3, and the 10-20 montage contains both AF3/F3 and AF4/F4.
+    selected = []
+    for column, info in parsed.items():
+        if channels is not None and info.channel not in channels:
+            continue
+        if frequency_bands is not None and info.band not in frequency_bands:
+            continue
+        if not pd.api.types.is_numeric_dtype(window[column]):
+            continue
+        selected.append(column)
 
-    columns = []
-    include = True
+    if not selected:
+        _raise_empty_selection(window, parsed, channels, frequency_bands)
 
-    for key in df.keys():
-        include = True
+    if max_subplots is not None and len(selected) > max_subplots:
+        raise ValueError(
+            f"{len(selected)} columns matched, which would produce a "
+            f"{max_height_per_channel * len(selected):.0f}-inch figure. Narrow the "
+            "selection with channels=/frequency_bands=, or raise max_subplots."
+        )
 
-        if channels is not None:
-            include = any(re.search(rf"{ch}", key) for ch in channels)
+    # Consecutive windows advance by the hop, not the full window length.
+    if not 0.0 <= overlap < 1.0:
+        raise ValueError(f"overlap must be in [0.0, 1.0), got {overlap}.")
+    hop_seconds = seconds * (1.0 - overlap)
+    x = start * hop_seconds + np.arange(stop - start) * hop_seconds
 
-        if frequency_bands is not None and include:
-            include = any(re.search(rf"{band}", key, re.IGNORECASE) for band in frequency_bands)
-
-        if include:
-            columns.append(key)
-
-
-    # X-axis in seconds
-    x = (np.arange(s, e) - s) * seconds
-
-    # Plot
-    max_width = 12 if max_width is None else max_width
-    max_height_per_channel = 0.6 if max_height_per_channel is None else max_height_per_channel
     fig, axes = plt.subplots(
-        nrows=len(columns),
+        nrows=len(selected),
         ncols=1,
-        figsize=(max_width, max_height_per_channel * (len(columns) + 1)),
+        figsize=(max_width, max_height_per_channel * (len(selected) + 1)),
         sharex=True,
+        squeeze=False,
     )
+    axes = list(axes[:, 0])
 
-    if len(columns) == 1:
-        axes = [axes]
+    try:
+        for ax, column in zip(axes, selected):
+            ax.plot(x, window[column].to_numpy(dtype=float))
+            ax.set_ylabel(column, rotation=0, ha="right", va="center", labelpad=20)
+            ax.grid(True, linewidth=0.5, alpha=0.5)
 
-    for ax, ch in zip(axes, columns):
-        y = df[ch]
-        ax.plot(x, y)
-        ax.set_ylabel(ch, rotation=0, ha="right", va="center", labelpad=20) 
-        ax.grid(True, linewidth=0.5, alpha=0.5)
+        axes[-1].set_xlabel(xlabel)
+        fig.suptitle(title, fontsize=14)
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
 
-    axes[-1].set_xlabel(xlabel)
-    fig.suptitle(title, fontsize=14)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-
-    if save_path:
-        fig.savefig(save_path, dpi=150)
+        if save_path:
+            fig.savefig(save_path, dpi=150)
+    except Exception:
         plt.close(fig)
-    else:
-        plt.show()
+        raise
+
+    return fig, axes
 
 
-if __name__ == "__main__":
-    from .. import wavelet_band_energy, wavelet_entropy, FREQUENCY_BANDS
-    from .. import bandpass_filter, shannons_entropy
+def _raise_empty_selection(window, parsed, channels, frequency_bands) -> None:
+    """Explain precisely why nothing matched, instead of failing in matplotlib."""
+    available_channels = sorted({i.channel for i in parsed.values()})
+    available_bands = sorted({i.band for i in parsed.values() if i.band})
 
-    FS = 128
-    csv_path = "DREAMER.csv"
-    chunk_iter = pd.read_csv(csv_path, chunksize=1)
-    first_chunk = next(chunk_iter)
-    sensor_columns = [col for col in first_chunk.columns if col[len(col) - 1].isdigit()]
-    print(f"Detected sensor columns: {sensor_columns}")
-
-    dreamer_df = []
-
-    for chunk in pd.read_csv(csv_path, chunksize=10000):
-        sensor_df = chunk[sensor_columns]
-        dreamer_df.append(sensor_df)
-
-    dreamer_df = pd.concat(dreamer_df, ignore_index=True)
-
-    clean = bandpass_filter(dreamer_df, FS, bands=FREQUENCY_BANDS, low=0.5, high=45.0, notch_hz=60)
-
-    # hj = hjorth_params(clean, FS)
-    # print("Hjorth Parameters\n", hj)
-
-    # psd_df = psd_bandpowers(clean, FS, bands=FREQUENCY_BANDS)
-    # print("PSD\n", psd_df)
-
-    shannons_df = shannons_entropy(clean, FS, bands=FREQUENCY_BANDS)
-    print("Shannons\n", shannons_df)
-
-    plot_per_channel(
-        shannons_df,
-        title="Shannons Entropy per Channel",
-        seconds=4,
-        start_row=0,
-        end_row=500,
-        max_height_per_channel=0.8,
-        save_path="shannons_entropy_plot",
-        channels=['AF3'],
-        frequency_bands=['delta'],
-    )
-
-
-
-    # wt_df = wavelet_band_energy(dreamer_df, FS, bands=FREQUENCY_BANDS)
-    # print("WT Energy\n", wt_df)
-
-    # wt_df = wavelet_entropy(wt_df, bands=FREQUENCY_BANDS)
-    # print("WT Entropy\n", wt_df)
-
-    # plot_per_channel(
-    #     wt_df,
-    #     title="Wavelet Entropy per Channel",
-    #     seconds=4,
-    #     start_row=0,
-    #     end_row=500,
-    # )
+    problems = []
+    if channels is not None:
+        unknown = [c for c in channels if c not in available_channels]
+        if unknown:
+            problems.append(
+                f"unknown channel(s) {unknown}; available: {available_channels}"
+            )
+    if frequency_bands is not None:
+        if not available_bands:
+            problems.append(
+                "none of these columns carry a band, so frequency_bands selects "
+                "nothing. shannons_entropy, wavelet_entropy and imf_entropy emit "
+                "one column per channel with no band — filter by channels only"
+            )
+        else:
+            unknown = [b for b in frequency_bands if b not in available_bands]
+            if unknown:
+                problems.append(
+                    f"unknown band(s) {unknown}; available: {available_bands}"
+                )
+    if not problems:
+        problems.append(
+            "the requested channel and band combination matched no column, or "
+            "every matching column is non-numeric"
+        )
+    raise ValueError("no columns to plot: " + "; ".join(problems) + ".")

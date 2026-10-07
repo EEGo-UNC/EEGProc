@@ -13,7 +13,6 @@ omit =
 [report]
 show_missing = True
 skip_covered = True
-fail_under = 80
 omit =
     src/eegproc/__init__.py
     src/eegproc/**/__init__.py

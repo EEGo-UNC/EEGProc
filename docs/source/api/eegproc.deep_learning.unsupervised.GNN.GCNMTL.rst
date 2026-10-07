@@ -1,0 +1,7 @@
+eegproc.deep\_learning.unsupervised.GNN.GCNMTL module
+=====================================================
+
+.. automodule:: eegproc.deep_learning.unsupervised.GNN.GCNMTL
+   :members:
+   :undoc-members:
+   :show-inheritance:

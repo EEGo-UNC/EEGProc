@@ -207,5 +207,36 @@ marimo/_lsp/
 __marimo__/
 
 DREAMER.CSV
-
 scripts/
+
+datasets/
+
+venv312/
+
+# Root-level only: src/eegproc/data/ (library code) and src/tests/data/ (test
+# fixtures) are tracked.
+/data/
+outputs/
+.devcontainer/
+*.npy
+
+# Generated reporting artifacts (reproducible from the result JSONs)
+experiment_outputs/
+figures/
+figures_experiment/
+XAI_runs/
+
+# --- v2 ---
+# Experiment output: never belongs in the library repo.
+runs/
+smoke_runs/
+
+# Coverage artifacts are produced by CI, not committed.
+coverage.svg
+
+
+# Editor / OS / local-env cruft that was previously committed.
+.DS_Store
+**/.DS_Store
+.coveragearc
+.venv312_install.lock

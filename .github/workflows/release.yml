@@ -1,0 +1,183 @@
+name: Release
+
+# A push to main publishes to PyPI when pyproject.toml's version is not on PyPI
+# yet: tests -> build -> publish -> GitHub release and tag -> install check.
+# Pushes that keep the version only run the tests and the build.
+#
+# Rehearsal: pushing a tag named testpypi-* runs the same chain against
+# TestPyPI with a unique .devN version and a draft GitHub release.
+#
+# The decisions and guards live in .github/release_tools.py.
+
+on:
+  push:
+    branches: [main]
+    tags: ["testpypi-*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      target: ${{ steps.plan.outputs.target }}
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      release: ${{ steps.plan.outputs.release }}
+      notes_version: ${{ steps.plan.outputs.notes_version }}
+      environment: ${{ steps.plan.outputs.environment }}
+      upload_url: ${{ steps.plan.outputs.upload_url }}
+      simple_url: ${{ steps.plan.outputs.simple_url }}
+      project_url: ${{ steps.plan.outputs.project_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Decide what to release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m pip install --quiet packaging
+          python .github/release_tools.py plan
+
+  build:
+    needs: plan
+    uses: ./.github/workflows/package.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+
+  publish:
+    needs: [tests, plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ needs.plan.outputs.environment }}
+      url: ${{ needs.plan.outputs.project_url }}
+    permissions:
+      id-token: write   # PyPI trusted publishing; no API token is stored anywhere
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ needs.plan.outputs.upload_url }}
+          skip-existing: ${{ needs.plan.outputs.target == 'testpypi' }}
+          print-hash: true
+
+  github-release:
+    needs: [tests, plan, build, publish]
+    # Also runs when publish was skipped because the version is already on
+    # PyPI, so a re-run after a partial failure still creates the release.
+    if: >-
+      ${{ !cancelled() && needs.tests.result == 'success' && needs.build.result == 'success'
+      && needs.plan.outputs.release != 'skip'
+      && contains(fromJSON('["success", "skipped"]'), needs.publish.result) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v8
+        if: needs.publish.result == 'success'
+        with:
+          name: distributions
+          path: dist
+
+      - name: Use the files already on PyPI
+        if: needs.publish.result == 'skipped'
+        run: |
+          mkdir -p dist
+          python - <<'PYCODE'
+          import json, os, urllib.request
+          version = os.environ["VERSION"]
+          with urllib.request.urlopen(f"https://pypi.org/pypi/eegproc/{version}/json", timeout=30) as response:
+              files = json.load(response)["urls"]
+          assert files, f"no files for eegproc {version} on PyPI"
+          for item in files:
+              urllib.request.urlretrieve(item["url"], os.path.join("dist", item["filename"]))
+              print("downloaded", item["filename"])
+          PYCODE
+
+      - name: Write release notes
+        run: python .github/release_tools.py notes "${{ needs.plan.outputs.notes_version }}" > notes.md
+
+      - name: Create the GitHub release
+        if: needs.plan.outputs.release == 'publish'
+        run: |
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" \
+            --title "EEGProc $VERSION" --notes-file notes.md
+
+      - name: Rehearse the GitHub release as a draft, then remove it
+        if: needs.plan.outputs.release == 'draft'
+        run: |
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --draft --prerelease \
+            --title "EEGProc $VERSION (rehearsal)" --notes-file notes.md
+          gh release view "v$VERSION" --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'
+          gh release delete "v$VERSION" --yes
+
+  verify:
+    needs: [tests, plan, build, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      SIMPLE_URL: ${{ needs.plan.outputs.simple_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: built
+
+      - name: Download the published wheel
+        run: |
+          for attempt in $(seq 1 30); do
+            if python -m pip download --quiet --no-deps --only-binary=:all: --no-cache-dir \
+                 --index-url "$SIMPLE_URL" --dest published "eegproc==$VERSION"; then
+              exit 0
+            fi
+            echo "eegproc $VERSION not on $SIMPLE_URL yet (attempt $attempt); waiting"
+            sleep 20
+          done
+          echo "::error::eegproc $VERSION never appeared on $SIMPLE_URL"
+          exit 1
+
+      - name: Compare with the wheel this run built
+        run: |
+          published=$(sha256sum published/*.whl | cut -d' ' -f1)
+          built=$(sha256sum built/*.whl | cut -d' ' -f1)
+          echo "published $published"
+          echo "built     $built"
+          test "$published" = "$built"
+
+      - name: Install it with dependencies from PyPI and smoke-test
+        env:
+          TF_CPP_MIN_LOG_LEVEL: "3"
+        run: |
+          python -m venv "$RUNNER_TEMP/release-env"
+          wheel=$(ls published/*.whl)
+          "$RUNNER_TEMP/release-env/bin/python" -m pip install --quiet "${wheel}[deep-learning]"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/release-env/bin/python" "$GITHUB_WORKSPACE/.github/release_tools.py" smoke "$VERSION"
