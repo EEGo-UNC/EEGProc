@@ -104,6 +104,40 @@ class PhysiologicalReference:
                 upper[family][defined] = np.quantile(values[:, defined], 1 - tail, axis=0)
         return cls(lower, upper, quantile, required_fraction)
 
+    def deviation(self, family, values):
+        """Graded companion to the binary check, in half-interval widths.
+
+        Each component is expressed as its absolute distance from the centre of
+        the source interval divided by that interval's half width, so z <= 1 is
+        exactly the pass condition recorded by assess(). The exceedance
+        max(z - 1, 0) is zero inside the interval and grows with the distance
+        past the nearer edge, which separates a component that just missed from
+        one that missed by an order of magnitude.
+
+        The interval is an empirical central interval rather than a standard
+        deviation, so z is not a Gaussian z-score; at the default quantile its
+        unit is approximately 1.96 sigma if the source is normal. Components
+        whose source interval has zero width carry no scale and are excluded
+        rather than reported as infinitely atypical.
+        """
+        lower, upper = self.lower[family], self.upper[family]
+        half = (upper - lower) / 2
+        scorable = (np.isfinite(lower) & np.isfinite(upper) & np.isfinite(values)
+                    & np.isfinite(half) & (half > 0))
+        if not scorable.any():
+            return None
+        z = np.abs(values[scorable] - ((lower + upper) / 2)[scorable]) / half[scorable]
+        exceedance = np.maximum(z - 1.0, 0.0)
+        return {
+            "n_scored": int(scorable.sum()), "n_unscorable": int(np.size(values) - scorable.sum()),
+            "z_median": float(np.median(z)), "z_mean": float(z.mean()),
+            "z_p95": float(np.quantile(z, 0.95)), "z_max": float(z.max()),
+            "exceedance_mean": float(exceedance.mean()),
+            "exceedance_median": float(np.median(exceedance)),
+            "exceedance_max": float(exceedance.max()),
+            "unit": "half_interval_widths",
+        }
+
     def assess(self, diagnostics):
         checks = {}
         for family in FAMILIES:
@@ -118,12 +152,20 @@ class PhysiologicalReference:
                 "n_components": int(values.size), "n_undefined_candidate": int((~np.isfinite(values) & defined).sum()),
                 "reason": ("not_estimable_from_band_filtered_decoder" if family == "aperiodic_exponent"
                            else "source_reference_undefined") if not count else None,
+                "deviation": self.deviation(family, values),
             }
         available = [v["passed"] for v in checks.values() if v["passed"] is not None]
+        graded = {name: v["deviation"] for name, v in checks.items() if v["deviation"] is not None}
         return {"checks": checks, "passed_count": sum(available), "available_count": len(available),
                 "required_count": len(FAMILIES),
                 "all_required_passed": all(available) if len(available) == len(FAMILIES) else None,
-                "available_checks_passed": all(available) if available else None}
+                "available_checks_passed": all(available) if available else None,
+                "graded_count": len(graded),
+                "exceedance_by_family": {k: v["exceedance_mean"] for k, v in graded.items()},
+                "worst_family_exceedance": (max(v["exceedance_mean"] for v in graded.values())
+                                            if graded else None),
+                "mean_family_exceedance": (sum(v["exceedance_mean"] for v in graded.values()) / len(graded)
+                                           if graded else None)}
 
     def arrays(self):
         return {**{f"lower_{k}": v for k, v in self.lower.items()},
