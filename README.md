@@ -43,6 +43,11 @@ counterfactual for a held-out input.
 Follow the [example README](https://github.com/EEGo-UNC/EEGProc/blob/main/examples/README.md) for installation, dataset
 conversion, run commands, and an explanation of every step and output.
 
+For Longleaf experiments with the spatiotemporal 3D-CNN, the
+[DREAMER 3D-CNN campaign](experiments/dreamer_3dcnn/README.md) plans a smoke
+test, tracks immutable run configurations and downloaded artifacts, maintains a
+leaderboard, and recommends the next controlled hyperparameter experiment.
+
 ## What EEGProc provides
 
 - **Preprocessing and features:** filtering, detrending, spectral band powers,

@@ -1,0 +1,58 @@
+{
+  "campaign": "dreamer-3dcnn",
+  "objective": {
+    "metric": "trial_balanced_accuracy",
+    "maximize": true,
+    "uncertainty_penalty": 0.25
+  },
+  "defaults": {
+    "target": "valence",
+    "label_threshold": 3.0,
+    "window_samples": 128,
+    "window_overlap": 0.0,
+    "normalization": "window_zscore",
+    "conv_filters": [32, 64, 128],
+    "temporal_kernel_size": 7,
+    "spatial_kernel_size": 3,
+    "spatial_pool_sizes": [2, 2, 1],
+    "temporal_pool_sizes": [],
+    "emb_dim": 128,
+    "hidden_units": 128,
+    "dropout": 0.2,
+    "learning_rate": 0.0001,
+    "weight_decay": 0.00005,
+    "batch_size": 64,
+    "epochs": 50,
+    "validation_subjects": 2,
+    "early_stopping_patience": 8,
+    "seed": 42,
+    "max_folds": null
+  },
+  "smoke_overrides": {
+    "epochs": 2,
+    "validation_subjects": 1,
+    "early_stopping_patience": null,
+    "max_folds": 2
+  },
+  "search_space": [
+    {"name": "learning_rate", "values": [0.00003, 0.0003]},
+    {"name": "dropout", "values": [0.1, 0.35]},
+    {"name": "conv_filters", "values": [[16, 32, 64], [32, 64, 128], [64, 96, 128]]},
+    {"name": "temporal_kernel_size", "values": [3, 7, 15]},
+    {"name": "emb_dim", "values": [64, 128, 256]},
+    {"name": "hidden_units", "values": [64, 128, 256]},
+    {"name": "weight_decay", "values": [0.0, 0.00005, 0.0005]},
+    {"name": "window_samples", "values": [128, 256, 512]}
+  ],
+  "longleaf": {
+    "partition": "l40-gpu",
+    "qos": "gpu_access",
+    "gpus": 1,
+    "cpus": 8,
+    "memory": "64G",
+    "time": "24:00:00",
+    "python_module": "python/3.12.4",
+    "cuda_module": "cuda/12.9",
+    "cudnn_module": "cudnn/9.11.0"
+  }
+}
