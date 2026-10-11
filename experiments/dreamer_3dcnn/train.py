@@ -21,6 +21,8 @@ import numpy as np
 
 
 TARGET_INDEX = {"valence": 0, "arousal": 1}
+RAW_DREAMER_CHANNELS = 14
+BANDED_DREAMER_FEATURES = 42
 
 
 def now() -> str:
@@ -81,10 +83,13 @@ def make_windows(
     overlap: float,
     normalization: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Convert ``(subject, trial, feature, time)`` arrays to rank-3 windows."""
+    """Convert raw or band-filtered DREAMER trial arrays to rank-3 windows."""
     if eeg.ndim != 4 or ratings.ndim != 3:
         raise ValueError(f"Expected rank-4 EEG and rank-3 labels; got {eeg.shape}, {ratings.shape}.")
-    if eeg.shape[:2] != ratings.shape[:2] or eeg.shape[2] != 42:
+    if eeg.shape[:2] != ratings.shape[:2] or eeg.shape[2] not in {
+        RAW_DREAMER_CHANNELS,
+        BANDED_DREAMER_FEATURES,
+    }:
         raise ValueError(f"Unexpected DREAMER array shapes: EEG={eeg.shape}, labels={ratings.shape}.")
     if target not in TARGET_INDEX:
         raise ValueError(f"Unknown target {target!r}.")
@@ -100,7 +105,9 @@ def make_windows(
     starts = tuple(starts)
     n_subjects, n_trials = eeg.shape[:2]
     rows = n_subjects * n_trials * len(starts)
-    features = np.empty((rows, window_samples, eeg.shape[2]), dtype=np.float32)
+    features = np.empty(
+        (rows, window_samples, BANDED_DREAMER_FEATURES), dtype=np.float32
+    )
     labels = np.empty(rows, dtype=np.int64)
     subject_ids = np.empty(rows, dtype=np.int64)
     trial_ids = np.empty(rows, dtype=np.int64)
@@ -108,9 +115,30 @@ def make_windows(
     for subject in range(n_subjects):
         for trial in range(n_trials):
             label = int(ratings[subject, trial, TARGET_INDEX[target]] >= threshold)
+            trial_features = np.asarray(eeg[subject, trial].T, dtype=np.float32)
+            if eeg.shape[2] == RAW_DREAMER_CHANNELS:
+                # Filtering the complete trial before slicing preserves the
+                # zero-phase filter context at every window boundary.
+                from eegproc.deep_learning.prepare_datasets import (
+                    _filter_dreamer_trial,
+                )
+
+                trial_features = _filter_dreamer_trial(trial_features)
+            if trial_features.shape != (
+                eeg.shape[-1],
+                BANDED_DREAMER_FEATURES,
+            ):
+                raise ValueError(
+                    "Unexpected filtered DREAMER trial shape: "
+                    f"{trial_features.shape}."
+                )
+            if not np.isfinite(trial_features).all():
+                raise ValueError(
+                    f"Non-finite features for DREAMER subject {subject}, trial {trial}."
+                )
             for start in starts:
                 window = np.asarray(
-                    eeg[subject, trial, :, start : start + window_samples].T,
+                    trial_features[start : start + window_samples],
                     dtype=np.float32,
                 )
                 if normalization == "window_zscore":

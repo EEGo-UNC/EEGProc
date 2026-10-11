@@ -114,3 +114,26 @@ def test_window_assembly_preserves_trial_boundaries_and_target_labels():
     assert subjects.tolist() == [0] * 6 + [1] * 6
     assert trials.tolist() == [0] * 3 + [1] * 3 + [2] * 3 + [3] * 3
     np.testing.assert_array_equal(features[0], eeg[0, 0, :, :4].T)
+
+
+def test_window_assembly_filters_raw_fourteen_channel_dreamer():
+    import numpy as np
+
+    trainer = _load_trainer()
+    rng = np.random.default_rng(7)
+    eeg = rng.normal(size=(1, 1, 14, 256)).astype(np.float32)
+    ratings = np.array([[[4, 2]]], dtype=np.float32)
+    features, labels, subjects, trials = trainer.make_windows(
+        eeg,
+        ratings,
+        target="valence",
+        threshold=3,
+        window_samples=128,
+        overlap=0.0,
+        normalization="window_zscore",
+    )
+    assert features.shape == (2, 128, 42)
+    assert np.isfinite(features).all()
+    assert labels.tolist() == [1, 1]
+    assert subjects.tolist() == [0, 0]
+    assert trials.tolist() == [0, 0]

@@ -29,6 +29,11 @@ The launcher assumes these defaults, all overrideable as environment variables:
 - arrays: `$PROJECT_DIR/datasets/dreamer_eeg.npy` and
   `dreamer_labels.npy` (`DATA_DIR`)
 
+`dreamer_eeg.npy` may contain either the original 14-channel trials shaped
+`(23, 18, 14, 7680)` or the prefiltered 42-feature trials shaped
+`(23, 18, 42, 7680)`. Raw trials are filtered into channel-major theta, alpha,
+and beta waveforms before windowing.
+
 Prepare the environment once on Longleaf:
 
 ```bash
