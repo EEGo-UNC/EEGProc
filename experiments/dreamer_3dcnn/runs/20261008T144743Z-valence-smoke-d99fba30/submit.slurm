@@ -38,6 +38,42 @@ export TF_GPU_ALLOCATOR=cuda_malloc_async
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 
+# TensorFlow/XLA does not automatically discover the libdevice shipped by
+# Longleaf's CUDA module. Resolve it from the active module (or the Python CUDA
+# packages) and pass its CUDA root explicitly before TensorFlow starts.
+MODULE_CUDA_ROOT=""
+if [[ -n "${EBROOTCUDA:-}" && -d "$EBROOTCUDA" ]]; then
+    MODULE_CUDA_ROOT="$EBROOTCUDA"
+elif [[ -n "${CUDA_HOME:-}" && -d "$CUDA_HOME" ]]; then
+    MODULE_CUDA_ROOT="$CUDA_HOME"
+elif command -v nvcc >/dev/null 2>&1; then
+    MODULE_CUDA_ROOT="$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")"
+fi
+
+find_libdevice() {
+    local roots=()
+    [[ -n "$MODULE_CUDA_ROOT" && -d "$MODULE_CUDA_ROOT" ]] && roots+=("$MODULE_CUDA_ROOT")
+    [[ -d "$VIRTUAL_ENV/lib/python3.12/site-packages/nvidia" ]] && roots+=("$VIRTUAL_ENV/lib/python3.12/site-packages/nvidia")
+    [[ -d /usr/local/cuda ]] && roots+=("/usr/local/cuda")
+    [[ -d /opt/cuda ]] && roots+=("/opt/cuda")
+    [[ ${#roots[@]} -eq 0 ]] && return 0
+    find "${roots[@]}" -type f -path "*/nvvm/libdevice/libdevice.10.bc" -print -quit 2>/dev/null || true
+}
+
+LIBDEVICE_PATH="$(find_libdevice)"
+if [[ -z "$LIBDEVICE_PATH" || ! -f "$LIBDEVICE_PATH" ]]; then
+    echo "Unable to locate nvvm/libdevice/libdevice.10.bc." >&2
+    echo "Loaded CUDA root: ${MODULE_CUDA_ROOT:-<none>}" >&2
+    echo "Try: python -m pip install nvidia-cuda-nvcc-cu12" >&2
+    exit 2
+fi
+CUDA_XLA_ROOT="${LIBDEVICE_PATH%/nvvm/libdevice/libdevice.10.bc}"
+export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_cuda_data_dir=$CUDA_XLA_ROOT"
+[[ -n "$MODULE_CUDA_ROOT" ]] && export CUDA_HOME="$MODULE_CUDA_ROOT" CUDA_PATH="$MODULE_CUDA_ROOT"
+
+echo "CUDA XLA root: $CUDA_XLA_ROOT"
+echo "libdevice: $LIBDEVICE_PATH"
+
 python experiments/dreamer_3dcnn/train.py \
     --config "$RUN_DIR/config.json" \
     --data-dir "$DATA_DIR" \

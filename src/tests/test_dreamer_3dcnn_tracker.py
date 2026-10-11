@@ -80,6 +80,14 @@ def test_sync_rejects_tampered_config(tracker, campaign, tmp_path):
         tracker.sync_bundles(source, tmp_path / "runs", campaign)
 
 
+def test_generated_slurm_script_configures_xla_libdevice(tracker, campaign):
+    script = tracker.slurm_script("example-run", campaign)
+    assert "EBROOTCUDA" in script
+    assert "libdevice.10.bc" in script
+    assert "--xla_gpu_cuda_data_dir=$CUDA_XLA_ROOT" in script
+    assert "python experiments/dreamer_3dcnn/train.py" in script
+
+
 def test_completed_full_run_changes_one_setting(tracker, campaign):
     defaults = dict(campaign["defaults"])
     smoke = {**defaults, **campaign["smoke_overrides"]}
