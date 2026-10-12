@@ -1,0 +1,4 @@
+{
+  "model_directory": "../../../../../../runs/full/sic_trial_bigru_v11_mldg_brier_ablation/DREAMER/valence/suite_65452590/full/dreamer_valence_sic_trial_bigru_v11_mldg_full_full_20260827_213158/configuration_0001/loso_zero_shot_models",
+  "model_glob": "loso_fold_*_target_*_zero_shot.keras"
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import cloudpickle
 import gc
+import hashlib
 import numpy as np
 import os
 import tensorflow as tf
@@ -109,6 +110,8 @@ def _run_subject_calibration_subject(
     subject_id_array: np.ndarray,
     trial_id_array: np.ndarray,
     fixed_config: dict,
+    training_seed: int | None,
+    deterministic_training: bool,
     source_epochs: int,
     source_batch_size: int,
     validation_subjects_per_fold: int,
@@ -154,12 +157,19 @@ def _run_subject_calibration_subject(
     calibration_print_every_n_epochs: int,
     source_model_output_dir: str | os.PathLike[str] | None,
     verbose: int,
+    gpus_per_fold: int = 1,
 ) -> dict:
     """Prepare one source model and run all target-subject calibration folds.
 
     ``pretrained_model`` is an already-loaded, target-specific LOSO checkpoint.
     When it is provided, source construction and source fitting are skipped.
     """
+    subject_training_seed = _subject_training_seed(training_seed, target_subject)
+    if deterministic_training and subject_training_seed is None:
+        raise ValueError(
+            "deterministic_training requires a non-null training_seed."
+        )
+
     target_mask = subject_id_array == target_subject
     target_indices = np.flatnonzero(target_mask)
     outer_source_indices = np.flatnonzero(~target_mask)
@@ -258,6 +268,24 @@ def _run_subject_calibration_subject(
 
     if pretrained_model is None:
         tf.keras.backend.clear_session()
+    if subject_training_seed is not None:
+        # This runs in the target-subject worker after its GPU mask is installed
+        # and before any initializer, model, optimizer, or dropout RNG exists.
+        tf.keras.utils.set_random_seed(subject_training_seed)
+    if deterministic_training:
+        tf.config.experimental.enable_op_determinism()
+        # The custom v15 multi-GPU path is intentionally outside a distribution
+        # strategy.  Synchronous eager dispatch plus run_eagerly (configured
+        # below) gives its device shards a fixed launch/completion order instead
+        # of allowing graph scheduling differences to perturb gradient sums.
+        tf.config.experimental.set_synchronous_execution(True)
+    if subject_training_seed is not None:
+        print(
+            f"[fold {subject_number}] target={_python_scalar(target_subject)!r} "
+            f"training_seed={subject_training_seed} "
+            f"deterministic_ops={bool(deterministic_training)}",
+            flush=True,
+        )
     try:
         if pretrained_model is not None:
             model = pretrained_model
@@ -275,21 +303,42 @@ def _run_subject_calibration_subject(
                     "For subject_calibration_cv, model_builder_function must accept "
                     "training_features, training_labels, training_subject_ids, and "
                     "training_trial_ids (directly or through **kwargs). v6 uses "
-                    "training_features to construct a source-only adjacency "
+                    "training_features to construct the MTLFuseNet MI adjacency "
                     "without target-subject leakage."
                 ) from exc
+
+        if gpus_per_fold > 1:
+            configure_devices = getattr(model, "configure_fold_devices", None)
+            if configure_devices is None:
+                raise ValueError("This model does not support multiple GPUs per fold.")
+            devices = tuple(device.name for device in tf.config.list_logical_devices("GPU"))
+            if len(devices) != gpus_per_fold:
+                raise RuntimeError(f"Expected {gpus_per_fold} fold GPUs, found {devices}.")
+            configure_devices(
+                devices,
+                deterministic_execution=bool(deterministic_training),
+            )
+            if deterministic_training and not model.run_eagerly:
+                raise RuntimeError(
+                    "Deterministic multi-GPU training requires eager train-step "
+                    "execution so device shards run in a fixed order."
+                )
+            print(
+                f"[fold {subject_number}] MLDG source devices={devices}; "
+                "one global VC objective and one inner/outer update per episode; "
+                f"execution={'serial_eager' if model.run_eagerly else 'parallel_graph'}",
+                flush=True,
+            )
 
         X_source_for_fit = _prepare_fit_inputs_with_subject_ids(
             model,
             X_source,
             source_subject_ids,
         )
-
         source_kwargs = dict(source_fit_kwargs)
         source_callbacks = list(source_kwargs.pop("callbacks", []))
         prediction_diagnostics_callback = None
         if prediction_diagnostics:
-
             prediction_diagnostics_callback = PredictionDiagnostics(
                 X_train=X_source,
                 y_train=y_source,
@@ -753,12 +802,16 @@ def _run_subject_calibration_subject(
         }
         subject_summary = {
             "target_subject": _python_scalar(target_subject),
+            "training_seed": subject_training_seed,
+            "deterministic_training": bool(deterministic_training),
             "zero_shot_all_trials_scores": zero_all_scores,
             "calibration_levels": calibration_summaries,
         }
         return {
             "subject_number": int(subject_number),
             "target_subject": _python_scalar(target_subject),
+            "training_seed": subject_training_seed,
+            "deterministic_training": bool(deterministic_training),
             "source_subjects": [
                 _python_scalar(value)
                 for value in np.sort(np.unique(source_subject_ids)).tolist()
@@ -824,11 +877,11 @@ def _subject_calibration_process_main(
     worker_state_payload: bytes,
     task_queue,
     result_queue,
-    gpu_id: int | None,
+    gpu_id: int | tuple[int, ...] | None,
     cpus_per_worker: int | None,
     assigned_device_label: str | None,
 ) -> None:
-    """Run target-subject calibration evaluations in a persistent worker."""
+    """Run target-subject calibration evaluations in a spawned worker."""
     try:
         _configure_tensorflow_worker(
             gpu_id=gpu_id,
@@ -836,25 +889,47 @@ def _subject_calibration_process_main(
             assigned_device_label=assigned_device_label,
         )
         worker_state = cloudpickle.loads(worker_state_payload)
-        while True:
-            task = task_queue.get()
-            if task is None:
-                return
-            subject_number, target_subject = task
-            try:
-                output = _run_subject_calibration_subject(
-                    subject_number=subject_number,
-                    target_subject=target_subject,
-                    **worker_state,
-                )
-                result_queue.put(("ok", int(subject_number), output))
-            except BaseException:
-                result_queue.put(
-                    ("error", int(subject_number), traceback.format_exc())
-                )
-                return
+        task = task_queue.get()
+        if task is None:
+            return
+        subject_number, target_subject = task
+        try:
+            output = _run_subject_calibration_subject(
+                subject_number=subject_number,
+                target_subject=target_subject,
+                **worker_state,
+            )
+            result_queue.put(("ok", int(subject_number), output))
+        except BaseException:
+            result_queue.put(
+                ("error", int(subject_number), traceback.format_exc())
+            )
     except BaseException:
         result_queue.put(("error", -1, traceback.format_exc()))
     finally:
         tf.keras.backend.clear_session()
         gc.collect()
+
+
+def _subject_training_seed(base_seed: int | None, target_subject) -> int | None:
+    """Derive a stable per-target TensorFlow seed from one experiment seed.
+
+    Numeric subject IDs use the intuitive ``base_seed + target_subject`` rule.
+    Other identifiers use SHA-256 instead of Python's salted ``hash()`` so the
+    result is stable in independently spawned interpreters.
+    """
+    if base_seed is None:
+        return None
+
+    subject_value = _python_scalar(target_subject)
+    if isinstance(subject_value, int) and not isinstance(subject_value, bool):
+        subject_offset = int(subject_value)
+    else:
+        token = repr(subject_value).encode("utf-8")
+        subject_offset = int.from_bytes(
+            hashlib.sha256(token).digest()[:8], byteorder="big", signed=False
+        )
+
+    # TensorFlow seeds use signed 32-bit integers. This also handles negative
+    # and nonnumeric subject identifiers without process-dependent behavior.
+    return (int(base_seed) + subject_offset) % (2**31 - 1)

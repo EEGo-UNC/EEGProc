@@ -78,16 +78,16 @@ def _start_device_bound_process(
     context,
     target: Callable,
     target_args_prefix: tuple,
-    requested_gpu_id: int | None,
+    requested_gpu_id: int | tuple[int, ...] | None,
     cpus_per_worker: int | None,
     name: str,
 ) -> mp.Process:
-    """Start one spawned process with its GPU mask set before TensorFlow import.
+    """Start a spawned process with its GPU group masked before TF import.
 
     ``spawn`` launches a fresh interpreter that imports this module. Temporarily
     changing the parent's environment around ``Process.start`` ensures the child
-    sees only its assigned GPU before importing TensorFlow. Inside a GPU-bound
-    worker that device is therefore always worker-local GPU 0.
+    sees only its assigned GPUs before importing TensorFlow. Worker-local
+    ordinals start at zero, including when Slurm exposes GPU UUIDs.
     """
     previous_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
 
@@ -96,11 +96,18 @@ def _start_device_bound_process(
         worker_local_gpu_id = None
         assigned_device_label = "CPU"
     else:
-        cuda_token = _resolve_cuda_device_token(requested_gpu_id)
-        child_cuda_visible_devices = cuda_token
-        worker_local_gpu_id = 0
+        gpu_group = (
+            requested_gpu_id if isinstance(requested_gpu_id, tuple)
+            else (int(requested_gpu_id),)
+        )
+        child_cuda_visible_devices = ",".join(
+            _resolve_cuda_device_token(gpu_id) for gpu_id in gpu_group
+        )
+        worker_local_gpu_id = (
+            0 if len(gpu_group) == 1 else tuple(range(len(gpu_group)))
+        )
         assigned_device_label = (
-            f"GPU {int(requested_gpu_id)} " f"(CUDA_VISIBLE_DEVICES={cuda_token})"
+            f"GPUs {gpu_group} (CUDA_VISIBLE_DEVICES={child_cuda_visible_devices})"
         )
 
     os.environ["CUDA_VISIBLE_DEVICES"] = child_cuda_visible_devices
@@ -126,14 +133,13 @@ def _start_device_bound_process(
 
 
 def _configure_tensorflow_worker(
-    gpu_id: int | None,
+    gpu_id: int | tuple[int, ...] | None,
     cpus_per_worker: int | None,
     assigned_device_label: str | None = None,
 ) -> None:
     """Configure TensorFlow before a worker constructs any model.
 
-    A GPU worker is started with a one-device ``CUDA_VISIBLE_DEVICES`` mask, so
-    ``gpu_id`` is normally 0 inside that process. A CPU worker is started with
+    GPU workers see only their assigned device group. A CPU worker uses
     ``CUDA_VISIBLE_DEVICES=-1``. This prevents every process from probing or
     allocating memory on every GPU in a multi-GPU Slurm allocation.
     """
@@ -156,23 +162,24 @@ def _configure_tensorflow_worker(
             )
         device_description = assigned_device_label or "CPU"
     else:
-        gpu_id = int(gpu_id)
-
-        if gpu_id < 0 or gpu_id >= len(physical_gpus):
+        gpu_group = gpu_id if isinstance(gpu_id, tuple) else (int(gpu_id),)
+        if not gpu_group or any(
+            index < 0 or index >= len(physical_gpus) for index in gpu_group
+        ):
             raise ValueError(
-                f"Worker requested local GPU index {gpu_id}, but TensorFlow sees "
+                f"Worker requested local GPUs {gpu_group}, but TensorFlow sees "
                 f"{len(physical_gpus)} GPU(s). The child process should have been "
-                "started with exactly one assigned CUDA device."
+                "started with its assigned CUDA device group."
             )
-
-        selected_gpu = physical_gpus[gpu_id]
-        tf.config.set_visible_devices(selected_gpu, "GPU")
-        tf.config.experimental.set_memory_growth(selected_gpu, True)
+        selected_gpus = [physical_gpus[index] for index in gpu_group]
+        tf.config.set_visible_devices(selected_gpus, "GPU")
+        for selected_gpu in selected_gpus:
+            tf.config.experimental.set_memory_growth(selected_gpu, True)
 
         logical_gpus = tf.config.list_logical_devices("GPU")
-        if len(logical_gpus) != 1:
+        if len(logical_gpus) != len(gpu_group):
             raise RuntimeError(
-                "A GPU worker must see exactly one logical GPU after isolation; "
+                f"A GPU worker must see exactly {len(gpu_group)} logical GPUs; "
                 f"TensorFlow sees {len(logical_gpus)}."
             )
 
@@ -249,7 +256,7 @@ def _run_spawned_fold_pool(
     worker_state: dict,
     tasks: list[tuple],
     n_workers: int,
-    gpu_ids: tuple[int, ...] | None,
+    gpu_ids: tuple[int | tuple[int, ...], ...] | None,
     cpus_per_worker: int | None,
     worker_name_prefix: str,
     worker_description: str,
@@ -324,3 +331,40 @@ def _run_spawned_fold_pool(
                 multiprocessing_queue.close()
             except (AttributeError, OSError, ValueError):
                 pass
+
+
+def _resolve_fold_gpu_groups(n_workers, gpu_ids, gpus_per_fold=1):
+    """Allocate disjoint, ordered GPU groups to subject-calibration workers."""
+    if int(gpus_per_fold) != gpus_per_fold or gpus_per_fold < 1:
+        raise ValueError("gpus_per_fold must be a positive integer.")
+    gpus_per_fold = int(gpus_per_fold)
+    if gpu_ids is None:
+        if n_workers == 1 and gpus_per_fold == 1:
+            return n_workers, None
+        available = _count_visible_gpus()
+        if available == 0 and gpus_per_fold == 1:
+            return n_workers, None
+        if available < gpus_per_fold:
+            raise ValueError(
+                f"Each fold requires {gpus_per_fold} GPUs, but only {available} are visible."
+            )
+        n_workers = min(n_workers, available // gpus_per_fold)
+        ids = tuple(range(n_workers * gpus_per_fold))
+    else:
+        ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
+        if not ids or any(gpu_id < 0 for gpu_id in ids) or len(set(ids)) != len(ids):
+            raise ValueError("gpu_ids must contain distinct non-negative GPU indices.")
+        required = n_workers * gpus_per_fold
+        if len(ids) < required:
+            raise ValueError(
+                f"n_jobs={n_workers} with gpus_per_fold={gpus_per_fold} requires "
+                f"{required} GPU IDs; got {ids}."
+            )
+        ids = ids[:required]
+    if gpus_per_fold == 1:
+        return n_workers, ids
+    groups = tuple(
+        ids[index:index + gpus_per_fold]
+        for index in range(0, len(ids), gpus_per_fold)
+    )
+    return n_workers, groups

@@ -1,0 +1,169 @@
+{
+  "base": {
+    "classification_level": "trial",
+    "n_channels": 14,
+    "n_bands": 3,
+    "n_classes": 2,
+    "optimizer_name": "adamw",
+    "learning_rate": 0.0001,
+    "weight_decay": 5e-05,
+    "vrex_penalty_weight": 1.0,
+    "training_method": "mldg",
+    "mldg_meta_train_subjects": 8,
+    "mldg_meta_test_subjects": 4,
+    "mldg_trials_per_subject": 3,
+    "mldg_steps_per_epoch": 10,
+    "mldg_inner_learning_rate": 0.0001,
+    "mldg_meta_test_weight": 1.0,
+    "mldg_seed": 42,
+    "gcn_units": [
+      128,
+      64
+    ],
+    "gcn_dropout": 0.1,
+    "gcn_activation": "relu",
+    "gcn_use_batch_norm": false,
+    "spectral_gru_units": 384,
+    "spectral_gru_dropout": 0.2,
+    "mi_n_neighbors": 3,
+    "mi_random_state": 42,
+    "mi_zero_diagonal": false,
+    "mi_band_reduction": "mean",
+    "mi_max_observations": 15000,
+    "bilstm_units": 63,
+    "n_bilstm_layers": 1,
+    "bilstm_dropout": 0.2,
+    "classifier_rnn_type": "bigru",
+    "classifier_rnn_units": [
+      128,
+      64
+    ],
+    "n_classifier_rnn_layers": 2,
+    "classifier_rnn_dropout": 0.4,
+    "focal_gamma": 0.3,
+    "focal_alpha": null,
+    "vc_loss_weight": 1.0,
+    "vc_alpha": 2.0,
+    "vc_beta": 0.6,
+    "vc_gamma": 0.0,
+    "vc_lambda": 0.05,
+    "vc_logit_scale": 16.0,
+    "update_vc_discriminator": false,
+    "use_subject_adversarial": true,
+    "subject_adversarial_weight": 0.6,
+    "subject_loss_weight": 0.2,
+    "subject_hidden_units": 64,
+    "subject_dropout": 0.0,
+    "use_gcn_gru_branch": true,
+    "use_bilstm_branch": true,
+    "use_decoder": true,
+    "reconstruction_loss_weight": 0.6,
+    "decoder_dropout": 0.1,
+    "joint_reconstruction_auxiliary_weight": 0.25,
+    "joint_reconstruction_initial_alpha": 0.5,
+    "calibration_unfreeze_layers": 2,
+    "calibration_use_vc_target": true,
+    "calibration_vc_alpha": 1.0,
+    "calibration_vc_beta": 0.3,
+    "calibration_vc_gamma": 0.0,
+    "calibration_vc_lambda": 0.05
+  },
+  "configurations": [
+    {
+      "name": "baseline",
+      "overrides": {}
+    },
+    {
+      "name": "lr_5e5",
+      "overrides": {
+        "learning_rate": 5e-05,
+        "mldg_inner_learning_rate": 5e-05
+      }
+    },
+    {
+      "name": "lr_2e4",
+      "overrides": {
+        "learning_rate": 0.0002,
+        "mldg_inner_learning_rate": 0.0002
+      }
+    },
+    {
+      "name": "scale_8",
+      "overrides": {
+        "vc_logit_scale": 8.0
+      }
+    },
+    {
+      "name": "scale_32",
+      "overrides": {
+        "vc_logit_scale": 32.0
+      }
+    },
+    {
+      "name": "scale_64",
+      "overrides": {
+        "vc_logit_scale": 64.0
+      }
+    },
+    {
+      "name": "vc_alpha_1",
+      "overrides": {
+        "vc_alpha": 1.0
+      }
+    },
+    {
+      "name": "vc_beta_03",
+      "overrides": {
+        "vc_beta": 0.3
+      }
+    },
+    {
+      "name": "vc_lambda_001",
+      "overrides": {
+        "vc_lambda": 0.01
+      }
+    },
+    {
+      "name": "reconstruction_02",
+      "overrides": {
+        "reconstruction_loss_weight": 0.2
+      }
+    },
+    {
+      "name": "reconstruction_04",
+      "overrides": {
+        "reconstruction_loss_weight": 0.4
+      }
+    },
+    {
+      "name": "reconstruction_08",
+      "overrides": {
+        "reconstruction_loss_weight": 0.8
+      }
+    },
+    {
+      "name": "subject_005",
+      "overrides": {
+        "subject_loss_weight": 0.05
+      }
+    },
+    {
+      "name": "subject_04",
+      "overrides": {
+        "subject_loss_weight": 0.4
+      }
+    },
+    {
+      "name": "dropout_02",
+      "overrides": {
+        "classifier_rnn_dropout": 0.2
+      }
+    },
+    {
+      "name": "focal_1",
+      "overrides": {
+        "focal_gamma": 1.0
+      }
+    }
+  ]
+}

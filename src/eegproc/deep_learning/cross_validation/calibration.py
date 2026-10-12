@@ -14,7 +14,7 @@ if TYPE_CHECKING:  # annotations only
 
 from .arrays import _python_scalar
 from .constants import _CLASSIFICATION_METRICS, _DECODER_SCORE_NAMES, _DEFAULT_ECE_BINS
-from .workers import _auto_assign_gpu_ids, _run_spawned_fold_pool
+from .workers import _resolve_fold_gpu_groups, _run_spawned_fold_pool
 from .probabilities import _normalize_decision_thresholds
 from .reporting import _mean_std_rows, _validate_evaluation_level
 from .calibration_subject import _run_subject_calibration_subject, _subject_calibration_process_main
@@ -69,6 +69,8 @@ def subject_calibration_cv(
     calibration_batch_size: int = 6,
     *,
     pretrained_model: tf.keras.Model | None = None,
+    training_seed: int | None = None,
+    deterministic_training: bool = False,
     calibration_trials: int = 6,
     calibration_folds: int = 3,
     calibration_levels: list[tuple[int, int]] | tuple[tuple[int, int], ...] | None = None,
@@ -126,6 +128,7 @@ def subject_calibration_cv(
     verbose: int = 0,
     n_jobs: int = 1,
     gpu_ids: list[int] | tuple[int, ...] | None = None,
+    gpus_per_fold: int = 1,
     cpus_per_worker: int | None = None,
     max_subjects: int | None = None,
     target_subjects: list[int] | tuple[int, ...] | None = None,
@@ -133,16 +136,25 @@ def subject_calibration_cv(
 ) -> dict:
     """Strict LOSO pretraining followed by one or more calibration levels.
 
+    ``n_jobs`` counts concurrent target folds. ``gpus_per_fold`` groups that
+    many entries from the flat ``gpu_ids`` list into each worker's isolated
+    device mask. Multi-GPU source training requires a builder whose model
+    implements ``configure_fold_devices`` (currently trial-level v15 MLDG).
+
     Pass exactly one of ``model_builder_function`` and ``pretrained_model``.
     The pretrained path accepts one already-loaded, target-specific LOSO model,
     requires one explicit ``target_subjects`` entry, and skips source fitting.
+
+    When ``training_seed`` is set, every target receives a stable seed derived
+    from that base seed and the target ID. ``deterministic_training=True`` also
+    enables TensorFlow deterministic operations inside the target worker.
 
     For each target subject, a fresh subject-independent source model is first
     trained using the other subjects. When ``validation_subjects_per_fold`` is
     positive, a seeded subset of those source subjects is excluded from gradient
     updates and used only for source checkpoint selection. The target subject is
     never used to construct, optimize, or select that source model. This is
-    important for models that learn data-dependent adjacency: the four ``training_*``
+    especially important for v6's MTLFuseNet-style GCN: the four ``training_*``
     arrays contain only gradient-training source subjects, so its fixed
     mutual-information adjacency remains training-only.
 
@@ -193,11 +205,11 @@ def subject_calibration_cv(
         )
 
     The method owns the architecture-specific freezing policy and must compile
-    a *fresh optimizer*. A typical policy freezes the shared representation
-    layers — graph, spectral and temporal encoders, plus any subject-invariance
-    machinery — while the classification head stays trainable; reconstruction
-    decoders may also remain trainable when the model's calibration settings
-    request it.
+    a *fresh optimizer*. For deterministic SIC it freezes the MTL GCN,
+    spectral GRU, temporal encoder, and subject-invariance machinery. The
+    configured emotion-classification suffix remains trainable; active
+    reconstruction decoders may also remain trainable when requested by the
+    model's calibration settings.
 
     Aggregation
     -----------
@@ -207,6 +219,8 @@ def subject_calibration_cv(
     terminal output reports final mean accuracy, balanced accuracy, and Brier
     score for 0-shot and each calibrated level.
     """
+    if pretrained_model is not None and gpus_per_fold != 1:
+        raise ValueError("Pretrained calibration runs require gpus_per_fold=1.")
     feature_array = np.asarray(feature_array)
     label_array = np.asarray(label_array)
     subject_id_array = np.asarray(subject_id_array).reshape(-1)
@@ -417,6 +431,11 @@ def subject_calibration_cv(
                 "model is passed directly rather than serialized to workers."
             )
 
+    if deterministic_training and training_seed is None:
+        raise ValueError(
+            "deterministic_training requires a non-null training_seed."
+        )
+
     # Fail early if a usable calibration/evaluation split cannot be formed for
     # any selected subject, rather than discovering it after pretraining.
     for target_subject in target_subjects:
@@ -434,30 +453,16 @@ def subject_calibration_cv(
                 f"{invalid_shots}."
             )
 
-    effective_n_jobs = min(int(n_jobs), total_subjects)
-    normalized_gpu_ids: tuple[int, ...] | None = None
-    if gpu_ids is None and effective_n_jobs > 1:
-        normalized_gpu_ids = _auto_assign_gpu_ids(effective_n_jobs)
-        if normalized_gpu_ids is not None:
-            effective_n_jobs = len(normalized_gpu_ids)
-    elif gpu_ids is not None:
-        normalized_gpu_ids = tuple(int(gpu_id) for gpu_id in gpu_ids)
-        if not normalized_gpu_ids:
-            raise ValueError("gpu_ids must contain at least one GPU index.")
-        if len(set(normalized_gpu_ids)) != len(normalized_gpu_ids):
-            raise ValueError("gpu_ids must not contain duplicate GPU indices.")
-        if effective_n_jobs > len(normalized_gpu_ids):
-            raise ValueError(
-                f"n_jobs={effective_n_jobs} requires at least that many GPU IDs; "
-                f"got gpu_ids={normalized_gpu_ids}."
-            )
-        normalized_gpu_ids = normalized_gpu_ids[:effective_n_jobs]
+    effective_n_jobs, normalized_gpu_ids = _resolve_fold_gpu_groups(
+        min(int(n_jobs), total_subjects), gpu_ids, gpus_per_fold
+    )
 
     tasks = [
         (subject_number, target_subject)
         for subject_number, target_subject in enumerate(target_subjects, start=1)
     ]
     worker_state = {
+        "gpus_per_fold": int(gpus_per_fold),
         "total_subjects": total_subjects,
         "model_builder_function": model_builder_function,
         "pretrained_model": pretrained_model,
@@ -466,6 +471,8 @@ def subject_calibration_cv(
         "subject_id_array": subject_id_array,
         "trial_id_array": trial_id_array,
         "fixed_config": fixed_config,
+        "training_seed": training_seed,
+        "deterministic_training": bool(deterministic_training),
         "source_epochs": int(source_epochs),
         "source_batch_size": int(source_batch_size),
         "validation_subjects_per_fold": int(validation_subjects_per_fold),
@@ -535,16 +542,33 @@ def subject_calibration_cv(
             for subject_number, target_subject in tasks
         ]
     else:
-        subject_outputs = _run_spawned_fold_pool(
-            worker_target=_subject_calibration_process_main,
-            worker_state=worker_state,
-            tasks=tasks,
-            n_workers=effective_n_jobs,
-            gpu_ids=normalized_gpu_ids,
-            cpus_per_worker=cpus_per_worker,
-            worker_name_prefix="SubjectCalibrationWorker",
-            worker_description="target-subject calibration",
-        )
+        # A full subject fit creates large cuDNN RNN workspaces. TensorFlow's
+        # clear_session() releases Keras state but does not destroy the CUDA
+        # context or all native cuDNN caches in a live process. Reusing a GPU
+        # worker for several target subjects can therefore fragment/retain
+        # enough device memory for a later GRU backward pass to fail. Run at
+        # most one subject per spawned process and recycle the worker wave.
+        subject_outputs = []
+        for batch_start in range(0, len(tasks), effective_n_jobs):
+            task_batch = tasks[batch_start : batch_start + effective_n_jobs]
+            batch_n_workers = len(task_batch)
+            batch_gpu_ids = (
+                None
+                if normalized_gpu_ids is None
+                else normalized_gpu_ids[:batch_n_workers]
+            )
+            subject_outputs.extend(
+                _run_spawned_fold_pool(
+                    worker_target=_subject_calibration_process_main,
+                    worker_state=worker_state,
+                    tasks=task_batch,
+                    n_workers=batch_n_workers,
+                    gpu_ids=batch_gpu_ids,
+                    cpus_per_worker=cpus_per_worker,
+                    worker_name_prefix="SubjectCalibrationWorker",
+                    worker_description="target-subject calibration",
+                )
+            )
     subject_outputs.sort(key=lambda row: int(row["subject_number"]))
 
     metric_names = ("loss", *metrics, "joint_loss", *_DECODER_SCORE_NAMES)
@@ -580,6 +604,16 @@ def subject_calibration_cv(
             if pretrained_model is not None
             else "fit_in_cross_validation"
         ),
+        "training_seed": training_seed,
+        "deterministic_training": bool(deterministic_training),
+        "deterministic_multi_gpu_execution": (
+            "serial_eager_device_shards"
+            if deterministic_training and gpus_per_fold > 1
+            else "tensorflow_op_determinism"
+            if deterministic_training
+            else None
+        ),
+        "subject_seed_rule": "base_seed_plus_numeric_target_id_mod_2^31_minus_1",
         "n_calibration_fits": total_subjects * int(total_calibration_folds),
         "calibration_plan": [
             {"shots": int(shots), "folds": int(folds)}
@@ -664,7 +698,13 @@ def subject_calibration_cv(
         zero_all = dict(summary["zero_shot_all_trials_scores"])
         zero_all_subject_rows.append(zero_all)
 
-        flat_summary = {"target_subject": subject_output["target_subject"]}
+        flat_summary = {
+            "target_subject": subject_output["target_subject"],
+            "training_seed": subject_output.get("training_seed"),
+            "deterministic_training": subject_output.get(
+                "deterministic_training", False
+            ),
+        }
         zero_shot_model = subject_output.get("zero_shot_model")
         if zero_shot_model is not None:
             flat_summary["zero_shot_model_path"] = zero_shot_model["path"]

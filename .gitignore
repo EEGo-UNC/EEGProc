@@ -207,7 +207,12 @@ marimo/_lsp/
 __marimo__/
 
 DREAMER.CSV
-scripts/
+# Keep local scratch scripts ignored; track the valence experiment entry points.
+/scripts/*
+!/scripts/VALENCE_SWEEP.md
+!/scripts/full_run_v15_valence_sweep.sh
+!/scripts/sic_v15_valence_sweep.py
+!/scripts/sic_v15_valence_configs.json
 
 datasets/
 

@@ -4,11 +4,6 @@ from typing import Any, Mapping
 import numpy as np
 import tensorflow as tf
 
-from ..cross_validation.arrays import (
-    _as_numpy_1d,
-    _prepare_fit_inputs_with_subject_ids,
-)
-
 
 class MLDGEpisodeSequence(tf.keras.utils.Sequence):
     """Build class-balanced, complete-trial MLDG episodes for domain generalization.
@@ -442,8 +437,9 @@ def _gradient_cosine_similarity(left, right):
     return tf.math.divide_no_nan(dot, tf.sqrt(left_norm_sq * right_norm_sq))
 
 
-def run_mldg_train_step(model, x, y_flat, sample_weight) -> None:
-    """Execute the first-order MLDG update outside the model definition."""
+def run_mldg_train_step(model, x, y_flat, sample_weight, *, encode=None) -> None:
+    """Execute a first-order update with an optional device-sharded encoder."""
+    encode = model._encode if encode is None else encode
     if not isinstance(x, Mapping) or "mldg_role" not in x:
         raise ValueError(
             "MLDG train_step requires the episode roles produced by "
@@ -481,7 +477,7 @@ def run_mldg_train_step(model, x, y_flat, sample_weight) -> None:
     # deliberately excludes reconstruction, so virtual-unseen performance
     # cannot improve merely by reproducing that subject's EEG.
     with tf.GradientTape() as meta_train_tape:
-        meta_train_outputs = model._encode(meta_train_eeg, training=True)
+        meta_train_outputs = encode(meta_train_eeg, training=True)
         meta_train_vc = model._vc_components(
             meta_train_outputs["classification_embedding"],
             meta_train_outputs["logits"],
@@ -525,7 +521,7 @@ def run_mldg_train_step(model, x, y_flat, sample_weight) -> None:
             )
 
     with tf.GradientTape() as meta_test_tape:
-        meta_test_outputs = model._encode(meta_test_eeg, training=True)
+        meta_test_outputs = encode(meta_test_eeg, training=True)
         meta_test_vc = model._vc_components(
             meta_test_outputs["classification_embedding"],
             meta_test_outputs["logits"],
@@ -628,6 +624,14 @@ class MetaLearningSubjectSequence(tf.keras.utils.Sequence):
         class_weight: dict[int, float] | None = None,
         seed: int | None = 42,
     ) -> None:
+        # Only this window-level sampler needs the CV input adapters. Loading
+        # them here lets the standalone MLDG helpers import before CV, whose
+        # fold runners also import this class.
+        from ..cross_validation.arrays import (
+            _as_numpy_1d,
+            _prepare_fit_inputs_with_subject_ids,
+        )
+
         super().__init__()
         self.X = np.asarray(X)
         self.y = np.asarray(y)
