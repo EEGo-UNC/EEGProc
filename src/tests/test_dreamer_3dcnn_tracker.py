@@ -88,6 +88,31 @@ def test_generated_slurm_script_configures_xla_libdevice(tracker, campaign):
     assert "python experiments/dreamer_3dcnn/train.py" in script
 
 
+def test_plan_repairs_launcher_left_by_failed_write(tracker, campaign, tmp_path, capsys):
+    runs = tmp_path / "runs"
+    run_dir = runs / "partial-run"
+    run_dir.mkdir(parents=True)
+    config = dict(campaign["defaults"])
+    (run_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps({
+            "campaign": campaign["campaign"],
+            "run_id": "partial-run",
+            "config_fingerprint": tracker.fingerprint(config),
+            "stage": "full",
+            "status": "planned",
+            "reason": "test recovery",
+        }),
+        encoding="utf-8",
+    )
+
+    planned = tracker.plan_run(campaign, runs, "valence")
+
+    assert planned == run_dir
+    assert (run_dir / "submit.slurm").read_text(encoding="utf-8").startswith("#!/bin/bash\n")
+    assert "Repaired partial plan partial-run" in capsys.readouterr().out
+
+
 def test_completed_full_run_changes_one_setting(tracker, campaign):
     defaults = dict(campaign["defaults"])
     smoke = {**defaults, **campaign["smoke_overrides"]}

@@ -258,7 +258,56 @@ python experiments/dreamer_3dcnn/train.py \\
 '''
 
 
+def _write_slurm_script(path: Path, run_id: str, campaign: dict[str, Any]) -> None:
+    """Write a launcher with Unix newlines on every supported Python version."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(slurm_script(run_id, campaign))
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return path.relative_to(HERE.parent.parent).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+def _repair_partial_plan(
+    campaign: dict[str, Any], runs_dir: Path, target: str
+) -> Path | None:
+    """Finish a planned run whose launcher was not written successfully."""
+    for manifest_path in sorted(runs_dir.glob(f"*/{MANIFEST_FILE}")):
+        run_dir = manifest_path.parent
+        script = run_dir / "submit.slurm"
+        if script.exists() and script.stat().st_size > 0:
+            continue
+        manifest = load_json(manifest_path)
+        config_path = run_dir / CONFIG_FILE
+        if (
+            manifest.get("campaign") != campaign["campaign"]
+            or manifest.get("status") != "planned"
+            or not config_path.exists()
+        ):
+            continue
+        config = load_json(config_path)
+        if config.get("target") != target:
+            continue
+        if manifest.get("config_fingerprint") != fingerprint(config):
+            raise ValueError(f"Config fingerprint mismatch in partial run {run_dir}.")
+        run_id = str(manifest.get("run_id", run_dir.name))
+        _write_slurm_script(script, run_id, campaign)
+        print(
+            f"Repaired partial plan {run_id}\nReason: {manifest.get('reason', 'planned run')}\n"
+            f"Submit on Longleaf:\n  cd <repo> && sbatch {_display_path(script)}"
+        )
+        return run_dir
+    return None
+
+
 def plan_run(campaign: dict[str, Any], runs_dir: Path, target: str) -> Path:
+    repaired = _repair_partial_plan(campaign, runs_dir, target)
+    if repaired is not None:
+        return repaired
     stage, config, reason = suggest(campaign, scan_runs(runs_dir, campaign), target)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     signature = fingerprint(config)
@@ -280,8 +329,8 @@ def plan_run(campaign: dict[str, Any], runs_dir: Path, target: str) -> Path:
         },
     )
     script = run_dir / "submit.slurm"
-    script.write_text(slurm_script(run_id, campaign), encoding="utf-8", newline="\n")
-    relative_script = script.relative_to(HERE.parent.parent).as_posix()
+    _write_slurm_script(script, run_id, campaign)
+    relative_script = _display_path(script)
     print(
         f"Planned {run_id}\nReason: {reason}\nSubmit on Longleaf:\n"
         f"  cd <repo> && sbatch {relative_script}"
