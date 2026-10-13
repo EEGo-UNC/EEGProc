@@ -175,7 +175,7 @@ print(json.dumps({
     "n_classifier_rnn_layers": 2,
     "classifier_rnn_dropout": 0.4,
 
-    "focal_gamma": {"grid": 0.0, 0.5, 1.0, 2.0},
+    "focal_gamma": {"grid": [0.0, 0.5, 1.0, 2.0]},
     "focal_alpha": None,
     "vc_loss_weight": 1.0,
     "vc_alpha": 2.0,
