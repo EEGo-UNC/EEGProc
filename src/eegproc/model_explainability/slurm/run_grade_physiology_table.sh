@@ -40,11 +40,10 @@ set -euo pipefail
 #   git fetch origin graded-physiological-checks
 #   git worktree add ../EEGProc-graded origin/graded-physiological-checks
 #
-# SUBMIT from ~/EEGProc (so PROJECT_DIR, venv and datasets resolve):
-#   mkdir -p runs/graded_physiology
-#   sbatch src/eegproc/model_explainability/slurm/run_grade_physiology_table.sh
-# or, if this file is not in the repo, from anywhere:
-#   PROJECT_DIR=~/EEGProc sbatch run_grade_physiology_table.sh
+# SUBMIT from ~/EEGProc (so PROJECT_DIR, venv, datasets and runs resolve);
+# the script itself lives in the worktree:
+#   cd ~/EEGProc
+#   sbatch ../EEGProc-graded/src/eegproc/model_explainability/slurm/run_grade_physiology_table.sh
 #
 # Overrides (export before sbatch): PROJECT_DIR, GRADE_REPO, VENV_DIR,
 # AROUSAL_SUITE, VALENCE_SUITE, EEG_PATH, LABELS_PATH, OUT_DIR, TOLERANCE.
