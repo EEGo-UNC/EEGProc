@@ -1,4 +1,4 @@
-"""Plan, import, and summarize DREAMER 3D-CNN experiments.
+"""Plan, import, and summarize config-driven DREAMER experiments.
 
 This module intentionally uses only the Python standard library so planning and
 syncing work on a laptop without TensorFlow installed.
@@ -175,10 +175,14 @@ def suggest(campaign: dict[str, Any], rows: list[dict[str, Any]], target: str) -
 
 def slurm_script(run_id: str, campaign: dict[str, Any]) -> str:
     cluster = campaign["longleaf"]
+    experiment_dir = campaign.get("experiment_dir", "experiments/dreamer_3dcnn")
+    training_script = campaign.get(
+        "training_script", "experiments/dreamer_3dcnn/train.py"
+    )
     return f'''#!/bin/bash
 #SBATCH --job-name={run_id[:40]}
-#SBATCH --output=experiments/dreamer_3dcnn/runs/{run_id}/slurm-%j.out
-#SBATCH --error=experiments/dreamer_3dcnn/runs/{run_id}/slurm-%j.err
+#SBATCH --output={experiment_dir}/runs/{run_id}/slurm-%j.out
+#SBATCH --error={experiment_dir}/runs/{run_id}/slurm-%j.err
 #SBATCH --partition={cluster["partition"]}
 #SBATCH --qos={cluster["qos"]}
 #SBATCH --gres=gpu:{cluster["gpus"]}
@@ -195,7 +199,7 @@ module load {cluster["cudnn_module"]}
 PROJECT_DIR="${{PROJECT_DIR:-$HOME/EEGProc}}"
 VENV_DIR="${{VENV_DIR:-$PROJECT_DIR/venv312}}"
 DATA_DIR="${{DATA_DIR:-$PROJECT_DIR/datasets}}"
-RUN_DIR="$PROJECT_DIR/experiments/dreamer_3dcnn/runs/{run_id}"
+RUN_DIR="$PROJECT_DIR/{experiment_dir}/runs/{run_id}"
 
 cd "$PROJECT_DIR"
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -251,7 +255,7 @@ export XLA_FLAGS="${{XLA_FLAGS:+$XLA_FLAGS }}--xla_gpu_cuda_data_dir=$CUDA_XLA_R
 echo "CUDA XLA root: $CUDA_XLA_ROOT"
 echo "libdevice: $LIBDEVICE_PATH"
 
-python experiments/dreamer_3dcnn/train.py \\
+python {training_script} \\
     --config "$RUN_DIR/config.json" \\
     --data-dir "$DATA_DIR" \\
     --output-dir "$RUN_DIR"
@@ -381,7 +385,8 @@ def rebuild_reports(runs_dir: Path, campaign: dict[str, Any]) -> list[dict[str, 
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-    lines = ["# DREAMER 3D-CNN runs", "", f"Objective: `{campaign['objective']['metric']}`", ""]
+    report_title = campaign.get("report_title", "DREAMER 3D-CNN runs")
+    lines = [f"# {report_title}", "", f"Objective: `{campaign['objective']['metric']}`", ""]
     for target in VALID_TARGETS:
         lines.extend([f"## {target.title()}", "", "| run | stage | status | mean | std |", "|---|---:|---:|---:|---:|"])
         target_rows = [row for row in rows if row.get("target") == target]
@@ -411,7 +416,12 @@ def print_status(rows: list[dict[str, Any]], campaign: dict[str, Any]) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--campaign", type=Path, default=DEFAULT_CAMPAIGN)
-    result.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
+    result.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=None,
+        help="Run store (defaults to a runs folder beside the selected campaign).",
+    )
     commands = result.add_subparsers(dest="command", required=True)
     for name in ("suggest", "plan"):
         command = commands.add_parser(name)
@@ -427,21 +437,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         campaign = load_json(args.campaign)
+        runs_dir = args.runs_dir or args.campaign.resolve().parent / "runs"
         target = getattr(args, "target", None) or campaign["defaults"]["target"]
         if args.command == "suggest":
-            stage, config, reason = suggest(campaign, scan_runs(args.runs_dir, campaign), target)
+            stage, config, reason = suggest(campaign, scan_runs(runs_dir, campaign), target)
             print(f"Next: {target} / {stage}\nReason: {reason}\n\n{json.dumps(config, indent=2)}")
         elif args.command == "plan":
-            plan_run(campaign, args.runs_dir, target)
-            rebuild_reports(args.runs_dir, campaign)
+            plan_run(campaign, runs_dir, target)
+            rebuild_reports(runs_dir, campaign)
         elif args.command == "sync":
-            count = sync_bundles(args.source.resolve(), args.runs_dir.resolve(), campaign)
-            print(f"Synced {count} run bundle(s) into {args.runs_dir}.")
+            count = sync_bundles(args.source.resolve(), runs_dir.resolve(), campaign)
+            print(f"Synced {count} run bundle(s) into {runs_dir}.")
         elif args.command == "rebuild":
-            rows = rebuild_reports(args.runs_dir, campaign)
+            rows = rebuild_reports(runs_dir, campaign)
             print(f"Rebuilt reports for {len(rows)} run(s).")
         else:
-            rows = rebuild_reports(args.runs_dir, campaign)
+            rows = rebuild_reports(runs_dir, campaign)
             print_status(rows, campaign)
     except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)

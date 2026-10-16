@@ -88,6 +88,18 @@ def test_generated_slurm_script_configures_xla_libdevice(tracker, campaign):
     assert "python experiments/dreamer_3dcnn/train.py" in script
 
 
+def test_generated_slurm_script_supports_a_separate_model_campaign(tracker, campaign):
+    alternate = {
+        **campaign,
+        "experiment_dir": "experiments/dreamer_3dcnn_transformer",
+        "training_script": "experiments/dreamer_3dcnn/train.py",
+    }
+    script = tracker.slurm_script("transformer-run", alternate)
+
+    assert "experiments/dreamer_3dcnn_transformer/runs/transformer-run" in script
+    assert "python experiments/dreamer_3dcnn/train.py" in script
+
+
 def test_plan_repairs_launcher_left_by_failed_write(tracker, campaign, tmp_path, capsys):
     runs = tmp_path / "runs"
     run_dir = runs / "partial-run"

@@ -156,6 +156,9 @@ def make_windows(
 def build_model_factory(config: dict[str, Any]):
     import tensorflow as tf
 
+    from eegproc.deep_learning.supervised.cnn_transformer import (
+        build_3dcnn_transformer_classifier,
+    )
     from eegproc.deep_learning.unsupervised.Convolutions.CNN3D import (
         MTLFuseNet3DCNNEncoder,
     )
@@ -163,24 +166,44 @@ def build_model_factory(config: dict[str, Any]):
     def build_model(**overrides):
         settings = {**config, **overrides}
         tf.keras.utils.set_random_seed(int(settings["seed"]))
-        inputs = tf.keras.layers.Input((int(settings["window_samples"]), 42), name="eeg_window")
-        encoder = MTLFuseNet3DCNNEncoder(
-            timesteps=int(settings["window_samples"]),
-            t_down=int(np.prod(settings["temporal_pool_sizes"])) if settings["temporal_pool_sizes"] else 1,
-            conv_filters=tuple(settings["conv_filters"]),
-            temporal_kernel_size=int(settings["temporal_kernel_size"]),
-            spatial_kernel_size=int(settings["spatial_kernel_size"]),
-            spatial_pool_sizes=tuple(settings["spatial_pool_sizes"]),
-            temporal_pool_sizes=tuple(settings["temporal_pool_sizes"]),
-            emb_dim=int(settings["emb_dim"]),
-            dropout=float(settings["dropout"]),
-        )
-        x = encoder(inputs)
-        x = tf.keras.layers.GlobalAveragePooling1D(name="temporal_average")(x)
-        x = tf.keras.layers.Dense(int(settings["hidden_units"]), activation="relu", name="hidden")(x)
-        x = tf.keras.layers.Dropout(float(settings["dropout"]), name="classifier_dropout")(x)
-        outputs = tf.keras.layers.Dense(2, activation="softmax", name="class_probabilities")(x)
-        model = tf.keras.Model(inputs, outputs, name="dreamer_3dcnn")
+        if settings.get("model_type", "3dcnn") == "3dcnn_transformer":
+            model = build_3dcnn_transformer_classifier(
+                timesteps=int(settings["window_samples"]),
+                conv_filters=tuple(settings["conv_filters"]),
+                temporal_kernel_size=int(settings["temporal_kernel_size"]),
+                spatial_kernel_size=int(settings["spatial_kernel_size"]),
+                spatial_pool_sizes=tuple(settings["spatial_pool_sizes"]),
+                temporal_pool_sizes=tuple(settings["temporal_pool_sizes"]),
+                embedding_dim=int(settings["emb_dim"]),
+                transformer_layers=int(settings["transformer_layers"]),
+                attention_heads=int(settings["attention_heads"]),
+                feed_forward_dim=int(settings["feed_forward_dim"]),
+                classifier_units=int(settings["hidden_units"]),
+                dropout=float(settings["dropout"]),
+                n_classes=2,
+                name="dreamer_3dcnn_transformer",
+            )
+        elif settings.get("model_type", "3dcnn") == "3dcnn":
+            inputs = tf.keras.layers.Input((int(settings["window_samples"]), 42), name="eeg_window")
+            encoder = MTLFuseNet3DCNNEncoder(
+                timesteps=int(settings["window_samples"]),
+                t_down=int(np.prod(settings["temporal_pool_sizes"])) if settings["temporal_pool_sizes"] else 1,
+                conv_filters=tuple(settings["conv_filters"]),
+                temporal_kernel_size=int(settings["temporal_kernel_size"]),
+                spatial_kernel_size=int(settings["spatial_kernel_size"]),
+                spatial_pool_sizes=tuple(settings["spatial_pool_sizes"]),
+                temporal_pool_sizes=tuple(settings["temporal_pool_sizes"]),
+                emb_dim=int(settings["emb_dim"]),
+                dropout=float(settings["dropout"]),
+            )
+            x = encoder(inputs)
+            x = tf.keras.layers.GlobalAveragePooling1D(name="temporal_average")(x)
+            x = tf.keras.layers.Dense(int(settings["hidden_units"]), activation="relu", name="hidden")(x)
+            x = tf.keras.layers.Dropout(float(settings["dropout"]), name="classifier_dropout")(x)
+            outputs = tf.keras.layers.Dense(2, activation="softmax", name="class_probabilities")(x)
+            model = tf.keras.Model(inputs, outputs, name="dreamer_3dcnn")
+        else:
+            raise ValueError(f"Unknown model_type={settings['model_type']!r}.")
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=float(settings["learning_rate"]),
             weight_decay=float(settings["weight_decay"]),
