@@ -44,7 +44,7 @@ to the models from the intended experiment before running calibration.
   function and honor subject-selection arguments; their default remains users
   0 and 1.
 
-The six-hour oracle sweep in `scripts/full_run_v15_valence_sweep.sh` is preserved:
+The six-hour oracle sweep in `src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/full_run_v15_valence_sweep.sh` is preserved:
 16 configurations, one per array task, and one shared epoch selected by maximum
 mean held-out-subject balanced accuracy. The imported full-run/calibration
 scripts retain their separate training budgets and reporting protocol.

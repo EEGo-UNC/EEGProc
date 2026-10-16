@@ -1,9 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=full_run_v15_valence
-#SBATCH --output=full_run_v15_valence_%j.out
-#SBATCH --error=full_run_v15_valence_%j.err
+#SBATCH --output=full_run_v15_valence_%A_%a.out
+#SBATCH --error=full_run_v15_valence_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
+#SBATCH --array=0-35%2
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
@@ -11,15 +12,22 @@
 
 set -euo pipefail
 
-# Run the SIC-model branch valence grid across every LOSO target:
-# subject loss 0.0/0.3/0.6 x reconstruction loss 0.0/0.4/0.8 (nine configurations).
-# For one configuration per six-hour array task, use scripts/full_run_v15_valence_sweep.sh.
+# Submit with sbatch: one fixed configuration per array task, all 23 LOSO targets.
+# focal gamma 0.0/0.5/1.0/2.0 x subject loss 0.0/0.3/0.6
+# x reconstruction loss 0.0/0.4/0.8 = 36 tasks, at most two concurrently.
+# The separate full_run_v15_valence_sweep.sh uses an oracle protocol.
 #
 # SICModelv15 adds the learned convex joint reconstruction. Its v15 defaults
 # are made explicit below: initial alpha=0.5 and auxiliary branch weight=0.25.
-# Four allocated GPUs run two folds concurrently on pairs (0,1) and (2,3).
+# Each task's four GPUs run two folds concurrently on pairs (0,1) and (2,3).
 # Each episode uses 12 meta-train + 6 meta-test subjects x 2 distinct trials:
 # 24/12 trials globally and 12/6 per GPU.
+
+TASK_INDEX="${SLURM_ARRAY_TASK_ID:-}"
+if [[ ! "$TASK_INDEX" =~ ^([0-9]|[12][0-9]|3[0-5])$ ]]; then
+    echo "ERROR: submit this script with sbatch; SLURM_ARRAY_TASK_ID must be 0..35." >&2
+    exit 1
+fi
 
 module purge
 module load python/3.12.4
@@ -39,7 +47,7 @@ SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
 PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-100}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
-SUITE_ID="${SLURM_JOB_ID:-manual}"
+SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 
 CALIBRATION_LEVEL_ARGS=(
     --calibration-level 3 6
@@ -126,15 +134,16 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# Cross the two loss-weight axes. Fixed wrappers keep the layer-width lists
-# as one architecture rather than extra search axes.
+# Select exactly one point from the three-axis grid. Fixed wrappers keep
+# layer-width lists as one architecture rather than extra search axes.
 MODEL_CONFIG="$(python - <<'PY'
+import itertools
 import json
 import os
 
 seed = int(os.environ["TRAINING_SEED"])
 
-print(json.dumps({
+model_config = {
     "classification_level": "trial",
     "n_channels": 14,
     "n_bands": 3,
@@ -206,21 +215,35 @@ print(json.dumps({
     "calibration_vc_beta": 0.3,
     "calibration_vc_gamma": 0.0,
     "calibration_vc_lambda": 0.05,
-}))
+}
+
+# Keep insertion order, matching expand_cartesian_grid in sic_common.config.
+axes = {name: value["grid"] for name, value in model_config.items()
+        if isinstance(value, dict) and "grid" in value}
+combinations = list(itertools.product(*axes.values()))
+if len(combinations) != 36:
+    raise SystemExit("Update the Slurm array range to match the valence grid.")
+task_index = int(os.environ["SLURM_ARRAY_TASK_ID"])
+if not 0 <= task_index < len(combinations):
+    raise SystemExit(f"Invalid array task index: {task_index}")
+model_config.update(zip(axes, combinations[task_index]))
+print(json.dumps(model_config))
 PY
 )"
 
 echo "SIC builder: v15"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
+echo "Array: $SUITE_ID task $TASK_INDEX (one of 36 configurations)"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER valence"
 echo "Scope: all 23 LOSO target subjects"
 echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 10 steps/epoch"
 echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-test"
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3 shots (6 folds)"
-echo "Selection: maximize zero-shot LOSO balanced accuracy"
-echo "Grid: subject loss 0.0/0.3/0.6 x reconstruction loss 0.0/0.4/0.8"
-echo "VC settings: focal_gamma=0.3 vc_alpha=2.0 vc_beta=0.6 vc_lambda=0.05 vc_logit_scale=16.0"
+echo "Selection metric: zero-shot LOSO balanced accuracy; compare scores across array tasks"
+echo "Grid: focal gamma 0.0/0.5/1.0/2.0 x subject loss 0.0/0.3/0.6 x reconstruction loss 0.0/0.4/0.8"
+echo "Selected model configuration: $MODEL_CONFIG"
+echo "VC settings: vc_alpha=2.0 vc_beta=0.6 vc_lambda=0.05 vc_logit_scale=16.0"
 echo "Joint reconstruction: initial alpha=0.5 auxiliary branch weight=0.25"
 echo "Deterministic training: enabled; base seed=$TRAINING_SEED; subject seed=base+target ID"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
@@ -249,8 +272,8 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --classification-level trial \
     --n-channels 14 \
     --n-bands 3 \
-    --out-dir "runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_${SUITE_ID}/full" \
-    --run-name "full_run_v15_valence_best_20260918" \
+    --out-dir "runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_${SUITE_ID}/task_${TASK_INDEX}/full" \
+    --run-name "full_run_v15_valence_best_20260918_task_${TASK_INDEX}" \
     --training-method mldg \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \

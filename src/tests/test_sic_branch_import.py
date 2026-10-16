@@ -20,21 +20,22 @@ def test_imported_launchers_parse_and_calibration_help_works():
         assert "--target-subjects" in result.stdout
 
 
-def test_upstream_valence_grid_has_a_valid_calibration_selection():
+def test_valence_array_task_has_a_valid_calibration_selection():
     pytest.importorskip("tensorflow")
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_args import parse_cli, expand_cartesian_grid
     path = ROOT / "src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/full_run_v15_valence.sh"
     text = path.read_text()
     fragment = text.split('MODEL_CONFIG="$(python - <<\'PY\'\n', 1)[1].split("\nPY\n", 1)[0]
     result = subprocess.run([sys.executable, "-c", fragment], check=True, capture_output=True,
-                            text=True, env={**os.environ, "TRAINING_SEED": "42"})
+                            text=True, env={**os.environ, "TRAINING_SEED": "42", "SLURM_ARRAY_TASK_ID": "0"})
     assert "--calibration-selection-shots 3" in text
     args, config = parse_cli(["--training-protocol", "loso_validation", "--hyperparameters-json", result.stdout,
                              "--calibration-level", "3", "6", "--calibration-selection-shots", "3",
                              "--validation-subjects", "0", "--no-early-stopping",
                              "--n-jobs", "2", "--gpus-per-fold", "2", "--gpu-ids", "0", "1", "2", "3"])
     expanded, dimensions = expand_cartesian_grid(config)
-    assert len(expanded) == 9
+    assert len(expanded) == 1
+    assert dimensions == {}
     assert args.calibration_selection_shots == 3
     assert json.loads(result.stdout)["mldg_seed"] == 42
 

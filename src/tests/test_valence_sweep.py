@@ -11,7 +11,8 @@ import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts/sic_v15_valence_sweep.py"
+SIC_V15 = ROOT / "src/eegproc/deep_learning/joint_architectures/SICModelv15"
+SCRIPT = SIC_V15 / "sic_v15_valence_sweep.py"
 spec = importlib.util.spec_from_file_location("valence_sweep", SCRIPT)
 sweep = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sweep)
@@ -89,12 +90,17 @@ def test_preprocessing_matches_full_run_windows(tmp_path):
     np.testing.assert_array_equal(np.load(tmp_path / "cache/trials.npy"), [0, 1, 0, 1])
 
 
-def test_dry_run_submits_nothing():
-    result = subprocess.run(["bash", str(ROOT / "scripts/full_run_v15_valence_sweep.sh")],
-                            env={**os.environ, "DRY_RUN": "1", "SUBMIT_PYTHON": sys.executable},
+def test_dry_run_submits_nothing(tmp_path):
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"PROJECT_DIR", "CONFIGS", "SLURM_SUBMIT_DIR", "SLURM_ARRAY_TASK_ID", "MAX_CONCURRENT"}}
+    result = subprocess.run(["bash", str(SIC_V15 / "SLURM_scripts/full_run_v15_valence_sweep.sh")],
+                            env={**env, "DRY_RUN": "1", "SUBMIT_PYTHON": sys.executable}, cwd=tmp_path,
                             capture_output=True, text=True, check=True)
     assert "--array=0-15%2" in result.stdout
     assert "06:00:00 per task" in result.stdout
+    assert str(SIC_V15 / "SLURM_scripts/full_run_v15_valence_sweep.sh") in result.stdout
+    assert sweep.ROOT == ROOT
+    assert sweep.DEFAULT_CONFIGS == SIC_V15 / "sic_v15_valence_configs.json"
 
 
 def test_rank_separates_budgets_and_excludes_incomplete(tmp_path):
@@ -164,7 +170,8 @@ def test_real_cpu_worker_saves_reloadable_oracle_model(tmp_path):
     sweep.write_json(tmp_path / "task.json", {"configuration": configuration, "target_subjects": [0],
         "source_epochs": 2, "seed": 42, "gpus_per_fold": 0, "deadline": time.time() + 180})
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "TF_CPP_MIN_LOG_LEVEL": "3",
-           "MPLCONFIGDIR": str(tmp_path / "mpl"), "PYTHONPATH": str(ROOT / "src")}
+           "MPLCONFIGDIR": str(tmp_path / "mpl")}
+    env.pop("PYTHONPATH", None)
     result = subprocess.run([sys.executable, str(SCRIPT), "worker", "--spec", str(tmp_path / "task.json"),
                              "--subject", "0"], env=env, capture_output=True, text=True, timeout=240)
     assert result.returncode == 0, result.stdout + result.stderr

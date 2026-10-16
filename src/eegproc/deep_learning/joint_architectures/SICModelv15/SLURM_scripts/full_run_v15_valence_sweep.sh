@@ -16,8 +16,9 @@ set -euo pipefail
 # submitted with DRY_RUN=1. Hyperparameter lists are fixed architecture widths.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
-PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$(dirname "$SCRIPT_DIR")}}"
-CONFIGS="${CONFIGS:-$PROJECT_DIR/scripts/sic_v15_valence_configs.json}"
+PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$SCRIPT_DIR/../../../../../.." && pwd)}}"
+SIC_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/SICModelv15"
+CONFIGS="${CONFIGS:-$SIC_DIR/sic_v15_valence_configs.json}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-6}"
 TIME_BUDGET_SECONDS="${TIME_BUDGET_SECONDS:-21000}"
@@ -30,7 +31,7 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     fi
     [[ "$MAX_CONCURRENT" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid MAX_CONCURRENT" >&2; exit 1; }
     SUBMIT_PYTHON="${SUBMIT_PYTHON:-python3}"
-    COUNT="$("$SUBMIT_PYTHON" "$PROJECT_DIR/scripts/sic_v15_valence_sweep.py" list --configs "$CONFIGS" --count)"
+    COUNT="$("$SUBMIT_PYTHON" "$SIC_DIR/sic_v15_valence_sweep.py" list --configs "$CONFIGS" --count)"
     # Slurm executes a spool copy of this file, so persist the real checkout.
     export PROJECT_DIR CONFIGS VENV_DIR
     SUBMIT=(sbatch --array="0-$((COUNT-1))%${MAX_CONCURRENT}" --chdir="$PROJECT_DIR" "$SCRIPT_PATH" --task)
@@ -95,7 +96,7 @@ PY_GPU
 if [[ "${GPU_PREFLIGHT:-1}" == 1 ]]; then
     EEGPROC_TEST_GPUS=1 python -m src.tests.test_sic_v15_multi_gpu
 fi
-exec python "$PROJECT_DIR/scripts/sic_v15_valence_sweep.py" run \
+exec python "$SIC_DIR/sic_v15_valence_sweep.py" run \
     --configs "$CONFIGS" \
     --config-index "$TASK_INDEX" \
     --output-dir "$OUTPUT_ROOT/suite_${SUITE_ID}/configuration_${TASK_INDEX}" \

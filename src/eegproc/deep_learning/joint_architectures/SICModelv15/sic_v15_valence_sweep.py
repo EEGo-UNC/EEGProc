@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(ROOT / "src"))
 DEFAULT_CONFIGS = Path(__file__).with_name("sic_v15_valence_configs.json")
 

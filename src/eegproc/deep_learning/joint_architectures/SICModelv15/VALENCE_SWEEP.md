@@ -26,14 +26,16 @@ install packages from concurrent workers. The environment needs the project's
 setup are retained.
 
 ```bash
+SIC_V15=src/eegproc/deep_learning/joint_architectures/SICModelv15
+
 # Preview the 16-task submission without submitting anything:
-DRY_RUN=1 bash scripts/full_run_v15_valence_sweep.sh
+DRY_RUN=1 bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_sweep.sh"
 
 # Submit the complete array:
-bash scripts/full_run_v15_valence_sweep.sh
+bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_sweep.sh"
 
 # Or submit only the baseline to measure runtime first:
-sbatch --array=0 scripts/full_run_v15_valence_sweep.sh
+sbatch --array=0 "$SIC_V15/SLURM_scripts/full_run_v15_valence_sweep.sh"
 ```
 
 Overrides: `PROJECT_DIR`, `VENV_DIR`, `EEG_PATH`, `LABELS_PATH`, `OUTPUT_ROOT`,
@@ -127,11 +129,13 @@ data, subject logs, per-epoch models/metrics, `execution.json`,
 `oracle_models.json`. The latter identifies the oracle model set.
 
 ```bash
-python scripts/sic_v15_valence_sweep.py rank \
+SIC_V15=src/eegproc/deep_learning/joint_architectures/SICModelv15
+
+python "$SIC_V15/sic_v15_valence_sweep.py" rank \
   runs/sweeps/sic_v15_valence_oracle/suite_ARRAYID
 
 # Reconstruct a report from completed epoch files after an abrupt Slurm kill:
-python scripts/sic_v15_valence_sweep.py summarize \
+python "$SIC_V15/sic_v15_valence_sweep.py" summarize \
   runs/sweeps/sic_v15_valence_oracle/suite_ARRAYID/configuration_0
 ```
 
@@ -153,5 +157,7 @@ and six-hour task limits. Its manifest baseline was taken from the earlier
 `origin/fix/arousal-v11-calibration-level` commit
 `e6201db95b6657608b346803cfce4415470643be`, specifically
 `SICModelv15/SLURM_scripts/full_run_v15_valence.sh`. The imported full-run
-launcher has a separate nine-configuration grid and does not replace this
-oracle sweep.
+launcher has a separate 36-configuration grid (focal gamma x subject loss x
+reconstruction loss), with one fixed configuration per array task and a
+24-hour limit per task. It retains its LOSO/calibration protocol and does not
+replace this oracle sweep.
