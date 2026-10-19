@@ -139,3 +139,33 @@ def test_ablation_launcher_cannot_reenable_npz_output(launcher_env, script):
     assert not hasattr(parse_args(command[3:]), "artifact_mode")
     assert "--artifact-mode" not in command
     assert "NPZ output disabled" in result.stdout
+
+
+@pytest.mark.parametrize("script", [SCRIPT, VALENCE_SCRIPT])
+def test_ablation_launcher_physiology_options(launcher_env, script):
+    from eegproc.model_explainability.typicality.runner import parse_args
+
+    def command(env):
+        result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+        line = next(l.removeprefix("Command: ") for l in result.stdout.splitlines() if l.startswith("Command: "))
+        return parse_args(shlex.split(line)[3:]), result.stdout
+
+    defaults, _ = command(launcher_env)
+    assert defaults.physiological_tolerance_quantile is None
+    assert defaults.physiological_tolerance == 1e-8
+    assert defaults.amplitude_spectral_weight == 0
+    assert not defaults.include_repair_baseline
+
+    launcher_env.update(PHYSIOLOGICAL_TOLERANCE_QUANTILE="0.5", AMPLITUDE_SPECTRAL_WEIGHT="1.0",
+                        AMPLITUDE_SPECTRAL_MARGIN="0.1", REPAIR_BASELINE="1")
+    enabled, stdout = command(launcher_env)
+    assert enabled.physiological_tolerance_quantile == 0.5
+    assert enabled.amplitude_spectral_weight == 1.0
+    assert enabled.amplitude_spectral_margin == 0.1
+    assert enabled.include_repair_baseline
+    assert "repair_reconstruction.npz" in stdout
+
+    launcher_env["REPAIR_BASELINE"] = "yes"
+    result = subprocess.run(["bash", str(script)], env=launcher_env, text=True, capture_output=True)
+    assert result.returncode == 2

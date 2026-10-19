@@ -89,6 +89,13 @@ def population_summary(rows):
         unknown = any(r["status"] == "completed" and r.get(field) is None for r in rows)
         result[f"{field}_percent"] = (100 * sum(r.get(field) is True for r in rows) / n
                                       if n and expected and not unknown else None)
+    if any("delta_dec_explanation" in r for r in rows):
+        for field in ("repair_feasible", "repair_preserves_prediction"):
+            known = [r[field] for r in rows if field in r]
+            result[f"{field}_percent"] = 100 * sum(known) / len(known) if known else None
+        for field in ("delta_dec_explanation", "delta_dec_repair"):
+            for key, value in _quantiles([r.get(field) for r in rows]).items():
+                result[f"{field}_{key}"] = value
     for field in ("d_z", "delta_dec", "e_rec"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
             result[f"{field}_{key}"] = value
@@ -177,6 +184,17 @@ def collect_study(root):
                             physiological_required_count=physiology["required_count"],
                             available_physiological_checks_passed=physiology["available_checks_passed"],
                         )
+                        repair = summary.get("repair_baseline")
+                        if repair and repair.get("available"):
+                            # Change measured against the repaired decoder output
+                            # instead of the raw reconstruction (see runner).
+                            record.update(
+                                delta_dec_explanation=repair["delta_dec_explanation"],
+                                delta_dec_repair=repair["delta_dec_repair"],
+                                repair_feasible=repair["feasible"],
+                                repair_preserves_prediction=repair["preserves_prediction"],
+                                vcsc_repair=repair["vcsc_repair"],
+                            )
                         if "counterfactual" in decoded and "original_reconstruction" in decoded:
                             cf, rec = decoded["counterfactual"], decoded["original_reconstruction"]
                             record.update(

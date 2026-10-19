@@ -22,6 +22,14 @@ set -euo pipefail
 # Default: all 23 subjects, four concurrent one-GPU jobs. Single subject:
 #   sbatch --array=0 src/eegproc/model_explainability/slurm/run_cfo_ablations_valence_65452590.sh
 # Optional: TRIAL_IDS="8", MAX_STEPS=5, OUT_ROOT, RESUME=1.
+# Physiology options (defaults reproduce the original suite):
+#   PHYSIOLOGICAL_TOLERANCE_QUANTILE=0.5  VCSC feasible = at or below this quantile of
+#                                         VCSC on the fold's source REAL trials (instead
+#                                         of the fixed PHYSIOLOGICAL_TOLERANCE=1e-8)
+#   AMPLITUDE_SPECTRAL_WEIGHT=1.0         add the amplitude/spectral-power penalty
+#   AMPLITUDE_SPECTRAL_MARGIN=0.0         shrink source intervals inside that penalty
+#   REPAIR_BASELINE=1                     per trial, first find the repair-only z_rep and
+#                                         report every arm's change against R(z_rep)
 # Local command preview (no GPU, module loads, or result writes):
 #   DRY_RUN=1 VENV_DIR=venv bash src/eegproc/model_explainability/slurm/run_cfo_ablations_valence_65452590.sh
 
@@ -167,6 +175,8 @@ COMMAND=("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runne
     --physiological-tolerance "${PHYSIOLOGICAL_TOLERANCE:-1e-8}"
     --physiology-quantile "${PHYSIOLOGY_QUANTILE:-0.95}"
     --physiology-required-fraction "${PHYSIOLOGY_REQUIRED_FRACTION:-0.95}"
+    --amplitude-spectral-weight "${AMPLITUDE_SPECTRAL_WEIGHT:-0.0}"
+    --amplitude-spectral-margin "${AMPLITUDE_SPECTRAL_MARGIN:-0.0}"
     --fs 128 --seed "${SEED:-42}" --log-every "${LOG_EVERY:-10}" --out-dir "$OUT_DIR")
 case "${STOP_ON_SUCCESS:-1}" in
     1) COMMAND+=(--stop-on-success) ;;
@@ -183,13 +193,25 @@ if [[ -n "${TRIAL_IDS:-}" ]]; then
     done
     COMMAND+=(--trial-ids "${SELECTED_TRIALS[@]}")
 fi
+if [[ -n "${PHYSIOLOGICAL_TOLERANCE_QUANTILE:-}" ]]; then
+    COMMAND+=(--physiological-tolerance-quantile "$PHYSIOLOGICAL_TOLERANCE_QUANTILE")
+fi
+case "${REPAIR_BASELINE:-0}" in
+    1) COMMAND+=(--include-repair-baseline) ;;
+    0) ;;
+    *) echo "ERROR: REPAIR_BASELINE must be 0 or 1." >&2; exit 2 ;;
+esac
 if [[ "$RESUME" == 1 ]]; then COMMAND+=(--resume); fi
 
 echo "Suite 65452590 / configuration 0001 / valence / subject $SUBJECT_ID"
 echo "Arms: target_latent, base (full without typicality), typicality (full), typicality_no_physiology"
 echo "Fixed reconstruction weights from arousal suite 1599318: GCN-GRU=0.49751, BiLSTM=0.50249"
 echo "Output: $OUT_DIR"
-echo "Artifacts: JSON/CSV summaries only (NPZ output disabled)"
+if [[ "${REPAIR_BASELINE:-0}" == 1 ]]; then
+    echo "Artifacts: JSON/CSV summaries, plus one repair_reconstruction.npz per eligible trial"
+else
+    echo "Artifacts: JSON/CSV summaries only (NPZ output disabled)"
+fi
 if [[ "$DRY_RUN" == 1 ]]; then
     printf 'Command: '; printf '%q ' "${COMMAND[@]}"; printf '\n'
     exit 0

@@ -374,6 +374,69 @@ Aggregate scalp-map means and channel/band names are saved in compact JSON.
 Signal heatmaps and the separate signal-topography tools require historical
 `counterfactual.npz` archives.
 
+## Repaired baseline, real-trial VCSC tolerance, and amplitude/spectral term
+
+Three opt-in options address what the VCSC diagnostic showed on the
+1599318 / 65452590 ablation suites: decoder reconstructions R(z) score
+thousands of times above real EEG on VCSC; when VCSC is in the objective
+nearly all of the decoded change R(z') - R(z) (99.9%) is the optimizer
+repairing that, not class-relevant change; counterfactuals end up more
+typical than 95-100% of real trials because of the fixed 1e-8 feasibility
+tolerance; and amplitude and spectral power, which VCSC cannot see, fail in
+every arm. All defaults reproduce the original suites exactly.
+
+`--include-repair-baseline` (launcher: `REPAIR_BASELINE=1`). For each eligible
+trial, first optimize z with the physiological constraints and the
+latent/decoded proximity terms but no target term, stopping at the first
+feasible iterate. Its decoded output R(z_rep) is the baseline:
+
+* explanation change: `delta_dec_explanation = RMSE(R(z'), R(z_rep))`
+* repair change: `delta_dec_repair = RMSE(R(z_rep), R(z))`
+* `band_power.json` adds `power_change_vs_repair`; `physiology.json` adds a `repair` set.
+
+Every arm's `result.json` gets a `repair_baseline` block, `trial_metrics.csv`
+gets the two columns, and population summaries report their quantiles plus
+`repair_feasible_percent` and `repair_preserves_prediction_percent`. The
+repair is not an objective; it lives in `trial_<id>/repair/` with its own
+`result.json` and the one archived array, `repair_reconstruction.npz`
+(`x_repair`), needed to measure the other arms and to resume. Report
+explanation topographies from `power_change_vs_repair`, not `power_change`.
+
+`--physiological-tolerance-quantile Q` (launcher:
+`PHYSIOLOGICAL_TOLERANCE_QUANTILE=Q`). Replaces the fixed VCSC tolerance with
+the Q-quantile of the same calibrated VCSC on the fold's source-subject real
+trials, so feasible means "as plausible as real EEG". The tolerance and the
+source distribution are saved in `calibration/vcsc_tolerance.json`. The
+source trials are also the calibration set, so the quantile is in-sample and
+slightly optimistic; held-out real-trial VCSC is archived per trial as
+`vcsc_original_input`.
+
+`--amplitude-spectral-weight W` and `--amplitude-spectral-margin M` (launcher:
+`AMPLITUDE_SPECTRAL_WEIGHT`, `AMPLITUDE_SPECTRAL_MARGIN`). Adds
+`W * mean relu(|v-m|/h - (1-M))^2` over the amplitude and spectral-power
+components, where m and h are the midpoint and half-width of each source
+interval used by the reported checks. The TensorFlow descriptors in
+`counterfactuals/amplitude_spectral.py` reproduce `signal_diagnostics`
+(tested to 1e-4) in physical units via each trial's normalization. With
+W > 0, feasibility also requires each family to meet
+`--physiology-required-fraction`, the reported pass rule. Band power mixes
+oscillatory and aperiodic power, and the aperiodic exponent cannot be
+estimated from the band-filtered decoder, so the term can be met by a
+broadband shift; report that limitation. `target_latent` and
+`typicality_no_physiology` drop this term along with VCSC.
+
+Suggested ablation suite:
+
+```bash
+REPAIR_BASELINE=1 PHYSIOLOGICAL_TOLERANCE_QUANTILE=0.5 AMPLITUDE_SPECTRAL_WEIGHT=1.0 \
+  sbatch --array=0-22%4 src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
+```
+
+Compare against the original suite on: amplitude/spectral in-range
+fractions, coherence/wPLI in range, counterfactual VCSC relative to
+`vcsc_original_input`, `delta_dec_explanation` vs `delta_dec`, and latent
+target success.
+
 ## Physiology and subject-identification limits
 
 VCSC is calibrated without labels on real source-subject EEG. A `--trial-ids`

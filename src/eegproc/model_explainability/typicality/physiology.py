@@ -156,13 +156,25 @@ def source_vcsc_calibration(source_features):
             "source_dwpli_squared": calibration["reference_dwpli_squared"]}
 
 
-def make_vcsc_loss(calibration, **weights):
-    """Use the existing CFO objective with fixed VCSC reference constants."""
+def make_vcsc_loss(calibration, amplitude_spectral=None, **weights):
+    """Use the existing CFO objective with fixed VCSC reference constants.
+
+    amplitude_spectral, if given, is a counterfactuals.amplitude_spectral.
+    AmplitudeSpectralReference built from the same source subjects. It adds
+    the amplitude/spectral-power term to the objective (weighted by
+    amplitude_spectral_weight; 0 keeps it a logged diagnostic).
+    """
     import tensorflow as tf
     from ..counterfactuals.loss import (CounterfactualLoss, _vcsc_band_coherence_wpli,
                                         _vcsc_pair_penalty, _VCSC_DISTANCES_CM)
 
+    if weights.get("amplitude_spectral_weight", 0.0) > 0 and amplitude_spectral is None:
+        raise ValueError("amplitude_spectral_weight > 0 requires an amplitude/spectral reference")
+
     class CalibratedVCSCLoss(CounterfactualLoss):
+        def amplitude_spectral_reference(self):
+            return amplitude_spectral
+
         def physiological_validity(self, x_prime):
             c, w = _vcsc_band_coherence_wpli(x_prime)
             zc = (c - tf.constant(calibration["c_hat"], tf.float32)) / tf.constant(calibration["sigma_raw"], tf.float32)

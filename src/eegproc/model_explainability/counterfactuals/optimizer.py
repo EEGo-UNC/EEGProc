@@ -60,6 +60,7 @@ class CounterfactualOptimizer:
         fixed_joint_alpha=None,
         typicality=None,
         typicality_weight=0.0,
+        repair_only=False,
     ):
         if not math.isfinite(learning_rate) or learning_rate <= 0:
             raise ValueError("learning_rate must be finite and positive.")
@@ -137,6 +138,18 @@ class CounterfactualOptimizer:
             raise ValueError("A fitted source-only typicality region is required.")
         self.typicality = typicality
         self.typicality_weight = float(typicality_weight)
+        # Repair-only mode finds the smallest latent edit that makes the
+        # decoded trial physiologically feasible WITHOUT any target term. Its
+        # decoded output, R(z_rep), is the baseline the counterfactual change
+        # is measured against, so decoder repair is not reported as
+        # explanation. It requires an active physiological constraint.
+        self.repair_only = bool(repair_only)
+        if self.repair_only:
+            if typicality_weight > 0:
+                raise ValueError("repair_only optimization cannot use a typicality weight.")
+            active = loss if loss is not None else CounterfactualLoss()
+            if active.physiological_weight == 0 and getattr(active, "amplitude_spectral_weight", 0.0) == 0:
+                raise ValueError("repair_only requires a positive physiological or amplitude/spectral weight.")
         self.model, self.loss = (
             model,
             loss if loss is not None else CounterfactualLoss(),
@@ -262,7 +275,27 @@ class CounterfactualOptimizer:
             ),
         }
 
+    def _physiology_feasible(self, values):
+        """Every ACTIVE physiological constraint is met for these loss values.
+
+        VCSC: raw penalty <= physiological_tolerance (fixed, or a quantile of
+        VCSC on the fold's source-subject real trials). Amplitude/spectral:
+        the reported rule, each family's in-range fraction >= required
+        fraction. A constraint with weight 0 is not part of feasibility.
+        """
+        vcsc_ok = (self.loss.physiological_weight == 0
+                   or values["physiological"] <= self.physiological_tolerance)
+        weight = getattr(self.loss, "amplitude_spectral_weight", 0.0)
+        reference = (self.loss.amplitude_spectral_reference()
+                     if hasattr(self.loss, "amplitude_spectral_reference") else None)
+        spectral_ok = weight == 0 or reference is None or reference.feasible(values)
+        return bool(vcsc_ok and spectral_ok)
+
     def _objective(self, *, classification_embedding, typicality_active=True, **kwargs):
+        if self.repair_only:
+            # No class objective at all: the target term is identically zero
+            # (and so contributes no gradient); it is still logged.
+            kwargs["target_loss_override"] = tf.zeros_like(kwargs["target_loss_override"])
         terms, decoded = self.loss.central_loss(**kwargs)
         if self.typicality is not None:
             if kwargs["target_class"] != self.typicality.metadata["target_class"]:
@@ -279,7 +312,7 @@ class CounterfactualOptimizer:
         return terms, decoded
 
     def optimize(self, inputs, *, target_class=None, progress=None, state_progress=None,
-                 record_state_arrays=True):
+                 record_state_arrays=True, signal_scale=None, signal_offset=None):
         """Return scalar history, a summary, and original/counterfactual arrays.
 
         inputs is one preprocessed trial: (W,T,F) or (1,W,T,F), not a batch
@@ -302,6 +335,10 @@ class CounterfactualOptimizer:
         success and typicality are evaluated on the optimized latent features.
         Decoded signals provide reconstruction and physiology diagnostics;
         they are never passed back through the encoder.
+
+        signal_scale/signal_offset are this trial's normalization arrays. They
+        are needed only by the amplitude/spectral term, whose source bounds
+        are in physical units.
         """
         started = time.perf_counter()
         x = tf.cast(tf.convert_to_tensor(inputs), tf.float32)
@@ -391,6 +428,8 @@ class CounterfactualOptimizer:
                     reference_reconstructions=original_decoded,
                     target_loss_override=target_loss,
                     target_components=target_components,
+                    signal_scale=signal_scale,
+                    signal_offset=signal_offset,
                 )
             gradient = tape.gradient(terms["total"], variable)
             if gradient is None:
@@ -409,18 +448,17 @@ class CounterfactualOptimizer:
                 break
             prediction = self._prediction(logits, target_class)
             typical = self.typicality is None or values["discrepancy"] <= self.typicality.tau
-            physiological_valid = (
-                self.loss.physiological_weight == 0
-                or values["physiological"] <= self.physiological_tolerance
-            )
-            feasible = prediction["success"] and physiological_valid
+            physiological_valid = self._physiology_feasible(values)
+            feasible = physiological_valid if self.repair_only else (
+                prediction["success"] and physiological_valid)
             optimization_success = (
                 feasible
                 and (self.typicality_weight == 0 or typical)
             )
             proximity = sum(
                 values[f"weighted_{name}"]
-                for name in ("latent", "decoded", "physiological")
+                for name in ("latent", "decoded", "physiological", "amplitude_spectral")
+                if f"weighted_{name}" in values
             )
             if self.typicality_weight > 0:
                 key = (not feasible,
@@ -556,12 +594,12 @@ class CounterfactualOptimizer:
             reference_reconstructions=original_decoded,
             target_loss_override=final_target_loss,
             target_components=final_target_components,
+            signal_scale=signal_scale,
+            signal_offset=signal_offset,
         )
         latent_prediction = self._prediction(final_logits, target_class)
-        final_physiological_valid = (
-            self.loss.physiological_weight == 0
-            or float(final_terms["physiological"].numpy()) <= self.physiological_tolerance
-        )
+        final_physiological_valid = self._physiology_feasible(
+            {k: float(v.numpy()) for k, v in final_terms.items()})
         arrays = {"x": x.numpy(), "z": z.numpy(), "z_prime": best_latent.numpy(),
                   "classification_embedding": original_embedding.numpy(),
                   "classification_embedding_prime": final_embedding.numpy()}
@@ -625,7 +663,13 @@ class CounterfactualOptimizer:
                 "counterfactual_validity_prediction_space": "latent",
                 "original": original_prediction,
                 "latent_counterfactual": latent_prediction,
-                "selected_feasible": bool(latent_prediction["success"] and final_physiological_valid),
+                "selected_feasible": bool(
+                    final_physiological_valid if self.repair_only
+                    else latent_prediction["success"] and final_physiological_valid),
+                "repair_only": self.repair_only,
+                **({"repair_preserves_prediction": bool(
+                        latent_prediction["predicted_class"] == original_class)}
+                   if self.repair_only else {}),
                 "selected_physiological_valid": bool(final_physiological_valid),
                 "decoded_trials": decoded_results,
                 "selected_losses": {
@@ -647,6 +691,9 @@ class CounterfactualOptimizer:
                 ),
                 "physiological_constraint_enforced": (
                     self.loss.physiological_weight > 0
+                ),
+                "amplitude_spectral_constraint_enforced": (
+                    getattr(self.loss, "amplitude_spectral_weight", 0.0) > 0
                 ),
                 "physiological_tolerance": self.physiological_tolerance,
             },
