@@ -1,5 +1,7 @@
 {
   "campaign": "dreamer-3dcnn",
+  "targets": ["valence", "arousal"],
+  "launcher": {"type": "longleaf"},
   "objective": {
     "metric": "trial_balanced_accuracy",
     "maximize": true,

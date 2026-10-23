@@ -1,0 +1,11 @@
+{
+  "campaign": "my-model",
+  "targets": ["classification", "regression"],
+  "defaults": {"target": "classification", "learning_rate": 0.001, "epochs": 50},
+  "objective": {"metric": "loss", "maximize": false, "uncertainty_penalty": 0.0},
+  "smoke_overrides": {"epochs": 2},
+  "search_space": [{"name": "learning_rate", "values": [0.0001, 0.01]}],
+  "experiment_dir": "experiments/tracker_template",
+  "training_script": "your_training_script.py",
+  "launcher": {"type": "template", "template": "submit.template.slurm"}
+}

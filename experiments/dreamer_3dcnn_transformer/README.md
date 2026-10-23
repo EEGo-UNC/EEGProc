@@ -39,3 +39,9 @@ the best completed run.
 
 See [ARCHITECTURE_REPORT.md](ARCHITECTURE_REPORT.md) for the model rationale,
 tensor shapes, and what each component is intended to learn.
+
+## Tracker documentation and result figures
+
+See the [team usage and design guide](../../docs/training-tracker.md) for the
+reusable tracker, subject and model comparison plots, and an offline demo for
+both architectures. Existing tracker commands remain compatible.

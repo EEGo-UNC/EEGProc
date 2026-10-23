@@ -228,6 +228,13 @@ Browse the [documentation](https://eego-unc.github.io/EEGProc/), follow the
 [contribution guide](https://github.com/EEGo-UNC/EEGProc/blob/main/CONTRIBUTING.md), or read the [changelog](https://github.com/EEGo-UNC/EEGProc/blob/main/CHANGELOG.md).
 If you use EEGProc in your research, see [CITATION.cff](https://github.com/EEGo-UNC/EEGProc/blob/main/CITATION.cff).
 
+## Reusable training tracker
+
+Plan, sync, suggest, track and visualize experiments for any model using the
+[training tracker guide](docs/training-tracker.md). It includes the existing
+3D CNN and CNN + transformer campaigns, a generic campaign template, and an
+offline synthetic demo requiring no Longleaf outputs.
+
 ## License
 
 GPLv2. See [LICENSE](https://github.com/EEGo-UNC/EEGProc/blob/main/LICENSE).

@@ -38,6 +38,7 @@ dependencies = [
 requires-python = ">=3.10"
 
 [project.scripts]
+training-tracker = "training_tracker.core:main"
 eegproc-to-csv = "eegproc.data.to_csv:main"
 
 [project.urls]
@@ -67,7 +68,7 @@ dev = ["pytest>=7.4", "pytest-cov>=4.1", "build>=1.0", "twine>=5", "bumpver>=202
 
 [tool.setuptools.packages.find]
 where   = ["src"]
-include = ["eegproc*"]
+include = ["eegproc*", "training_tracker*"]
 exclude = ["tests*"]
 
 [tool.bumpver]

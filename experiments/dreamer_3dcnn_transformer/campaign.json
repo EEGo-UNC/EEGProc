@@ -1,5 +1,7 @@
 {
   "campaign": "dreamer-3dcnn-transformer",
+  "targets": ["valence", "arousal"],
+  "launcher": {"type": "longleaf"},
   "experiment_dir": "experiments/dreamer_3dcnn_transformer",
   "training_script": "experiments/dreamer_3dcnn/train.py",
   "report_title": "DREAMER 3D-CNN + Transformer runs",

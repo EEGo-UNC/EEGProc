@@ -1,5 +1,9 @@
 # DREAMER 3D-CNN experiment campaign
 
+The tracker is now a reusable package. See the [team usage and design guide](../../docs/training-tracker.md)
+for model-independent configuration, plot generation, comparison with the transformer,
+and a synthetic-data demo. The commands below remain compatible.
+
 This folder turns the DREAMER 3D-CNN work into a sequence of reproducible,
 tracked Longleaf runs. It keeps planning lightweight (standard-library Python),
 executes training through EEGProc's LOSO evaluator, and treats downloaded run

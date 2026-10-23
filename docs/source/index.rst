@@ -12,6 +12,7 @@ EEGProc documentation
    
    getting-started
    datasets
+   training-tracker
    api/modules
 
 
