@@ -200,6 +200,18 @@ class ThreeBandSICModel(SICModel):
             self._configure_subject_head(self.n_subject_classes)
         self.main_optimizer = self.vc_discriminator_optimizer = None
 
+    def build(self, input_shape):
+        # Prediction alone does not touch the optional subject adversary.
+        # Materialize all state before Keras marks the outer model built.
+        shape = (1, self.graph_encoder.timesteps, 42)
+        if self.classification_level == "trial":
+            shape = (1, 1, self.graph_encoder.timesteps, 42)
+        self._encode(tf.zeros(shape), training=False)
+        if self.subject_logits_layer is not None:
+            self._subject_logits(tf.zeros((1, self.classification_embedding_dim)),
+                                 training=False, use_grl=False)
+        super().build(input_shape)
+
     def _features_from_flat_windows(self, flat_windows, training):
         # Build the container as well as nested layers before checkpointing.
         if not self.graph_encoder.built:

@@ -32,6 +32,16 @@ class ThreeBandTests(unittest.TestCase):
             feed_forward_dim=8, classifier_units=4, dropout=0.0,
             classifier_dropout=0.0, **kwargs)
 
+    def assert_no_gradient(self, tape, loss, variables):
+        # Concat/split backpropagation can return a dense zero tensor for an
+        # unused slice. Isolation means no nonzero gradient, not necessarily
+        # a disconnected graph (None). Check every coefficient exactly.
+        gradients = tape.gradient(loss, variables)
+        for variable, gradient in zip(variables, gradients, strict=True):
+            if gradient is not None:
+                np.testing.assert_array_equal(tf.convert_to_tensor(gradient).numpy(), 0,
+                    err_msg=f"Unexpected gradient to {variable.path}")
+
     def test_band_order_and_isolation(self):
         model = self.model(use_transformer=True)
         values = np.arange(42, dtype="float32").reshape(1, 1, 42)
@@ -63,11 +73,12 @@ class ThreeBandTests(unittest.TestCase):
         for band_index, encoder in enumerate(model.graph_encoder.encoders):
             gradients = tape.gradient(loss, encoder.trainable_variables)
             self.assertTrue(any(g is not None and float(tf.reduce_sum(tf.abs(g))) > 0 for g in gradients))
-            # A band's decoder objective cannot reach another band's CNN.
-            other = model.graph_encoder.encoders[(band_index + 1) % 3]
-            self.assertTrue(all(g is None for g in tape.gradient(band_losses[band_index], other.trainable_variables)))
+            # A band's objective cannot update either other band's CNN.
+            for other_index, other in enumerate(model.graph_encoder.encoders):
+                if other_index != band_index:
+                    self.assert_no_gradient(tape, band_losses[band_index], other.trainable_variables)
         transformer_variables = [v for block in model.graph_encoder.transformers for v in block.trainable_variables]
-        self.assertTrue(all(g is None for g in tape.gradient(loss, transformer_variables)))
+        self.assert_no_gradient(tape, loss, transformer_variables)
         reconstructed = model.reconstruct(self.x)
         for band in BANDS:
             self.assertEqual(tuple(reconstructed[band].shape), (4, 2, 8, 14))
@@ -128,11 +139,16 @@ class ThreeBandTests(unittest.TestCase):
                 self.assertTrue(np.isfinite(list(result.values())).all())
 
     def test_mldg(self):
-        subjects = np.arange(4)
+        # The SIC sampler requires both classes within every source subject,
+        # even when an episode samples only a subset of that subject's trials.
+        subjects = np.repeat(np.arange(4), 2)
+        trials = np.tile(np.arange(2), 4)
+        labels = np.tile(np.array([0, 1], dtype="int32"), 4)
+        eeg = np.random.default_rng(15).normal(size=(8, 2, 8, 42)).astype("float32")
         model = self.model(training_method="mldg", mldg_meta_train_subjects=2,
-            mldg_meta_test_subjects=1, mldg_trials_per_subject=1, mldg_steps_per_epoch=1,
-            training_subject_ids=subjects, training_trial_ids=np.arange(4), use_decoder=True)
-        history = model.fit(model.prepare_fit_inputs(self.x, subjects), self.y,
+            mldg_meta_test_subjects=1, mldg_trials_per_subject=2, mldg_steps_per_epoch=1,
+            training_subject_ids=subjects, training_trial_ids=trials, use_decoder=True)
+        history = model.fit(model.prepare_fit_inputs(eeg, subjects), labels,
                             epochs=1, verbose=0)
         self.assertTrue(np.isfinite(history.history["loss"]).all())
 
