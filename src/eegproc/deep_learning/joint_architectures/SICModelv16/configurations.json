@@ -1,0 +1,34 @@
+{
+  "base": {
+    "classification_level": "trial",
+    "use_transformer": false,
+    "use_decoder": false,
+    "conv_filters": [32, 64],
+    "spatial_pool_sizes": [2, 2],
+    "temporal_pool_sizes": [],
+    "temporal_kernel_size": 7,
+    "spatial_kernel_size": 3,
+    "emb_dim": 128,
+    "dropout": 0.2,
+    "transformer_layers": 1,
+    "attention_heads": 4,
+    "feed_forward_dim": 256,
+    "classifier_units": 128,
+    "classifier_dropout": 0.2,
+    "use_recurrent_classifier": false,
+    "use_variational_head": false,
+    "use_subject_adversarial": false,
+    "training_method": "erm",
+    "focal_gamma": 0.0,
+    "reconstruction_loss_weight": 0.1,
+    "vc_loss_weight": 1.0,
+    "learning_rate": 0.0001,
+    "weight_decay": 0.00005
+  },
+  "configurations": [
+    {"name": "cnn", "overrides": {}},
+    {"name": "cnn_reconstruction", "overrides": {"use_decoder": true}},
+    {"name": "cnn_transformer", "overrides": {"use_transformer": true}},
+    {"name": "cnn_transformer_reconstruction", "overrides": {"use_transformer": true, "use_decoder": true}}
+  ]
+}
