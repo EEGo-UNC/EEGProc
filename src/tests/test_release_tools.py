@@ -79,13 +79,36 @@ def test_published_but_unreleased_version_only_creates_the_release():
     assert (plan.publish, plan.release) == (False, "publish")
 
 
-def test_rehearsal_tag_builds_a_unique_development_version():
-    plan = _decide(ref="refs/tags/testpypi-3", run_number=12, run_attempt=2,
+@pytest.mark.parametrize("ref", [
+    "refs/heads/testpypi-v2-deployment",
+    "refs/heads/testpypi-next-release",
+])
+def test_rehearsal_branch_builds_a_unique_development_version(ref):
+    plan = _decide(ref=ref, run_number=12, run_attempt=2,
                    changelog=CHANGELOG.replace("2.1.0 — 2026-10-02", "2.1.0 — unreleased"))
     assert (plan.target, plan.version, plan.publish, plan.release) == (
         "testpypi", "2.1.0.dev1202", True, "draft",
     )
     assert plan.outputs()["upload_url"] == "https://test.pypi.org/legacy/"
+
+
+def test_rehearsal_branch_does_not_query_production_releases(monkeypatch):
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/testpypi-v2-deployment")
+    monkeypatch.setenv("GITHUB_SHA", SHA)
+    monkeypatch.setenv("GITHUB_RUN_NUMBER", "12")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+
+    def unexpected_production_lookup(*args, **kwargs):
+        raise AssertionError("A TestPyPI rehearsal must not query production releases.")
+
+    monkeypatch.setattr(release_tools, "pypi_releases", unexpected_production_lookup)
+    monkeypatch.setattr(release_tools, "remote_tag_commit", unexpected_production_lookup)
+    monkeypatch.setattr(release_tools.subprocess, "run", unexpected_production_lookup)
+
+    plan = release_tools._plan_from_environment()
+    assert plan.target == "testpypi"
+    assert plan.publish is True
+    assert plan.outputs()["environment"] == "testpypi"
 
 
 @pytest.mark.parametrize(
@@ -97,6 +120,8 @@ def test_rehearsal_tag_builds_a_unique_development_version():
         ({"published": {"2.2.0"}}, "not newer than 2.2.0"),
         ({"tag_commit": "b" * 40}, "already exists"),
         ({"ref": "refs/heads/v2"}, "not refs/heads/v2"),
+        ({"ref": "refs/heads/testpypi"}, "not refs/heads/testpypi"),
+        ({"ref": "refs/tags/testpypi-3"}, "not refs/tags/testpypi-3"),
     ],
 )
 def test_guards_stop_a_bad_release(overrides, message):

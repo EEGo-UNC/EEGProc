@@ -4,15 +4,14 @@ name: Release
 # yet: tests -> build -> publish -> GitHub release and tag -> install check.
 # Pushes that keep the version only run the tests and the build.
 #
-# Rehearsal: pushing a tag named testpypi-* runs the same chain against
+# Rehearsal: pushing a branch named testpypi-* runs the same chain against
 # TestPyPI with a unique .devN version and a draft GitHub release.
 #
 # The decisions and guards live in .github/release_tools.py.
 
 on:
   push:
-    branches: [main]
-    tags: ["testpypi-*"]
+    branches: [main, "testpypi-*"]
 
 permissions:
   contents: read

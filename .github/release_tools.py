@@ -161,13 +161,13 @@ def decide(
     if heading is None:
         raise ReleaseError(f"CHANGELOG.md has no '## {base}' section.")
 
-    if ref.startswith("refs/tags/testpypi-"):
+    if ref.startswith("refs/heads/testpypi-"):
         # Every rehearsal uploads a new, never-reused development version.
         version = f"{base}.dev{run_number * 100 + run_attempt}"
         return Plan("testpypi", version, publish=True, release="draft", notes_version=base)
 
     if ref != "refs/heads/main":
-        raise ReleaseError(f"Releases run from main or testpypi-* tags, not {ref}.")
+        raise ReleaseError(f"Releases run from main or testpypi-* branches, not {ref}.")
 
     already_published = published is not None and base in published
     if not already_published:
@@ -272,7 +272,7 @@ def _plan_from_environment() -> Plan:
     sha = os.environ["GITHUB_SHA"]
     versions = declared_versions()
     base = next(iter(versions.values()))
-    target = "testpypi" if ref.startswith("refs/tags/testpypi-") else "pypi"
+    target = "testpypi" if ref.startswith("refs/heads/testpypi-") else "pypi"
     on_main = target == "pypi"
     release_exists = False
     if on_main:

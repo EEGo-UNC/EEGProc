@@ -61,6 +61,6 @@ workflow refuses to publish if the version is not newer than PyPI's, the
 changelog heading is undated, or `pyproject.toml`, bumpver and `CITATION.cff`
 disagree.
 
-To rehearse without touching PyPI, push a tag named `testpypi-N` (one at a
-time). The same chain runs against TestPyPI with a unique `X.Y.Z.devN` version
-and a draft GitHub release that is deleted afterwards.
+To rehearse without touching PyPI, push to `testpypi-v2-deployment` or another
+branch named `testpypi-*`. The same chain runs against TestPyPI with a unique
+`X.Y.Z.devN` version and a draft GitHub release that is deleted afterwards.
