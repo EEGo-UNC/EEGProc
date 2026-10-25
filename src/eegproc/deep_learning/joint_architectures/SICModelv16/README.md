@@ -1,8 +1,9 @@
 # SIC v16 — Pranav's three-band CNN experiments
 
 Branch: `SICv16-Pranav`, based on `origin/valence-enhancement` at `c0adc65`.
-This implementation is awaiting cluster preflight and real-data smoke results.
-No TensorFlow execution, training or GPU tests were run on the local machine.
+All eight synthetic cluster preflight tests passed on a Longleaf L40 in job
+6610071. Real-data smoke results are still pending. No TensorFlow execution,
+training or GPU tests were run on the local machine.
 
 ## Architecture
 

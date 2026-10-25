@@ -2,6 +2,8 @@
 # Sourced by v16 jobs. Prepare venv312 once before submitting; never install in jobs.
 set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:?Submit from the EEGProc repository root}}"
+# smoke.sh/full.sh invoke task.sh in a child shell; pass the resolved path.
+export PROJECT_DIR
 cd "$PROJECT_DIR"
 module purge
 module load python/3.12.4
