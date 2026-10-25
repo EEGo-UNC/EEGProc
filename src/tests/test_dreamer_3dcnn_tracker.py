@@ -42,7 +42,7 @@ def test_first_suggestion_is_a_cheap_smoke(tracker, campaign):
     stage, config, reason = tracker.suggest(campaign, [], "valence")
     assert stage == "smoke"
     assert config["target"] == "valence"
-    assert config["max_folds"] == 2
+    assert config["max_folds"] == 4
     assert config["epochs"] == 2
     assert "cheaply" in reason
 
@@ -52,7 +52,7 @@ def test_completed_smoke_advances_to_full_baseline(tracker, campaign):
     rows = [{"target": "arousal", "stage": "smoke", "status": "completed", "config": smoke}]
     stage, config, _ = tracker.suggest(campaign, rows, "arousal")
     assert stage == "full"
-    assert config["max_folds"] is None
+    assert config["max_folds"] == 4
     assert config["epochs"] == campaign["defaults"]["epochs"]
 
 

@@ -65,9 +65,13 @@ logs can be large; the planner/configuration code remains versioned.
 
 Each target (`valence` and `arousal`) has an independent campaign:
 
-1. a two-fold, two-epoch smoke test;
-2. the full baseline across all 23 held-out subjects;
+1. a four-fold, two-epoch smoke test;
+2. the baseline at the configured training budget, limited to the first four held-out subjects;
 3. controlled one-factor experiments around the current incumbent.
+
+Both smoke and baseline runs currently set `max_folds` to 4. Other subjects
+still participate in training and validation; this limits test folds only.
+Existing planned bundles retain their original configurations.
 
 The incumbent maximizes mean trial balanced accuracy with a small penalty for
 between-subject standard deviation. Search dimensions are ordered in

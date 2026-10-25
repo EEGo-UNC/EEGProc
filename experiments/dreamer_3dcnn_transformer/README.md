@@ -33,9 +33,11 @@ python experiments/dreamer_3dcnn/tracker.py \
 ```
 
 Use the same commands with `--target arousal` for the independent arousal
-campaign. Each target begins with a two-fold/two-epoch smoke run, advances to a
-full LOSO baseline, and then performs controlled one-factor experiments around
-the best completed run.
+campaign. Each target begins with a four-fold/two-epoch smoke run, advances to a
+baseline limited to the first four held-out subjects, and then performs controlled one-factor experiments around
+the best completed run. Both stages set `max_folds` to 4; other subjects
+still participate in training and validation. Existing planned bundles retain
+their original configurations.
 
 See [ARCHITECTURE_REPORT.md](ARCHITECTURE_REPORT.md) for the model rationale,
 tensor shapes, and what each component is intended to learn.

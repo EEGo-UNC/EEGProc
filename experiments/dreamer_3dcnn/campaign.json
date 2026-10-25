@@ -28,13 +28,13 @@
     "validation_subjects": 2,
     "early_stopping_patience": 8,
     "seed": 42,
-    "max_folds": null
+    "max_folds": 4
   },
   "smoke_overrides": {
     "epochs": 2,
     "validation_subjects": 1,
     "early_stopping_patience": null,
-    "max_folds": 2
+    "max_folds": 4
   },
   "search_space": [
     {"name": "learning_rate", "values": [0.00003, 0.0003]},
