@@ -31,6 +31,8 @@ def tracker_result(summary):
     return {"metrics": metrics, "subject_metrics": subjects,
             "evaluation_level": "trial", "selection": selected["selection_rule"],
             "oracle": False, "oracle_diagnostics": summary["oracle"],
+            "single_class_prediction_subjects": [row["target_subject"] for row in selected["folds"]
+                if row.get("prediction_diagnostics", {}).get("single_class_predictions", False)],
             "validation_selected_folds": selected["folds"]}
 
 

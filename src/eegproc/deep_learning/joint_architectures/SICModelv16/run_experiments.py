@@ -41,6 +41,19 @@ def prepare_data(*args, **kwargs):
 DEFAULT_CONFIGS = Path(__file__).with_name("configurations.json")
 
 
+def prediction_diagnostics(labels, probabilities):
+    """Describe fixed-threshold predictions without changing model selection."""
+    positive = [float(row[1]) for row in probabilities]
+    if not positive or len(labels) != len(positive):
+        raise ValueError("Prediction diagnostics require aligned, nonempty labels/probabilities.")
+    predicted = [int(value >= 0.5) for value in positive]
+    return {"predicted_class_1_fraction": sum(predicted) / len(predicted),
+            "true_class_1_fraction": sum(int(y) for y in labels) / len(labels),
+            "class_1_probability_min": min(positive),
+            "class_1_probability_max": max(positive),
+            "single_class_predictions": len(set(predicted)) == 1}
+
+
 def summarize(output):
     output = Path(output)
     spec = json.loads((output / "task.json").read_text())
@@ -67,6 +80,7 @@ def summarize(output):
                    key=lambda r: r["validation_mean_balanced_accuracy"])
         selected.append({"target_subject": subject, "epoch": best["epoch"],
             "checkpoint": best["checkpoint"], "test_metrics": best["test_metrics"],
+            "prediction_diagnostics": prediction_diagnostics(best["y_true"], best["probabilities"]),
             "validation_mean_balanced_accuracy": best["validation_mean_balanced_accuracy"]})
     validation = {"oracle": False, "selection_rule": "per-fold source-validation subject mean balanced accuracy; earliest tie",
                   "status": "completed" if len(selected) == len(spec["target_subjects"]) else "incomplete",
@@ -166,6 +180,7 @@ def worker(spec_path, subject):
                 raise ValueError("Nonfinite training metrics.")
             validation_metrics, validation_probabilities = evaluate(validation)
             test_metrics, test_probabilities = evaluate(test)
+            test_diagnostics = prediction_diagnostics(arrays["labels"][test], test_probabilities)
             validation_labels = arrays["labels"][validation]
             validation_subjects = arrays["subjects"][validation]
             validation_scores = [float(balanced_accuracy_score(
@@ -181,6 +196,7 @@ def worker(spec_path, subject):
                 "target_subject": subject, "epoch": number, "decision_threshold": 0.5,
                 "balanced_accuracy": test_metrics["balanced_accuracy"],
                 "test_metrics": test_metrics, "validation_metrics": validation_metrics,
+                "test_prediction_diagnostics": test_diagnostics,
                 "validation_mean_balanced_accuracy": math.fsum(validation_scores) / len(validation_scores),
                 "checkpoint": str(checkpoint.relative_to(output)),
                 "epoch_seconds": time.monotonic() - self.started, "training_metrics": log_values,
@@ -192,6 +208,10 @@ def worker(spec_path, subject):
                 "validation_probabilities": validation_probabilities.tolist()})
             print(f"SAVED epoch={number} test_BA={test_metrics['balanced_accuracy']:.5f} "
                   f"validation_BA={math.fsum(validation_scores)/len(validation_scores):.5f}", flush=True)
+            if test_diagnostics["single_class_predictions"]:
+                print(f"DIAGNOSTIC subject={subject} epoch={number}: all held-out predictions "
+                      f"are class {int(test_diagnostics['predicted_class_1_fraction'])} at threshold 0.5; "
+                      "reported metrics remain unchanged.", flush=True)
             if time.time() >= spec["deadline"]:
                 self.model.stop_training = True
 

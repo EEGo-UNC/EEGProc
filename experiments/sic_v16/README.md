@@ -1,5 +1,8 @@
 # SIC v16 tracker workflow
 
+The four real-data smoke runs have passed. See [the review](SMOKE_REVIEW.md)
+for learning results, measured resources and the next full baseline step.
+
 Use the existing tracker for planning, status, syncing and plotting. The model
 and oracle selection are the same as the SICv16 Slurm array runner; this bridge
 adds portable run manifests and `result.json` output. Each architecture has its

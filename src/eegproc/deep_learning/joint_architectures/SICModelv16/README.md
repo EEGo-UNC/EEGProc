@@ -2,7 +2,9 @@
 
 Branch: `SICv16-Pranav`, based on `origin/valence-enhancement` at `c0adc65`.
 All eight synthetic cluster preflight tests passed on a Longleaf L40 in job
-6610071. Real-data smoke results are still pending. No TensorFlow execution,
+6610071. All four tracked real-data smoke runs also completed; see
+`experiments/sic_v16/SMOKE_REVIEW.md` for results and baseline runtime estimates.
+No TensorFlow execution,
 training or GPU tests were run on the local machine.
 
 ## Architecture

@@ -9,13 +9,21 @@ from unittest.mock import patch
 import numpy as np
 
 from eegproc.deep_learning.joint_architectures.SICModelv16.data import prepare_data
-from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import run
+from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import run, prediction_diagnostics
 from training_tracker.core import load_campaign, plan_run, scan_runs
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class DataAndTrackerTests(unittest.TestCase):
+    def test_single_class_prediction_diagnostics(self):
+        single = prediction_diagnostics([0, 1], [[.4, .6], [.3, .7]])
+        self.assertTrue(single["single_class_predictions"])
+        self.assertEqual(single["predicted_class_1_fraction"], 1.0)
+        self.assertEqual(single["true_class_1_fraction"], .5)
+        mixed = prediction_diagnostics([0, 1], [[.6, .4], [.3, .7]])
+        self.assertFalse(mixed["single_class_predictions"])
+
     def test_raw_and_prefiltered_arrays_agree(self):
         from eegproc.deep_learning.prepare_datasets import _filter_dreamer_trial
         # Distinct rhythms on the first electrodes expose channel/band swaps.
