@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 import traceback
+import warnings
 
 ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(ROOT / "src"))
@@ -37,6 +38,11 @@ write_json = _shared.write_json
 def prepare_data(*args, **kwargs):
     from eegproc.deep_learning.joint_architectures.SICModelv16.data import prepare_data as prepare
     return prepare(*args, **kwargs)
+
+
+def progress_for(output, subject, epochs, **kwargs):
+    from eegproc.deep_learning.joint_architectures.SICModelv16.recovery import checkpoint_progress
+    return checkpoint_progress(output, subject, epochs, **kwargs)
 
 DEFAULT_CONFIGS = Path(__file__).with_name("configurations.json")
 
@@ -131,19 +137,45 @@ def worker(spec_path, subject):
     config = spec["configuration"]["hyperparameters"]
     if config.get("classification_level", "trial") != "trial":
         raise ValueError("This runner operates on complete trials; use a separate protocol for windows.")
-    model = build_sic_model(input_shape=tuple(arrays["features"].shape[1:]),
-        training_subject_ids=arrays["subjects"][train],
-        training_trial_ids=arrays["trials"][train], **config)
     folder = output / f"subject_{subject:02d}"
-    folder.mkdir(exist_ok=False)
+    progress = progress_for(output, subject, spec["source_epochs"], verify_latest=True)
+    if progress["complete"]:
+        return 0
+    if progress["orphan_checkpoints"]:
+        raise ValueError(f"Unpaired saved models require inspection before resume; preserved: {progress['orphan_checkpoints']}")
+    initial_epoch = progress["completed_epochs"]
+    expected_batches = (config.get("mldg_steps_per_epoch") if config.get("training_method") == "mldg" else
+                        math.ceil(int(train.sum()) / spec["batch_size"]))
+    if expected_batches is None:
+        raise ValueError("Resume requires an explicit MLDG steps_per_epoch.")
+    if progress["checkpoint"]:
+        with warnings.catch_warnings(record=True) as load_warnings:
+            warnings.simplefilter("always")
+            model = tf.keras.models.load_model(progress["checkpoint"], compile=True)
+        if any("optimizer" in str(w.message).lower() and "skipping" in str(w.message).lower()
+               for w in load_warnings):
+            raise ValueError("Keras skipped optimizer state restoration; refusing to restart optimizer moments.")
+        if int(model.main_optimizer.iterations.numpy()) != initial_epoch * expected_batches:
+            raise ValueError("Restored optimizer step count does not match the completed epoch budget.")
+        model.set_source_training_metadata(arrays["subjects"][train], arrays["trials"][train])
+        write_json(folder / f"resume_{time.time_ns()}.json", {
+            "initial_epoch": initial_epoch, "checkpoint": progress["checkpoint"],
+            "optimizer_iterations": int(model.main_optimizer.iterations.numpy()),
+            "note": "Weights and optimizer restored. Future shuffle/dropout draws need not match an uninterrupted run."})
+        print(f"RESUME subject={subject} after epoch={initial_epoch}; optimizer state restored", flush=True)
+    else:
+        model = build_sic_model(input_shape=tuple(arrays["features"].shape[1:]),
+            training_subject_ids=arrays["subjects"][train],
+            training_trial_ids=arrays["trials"][train], **config)
+    folder.mkdir(exist_ok=True)
     write_json(folder / "runtime.json", {"tensorflow": tf.__version__, "numpy": np.__version__,
         "gpu": tf.config.experimental.get_device_details(physical[0]),
         "python": sys.version, "train_trials": int(train.sum()),
         "validation_trials": int(validation.sum()), "test_trials": int(test.sum())})
-    write_json(folder / "split.json", {"test_subject": subject,
-        "train_subjects": train_ids, "validation_subjects": validation_ids})
-    expected_batches = (model.mldg_steps_per_epoch if model.use_mldg else
-                        math.ceil(int(train.sum()) / spec["batch_size"]))
+    split = {"test_subject": subject, "train_subjects": train_ids, "validation_subjects": validation_ids}
+    if (folder / "split.json").exists() and json.loads((folder / "split.json").read_text()) != split:
+        raise ValueError("Saved subject split differs from the current split; refusing resume.")
+    write_json(folder / "split.json", split)
     if expected_batches is None:
         raise ValueError("Set mldg_steps_per_epoch explicitly for MLDG experiments.")
 
@@ -190,6 +222,10 @@ def worker(spec_path, subject):
             number = epoch + 1
             checkpoint = folder / f"epoch_{number:03d}.keras"
             temporary = folder / f"epoch_{number:03d}.tmp.keras"
+            if checkpoint.exists():
+                raise ValueError(f"Refusing to overwrite an existing checkpoint: {checkpoint}")
+            if temporary.exists():
+                temporary.rename(folder / f"interrupted-{time.time_ns()}-{temporary.name}")
             self.model.save(temporary)
             temporary.replace(checkpoint)
             write_json(folder / f"epoch_{number:03d}.json", {
@@ -217,6 +253,7 @@ def worker(spec_path, subject):
 
     model.fit(model.prepare_fit_inputs(arrays["features"][train], arrays["subjects"][train]),
               arrays["labels"][train], batch_size=spec["batch_size"], epochs=spec["source_epochs"],
+              initial_epoch=initial_epoch,
               verbose=2, callbacks=[tf.keras.callbacks.TerminateOnNaN(), SaveEpoch()])
     return 0 if len(list(folder.glob("epoch_*.json"))) == spec["source_epochs"] else 2
 
@@ -228,16 +265,38 @@ def run(args):
     if min(args.source_epochs, args.batch_size, args.time_budget_seconds) < 1:
         raise ValueError("Epochs, batch size and time budget must be positive.")
     output = Path(args.output_dir).resolve()
-    output.mkdir(parents=True, exist_ok=False)
+    resuming = bool(getattr(args, "resume", False))
+    output.mkdir(parents=True, exist_ok=resuming)
     started = time.time()
-    write_json(output / "execution.json", {"status": "preparing_data", "started": started})
-    try:
-        available = prepare_data(args.eeg, args.labels, output / "data")
-    except Exception as exc:
-        write_json(output / "execution.json", {"status": "failed", "stage": "data_preparation",
-            "error_type": type(exc).__name__, "error": str(exc)})
-        (output / "failure.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        raise
+    old_spec = json.loads((output / "task.json").read_text()) if resuming else None
+    if resuming:
+        checks = {"configuration": records[args.config_index], "source_epochs": args.source_epochs,
+                  "seed": args.seed, "batch_size": args.batch_size, "validation_subjects": args.validation_subjects}
+        if any(old_spec.get(key) != value for key, value in checks.items()):
+            raise ValueError("Resume configuration/budget differs from task.json.")
+        if old_spec["target_subjects"] != args.target_subjects:
+            raise ValueError("Resume target set differs from the original run.")
+        for name in ("features", "labels", "subjects", "trials"):
+            if not (output / "data" / f"{name}.npy").is_file():
+                raise ValueError(f"Prepared {name}.npy is missing; refusing to silently rebuild resume data.")
+        for path, metadata in old_spec["input_files"].items():
+            current = Path(path).stat()
+            if current.st_size != metadata["size"] or current.st_mtime_ns != metadata["mtime_ns"]:
+                raise ValueError(f"Source dataset changed since the saved run: {path}")
+        available = list(range(23))
+        write_json(output / f"previous-task-{time.time_ns()}.json", old_spec)
+        if (output / "execution.json").exists():
+            previous = (output / "execution.json").read_bytes()
+            (output / f"previous-execution-{time.time_ns()}.json").write_bytes(previous)
+    else:
+        write_json(output / "execution.json", {"status": "preparing_data", "started": started})
+        try:
+            available = prepare_data(args.eeg, args.labels, output / "data")
+        except Exception as exc:
+            write_json(output / "execution.json", {"status": "failed", "stage": "data_preparation",
+                "error_type": type(exc).__name__, "error": str(exc)})
+            (output / "failure.txt").write_text(traceback.format_exc(), encoding="utf-8")
+            raise
     targets = available if args.target_subjects is None else args.target_subjects
     if not targets or len(set(targets)) != len(targets) or not set(targets) <= set(available):
         raise ValueError("Invalid target subjects.")
@@ -256,6 +315,7 @@ def run(args):
                      for p in (args.eeg, args.labels)},
         preprocessing="SIC v15: complete ordered trials; 128-sample nonoverlapping windows; global window RMS; valence >= 3")
     write_json(output / "task.json", spec)
+    write_json(output / "execution.json", {"status": "running", "resumed": resuming, "started": started})
     process = None
     interrupted = False
     failures, completed = [], []
@@ -271,7 +331,11 @@ def run(args):
         for subject in targets:
             if interrupted or time.time() >= spec["deadline"]:
                 break
-            with (output / f"subject_{subject:02d}.log").open("w") as log:
+            if resuming and progress_for(output, subject, args.source_epochs)["complete"]:
+                completed.append(subject)
+                print(f"SKIP subject={subject}: all {args.source_epochs} epochs already saved", flush=True)
+                continue
+            with (output / f"subject_{subject:02d}.log").open("a" if resuming else "w") as log:
                 process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "worker",
                     "--spec", str(output / "task.json"), "--subject", str(subject)],
                     stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED="1"))
@@ -319,6 +383,7 @@ def main(argv=None):
     launch.add_argument("--seed", type=int, default=42)
     launch.add_argument("--time-budget-seconds", type=int, default=85000)
     launch.add_argument("--target-subjects", nargs="+", type=int)
+    launch.add_argument("--resume", action="store_true")
     fold = commands.add_parser("worker")
     fold.add_argument("--spec", type=Path, required=True)
     fold.add_argument("--subject", type=int, required=True)

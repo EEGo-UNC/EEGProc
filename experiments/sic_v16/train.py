@@ -7,6 +7,7 @@ import statistics
 import subprocess
 import sys
 import traceback
+import json
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -41,15 +42,30 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
     config = load_json(args.config)
     output = args.output_dir.resolve()
+    if Path("/work/users").is_dir() and output.is_relative_to(Path.home().resolve()):
+        raise ValueError("Run output is still in home storage. Run recover.py --apply before training.")
     manifest_path = output / "manifest.json"
     manifest = load_json(manifest_path)
     if manifest["config_fingerprint"] != fingerprint(config):
         raise ValueError("Tracked configuration fingerprint mismatch.")
-    if manifest["status"] != "planned":
+    if args.resume and manifest["status"] == "completed":
+        print("Already completed; no work needed.")
+        return 0
+    if not args.resume and manifest["status"] != "planned":
         raise ValueError("This bundle has already started; plan a new run instead of overwriting it.")
+    if args.resume:
+        manifest.setdefault("previous_attempts", []).append({k: v for k, v in manifest.items()
+            if k not in {"previous_attempts"}})
+        for key in ("error", "error_type", "completed_at"):
+            manifest.pop(key, None)
+    lock = output / ".run.lock"
+    descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump({"job_id": os.environ.get("SLURM_JOB_ID"), "pid": os.getpid()}, stream)
     manifest.update(status="running", started_at=utc_now(),
                     hostname=platform.node(), slurm_job_id=os.environ.get("SLURM_JOB_ID"))
     write_json(manifest_path, manifest)
@@ -65,12 +81,16 @@ def main(argv=None):
         fixed = output / "sic_configuration.json"
         write_json(fixed, {"base": hyperparameters,
                            "configurations": [{"name": "tracked", "overrides": {}}]})
+        if args.resume:
+            subprocess.run([sys.executable, "-m", "unittest", "discover", "-s",
+                            str(ROOT / "src/tests"), "-p", "test_sic_v16_resume.py", "-v"],
+                           cwd=ROOT, check=True)
         code = run(argparse.Namespace(configs=fixed, config_index=0,
             output_dir=output / "artifacts", eeg=args.data_dir / "dreamer_eeg.npy",
             labels=args.data_dir / "dreamer_labels.npy", source_epochs=int(config["epochs"]),
             batch_size=int(config["batch_size"]), validation_subjects=int(config["validation_subjects"]),
             seed=int(config["seed"]), time_budget_seconds=int(config["time_budget_seconds"]),
-            target_subjects=config["target_subjects"]))
+            target_subjects=config["target_subjects"], resume=args.resume))
         if code:
             raise RuntimeError(f"SICv16 runner stopped incomplete (exit {code}); inspect artifacts/ and subject logs.")
         result = tracker_result(summarize(output / "artifacts"))
@@ -83,6 +103,8 @@ def main(argv=None):
         write_json(manifest_path, manifest)
         (output / "failure.txt").write_text(traceback.format_exc(), encoding="utf-8")
         raise
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

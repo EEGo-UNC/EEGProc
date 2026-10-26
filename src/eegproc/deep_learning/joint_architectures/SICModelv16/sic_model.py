@@ -301,6 +301,21 @@ class ThreeBandSICModel(SICModel):
         model(tf.zeros(shape), training=False)
         return model
 
+    def compile_from_config(self, config):
+        # Older checkpoints use Keras' standard `optimizer` key, even though
+        # SIC.compile names its argument main_optimizer. Build slots before
+        # Keras restores optimizer variables from model.weights.h5.
+        config = dict(config)
+        optimizer = config.pop("main_optimizer", None)
+        if optimizer is None:
+            optimizer = config.pop("optimizer", None)
+        if optimizer is None:
+            raise ValueError("Checkpoint has no optimizer configuration; refusing a weights-only resume.")
+        optimizer = tf.keras.optimizers.deserialize(optimizer)
+        config.pop("vc_discriminator_optimizer", None)
+        self.compile(main_optimizer=optimizer, vc_discriminator_optimizer=None, **config)
+        optimizer.build(self.trainable_variables)
+
     def configure_fold_devices(self, devices, **kwargs):
         if len(devices) != 1:
             raise ValueError("v16 currently uses one GPU per fold; v15's graph sharding is incompatible.")

@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:?Submit from the EEGProc repository root}}"
 # smoke.sh/full.sh invoke task.sh in a child shell; pass the resolved path.
 export PROJECT_DIR
+export SIC_V16_WORK_ROOT="${SIC_V16_WORK_ROOT:-/work/users/${USER:0:1}/${USER:1:1}/$USER/sic-v16}"
 cd "$PROJECT_DIR"
 module purge
 module load python/3.12.4

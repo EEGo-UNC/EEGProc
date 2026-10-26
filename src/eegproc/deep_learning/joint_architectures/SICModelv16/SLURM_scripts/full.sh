@@ -14,5 +14,5 @@ PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:?Submit from the repository root}
 source "$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/SICModelv16/SLURM_scripts/environment.sh"
 export SOURCE_EPOCHS="${SOURCE_EPOCHS:-50}"
 export TIME_BUDGET_SECONDS="${TIME_BUDGET_SECONDS:-85000}"
-export OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/runs/sic_v16/full}"
+export OUTPUT_ROOT="${OUTPUT_ROOT:-$SIC_V16_WORK_ROOT/legacy/full}"
 bash "$SIC16/SLURM_scripts/task.sh"

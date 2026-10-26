@@ -1,5 +1,8 @@
 # SIC v16 tracker workflow
 
+For quota failures or interrupted baselines, use [recovery instructions](RECOVERY.md).
+They preserve checkpoints and resume existing runs on shared work storage.
+
 The four real-data smoke runs have passed. See [the review](SMOKE_REVIEW.md)
 for learning results, measured resources and the next full baseline step.
 
