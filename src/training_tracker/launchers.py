@@ -113,5 +113,3 @@ python {training_script} \\
     --data-dir "$DATA_DIR" \\
     --output-dir "$RUN_DIR"
 '''
-
-
