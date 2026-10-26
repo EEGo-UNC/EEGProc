@@ -76,9 +76,12 @@ seed experiment schedule should follow validated source models and smoke timing.
 | 2 | Three CNN + Transformer branches | off |
 | 3 | Three CNN + Transformer branches | on |
 
-Use the existing band-stacked DREAMER arrays: EEG `(23,trials,42,samples)` and
-ratings `(23,trials,dimensions)`. Raw 14-channel arrays must be converted first.
-Preprocessing reuses v15's `prepare_data`: 128-sample nonoverlapping windows,
+Use DREAMER EEG arrays `(23,trials,14,samples)` (raw) or
+`(23,trials,42,samples)` (already filtered), with ratings
+`(23,trials,dimensions)`. Raw arrays are filtered automatically into separate
+theta/alpha/beta waveforms using EEGProc's `_filter_dreamer_trial` before any
+windowing; the source files are never overwritten. Already filtered arrays
+bypass that step. Preprocessing then reuses v15's `prepare_data`: 128-sample nonoverlapping windows,
 global RMS per window, all complete windows retained in chronological order,
 and valence rating >= 3 as class 1. This differs from the earlier standalone
 per-feature z-score/window-prediction campaign, so old scores are not directly
@@ -150,6 +153,10 @@ V-REx, MLDG and common-epoch oracle selection. It uses tiny synthetic arrays.
 Send back `sicv16_preflight_JOBID.out` and `.err`, including failures.
 
 Only after preflight passes, submit real-data smoke:
+
+The preferred next step is now the [tracker workflow](../../../../../../experiments/sic_v16/README.md).
+It plans the same four smoke configurations and produces familiar run bundles.
+The array command below remains an alternative; do not submit both.
 
 ```bash
 sbatch "$SIC16/SLURM_scripts/smoke.sh"

@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 
 ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(ROOT / "src"))
@@ -29,9 +30,13 @@ _shared_spec = importlib.util.spec_from_file_location("_sic_v15_oracle",
 _shared = importlib.util.module_from_spec(_shared_spec)
 _shared_spec.loader.exec_module(_shared)
 configurations = _shared.configurations
-prepare_data = _shared.prepare_data
 select_oracle = _shared.select_oracle
 write_json = _shared.write_json
+
+
+def prepare_data(*args, **kwargs):
+    from eegproc.deep_learning.joint_architectures.SICModelv16.data import prepare_data as prepare
+    return prepare(*args, **kwargs)
 
 DEFAULT_CONFIGS = Path(__file__).with_name("configurations.json")
 
@@ -205,7 +210,14 @@ def run(args):
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=False)
     started = time.time()
-    available = prepare_data(args.eeg, args.labels, output / "data")
+    write_json(output / "execution.json", {"status": "preparing_data", "started": started})
+    try:
+        available = prepare_data(args.eeg, args.labels, output / "data")
+    except Exception as exc:
+        write_json(output / "execution.json", {"status": "failed", "stage": "data_preparation",
+            "error_type": type(exc).__name__, "error": str(exc)})
+        (output / "failure.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        raise
     targets = available if args.target_subjects is None else args.target_subjects
     if not targets or len(set(targets)) != len(targets) or not set(targets) <= set(available):
         raise ValueError("Invalid target subjects.")

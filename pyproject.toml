@@ -67,7 +67,7 @@ dev = ["pytest>=7.4", "pytest-cov>=4.1", "build>=1.0", "twine>=5", "bumpver>=202
 
 [tool.setuptools.packages.find]
 where   = ["src"]
-include = ["eegproc*"]
+include = ["eegproc*", "training_tracker*"]
 exclude = ["tests*"]
 
 [tool.bumpver]

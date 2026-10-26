@@ -16,4 +16,5 @@ export SOURCE_EPOCHS="${SOURCE_EPOCHS:-2}"
 export TARGET_SUBJECTS="${TARGET_SUBJECTS:-0 1}"
 export TIME_BUDGET_SECONDS="${TIME_BUDGET_SECONDS:-6600}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/runs/sic_v16/smoke}"
+python -m unittest discover -s src/tests -p test_sic_v16_data.py -v
 bash "$SIC16/SLURM_scripts/task.sh"
