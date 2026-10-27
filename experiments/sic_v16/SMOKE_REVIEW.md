@@ -53,8 +53,8 @@ The smoke gate has passed. Use the existing tracker to plan all four baseline
 runs (50 epochs, all 23 subjects), then submit the four generated scripts:
 
 ```bash
-python experiments/sic_v16/tracker.py --variant all status
-python experiments/sic_v16/tracker.py --variant all plan --target valence
+python experiments/sic_v16/tracker.py --scope all23 --variant all status
+python experiments/sic_v16/tracker.py --scope all23 --variant all plan --target valence
 ```
 
 Do not rerun the smoke jobs. These longer matched baselines are needed to see

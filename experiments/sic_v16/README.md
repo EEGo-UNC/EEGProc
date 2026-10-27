@@ -1,5 +1,48 @@
 # SIC v16 tracker workflow
 
+## Current default: subjects 0–3 are the entire dataset
+
+The wrapper now defaults to `--scope first4`. This restricts EEG/ratings before
+filtering or windowing, so subjects 4–22 cannot enter training, validation or
+testing. It is different from evaluating only four folds while still training
+on the other subjects. A four-subject LOSO fold uses **two training subjects,
+one validation subject, and one held-out test subject**. The input files stay
+unchanged. Source-trained weights from the old all-23 runs are not reused.
+
+The four new campaigns live under `experiments/sic_v16/first4/VARIANT/`, with
+separate campaign names, configurations and work-backed run stores. The old
+all-23 results stay intact and are not ranked against this new data protocol.
+
+```bash
+# Plan short smoke runs for the new data restriction:
+python experiments/sic_v16/tracker.py --scope first4 --variant all plan --target valence
+# Submit the four printed sbatch commands, then:
+python experiments/sic_v16/tracker.py --scope first4 --variant all status
+```
+
+The new smoke keeps the entire data pool restricted to subjects 0–3, but runs
+only test folds 0 and 1 for two epochs. After successful smoke, the same plan
+command proposes 50-epoch baselines for all four held-out subjects. Both smoke
+and baseline scripts request at most two hours with a 6,600-second soft cap.
+The next plan after baseline completion proposes one-factor experiments as
+before; no new hand-written Slurm script is required for each experiment.
+
+To inspect the **completed original** 23-subject runs:
+
+```bash
+python experiments/sic_v16/tracker.py --scope all23 --variant all status
+```
+
+Recovery for new first4 runs uses `recover.py --scope first4`; the recovery
+tool's default stays `all23` for compatibility with the earlier instructions.
+`diagnostics.py` packages both scopes. See [the resumed-run review](RESUME_REVIEW.md)
+for checkpoint evidence and the completed baseline metrics.
+
+## Original all-23 protocol and general tracker usage
+
+The older examples below describe the original campaigns; add `--scope all23`
+to select those stores. Use the current-default instructions above for new work.
+
 For quota failures or interrupted baselines, use [recovery instructions](RECOVERY.md).
 They preserve checkpoints and resume existing runs on shared work storage.
 

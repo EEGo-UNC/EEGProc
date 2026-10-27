@@ -129,6 +129,8 @@ def worker(spec_path, subject):
     tf.keras.utils.set_random_seed(spec["seed"] + subject)
     arrays = {name: np.load(output / "data" / f"{name}.npy", mmap_mode="r")
               for name in ("features", "labels", "subjects", "trials")}
+    if spec.get("data_subjects") is not None and set(np.unique(arrays["subjects"]).tolist()) != set(spec["data_subjects"]):
+        raise ValueError("Prepared arrays contain subjects outside the configured data pool.")
     train_ids, validation_ids = fold_subjects(arrays["subjects"], subject,
                                              spec["validation_subjects"], spec["seed"])
     train = np.isin(arrays["subjects"], train_ids)
@@ -276,6 +278,8 @@ def run(args):
             raise ValueError("Resume configuration/budget differs from task.json.")
         if old_spec["target_subjects"] != args.target_subjects:
             raise ValueError("Resume target set differs from the original run.")
+        if old_spec.get("data_subjects") != getattr(args, "data_subjects", None):
+            raise ValueError("Resume data pool differs from the original run.")
         for name in ("features", "labels", "subjects", "trials"):
             if not (output / "data" / f"{name}.npy").is_file():
                 raise ValueError(f"Prepared {name}.npy is missing; refusing to silently rebuild resume data.")
@@ -283,7 +287,7 @@ def run(args):
             current = Path(path).stat()
             if current.st_size != metadata["size"] or current.st_mtime_ns != metadata["mtime_ns"]:
                 raise ValueError(f"Source dataset changed since the saved run: {path}")
-        available = list(range(23))
+        available = old_spec.get("data_subjects") or list(range(23))
         write_json(output / f"previous-task-{time.time_ns()}.json", old_spec)
         if (output / "execution.json").exists():
             previous = (output / "execution.json").read_bytes()
@@ -291,7 +295,8 @@ def run(args):
     else:
         write_json(output / "execution.json", {"status": "preparing_data", "started": started})
         try:
-            available = prepare_data(args.eeg, args.labels, output / "data")
+            available = prepare_data(args.eeg, args.labels, output / "data",
+                                     data_subjects=getattr(args, "data_subjects", None))
         except Exception as exc:
             write_json(output / "execution.json", {"status": "failed", "stage": "data_preparation",
                 "error_type": type(exc).__name__, "error": str(exc)})
@@ -307,6 +312,7 @@ def run(args):
     except (OSError, subprocess.CalledProcessError):
         revision, dirty = None, None
     spec = dict(configuration=records[args.config_index], source_epochs=args.source_epochs,
+        data_subjects=getattr(args, "data_subjects", None),
         target_subjects=targets, seed=args.seed, batch_size=args.batch_size,
         validation_subjects=args.validation_subjects, deadline=started + args.time_budget_seconds,
         started=started, git_revision=revision, working_tree_dirty=dirty,
@@ -383,6 +389,8 @@ def main(argv=None):
     launch.add_argument("--seed", type=int, default=42)
     launch.add_argument("--time-budget-seconds", type=int, default=85000)
     launch.add_argument("--target-subjects", nargs="+", type=int)
+    launch.add_argument("--data-subjects", nargs="+", type=int,
+                        help="Restrict the entire data pool, including training and validation.")
     launch.add_argument("--resume", action="store_true")
     fold = commands.add_parser("worker")
     fold.add_argument("--spec", type=Path, required=True)

@@ -1,0 +1,93 @@
+{
+  "campaign": "sic-v16-cnn_reconstruction-first4-data",
+  "targets": [
+    "valence"
+  ],
+  "report_title": "SIC v16 cnn_reconstruction (data subjects 0-3 only)",
+  "experiment_dir": "experiments/sic_v16/first4/cnn_reconstruction",
+  "training_script": "experiments/sic_v16/train.py",
+  "launcher": {
+    "type": "template",
+    "template": "../../submit.template.slurm"
+  },
+  "objective": {
+    "metric": "trial_balanced_accuracy",
+    "maximize": true,
+    "uncertainty_penalty": 0.25
+  },
+  "defaults": {
+    "classification_level": "trial",
+    "use_transformer": false,
+    "use_decoder": true,
+    "conv_filters": [
+      32,
+      64
+    ],
+    "spatial_pool_sizes": [
+      2,
+      2
+    ],
+    "temporal_pool_sizes": [],
+    "temporal_kernel_size": 7,
+    "spatial_kernel_size": 3,
+    "emb_dim": 128,
+    "dropout": 0.2,
+    "transformer_layers": 1,
+    "attention_heads": 4,
+    "feed_forward_dim": 256,
+    "classifier_units": 128,
+    "classifier_dropout": 0.2,
+    "use_recurrent_classifier": false,
+    "use_variational_head": false,
+    "use_subject_adversarial": false,
+    "training_method": "erm",
+    "focal_gamma": 0.0,
+    "reconstruction_loss_weight": 0.1,
+    "vc_loss_weight": 1.0,
+    "learning_rate": 0.0001,
+    "weight_decay": 5e-05,
+    "target": "valence",
+    "epochs": 50,
+    "target_subjects": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "batch_size": 1,
+    "validation_subjects": 1,
+    "seed": 42,
+    "time_budget_seconds": 6600,
+    "data_subjects": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "smoke_overrides": {
+    "epochs": 2,
+    "target_subjects": [
+      0,
+      1
+    ],
+    "time_budget_seconds": 6600
+  },
+  "search_space": [
+    {
+      "name": "learning_rate",
+      "values": [
+        3e-05,
+        0.0003
+      ]
+    },
+    {
+      "name": "dropout",
+      "values": [
+        0.1,
+        0.35
+      ]
+    }
+  ],
+  "full_slurm_time": "02:00:00"
+}

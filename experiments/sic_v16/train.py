@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from training_tracker.core import fingerprint, load_json, utc_now, write_json
 from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import run, summarize
 
-RUNTIME_KEYS = {"target", "epochs", "target_subjects", "batch_size", "validation_subjects", "seed", "time_budget_seconds"}
+RUNTIME_KEYS = {"target", "epochs", "target_subjects", "data_subjects", "batch_size", "validation_subjects", "seed", "time_budget_seconds"}
 
 
 def tracker_result(summary):
@@ -90,10 +90,13 @@ def main(argv=None):
             labels=args.data_dir / "dreamer_labels.npy", source_epochs=int(config["epochs"]),
             batch_size=int(config["batch_size"]), validation_subjects=int(config["validation_subjects"]),
             seed=int(config["seed"]), time_budget_seconds=int(config["time_budget_seconds"]),
-            target_subjects=config["target_subjects"], resume=args.resume))
+            target_subjects=config["target_subjects"], data_subjects=config.get("data_subjects"), resume=args.resume))
         if code:
             raise RuntimeError(f"SICv16 runner stopped incomplete (exit {code}); inspect artifacts/ and subject logs.")
         result = tracker_result(summarize(output / "artifacts"))
+        result["data_scope"] = {"data_subjects": config.get("data_subjects"),
+            "target_subjects": config["target_subjects"],
+            "validation_subjects_per_fold": config["validation_subjects"]}
         write_json(output / "result.json", result)
         manifest.update(status="completed", completed_at=utc_now())
         write_json(manifest_path, manifest)

@@ -9,13 +9,48 @@ from unittest.mock import patch
 import numpy as np
 
 from eegproc.deep_learning.joint_architectures.SICModelv16.data import prepare_data
-from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import run, prediction_diagnostics
+from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import run, prediction_diagnostics, fold_subjects
 from training_tracker.core import load_campaign, plan_run, scan_runs
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class DataAndTrackerTests(unittest.TestCase):
+    def test_data_pool_excludes_other_subjects_before_filtering(self):
+        # Poison the excluded subjects: neither validation nor filtering may
+        # inspect their EEG/ratings when a subset was explicitly requested.
+        eeg = np.ones((6, 2, 14, 256), dtype="float32")
+        eeg[4:] = np.nan
+        labels = np.tile(np.array([1., 5.])[None, :, None], (6, 1, 3))
+        labels[4:] = np.nan
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            np.save(root/"eeg.npy", eeg)
+            np.save(root/"labels.npy", labels)
+            with patch("eegproc.deep_learning.prepare_datasets._filter_dreamer_trial",
+                       side_effect=lambda raw: np.repeat(raw, 3, axis=-1)) as filtering:
+                available = prepare_data(root/"eeg.npy", root/"labels.npy", root/"cache",
+                    expected_subjects=6, data_subjects=[0, 1, 2, 3])
+            self.assertEqual(available, [0, 1, 2, 3])
+            self.assertEqual(filtering.call_count, 8)
+            subjects = np.load(root/"cache/subjects.npy")
+            self.assertEqual(set(subjects.tolist()), {0, 1, 2, 3})
+            self.assertEqual(np.load(root/"cache/features.npy").shape, (8, 2, 128, 42))
+            for target in available:
+                train, validation = fold_subjects(subjects, target, 1, 42)
+                self.assertEqual(len(train), 2)
+                self.assertEqual(len(validation), 1)
+                self.assertEqual(set(train + validation + [target]), {0, 1, 2, 3})
+
+    def test_banded_subset_preserves_original_subject_ids(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            np.save(root/"eeg.npy", np.ones((6, 2, 42, 128), dtype="float32"))
+            np.save(root/"labels.npy", np.tile(np.array([1., 5.])[None, :, None], (6, 1, 3)))
+            prepare_data(root/"eeg.npy", root/"labels.npy", root/"cache",
+                         expected_subjects=6, data_subjects=[1, 3])
+            np.testing.assert_array_equal(np.load(root/"cache/subjects.npy"), [1, 1, 3, 3])
+
     def test_single_class_prediction_diagnostics(self):
         single = prediction_diagnostics([0, 1], [[.4, .6], [.3, .7]])
         self.assertTrue(single["single_class_predictions"])
@@ -80,6 +115,14 @@ class DataAndTrackerTests(unittest.TestCase):
             self.assertIn("#SBATCH --time=02:00:00", script)
             self.assertNotIn("{{", script)
             self.assertEqual(scan_runs(path.parent, campaign)[0]["status"], "planned")
+
+    def test_first4_tracker_pool_is_separate_from_old_campaign(self):
+        campaign = load_campaign(ROOT / "experiments/sic_v16/first4/cnn/campaign.json")
+        original = load_campaign(ROOT / "experiments/sic_v16/cnn/campaign.json")
+        self.assertNotEqual(campaign["campaign"], original["campaign"])
+        self.assertEqual(campaign["defaults"]["data_subjects"], [0, 1, 2, 3])
+        self.assertEqual(campaign["defaults"]["target_subjects"], [0, 1, 2, 3])
+        self.assertEqual(campaign["defaults"]["validation_subjects"], 1)
 
     def test_tracker_result_uses_validation_not_oracle(self):
         spec = importlib.util.spec_from_file_location("v16_tracked_train", ROOT / "experiments/sic_v16/train.py")

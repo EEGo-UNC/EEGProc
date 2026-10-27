@@ -21,9 +21,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-root", type=Path, default=None)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--scope", choices=("all23", "first4"), default="all23")
     args = parser.parse_args()
     work = args.work_root or default_work_root()
-    stores = [ROOT / "experiments/sic_v16" / v / "runs" for v in VARIANTS]
+    prefix = Path("first4") if args.scope == "first4" else Path()
+    stores = [ROOT / "experiments/sic_v16" / prefix / v / "runs" for v in VARIANTS]
     candidates = [p for store in stores for p in store.glob("*/manifest.json")]
     jobs = [str(json.loads(p.read_text()).get("slurm_job_id", "")) for p in candidates]
     jobs = [job for job in jobs if job.isdigit()]
@@ -42,11 +44,11 @@ def main():
             print(manifest["status"], path.parent)
         print("Dry run only. Add --apply to migrate, audit and generate resume scripts.")
         return
-    ensure_work_stores(ROOT, work, migrate=True)
+    ensure_work_stores(ROOT, work, migrate=True, scope=args.scope)
     # All metadata and scripts now live on shared storage, including completed runs.
     from eegproc.deep_learning.joint_architectures.SICModelv16.recovery import checkpoint_progress
     for variant in VARIANTS:
-        for manifest_path in (ROOT / "experiments/sic_v16" / variant / "runs").glob("*/manifest.json"):
+        for manifest_path in (ROOT / "experiments/sic_v16" / prefix / variant / "runs").glob("*/manifest.json"):
             manifest = json.loads(manifest_path.read_text())
             if manifest["status"] == "completed":
                 print(f"KEEP completed: {variant}/{manifest['run_id']}")

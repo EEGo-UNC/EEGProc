@@ -10,11 +10,12 @@ extensions = {".json", ".log", ".out", ".err", ".txt", ".csv", ".slurm"}
 
 def main():
     files = set()
-    for variant in VARIANTS:
-        store = ROOT / "experiments/sic_v16" / variant / "runs"
-        if store.is_dir():
-            files.update(p for p in store.rglob("*") if p.is_file()
-                         and not p.is_symlink() and p.suffix in extensions)
+    for prefix in (Path(), Path("first4")):
+        for variant in VARIANTS:
+            store = ROOT / "experiments/sic_v16" / prefix / variant / "runs"
+            if store.is_dir():
+                files.update(p for p in store.rglob("*") if p.is_file()
+                             and not p.is_symlink() and p.suffix in extensions)
     for pattern in ("sicv16_*.out", "sicv16_*.err"):
         files.update(ROOT.glob(pattern))
     if not files:

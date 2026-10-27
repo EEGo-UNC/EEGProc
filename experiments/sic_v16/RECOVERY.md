@@ -117,7 +117,7 @@ is archived. In-progress duplicate submissions are blocked by a run lock.
 Monitor through the same tracker paths:
 
 ```bash
-python experiments/sic_v16/tracker.py --variant all status
+python experiments/sic_v16/tracker.py --scope all23 --variant all status
 ```
 
 While running, inspect `resume-JOBID.out/.err` and `artifacts/subject_XX.log` in

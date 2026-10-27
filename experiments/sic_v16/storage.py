@@ -79,15 +79,18 @@ def migrate_store(source, destination):
     print(f"Run store: {source} -> {destination}", flush=True)
 
 
-def ensure_work_stores(repo, work_root, *, migrate=False):
+def ensure_work_stores(repo, work_root, *, migrate=False, scope="all23"):
     repo, work_root = Path(repo).resolve(), Path(work_root).resolve()
     if work_root.is_relative_to(Path.home().resolve()):
         raise ValueError("Work root must be outside the quota-limited home directory.")
     if not work_root.parent.is_dir():
         raise ValueError(f"Shared work parent does not exist: {work_root.parent}")
+    if scope not in {"all23", "first4"}:
+        raise ValueError("Unknown data scope.")
+    prefix = Path("first4") if scope == "first4" else Path()
     for variant in VARIANTS:
-        source = repo / "experiments/sic_v16" / variant / "runs"
-        destination = work_root / variant / "runs"
+        source = repo / "experiments/sic_v16" / prefix / variant / "runs"
+        destination = work_root / prefix / variant / "runs"
         if source.exists() and not source.is_symlink() and any(source.iterdir()) and not migrate:
             raise ValueError("Existing home run stores need recovery migration before planning more runs.")
         migrate_store(source, destination)
