@@ -140,3 +140,7 @@ matched across the four variant campaigns.
 The shared tracker's [general guide](../../docs/training-tracker.md) describes
 configuration and reporting. Its older standalone example campaigns are not
 part of this branch; use the SIC v16 wrapper above.
+
+## Architecture figures for the manuscript
+
+See [four-model architecture diagrams and dimension calculations](../../docs/model_architectures/README.md).
