@@ -12,7 +12,7 @@
     "mldg_meta_train_subjects": 12,
     "mldg_meta_test_subjects": 6,
     "mldg_trials_per_subject": 2,
-    "mldg_steps_per_epoch": 10,
+    "mldg_steps_per_epoch": 8,
     "mldg_inner_learning_rate": 0.0001,
     "mldg_meta_test_weight": 1.0,
     "mldg_seed": 42,
@@ -71,327 +71,219 @@
   },
   "configurations": [
     {
-      "name": "focal_0p5_scale_8_recon_0p0_episodes_5",
+      "name": "focal_0p5_scale_8_recon_0p0_episodes_8",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_0p5_scale_8_recon_0p0_episodes_10",
+      "name": "focal_0p5_scale_8_recon_0p0_episodes_16",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_0p5_scale_8_recon_0p0_episodes_20",
-      "overrides": {
-        "focal_gamma": 0.5,
-        "vc_logit_scale": 8.0,
-        "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_0p5_scale_8_recon_0p4_episodes_5",
+      "name": "focal_0p5_scale_8_recon_0p4_episodes_8",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_0p5_scale_8_recon_0p4_episodes_10",
+      "name": "focal_0p5_scale_8_recon_0p4_episodes_16",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_0p5_scale_8_recon_0p4_episodes_20",
-      "overrides": {
-        "focal_gamma": 0.5,
-        "vc_logit_scale": 8.0,
-        "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_0p5_scale_16_recon_0p0_episodes_5",
+      "name": "focal_0p5_scale_16_recon_0p0_episodes_8",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_0p5_scale_16_recon_0p0_episodes_10",
+      "name": "focal_0p5_scale_16_recon_0p0_episodes_16",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_0p5_scale_16_recon_0p0_episodes_20",
-      "overrides": {
-        "focal_gamma": 0.5,
-        "vc_logit_scale": 16.0,
-        "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_0p5_scale_16_recon_0p4_episodes_5",
+      "name": "focal_0p5_scale_16_recon_0p4_episodes_8",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_0p5_scale_16_recon_0p4_episodes_10",
+      "name": "focal_0p5_scale_16_recon_0p4_episodes_16",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_0p5_scale_16_recon_0p4_episodes_20",
-      "overrides": {
-        "focal_gamma": 0.5,
-        "vc_logit_scale": 16.0,
-        "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_0p5_scale_32_recon_0p0_episodes_5",
+      "name": "focal_0p5_scale_32_recon_0p0_episodes_8",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_0p5_scale_32_recon_0p0_episodes_10",
+      "name": "focal_0p5_scale_32_recon_0p0_episodes_16",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_0p5_scale_32_recon_0p0_episodes_20",
-      "overrides": {
-        "focal_gamma": 0.5,
-        "vc_logit_scale": 32.0,
-        "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_0p5_scale_32_recon_0p4_episodes_5",
+      "name": "focal_0p5_scale_32_recon_0p4_episodes_8",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_0p5_scale_32_recon_0p4_episodes_10",
+      "name": "focal_0p5_scale_32_recon_0p4_episodes_16",
       "overrides": {
         "focal_gamma": 0.5,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_0p5_scale_32_recon_0p4_episodes_20",
-      "overrides": {
-        "focal_gamma": 0.5,
-        "vc_logit_scale": 32.0,
-        "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_1p0_scale_8_recon_0p0_episodes_5",
+      "name": "focal_1p0_scale_8_recon_0p0_episodes_8",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_1p0_scale_8_recon_0p0_episodes_10",
+      "name": "focal_1p0_scale_8_recon_0p0_episodes_16",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_1p0_scale_8_recon_0p0_episodes_20",
-      "overrides": {
-        "focal_gamma": 1.0,
-        "vc_logit_scale": 8.0,
-        "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_1p0_scale_8_recon_0p4_episodes_5",
+      "name": "focal_1p0_scale_8_recon_0p4_episodes_8",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_1p0_scale_8_recon_0p4_episodes_10",
+      "name": "focal_1p0_scale_8_recon_0p4_episodes_16",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 8.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_1p0_scale_8_recon_0p4_episodes_20",
-      "overrides": {
-        "focal_gamma": 1.0,
-        "vc_logit_scale": 8.0,
-        "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_1p0_scale_16_recon_0p0_episodes_5",
+      "name": "focal_1p0_scale_16_recon_0p0_episodes_8",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_1p0_scale_16_recon_0p0_episodes_10",
+      "name": "focal_1p0_scale_16_recon_0p0_episodes_16",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_1p0_scale_16_recon_0p0_episodes_20",
-      "overrides": {
-        "focal_gamma": 1.0,
-        "vc_logit_scale": 16.0,
-        "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_1p0_scale_16_recon_0p4_episodes_5",
+      "name": "focal_1p0_scale_16_recon_0p4_episodes_8",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_1p0_scale_16_recon_0p4_episodes_10",
+      "name": "focal_1p0_scale_16_recon_0p4_episodes_16",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 16.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_1p0_scale_16_recon_0p4_episodes_20",
-      "overrides": {
-        "focal_gamma": 1.0,
-        "vc_logit_scale": 16.0,
-        "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_1p0_scale_32_recon_0p0_episodes_5",
+      "name": "focal_1p0_scale_32_recon_0p0_episodes_8",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_1p0_scale_32_recon_0p0_episodes_10",
+      "name": "focal_1p0_scale_32_recon_0p0_episodes_16",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 10
+        "mldg_steps_per_epoch": 16
       }
     },
     {
-      "name": "focal_1p0_scale_32_recon_0p0_episodes_20",
-      "overrides": {
-        "focal_gamma": 1.0,
-        "vc_logit_scale": 32.0,
-        "reconstruction_loss_weight": 0.0,
-        "mldg_steps_per_epoch": 20
-      }
-    },
-    {
-      "name": "focal_1p0_scale_32_recon_0p4_episodes_5",
+      "name": "focal_1p0_scale_32_recon_0p4_episodes_8",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 5
+        "mldg_steps_per_epoch": 8
       }
     },
     {
-      "name": "focal_1p0_scale_32_recon_0p4_episodes_10",
+      "name": "focal_1p0_scale_32_recon_0p4_episodes_16",
       "overrides": {
         "focal_gamma": 1.0,
         "vc_logit_scale": 32.0,
         "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 10
-      }
-    },
-    {
-      "name": "focal_1p0_scale_32_recon_0p4_episodes_20",
-      "overrides": {
-        "focal_gamma": 1.0,
-        "vc_logit_scale": 32.0,
-        "reconstruction_loss_weight": 0.4,
-        "mldg_steps_per_epoch": 20
+        "mldg_steps_per_epoch": 16
       }
     }
   ]

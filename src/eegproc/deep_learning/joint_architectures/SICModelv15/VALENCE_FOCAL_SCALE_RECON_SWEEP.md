@@ -1,14 +1,14 @@
 # Valence focal, logit-scale, reconstruction and episode sweep
 
 This sweep starts from the model/data settings of array run `5168991_12`.
-It contains **36 fixed configurations**:
+It contains **24 fixed configurations**:
 
 | Setting | Values |
 | --- | --- |
 | `focal_gamma` | 0.5, 1.0 |
 | `vc_logit_scale` | 8, 16, 32 |
 | `reconstruction_loss_weight` | 0.0, 0.4 |
-| `mldg_steps_per_epoch` | 5, 10, 20 |
+| `mldg_steps_per_epoch` | 8, 16 |
 | Outer/source epochs | **24**, increased from 12 |
 | `subject_loss_weight` | 0.3, fixed |
 
@@ -20,7 +20,7 @@ fixed architecture lists, with no implicit extra search dimensions.
 
 The inner-count axis means complete **MLDG episodes per source epoch**. Each
 episode still has one temporary inner adaptation step and one persistent outer
-update. The three settings produce 120, 240, and 480 episodes over 24 epochs.
+update. The two settings produce 192 and 384 episodes over 24 epochs.
 They intentionally vary the training budget. They do not introduce multiple
 adaptation steps inside an episode.
 
@@ -45,12 +45,12 @@ bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh"
 
 The wrapper submits two arrays:
 
-1. **108 source tasks**: three target-user shards per configuration, with held-out
+1. **72 source tasks**: three target-user shards per configuration, with held-out
    users 0-7, 8-15, and 16-22. Each source task requests four GPUs and runs two
    folds concurrently on separate GPU pairs. Every fold retains its full
    22-user source pool. Splitting targets keeps the longer training settings
    within smaller per-job workloads.
-2. **36 collectors**, dependent on the entire source array finishing. Each
+2. **24 collectors**, dependent on the entire source array finishing. Each
    collector requests two GPUs, combines its configuration's three shards,
    chooses one common epoch over all 23 users, and evaluates/calibrates only
    those selected models. It verifies matching settings and complete epoch
@@ -109,13 +109,13 @@ python "$SIC_V15/sic_v15_valence_sweep.py" rank \
 ```
 
 The manifest order is focal gamma, then logit scale, then reconstruction, then
-episode count (fastest). **Configuration 7** has the original run-12 model
-hyperparameters; **configuration 25** has the original run-21 model
-hyperparameters. Their source epoch budget is now 24. Source array task IDs
-are `3 * configuration + shard`; collector task IDs are configuration IDs.
+episode count (fastest). **Configuration 4** uses the original run-12 model
+settings with 8 episodes per epoch; **configuration 16** uses the original
+run-21 model settings with 8 episodes per epoch. Both use 24 source epochs.
+Source array task IDs are `3 * configuration + shard`; collector task IDs are configuration IDs.
 
-All per-epoch checkpoints are retained: a full 36-configuration run with 24
-epochs contains **19,872 source model files**, plus metric rows and shard data
+All per-epoch checkpoints are retained: a full 24-configuration run with 24
+epochs contains **13,248 source model files**, plus metric rows and shard data
 caches. Use an output filesystem with suitable capacity. Jobs refuse to
 overwrite an existing shard directory; use a new suite for a fresh run.
 The fixed run-12 launcher and the separate earlier screening sweep remain

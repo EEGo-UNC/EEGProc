@@ -31,16 +31,16 @@ def test_complete_cartesian_grid_keeps_run12_baseline():
     records = configurations(MANIFEST)
     baseline = configurations(SIC / 'sic_v15_valence_run_5168991_12.json')[0]['hyperparameters']
     axes = ('focal_gamma', 'vc_logit_scale', 'reconstruction_loss_weight', 'mldg_steps_per_epoch')
-    expected = list(itertools.product([.5, 1.], [8., 16., 32.], [0., .4], [5, 10, 20]))
-    assert len(records) == 36
+    expected = list(itertools.product([.5, 1.], [8., 16., 32.], [0., .4], [8, 16]))
+    assert len(records) == 24
     assert [tuple(row['hyperparameters'][key] for key in axes) for row in records] == expected
     for row in records:
         config = row['hyperparameters']
         assert {key: value for key, value in config.items() if key not in axes} == {
             key: value for key, value in baseline.items() if key not in axes}
         assert config['subject_loss_weight'] == .3
-    assert records[7]['hyperparameters'] == baseline
-    assert records[25]['hyperparameters'] == {**baseline, 'focal_gamma': 1.}
+    assert records[4]['hyperparameters'] == {**baseline, 'mldg_steps_per_epoch': 8}
+    assert records[16]['hyperparameters'] == {**baseline, 'focal_gamma': 1., 'mldg_steps_per_epoch': 8}
     assert sorted(user for group in SHARD_TARGETS for user in group) == list(range(23))
 
 
@@ -48,10 +48,10 @@ def test_dry_run_submits_nothing_and_shows_both_arrays(tmp_path):
     result = subprocess.run(['bash', str(SCRIPT)], cwd=tmp_path,
         env={**clean_environment(), 'DRY_RUN': '1', 'SUBMIT_PYTHON': sys.executable},
         capture_output=True, text=True, check=True)
-    assert '--array=0-107%2' in result.stdout
-    assert '--array=0-35%2' in result.stdout
+    assert '--array=0-71%2' in result.stdout
+    assert '--array=0-23%2' in result.stdout
     assert '--dependency=afterany:SOURCE_ARRAY_ID' in result.stdout
-    assert '36 configurations; 108 source tasks' in result.stdout
+    assert '24 configurations; 72 source tasks' in result.stdout
     assert 'Outer/source epochs: 24' in result.stdout
     assert '24:00:00 per task' in result.stdout
 
@@ -74,7 +74,7 @@ print('7001;longleaf' if any(arg.startswith('--dependency=') for arg in sys.argv
         capture_output=True, text=True, check=True)
     calls = [json.loads(line) for line in capture.read_text().splitlines()]
     assert len(calls) == 2
-    assert '--array=0-107%2' in calls[0]['args']
+    assert '--array=0-71%2' in calls[0]['args']
     assert '--dependency=afterany:7000' in calls[1]['args']
     assert '--export=ALL,SWEEP_SUITE_ID=7000' in calls[1]['args']
     assert '--gres=gpu:2' in calls[1]['args']
@@ -82,8 +82,8 @@ print('7001;longleaf' if any(arg.startswith('--dependency=') for arg in sys.argv
     assert all(call['epochs'] == '24' and call['project'] == str(ROOT) for call in calls)
 
 
-@pytest.mark.parametrize('phase,index', [('--task', '-1'), ('--task', '108'), ('--task', 'abc'),
-                                       ('--task', '01'), ('--collect', '36')])
+@pytest.mark.parametrize('phase,index', [('--task', '-1'), ('--task', '72'), ('--task', 'abc'),
+                                       ('--task', '01'), ('--collect', '24')])
 def test_invalid_indices_fail_before_cluster_setup(phase, index):
     result = subprocess.run(['bash', str(SCRIPT), phase], env={
         **clean_environment(), 'SLURM_ARRAY_TASK_ID': index, 'SWEEP_SUITE_ID': '7000'},
@@ -131,7 +131,7 @@ else:
             'OUTPUT_ROOT': str(project / 'outputs'), 'TIME_BUDGET_SECONDS': '70000'}
 
 
-@pytest.mark.parametrize('index', [0, 1, 2, 21, 107])
+@pytest.mark.parametrize('index', [0, 1, 2, 12, 71])
 def test_source_tasks_route_to_exact_configuration_and_user_shard(tmp_path, index):
     capture = tmp_path / 'training.jsonl'
     env = {**cluster_environment(tmp_path), 'SLURM_ARRAY_TASK_ID': str(index),
@@ -158,7 +158,7 @@ def test_source_tasks_route_to_exact_configuration_and_user_shard(tmp_path, inde
 @pytest.mark.parametrize('collector_code,calibrate', [(0, '1'), (0, '0'), (2, '1')])
 def test_collector_routes_only_successful_global_selection_to_calibration(tmp_path, collector_code, calibrate):
     capture = tmp_path / 'collect.jsonl'
-    env = {**cluster_environment(tmp_path), 'SLURM_ARRAY_TASK_ID': '7', 'SWEEP_SUITE_ID': '7000',
+    env = {**cluster_environment(tmp_path), 'SLURM_ARRAY_TASK_ID': '4', 'SWEEP_SUITE_ID': '7000',
            'TRAINING_CAPTURE': str(capture), 'COLLECT_RETURN_CODE': str(collector_code),
            'RUN_CALIBRATION': calibrate}
     result = subprocess.run(['bash', str(SCRIPT), '--collect'], env=env, capture_output=True, text=True)
@@ -166,14 +166,14 @@ def test_collector_routes_only_successful_global_selection_to_calibration(tmp_pa
     calls = [json.loads(line) for line in capture.read_text().splitlines()]
     assert len(calls) == (2 if collector_code == 0 and calibrate == '1' else 1)
     assert calls[0][0].endswith('collect_valence_sweep_shards.py')
-    assert calls[0][1].endswith('/suite_7000/configuration_7')
+    assert calls[0][1].endswith('/suite_7000/configuration_4')
     if len(calls) == 2:
         assert calls[1][1:3] == ['calibrate', calls[0][1]]
         assert calls[1][-4:] == ['--calibration-epochs', '1', '--calibration-batch-size', '64']
 
 
 def make_shards(tmp_path):
-    config = configurations(MANIFEST)[7]
+    config = configurations(MANIFEST)[4]
     for shard_number, targets in enumerate(SHARD_TARGETS):
         shard = tmp_path / f'shard_{shard_number}'
         write_json(shard / 'task.json', {'configuration': config, 'source_epochs': 3,
@@ -224,7 +224,7 @@ def test_partial_or_mixed_shards_cannot_publish_a_winner(tmp_path, failure):
         if failure == 'budget_mismatch':
             spec['source_epochs'] = 2
         else:
-            spec['configuration']['hyperparameters']['mldg_steps_per_epoch'] = 20
+            spec['configuration']['hyperparameters']['mldg_steps_per_epoch'] = 16
         write_json(path, spec)
     with pytest.raises(ValueError):
         collect(output)
