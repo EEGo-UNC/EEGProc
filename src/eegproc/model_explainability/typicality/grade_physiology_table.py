@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Produce the graded-physiology column of the counterfactual results table.
 
-Walks a counterfactual suite, refits each fold's PhysiologicalReference from
-source-subject EEG, scores every archived counterfactual against it, and prints
-median [Q1, Q3] worst-family exceedance per objective.
+Reads saved physiology JSON for every attempt. --report binary summarizes
+the recorded checks per objective/family. Graded reporting accepts saved
+exceedances, JSON component arrays, or legacy NPZ component arrays.
 
-Every trial passes through the same gate as grade_physiology.py: the refit
-bounds must reproduce the archived fraction_in_range values. Trials that fail
-the gate are counted and EXCLUDED from the quantiles rather than silently
-folded in, and the run exits non-zero if any failed, because a disagreeing
-reference is not the one the run used.
+Component arrays are rescored against source-only references and must match
+archived binary fractions. Saved graded summaries are reported as saved;
+binary-only summaries cannot supply distances. Missing grades are counted
+and graded reporting exits nonzero instead of treating them as zero.
 
 Expected layout (as archived by runner.py):
 
@@ -28,8 +27,7 @@ import argparse
 import json
 import re
 import sys
-import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +48,7 @@ def main(argv=None):
     parser.add_argument("--task", default="arousal", choices=("arousal", "valence"))
     parser.add_argument("--which", default="counterfactual",
                         choices=("counterfactual", "original", "reconstruction"))
+    parser.add_argument("--report", choices=("graded", "binary"), default="graded")
     parser.add_argument("--repo", default=Path("."), type=Path)
     parser.add_argument("--eeg", default=None, type=Path)
     parser.add_argument("--labels", default=None, type=Path)
@@ -65,115 +64,89 @@ def main(argv=None):
     repo = args.repo.resolve()
     sys.path.insert(0, str(repo / "src"))
 
-    from eegproc.model_explainability.typicality.grading_data import load_grading_trials
-    from eegproc.model_explainability.typicality.physiology import (
-        signal_diagnostics, PhysiologicalReference, DEFAULT_BANDS, FAMILIES)
+    from eegproc.model_explainability.typicality.physiology import FAMILIES
+    from eegproc.model_explainability.typicality.grading_archives import (
+        BoundsMismatch, GradingUnavailable, SourceReferences, assess_attempt,
+        attempt_directories, graded_score, read_summary,
+    )
 
-    if not hasattr(PhysiologicalReference, "deviation"):
-        sys.exit("This checkout has no PhysiologicalReference.deviation().")
-
-    config = {
-        "raw_eeg_npy": str(args.eeg or repo / "datasets" / "dreamer_eeg.npy"),
-        "raw_labels_npy": str(args.labels or repo / "datasets" / "dreamer_labels.npy"),
-        "dataset": "dreamer", "label_dimension": args.task,
-        "fs": args.fs, "window_sec": 1, "window_overlap": 0,
-        "window_normalization": "global_rms",
-        "label_threshold_mode": "global", "median_label": 3,
-    }
-    dataset = load_grading_trials(config)
-    print(f"dataset: {len(dataset.features)} trials, feature_order={dataset.feature_order!r}")
-
-    def physical(index, values):
-        if dataset.normalization_scale is None:
-            return np.asarray(values)
-        return (np.asarray(values) * dataset.normalization_scale[index]
-                + dataset.normalization_offset[index])
-
-    reference_cache = {}
-
-    def reference_for(held_out):
-        if held_out not in reference_cache:
-            started = time.time()
-            source = [i for i in range(len(dataset.features))
-                      if int(dataset.subject_ids[i]) != held_out]
-            diagnostics = [
-                signal_diagnostics(physical(i, dataset.features[i]), fs=args.fs,
-                                   n_channels=14, band_edges=DEFAULT_BANDS,
-                                   feature_order=dataset.feature_order or "channel-major")
-                for i in source
-            ]
-            reference_cache[held_out] = PhysiologicalReference.fit(
-                diagnostics, quantile=args.quantile,
-                required_fraction=args.required_fraction)
-            print(f"  fit reference for held-out {held_out}: "
-                  f"{len(source)} source trials ({time.time() - started:.1f}s)")
-        return reference_cache[held_out]
-
+    references = SourceReferences(args)
     subject_pattern = re.compile(r"subject_(\d+)")
     per_objective = defaultdict(list)
+    binary = defaultdict(list)
     gate_failures = []
-    missing = 0
+    unavailable = []
+    origins = Counter()
+    attempts = attempt_directories(args.suite, args.which)
+    print(f"found {len(attempts)} archived {args.which} attempts under {args.suite}\n")
+    if not attempts:
+        print("UNAVAILABLE: no physiology JSON summaries or component archives found.", file=sys.stderr)
+        return 2
 
-    attempts = sorted(args.suite.rglob(f"attempt_*/physiology_{args.which}.npz"))
-    print(f"found {len(attempts)} archived {args.which} files under {args.suite}\n")
-
-    for npz_path in attempts:
-        attempt = npz_path.parent
+    for attempt in attempts:
         objective = attempt.parent.name
-        match = subject_pattern.search(str(attempt))
+        match = next((subject_pattern.fullmatch(part) for part in reversed(attempt.parts)
+                      if subject_pattern.fullmatch(part)), None)
         if match is None:
-            missing += 1
+            unavailable.append((str(attempt), "No subject ID in attempt path"))
             continue
         held_out = int(match.group(1))
-        summary_path = attempt / "physiology.json"
-        if not summary_path.exists():
-            missing += 1
-            continue
-
-        reference = reference_for(held_out)
-        archive = np.load(npz_path)
-        values = {family: archive[family] for family in FAMILIES if family in archive.files}
-        summary = reference.assess(values)
-
-        recorded = json.loads(summary_path.read_text())[args.which]
-        ok = True
-        for family, archived in recorded["checks"].items():
-            got = summary["checks"][family]["fraction_in_range"]
-            want = archived["fraction_in_range"]
-            if want is None or got is None:
-                ok = ok and (want is got)
-            elif abs(got - want) > args.tolerance:
-                ok = False
-        if not ok:
+        try:
+            if args.report == "binary":
+                binary[objective].append(read_summary(attempt, args.which))
+                origins["saved_binary_json"] += 1
+                continue
+            summary, origin = assess_attempt(attempt, args.which, held_out, references)
+            value = graded_score(summary, args.statistic)
+            origins[origin] += 1
+            if value is not None:
+                per_objective[objective].append(value)
+        except BoundsMismatch:
             gate_failures.append(str(attempt))
-            continue
+        except (GradingUnavailable, OSError, ValueError) as error:
+            unavailable.append((str(attempt), str(error)))
 
-        key = ("worst_family_exceedance" if args.statistic == "worst"
-               else "mean_family_exceedance")
-        if summary[key] is not None:
-            per_objective[objective].append(summary[key])
-
-    print()
-    label = "worst-family" if args.statistic == "worst" else "mean-family"
-    print(f"{args.task}: median [Q1, Q3] {label} exceedance, half-interval widths\n")
-    print(f"{'objective':<34}{'n':>5}{'median':>10}{'Q1':>10}{'Q3':>10}")
-    print("-" * 69)
-    for objective in sorted(per_objective):
-        values = per_objective[objective]
-        median, q1, q3 = quantiles(values)
-        print(f"{objective:<34}{len(values):>5}{median:>10.3f}{q1:>10.3f}{q3:>10.3f}")
-        print(f"{'':34}  -> LaTeX cell:  {median:.3f} [{q1:.2f}, {q3:.2f}]")
-
-    if missing:
-        print(f"\nskipped {missing} attempt directories with no physiology.json or subject id")
+    if args.report == "binary":
+        print(f"{args.task}: saved binary physiology checks from JSON")
+        print("In-range fractions and pass percentages; graded distances are not inferred.\n")
+        print(f"{'objective':<26}{'family':<24}{'n/total':>10}{'pass %':>10}"
+              f"{'median':>10}{'Q1':>10}{'Q3':>10}")
+        for objective in sorted(binary):
+            summaries = binary[objective]
+            for family in FAMILIES:
+                checks = [summary["checks"][family] for summary in summaries]
+                fractions = [check["fraction_in_range"] for check in checks
+                             if check.get("fraction_in_range") is not None]
+                flags = [check["passed"] for check in checks if check.get("passed") is not None]
+                n = f"{len(fractions)}/{len(summaries)}"
+                passed = f"{100 * sum(flags) / len(flags):.2f}" if flags else "N/A"
+                values = [f"{value:.6f}" for value in quantiles(fractions)] if fractions else ["N/A"] * 3
+                print(f"{objective:<26}{family:<24}{n:>10}{passed:>10}" +
+                      "".join(f"{value:>10}" for value in values))
+    else:
+        label = "worst-family" if args.statistic == "worst" else "mean-family"
+        print(f"{args.task}: median [Q1, Q3] {label} exceedance, half-interval widths\n")
+        print(f"{'objective':<34}{'n':>5}{'median':>10}{'Q1':>10}{'Q3':>10}")
+        print("-" * 69)
+        for objective in sorted(per_objective):
+            values = per_objective[objective]
+            median, q1, q3 = quantiles(values)
+            print(f"{objective:<34}{len(values):>5}{median:>10.3f}{q1:>10.3f}{q3:>10.3f}")
+            print(f"{'':34}  -> LaTeX cell:  {median:.3f} [{q1:.2f}, {q3:.2f}]")
+    print("\nInput sources: " + ", ".join(f"{name}={count}" for name, count in sorted(origins.items())))
+    if origins["saved_json"]:
+        print("Saved graded JSON summaries were not independently revalidated against raw EEG.")
+    if unavailable:
+        print(f"\nUNAVAILABLE on {len(unavailable)} attempts -- excluded from the report:")
+        for path, reason in unavailable[:10]:
+            print(f"  {path}: {reason}")
     if gate_failures:
         print(f"\nGATE FAILED on {len(gate_failures)} trials -- excluded from the quantiles above:")
         for path in gate_failures[:10]:
             print(f"  {path}")
-        if len(gate_failures) > 10:
-            print(f"  ... and {len(gate_failures) - 10} more")
-        sys.exit(1)
+        return 1
+    return 2 if unavailable else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

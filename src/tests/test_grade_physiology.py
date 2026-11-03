@@ -127,3 +127,106 @@ def test_zero_width_and_undefined_deviations_are_unscorable():
     assert value["n_scored"] == value["n_unscorable"] == 1
     assert value["exceedance_mean"] == 1.
     assert reference.deviation("amplitude", np.array([1., np.nan])) is None
+
+
+def summaries_only(attempts, *, binary=False, family_only=False):
+    for attempt in attempts:
+        for path in attempt.glob('physiology_*.npz'):
+            path.unlink()
+        path = attempt / 'physiology.json'
+        payload = json.loads(path.read_text())
+        for summary in payload.values():
+            if binary or family_only:
+                for key in ('graded_count', 'exceedance_by_family',
+                            'worst_family_exceedance', 'mean_family_exceedance'):
+                    summary.pop(key, None)
+            if binary:
+                for check in summary['checks'].values():
+                    check.pop('deviation', None)
+        path.write_text(json.dumps(payload))
+
+
+def test_binary_json_needs_no_raw_eeg_and_does_not_invent_grades(archived_suite):
+    _, _, suite, attempts = archived_suite
+    summaries_only(attempts, binary=True)
+    single = run_grader('grade_physiology.py',
+                        ['--attempt', attempts[0], '--held-out', '0', '--report', 'binary'])
+    assert single.returncode == 0, single.stdout + single.stderr
+    assert 'saved binary physiology checks from JSON' in single.stdout
+    assert 'graded families' not in single.stdout
+    table = run_grader('grade_physiology_table.py', ['--suite', suite, '--report', 'binary'])
+    assert table.returncode == 0, table.stdout + table.stderr
+    rows = [line.split() for line in table.stdout.splitlines() if line.startswith('base ')]
+    assert len(rows) == 5
+    amplitude = next(row for row in rows if row[1] == 'amplitude')
+    assert amplitude[2] == '2/2'
+    values = [json.loads((attempt / 'physiology.json').read_text())['counterfactual']['checks']['amplitude']['fraction_in_range']
+              for attempt in attempts[:2]]
+    assert float(amplitude[4]) == pytest.approx(np.median(values), abs=1e-6)
+    aperiodic = next(row for row in rows if row[1] == 'aperiodic_exponent')
+    assert aperiodic[2:] == ['0/2', 'N/A', 'N/A', 'N/A', 'N/A']
+    assert 'LaTeX cell' not in table.stdout
+    for script, args in [('grade_physiology.py', ['--attempt', attempts[0], '--held-out', '0']),
+                         ('grade_physiology_table.py', ['--suite', suite])]:
+        missing = run_grader(script, args)
+        assert missing.returncode == 2
+        assert 'binary checks only' in missing.stdout + missing.stderr
+        assert 'LaTeX cell' not in missing.stdout
+        assert 'FileNotFoundError' not in missing.stdout + missing.stderr
+
+
+@pytest.mark.parametrize('family_only', [False, True])
+def test_saved_graded_json_is_reported_without_raw_eeg(archived_suite, family_only):
+    _, _, suite, attempts = archived_suite
+    summaries_only(attempts, family_only=family_only)
+    single = run_grader('grade_physiology.py', ['--attempt', attempts[0], '--held-out', '0'])
+    assert single.returncode == 0, single.stdout + single.stderr
+    assert 'Using saved graded JSON' in single.stdout
+    assert 'gate passed' not in single.stdout
+    for statistic in ('worst', 'mean'):
+        table = run_grader('grade_physiology_table.py', ['--suite', suite, '--statistic', statistic])
+        assert table.returncode == 0, table.stdout + table.stderr
+        assert 'saved_json=3' in table.stdout
+        assert 'LaTeX cell' in table.stdout
+        assert 'not independently revalidated' in table.stdout
+
+
+def test_json_component_arrays_preserve_the_bounds_gate(archived_suite):
+    eeg, labels, suite, attempts = archived_suite
+    for attempt in attempts:
+        for path in attempt.glob('physiology_*.npz'):
+            with np.load(path, allow_pickle=False) as archive:
+                values = {key: np.where(np.isfinite(archive[key]), archive[key], None).tolist()
+                          for key in archive.files}
+            path.with_suffix('.json').write_text(json.dumps(values, allow_nan=False))
+            path.unlink()
+    args = ['--suite', suite, '--eeg', eeg, '--labels', labels]
+    result = run_grader('grade_physiology_table.py', args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'recomputed_components=3' in result.stdout
+    path = attempts[0] / 'physiology.json'
+    saved = json.loads(path.read_text())
+    saved['counterfactual']['checks']['amplitude']['fraction_in_range'] = .123456
+    path.write_text(json.dumps(saved))
+    result = run_grader('grade_physiology_table.py', args)
+    assert result.returncode == 1
+    assert 'GATE FAILED on 1 trials' in result.stdout
+
+
+def test_empty_suite_is_not_reported_as_a_successful_table(tmp_path):
+    result = run_grader('grade_physiology_table.py', ['--suite', tmp_path])
+    assert result.returncode == 2
+    assert 'no physiology JSON summaries' in result.stderr
+
+
+@pytest.mark.parametrize('invalid', [-1., float('nan'), float('inf')])
+def test_invalid_saved_graded_values_are_rejected(archived_suite, invalid):
+    _, _, _, attempts = archived_suite
+    summaries_only(attempts)
+    path = attempts[0] / 'physiology.json'
+    payload = json.loads(path.read_text())
+    payload['counterfactual']['worst_family_exceedance'] = invalid
+    path.write_text(json.dumps(payload))
+    result = run_grader('grade_physiology.py', ['--attempt', attempts[0], '--held-out', '0'])
+    assert result.returncode == 2
+    assert 'Invalid saved' in result.stderr

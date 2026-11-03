@@ -1,42 +1,78 @@
-# Archived physiology grading
+# Physiological reports from JSON
 
-The physiological diagnostics and graded deviation from
-`graded-physiological-checks` are available on `valence-enhancement`.
-The grading tools use the existing NumPy dataset preparation and do not
-import TensorFlow, load checkpoints, or require the removed SIC adapter.
-The original float32 normalization and inverse transform are preserved.
+Both grading commands read `physiology.json`. The report type is explicit:
 
-From the repository root, grade one archived attempt:
+- `--report binary` reads the saved per-family pass/fail and in-range fractions.
+  It needs no raw EEG, checkpoints, component arrays, or TensorFlow.
+- `--report graded` (default) reports graded distance when the archive has
+  saved graded values or enough component values to recompute it. Binary
+  pass fractions alone cannot recover graded distances.
 
-```bash
-python src/eegproc/model_explainability/typicality/grade_physiology.py \
-  --attempt runs/path/to/subject_0/trial_16/typicality/attempt_0001 \
-  --held-out 0 --task arousal
-```
+## Existing summary-only suites
 
-Grade a suite, aggregating separately for each objective:
+For the saved arousal/valence suites containing only binary JSON summaries:
 
 ```bash
 python src/eegproc/model_explainability/typicality/grade_physiology_table.py \
-  --suite runs/path/to/suite --task arousal --statistic worst
+  --suite runs/path/to/suite --task valence --which counterfactual --report binary
 ```
 
-Both tools accept `--which counterfactual`, `original`, or `reconstruction`,
-and optional `--eeg` and `--labels` paths. They read `physiology_<which>.npz`
-and `physiology.json` from each archived attempt, reconstruct the held-out
-user's source-only reference, and require its fractions to match the archive.
-Mismatch exits nonzero; failed suite attempts are excluded from quantiles.
-`--statistic mean` reports the alternative mean-family exceedance.
+The table reports each objective and physiological family separately: number
+of evaluable attempts / total attempts, percent passing the saved binary
+check, and median [Q1, Q3] in-range fraction. Fractions are on the 0–1 scale.
+Undefined families show `N/A`; they are excluded from that family's statistics.
+These values are binary-check summaries, not graded-distance substitutes.
 
-The six-task CPU Slurm launcher runs all three signal types for both tasks
-and prints both statistics. It uses the current project checkout by default;
-`GRADE_REPO` can select another checkout explicitly.
+For one attempt:
 
 ```bash
-sbatch src/eegproc/model_explainability/slurm/run_grade_physiology_table.sh
+python src/eegproc/model_explainability/typicality/grade_physiology.py \
+  --attempt runs/path/to/subject_0/trial_7/base/attempt_0001 \
+  --held-out 0 --task valence --which counterfactual --report binary
 ```
 
-Graded exceedance is `max(z - 1, 0)`, where `z` is the distance from the source
-interval's center in half-interval widths. The binary pass checks are
-unchanged. Undefined and zero-width intervals remain unscorable; an aperiodic
-exponent is unavailable for the band-filtered decoder.
+`--which` accepts `counterfactual`, `original`, or `reconstruction`.
+
+## Graded inputs
+
+Graded mode accepts any of these archives:
+
+1. `physiology.json` with saved `worst_family_exceedance` and
+   `mean_family_exceedance`, or per-family `deviation.exceedance_mean` for every
+   evaluable family. These are reported as saved, with an explicit notice that
+   the reference bounds were not independently recomputed.
+2. `physiology_<which>.json` containing the component arrays `amplitude`,
+   `spectral_power`, `aperiodic_exponent`, `coherence`, and
+   `debiased_wpli_squared`. Undefined array entries can be JSON `null`.
+3. Legacy `physiology_<which>.npz` component arrays.
+
+Component archives also require the saved binary checks in `physiology.json`
+and raw EEG/labels (`--eeg`/`--labels`, or the default DREAMER dataset paths).
+The grader refits the source-only reference and requires all recomputed
+in-range fractions to match the saved fractions. JSON component arrays and
+legacy NPZ use the same bounds gate. The original float32 normalization and
+inverse transform are preserved.
+
+For graded tables, `--statistic worst` (default) reports the worst-family
+exceedance; `--statistic mean` reports the mean-family exceedance. The original
+units and definition remain: `max(z - 1, 0)`, where `z` is distance from the
+source interval's center in half-interval widths.
+
+Missing graded values are reported as unavailable and cause exit status 2.
+A bounds mismatch causes status 1. Unavailable/mismatched attempts are counted
+and excluded from reported quantiles. The grader never fills missing grades
+with zero or infers them from binary fractions.
+
+## CPU Slurm launcher
+
+The six-task launcher runs both tasks and all three signal types:
+
+```bash
+REPORT=binary sbatch src/eegproc/model_explainability/slurm/run_grade_physiology_table.sh
+```
+
+`REPORT=graded` is the default and runs both worst/mean statistics. Binary
+mode writes one report per array task. The launcher accepts JSON summaries
+without requiring NPZ files, raw EEG, or checkpoints up front. Raw EEG is
+loaded only when component arrays need rescoring. `GRADE_REPO` defaults to
+the current project checkout and can select another checkout explicitly.

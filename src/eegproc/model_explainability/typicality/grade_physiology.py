@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Rescore an archived counterfactual's physiological checks on a graded scale.
 
-Refits the fold's PhysiologicalReference from source-subject EEG (exactly as
-runner.py does), then scores an archived physiology_*.npz against it and reports
-the graded deviation added in commit 832ca13.
+Reads physiology.json for saved binary checks or saved graded distances.
+Optional physiology_<which>.json component arrays and legacy NPZ archives
+can be rescored against a source-only reference.
 
-The script REFUSES to print graded numbers unless the refit bounds first
-reproduce the archived binary fractions in physiology.json. That check is the
-whole point: if it fails, the bounds are not the ones the run used.
+Rescored components must reproduce archived binary fractions. Saved graded
+JSON is reported with its provenance; binary-only JSON cannot supply graded
+distances. Use --report binary to display the saved checks directly.
 
 Usage
 -----
@@ -16,28 +16,28 @@ Usage
         --held-out 0 \
         --task     arousal
 
-Run it from the EEGProc repo root, with datasets/dreamer_eeg.npy present; no TensorFlow or model loading is required.
+Run from the EEGProc repo root. Raw EEG is needed only to rescore component
+arrays; saved binary/graded JSON needs no model or TensorFlow.
 """
 
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
-
-import numpy as np
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--attempt", required=True, type=Path,
-                        help="attempt_0001 directory holding physiology*.npz and physiology.json")
+                        help="attempt_0001 directory holding physiology.json and optional component arrays")
     parser.add_argument("--held-out", required=True, type=int,
                         help="held-out subject id; the reference is fit on its LOSO complement")
     parser.add_argument("--task", default="arousal", choices=("arousal", "valence"))
     parser.add_argument("--which", default="counterfactual",
                         choices=("counterfactual", "original", "reconstruction"))
+    parser.add_argument("--report", choices=("graded", "binary"), default="graded",
+                        help="Graded distances, or the saved per-family binary checks.")
     parser.add_argument("--repo", default=Path("."), type=Path, help="EEGProc repo root")
     parser.add_argument("--eeg", default=None, type=Path)
     parser.add_argument("--labels", default=None, type=Path)
@@ -51,75 +51,42 @@ def main(argv=None):
     repo = args.repo.resolve()
     sys.path.insert(0, str(repo / "src"))
 
-    from eegproc.model_explainability.typicality.grading_data import load_grading_trials
-    from eegproc.model_explainability.typicality.physiology import (
-        signal_diagnostics, PhysiologicalReference, DEFAULT_BANDS, FAMILIES)
+    from eegproc.model_explainability.typicality.physiology import FAMILIES
+    from eegproc.model_explainability.typicality.grading_archives import (
+        BoundsMismatch, GradingUnavailable, SourceReferences, assess_attempt, graded_score, read_summary,
+    )
 
-    if not hasattr(PhysiologicalReference, "deviation"):
-        sys.exit("This checkout has no PhysiologicalReference.deviation(). "
-                 "Check out graded-physiological-checks (or later) first.")
+    if args.report == "binary":
+        try:
+            summary = read_summary(args.attempt, args.which)
+        except GradingUnavailable as error:
+            print(f"UNAVAILABLE: {error}", file=sys.stderr)
+            return 2
+        print(f"{args.which}: saved binary physiology checks from JSON")
+        print("Graded distances are not inferred from pass fractions.\n")
+        print(f"{'family':<24}{'passed':>12}{'in-range fraction':>20}")
+        for family in FAMILIES:
+            check = summary["checks"][family]
+            fraction = check.get("fraction_in_range")
+            label = "N/A" if fraction is None else f"{fraction:.6f}"
+            passed = "N/A" if check.get("passed") is None else str(check["passed"])
+            print(f"{family:<24}{passed:>12}{label:>20}")
+        return 0
 
-    # ---- 1. rebuild the dataset exactly as the run's study.json describes ----
-    config = {
-        "raw_eeg_npy": str(args.eeg or repo / "datasets" / "dreamer_eeg.npy"),
-        "raw_labels_npy": str(args.labels or repo / "datasets" / "dreamer_labels.npy"),
-        "dataset": "dreamer", "label_dimension": args.task,
-        "fs": args.fs, "window_sec": 1, "window_overlap": 0,
-        "window_normalization": "global_rms",
-        "label_threshold_mode": "global", "median_label": 3,
-    }
-    started = time.time()
-    dataset = load_grading_trials(config)
-    print(f"dataset: {len(dataset.features)} trials, "
-          f"feature_order={dataset.feature_order!r} ({time.time() - started:.1f}s)")
-
-    def physical(index, values):
-        if dataset.normalization_scale is None:
-            return np.asarray(values)
-        return (np.asarray(values) * dataset.normalization_scale[index]
-                + dataset.normalization_offset[index])
-
-    # ---- 2. refit the physiological reference on the LOSO complement ----
-    source = [i for i in range(len(dataset.features))
-              if int(dataset.subject_ids[i]) != args.held_out]
-    if not source:
-        sys.exit(f"No source trials for held-out subject {args.held_out}")
-    started = time.time()
-    diagnostics = [
-        signal_diagnostics(physical(i, dataset.features[i]), fs=args.fs, n_channels=14,
-                           band_edges=DEFAULT_BANDS,
-                           feature_order=dataset.feature_order or "channel-major")
-        for i in source
-    ]
-    reference = PhysiologicalReference.fit(diagnostics, quantile=args.quantile,
-                                           required_fraction=args.required_fraction)
-    print(f"reference: {len(source)} source trials from "
-          f"{len(set(int(dataset.subject_ids[i]) for i in source))} subjects "
-          f"({time.time() - started:.1f}s)")
-
-    # ---- 3. score the archived candidate ----
-    archive = np.load(args.attempt / f"physiology_{args.which}.npz")
-    values = {family: archive[family] for family in FAMILIES if family in archive.files}
-    summary = reference.assess(values)
-
-    # ---- 4. GATE: the refit bounds must reproduce the archived fractions ----
-    recorded = json.loads((args.attempt / "physiology.json").read_text())[args.which]
-    failures = []
-    for family, archived in recorded["checks"].items():
-        got = summary["checks"][family]["fraction_in_range"]
-        want = archived["fraction_in_range"]
-        if want is None or got is None:
-            if want is not got:
-                failures.append(f"  {family}: archived {want!r}, recomputed {got!r}")
-            continue
-        if abs(got - want) > args.tolerance:
-            failures.append(f"  {family}: archived {want!r}, recomputed {got!r}")
-    if failures:
-        print("\nBOUNDS DO NOT MATCH THE ARCHIVE -- graded numbers withheld:")
-        print("\n".join(failures))
-        sys.exit(1)
-    print(f"gate passed: refit bounds reproduce every archived fraction "
-          f"(|delta| <= {args.tolerance:g})\n")
+    try:
+        summary, origin = assess_attempt(args.attempt, args.which, args.held_out, SourceReferences(args))
+    except BoundsMismatch as error:
+        print("BOUNDS DO NOT MATCH THE ARCHIVE -- graded numbers withheld:")
+        print(error)
+        return 1
+    except (GradingUnavailable, OSError, ValueError) as error:
+        print(f"UNAVAILABLE: {error}", file=sys.stderr)
+        return 2
+    if origin == "saved_json":
+        print("Using saved graded JSON; reference bounds were not independently recomputed.")
+    else:
+        print(f"gate passed: refit bounds reproduce every archived fraction "
+              f"(|delta| <= {args.tolerance:g})\n")
 
     # ---- 5. report ----
     print(f"{args.which}: passed {summary['passed_count']}/{summary['available_count']} "
@@ -138,11 +105,12 @@ def main(argv=None):
               f"{deviation['exceedance_max']:>10.4f}{deviation['z_median']:>9.4f}"
               f"{deviation['z_max']:>9.4f}")
     print()
-    print(f"graded families      : {summary['graded_count']}")
-    print(f"worst family mean exc: {summary['worst_family_exceedance']:.4f}")
-    print(f"mean family exc      : {summary['mean_family_exceedance']:.4f}")
+    print(f"graded families      : {summary.get('graded_count', 'N/A')}")
+    for label, statistic in (("worst family mean exc", "worst"), ("mean family exc", "mean")):
+        value = graded_score(summary, statistic)
+        print(f"{label}: " + ("N/A" if value is None else f"{value:.4f}"))
     print("\nunit: half-interval widths (z <= 1 == inside the source interval)")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
