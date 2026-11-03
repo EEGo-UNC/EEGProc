@@ -8,12 +8,23 @@ import sys
 import tarfile
 
 
+def segment_log_power(windows, segments):
+    """Preserve segment order; average log one-second power within each segment."""
+    import numpy as np
+    windows = np.asarray(windows)
+    if windows.shape != (60, 128, 42) or segments not in (1, 6):
+        raise ValueError("Expected 60 one-second windows and one or six segments.")
+    power = np.mean(np.square(windows, dtype=np.float64), axis=1)
+    return np.log(np.maximum(power, 1e-12)).reshape(segments, 60 // segments, 42).mean(axis=1).reshape(-1)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--rebuild-dir", type=Path)
     p.add_argument("--output-dir", type=Path, required=True)
+    p.add_argument("--segments", type=int, choices=[1, 6], default=1)
     args = p.parse_args()
-    from nested_logpower import trial_features
+    import nested_logpower  # Adds the project source directory for shared preprocessing.
     from eegproc.deep_learning.joint_architectures.SICModelv16.data import prepare_data
     from permutation_audit import digest
     import numpy as np
@@ -44,15 +55,17 @@ def main():
     prepare_data(data / "dreamer_eeg.npy", data / "dreamer_labels.npy", cache,
                  data_subjects=list(range(23)))
     windows = np.load(cache / "features.npy", mmap_mode="r")
-    matrix = np.stack([trial_features(trial)["log_band_power"] for trial in windows])
-    if matrix.shape != (414, 42) or not np.isfinite(matrix).all():
+    matrix = np.stack([segment_log_power(trial, args.segments) for trial in windows])
+    if matrix.shape != (414, 42 * args.segments) or not np.isfinite(matrix).all():
         raise ValueError("Invalid EEG feature matrix.")
     np.save(cache / "log_power.npy", matrix)
     del windows
     (cache / "features.npy").unlink()
     manifest = dict(rebuild_dir=str(rebuild), data_dir=str(data), sha256=actual,
-                    preprocessing="already band-filtered source stimulus; centre crop; window RMS; mean log power",
-                    arms={"trial_id": 18, "eeg": 42, "trial_id_plus_eeg": 60},
+                    preprocessing="already band-filtered source stimulus; centre crop; window RMS; mean log power within ordered segments",
+                    segments=args.segments, seconds_per_segment=60 // args.segments,
+                    feature_order="segment-major, then channel-major, then theta/alpha/beta",
+                    arms={"trial_id": 18, "eeg": 42 * args.segments, "trial_id_plus_eeg": 18 + 42 * args.segments},
                     evaluation="identical 23 outer and 22 inner subject folds; independent C/threshold selection per arm",
                     limitation="Trial ID remains a stimulus proxy; combined features test incremental value under shared-trial evaluation.")
     (root / "provenance.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -77,7 +90,7 @@ def main():
                            for combined, identity in zip(results["trial_id_plus_eeg"]["folds"], results["trial_id"]["folds"])]))
         for key in ("test", "test_fixed_05")}
     (root / "comparison.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    archive = root / "trial-eeg-comparison-diagnostics.tar.gz"
+    archive = root / ("segment-trial-eeg-comparison-diagnostics.tar.gz" if args.segments == 6 else "trial-eeg-comparison-diagnostics.tar.gz")
     with tarfile.open(archive, "w:gz") as bundle:
         for relative in ["provenance.json", "comparison.json", "prepared/preprocessing.json"] + [
                 f"{arm}/{name}" for arm in results for name in ("config.json", "result.json")]:

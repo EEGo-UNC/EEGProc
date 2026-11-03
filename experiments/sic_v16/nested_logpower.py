@@ -94,7 +94,7 @@ def main():
           outer_protocol="23 held-out subjects; refit on all 22 non-test subjects",
           inner_protocol="22 leave-one-subject-out validation folds per outer fold",
           selection="mean subject validation balanced accuracy; ties: smaller C, threshold nearest 0.5, lower threshold",
-          feature=("one-hot trial index; stimulus identity proxy pending source mapping" if args.trial_id_only else "one-hot trial index plus RMS log band power; 60 features" if args.trial_id_plus_eeg else "RMS log band power; mean natural log window power; 42 features"),
+          feature=("one-hot trial index; stimulus identity proxy pending source mapping" if args.trial_id_only else f"one-hot trial index plus RMS log band power; {x.shape[1]} features" if args.trial_id_plus_eeg else f"RMS log band power; {x.shape[1]} ordered features"),
           scaling="StandardScaler fitted independently on each inner training pool and final refit pool",
           diagnostic="fixed-0.5 results use the same selected C; no test-label tuning"))
     results = []
