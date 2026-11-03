@@ -29,7 +29,9 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--feature-cache", type=Path)
     parser.add_argument("--permutation-index", type=int, default=0)
-    parser.add_argument("--trial-id-only", action="store_true")
+    features = parser.add_mutually_exclusive_group()
+    features.add_argument("--trial-id-only", action="store_true")
+    features.add_argument("--trial-id-plus-eeg", action="store_true")
     args = parser.parse_args()
     if args.permutation_index < 0:
         parser.error("Permutation index must be nonnegative; zero means original labels.")
@@ -71,7 +73,10 @@ def main():
     from sklearn.model_selection import LeaveOneGroupOut
     grid = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
     thresholds = np.linspace(0.0, 1.0, 41)
-    x = (np.eye(18)[arrays["trials"].astype(int)] if args.trial_id_only else matrices["log_band_power"])
+    identity = np.eye(18)[arrays["trials"].astype(int)]
+    x = (identity if args.trial_id_only else
+         np.concatenate([identity, matrices["log_band_power"]], axis=1) if args.trial_id_plus_eeg
+         else matrices["log_band_power"])
     def new_model(c):
         return make_pipeline(StandardScaler(), LogisticRegression(
             C=c, class_weight="balanced", solver="lbfgs", max_iter=10000,
@@ -89,7 +94,7 @@ def main():
           outer_protocol="23 held-out subjects; refit on all 22 non-test subjects",
           inner_protocol="22 leave-one-subject-out validation folds per outer fold",
           selection="mean subject validation balanced accuracy; ties: smaller C, threshold nearest 0.5, lower threshold",
-          feature=("one-hot trial index; stimulus identity proxy pending source mapping" if args.trial_id_only else "RMS log band power; mean natural log window power; 42 features"),
+          feature=("one-hot trial index; stimulus identity proxy pending source mapping" if args.trial_id_only else "one-hot trial index plus RMS log band power; 60 features" if args.trial_id_plus_eeg else "RMS log band power; mean natural log window power; 42 features"),
           scaling="StandardScaler fitted independently on each inner training pool and final refit pool",
           diagnostic="fixed-0.5 results use the same selected C; no test-label tuning"))
     results = []
