@@ -186,8 +186,8 @@ The full datasets and CUDA memory use must still be verified on Longleaf.
 
 ## Extended valence hyperparameter sweep
 
-`SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh` adds 108
-configurations crossing focal gamma, logit scale, six reconstruction weights,
+`SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh` adds 36
+configurations crossing focal gamma, logit scale, reconstruction weights 0.0/0.4,
 and 5/10/20 MLDG episodes per source epoch. It uses 24 source epochs and the
 run-12 baseline for all other settings. Source jobs shard the 23 held-out users;
 dependent collectors select one common oracle epoch over all users and then
