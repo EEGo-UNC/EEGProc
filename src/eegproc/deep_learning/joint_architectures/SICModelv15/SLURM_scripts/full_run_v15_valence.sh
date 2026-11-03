@@ -4,7 +4,7 @@
 #SBATCH --error=full_run_v15_valence_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --array=0-35%2
+#SBATCH --array=0
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
@@ -12,10 +12,9 @@
 
 set -euo pipefail
 
-# Submit with sbatch: one fixed configuration per array task, all 23 LOSO targets.
-# focal gamma 0.0/0.5/1.0/2.0 x subject loss 0.0/0.3/0.6
-# x reconstruction loss 0.0/0.4/0.8 = 36 tasks, at most two concurrently.
-# The separate full_run_v15_valence_sweep.sh uses an oracle protocol.
+# One fixed configuration: run 5168991_12, all 23 LOSO targets.
+# Select one common epoch maximizing mean held-out-user balanced accuracy.
+# Reload that epoch for final zero-shot evaluation and 3-shot calibration.
 #
 # SICModelv15 adds the learned convex joint reconstruction. Its v15 defaults
 # are made explicit below: initial alpha=0.5 and auxiliary branch weight=0.25.
@@ -24,8 +23,8 @@ set -euo pipefail
 # 24/12 trials globally and 12/6 per GPU.
 
 TASK_INDEX="${SLURM_ARRAY_TASK_ID:-}"
-if [[ ! "$TASK_INDEX" =~ ^([0-9]|[12][0-9]|3[0-5])$ ]]; then
-    echo "ERROR: submit this script with sbatch; SLURM_ARRAY_TASK_ID must be 0..35." >&2
+if [[ "$TASK_INDEX" != "0" ]]; then
+    echo "ERROR: submit this script with sbatch; SLURM_ARRAY_TASK_ID must be 0 (one fixed configuration)." >&2
     exit 1
 fi
 
@@ -45,13 +44,13 @@ SOURCE_EPOCHS="${SOURCE_EPOCHS:-12}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
-PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-100}"
+TIME_BUDGET_SECONDS="${TIME_BUDGET_SECONDS:-82800}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
 SUITE_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 
-CALIBRATION_LEVEL_ARGS=(
-    --calibration-level 3 6
-)
+SIC_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/SICModelv15"
+CONFIGS="$SIC_DIR/sic_v15_valence_run_5168991_12.json"
+OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_DIR/runs/full/sic_v15_valence_oracle_5168991_12/suite_${SUITE_ID}/task_${TASK_INDEX}}"
 
 cd "$PROJECT_DIR"
 
@@ -134,114 +133,20 @@ if [[ -n "$MODULE_CUDA_ROOT" ]]; then
     export CUDA_PATH="$MODULE_CUDA_ROOT"
 fi
 
-# Select exactly one point from the three-axis grid. Fixed wrappers keep
-# layer-width lists as one architecture rather than extra search axes.
-MODEL_CONFIG="$(python - <<'PY'
-import itertools
-import json
-import os
-
-seed = int(os.environ["TRAINING_SEED"])
-
-model_config = {
-    "classification_level": "trial",
-    "n_channels": 14,
-    "n_bands": 3,
-    "n_classes": 2,
-
-    "optimizer_name": "adamw",
-    "learning_rate": 1e-4,
-    "weight_decay": 5e-5,
-    "vrex_penalty_weight": 1.0,
-    "training_method": "mldg",
-
-    "mldg_meta_train_subjects": 12,
-    "mldg_meta_test_subjects": 6,
-    "mldg_trials_per_subject": 2,
-    "mldg_steps_per_epoch": 10,
-    "mldg_inner_learning_rate": 1e-4,
-    "mldg_meta_test_weight": 1.0,
-    "mldg_seed": seed,
-
-    "gcn_units": {"fixed": [128, 64]},
-    "gcn_dropout": 0.1,
-    "gcn_activation": "relu",
-    "gcn_use_batch_norm": False,
-    "spectral_gru_units": 384,
-    "spectral_gru_dropout": 0.2,
-    "mi_n_neighbors": 3,
-    "mi_random_state": seed,
-    "mi_zero_diagonal": False,
-    "mi_band_reduction": "mean",
-    "mi_max_observations": 15000,
-
-    "bilstm_units": 63,
-    "n_bilstm_layers": 1,
-    "bilstm_dropout": 0.2,
-
-    "classifier_rnn_type": "bigru",
-    "classifier_rnn_units": {"fixed": [128, 64]},
-    "n_classifier_rnn_layers": 2,
-    "classifier_rnn_dropout": 0.4,
-
-    "focal_gamma": {"grid": [0.0, 0.5, 1.0, 2.0]},
-    "focal_alpha": None,
-    "vc_loss_weight": 1.0,
-    "vc_alpha": 2.0,
-    "vc_beta": 0.6,
-    "vc_gamma": 0.0,
-    "vc_lambda": 0.05,
-    "vc_logit_scale": 16.0,
-    "update_vc_discriminator": False,
-
-    "use_subject_adversarial": True,
-    "subject_adversarial_weight": 0.6,
-    "subject_loss_weight": {"grid": [0.0, 0.3, 0.6]},
-    "subject_hidden_units": 64,
-    "subject_dropout": 0.0,
-
-    "use_gcn_gru_branch": True,
-    "use_bilstm_branch": True,
-    "use_decoder": True,
-    "reconstruction_loss_weight": {"grid": [0.0, 0.4, 0.8]},
-    "decoder_dropout": 0.1,
-    "joint_reconstruction_auxiliary_weight": 0.25,
-    "joint_reconstruction_initial_alpha": 0.5,
-    "remove_median_label": False,
-
-    "calibration_unfreeze_layers": 2,
-    "calibration_use_vc_target": True,
-    "calibration_vc_alpha": 1.0,
-    "calibration_vc_beta": 0.3,
-    "calibration_vc_gamma": 0.0,
-    "calibration_vc_lambda": 0.05,
-}
-
-# Keep insertion order, matching expand_cartesian_grid in sic_common.config.
-axes = {name: value["grid"] for name, value in model_config.items()
-        if isinstance(value, dict) and "grid" in value}
-combinations = list(itertools.product(*axes.values()))
-if len(combinations) != 36:
-    raise SystemExit("Update the Slurm array range to match the valence grid.")
-task_index = int(os.environ["SLURM_ARRAY_TASK_ID"])
-if not 0 <= task_index < len(combinations):
-    raise SystemExit(f"Invalid array task index: {task_index}")
-model_config.update(zip(axes, combinations[task_index]))
-print(json.dumps(model_config))
-PY
-)"
+# Print the same single fixed configuration passed to the oracle controller.
+MODEL_CONFIG="$(python "$SIC_DIR/sic_v15_valence_sweep.py" list --configs "$CONFIGS" --seed "$TRAINING_SEED")"
 
 echo "SIC builder: v15"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
-echo "Array: $SUITE_ID task $TASK_INDEX (one of 36 configurations)"
+echo "Array: $SUITE_ID task $TASK_INDEX (one fixed configuration: run 5168991_12)"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER valence"
 echo "Scope: all 23 LOSO target subjects"
 echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 10 steps/epoch"
 echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-test"
 echo "Calibration: $CALIBRATION_EPOCHS epochs at 3 shots (6 folds)"
-echo "Selection metric: zero-shot LOSO balanced accuracy; compare scores across array tasks"
-echo "Grid: focal gamma 0.0/0.5/1.0/2.0 x subject loss 0.0/0.3/0.6 x reconstruction loss 0.0/0.4/0.8"
+echo "Oracle selection: one common epoch maximizing mean held-out-user balanced accuracy at threshold 0.5"
+echo "Fixed settings: focal gamma=0.5 subject loss=0.3 reconstruction loss=0.0"
 echo "Selected model configuration: $MODEL_CONFIG"
 echo "VC settings: vc_alpha=2.0 vc_beta=0.6 vc_lambda=0.05 vc_logit_scale=16.0"
 echo "Joint reconstruction: initial alpha=0.5 auxiliary branch weight=0.25"
@@ -263,52 +168,22 @@ if n != 4:
 PY_GPU
 EEGPROC_TEST_GPUS=1 python -m src.tests.test_sic_v15_multi_gpu
 
-python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_train \
-    --training-protocol loso_validation \
-    --dataset dreamer \
-    --raw-eeg-npy "$EEG_PATH" \
-    --raw-labels-npy "$LABELS_PATH" \
-    --label-dimension valence \
-    --classification-level trial \
-    --n-channels 14 \
-    --n-bands 3 \
-    --out-dir "runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_${SUITE_ID}/task_${TASK_INDEX}/full" \
-    --run-name "full_run_v15_valence_best_20260918_task_${TASK_INDEX}" \
-    --training-method mldg \
+# Source fits use all 22 other users, with no validation holdout. Every
+# completed epoch saves its actual model. Selection waits for all 23 users.
+python "$SIC_DIR/sic_v15_valence_sweep.py" run \
+    --configs "$CONFIGS" \
+    --config-index 0 \
+    --output-dir "$OUTPUT_DIR" \
+    --eeg "$EEG_PATH" --labels "$LABELS_PATH" \
     --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" \
-    --validation-subjects 0 \
-    --validation-seed "$TRAINING_SEED" \
-    --no-early-stopping \
-    --calibration-epochs "$CALIBRATION_EPOCHS" \
-    --calibration-batch-size "$CALIBRATION_BATCH_SIZE" \
-    "${CALIBRATION_LEVEL_ARGS[@]}" \
-    --calibration-selection-shots 3 \
-    --calibration-learning-rate 0.0001 \
-    --calibration-optimizer adamw \
-    --calibration-weight-decay 0.00005 \
-    --calibration-seed 42 \
-    --selection-metric balanced_accuracy \
-    --hyperparameter-selection-level losocv \
-    --decision-threshold 0.5 \
-    --prediction-diagnostics \
-    --prediction-diagnostics-metric balanced_accuracy \
-    --prediction-diagnostics-every-n-epochs 1 \
-    --prediction-diagnostics-max-samples "$PREDICTION_DIAGNOSTICS_MAX_SAMPLES" \
-    --prediction-diagnostics-threshold-tolerance 0.01 \
-    --prediction-diagnostics-seed "$TRAINING_SEED" \
-    --ece-bins 15 \
-    --n-jobs 2 \
-    --gpus-per-fold 2 \
-    --gpu-ids 0 1 2 3 \
-    --cpus-per-worker 4 \
-    --verbose 2 \
     --seed "$TRAINING_SEED" \
     --deterministic-training \
-    --label-threshold-mode global \
-    --median-label 3 \
-    --window-sec 1.0 \
-    --fs 128 \
-    --window-overlap 0.0 \
-    --window-normalization global_rms \
-    --hyperparameters-json "$MODEL_CONFIG"
+    --time-budget-seconds "$TIME_BUDGET_SECONDS"
+
+# Use only the selected common-epoch model set. A failed or incomplete source
+# run stops the script before this step. Final metrics are checked against the
+# selected oracle score and written to OUTPUT_DIR/final_metrics.json.
+python "$SIC_DIR/sic_v15_valence_sweep.py" calibrate "$OUTPUT_DIR" \
+    --calibration-epochs "$CALIBRATION_EPOCHS" \
+    --calibration-batch-size "$CALIBRATION_BATCH_SIZE"

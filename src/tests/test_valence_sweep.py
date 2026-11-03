@@ -162,13 +162,14 @@ def test_real_cpu_worker_saves_reloadable_oracle_model(tmp_path):
     for name, value in {"features": features, "labels": np.tile([0, 1], 4),
                         "subjects": np.repeat(np.arange(4), 2), "trials": np.tile([0, 1], 4)}.items():
         np.save(data / f"{name}.npy", value)
-    configuration = sweep.configurations()[0]
+    configuration = sweep.configurations(SIC_V15 / "sic_v15_valence_run_5168991_12.json")[0]
     configuration["hyperparameters"].update(n_channels=3, n_bands=2, gcn_units=[3], spectral_gru_units=4,
         bilstm_units=2, classifier_rnn_units=[3], n_classifier_rnn_layers=1,
         mldg_meta_train_subjects=2, mldg_meta_test_subjects=1, mldg_trials_per_subject=2,
         mldg_steps_per_epoch=1, mi_max_observations=24, subject_hidden_units=3)
     sweep.write_json(tmp_path / "task.json", {"configuration": configuration, "target_subjects": [0],
-        "source_epochs": 2, "seed": 42, "gpus_per_fold": 0, "deadline": time.time() + 180})
+        "source_epochs": 2, "seed": 42, "gpus_per_fold": 0, "deadline": time.time() + 180,
+        "deterministic_training": True})
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "TF_CPP_MIN_LOG_LEVEL": "3",
            "MPLCONFIGDIR": str(tmp_path / "mpl")}
     env.pop("PYTHONPATH", None)
@@ -185,3 +186,67 @@ def test_real_cpu_worker_saves_reloadable_oracle_model(tmp_path):
     saved = json.loads(selected.with_suffix(".json").read_text())
     probabilities = _predict_probabilities(restored, features[:2], batch_size=1)
     np.testing.assert_allclose(probabilities, saved["probabilities"], rtol=1e-5, atol=1e-6)
+
+
+def test_final_metrics_use_reloaded_common_epoch_models(tmp_path, monkeypatch):
+    from argparse import Namespace
+    from eegproc.deep_learning.joint_architectures.SICModelv15 import sic_calibration_only_train as calibration
+
+    # Epoch two wins; neither the last epoch nor separate per-user peaks may
+    # supply the final metrics or the models passed to calibration.
+    for subject, scores in enumerate(((.8, .6, .5), (.4, .8, .5))):
+        for epoch, score in enumerate(scores, 1):
+            record = row(subject, epoch, score)
+            path = tmp_path / record["checkpoint"]
+            path.parent.mkdir(exist_ok=True)
+            path.touch()
+            sweep.write_json(path.with_suffix(".json"), record)
+    sweep.write_json(tmp_path / "task.json", {
+        "configuration": sweep.configurations()[0], "source_epochs": 3,
+        "target_subjects": [0, 1], "seed": 42, "source_batch_size": 64,
+        "eeg": str(tmp_path / "eeg.npy"), "labels": str(tmp_path / "labels.npy"),
+    })
+    sweep.write_json(tmp_path / "execution.json", {"failures": [], "interrupted": False})
+    zero = {"accuracy": .65, "balanced_accuracy": .7, "brier_score": .21}
+    calibrated = {"accuracy": .72, "balanced_accuracy": .71, "brier_score": .20}
+    candidate = {"n_subjects": 2, "zero_shot_all_trials_mean_scores": zero,
+                 "calibration_level_metrics": {"3": {"calibrated_mean_scores": calibrated}}}
+    def fake_calibrate(args):
+        _, specs, _ = calibration._read_models_config(args.models_config)
+        assert [entry["target_subject"] for entry in specs] == [0, 1]
+        assert all(entry["path"].name == "epoch_002.keras" for entry in specs)
+        assert args.calibration_level == [[3, 6]]
+        assert args.calibration_epochs == 1
+        assert args.decision_threshold == .5
+        assert args.selection_metric == "balanced_accuracy"
+        return {"run_dir": str(tmp_path / "calibration"), "results": {
+            "n_failed": 0, "n_completed": 1, "configurations": [candidate]}}
+    monkeypatch.setattr(calibration, "run_calibration_only_search", fake_calibrate)
+    args = Namespace(output_dir=tmp_path, calibration_epochs=1, calibration_batch_size=64)
+    final = sweep.calibrate_selected(args)
+    assert final["selected_epoch"] == 2
+    assert final["mean_metrics_by_calibration_level"] == {"0": zero, "3": calibrated}
+    assert json.loads((tmp_path / "final_metrics.json").read_text()) == final
+
+    # A stale/final-epoch model set must not silently publish an oracle score.
+    (tmp_path / "final_metrics.json").unlink()
+    candidate["zero_shot_all_trials_mean_scores"] = {**zero, "balanced_accuracy": .5}
+    with pytest.raises(ValueError, match="do not match"):
+        sweep.calibrate_selected(args)
+    assert not (tmp_path / "final_metrics.json").exists()
+
+
+def test_calibration_refuses_incomplete_source_epochs(tmp_path):
+    from argparse import Namespace
+    record = row(0, 1, .9)
+    path = tmp_path / record["checkpoint"]
+    path.parent.mkdir()
+    path.touch()
+    sweep.write_json(path.with_suffix(".json"), record)
+    sweep.write_json(tmp_path / "task.json", {
+        "configuration": sweep.configurations()[0], "source_epochs": 2,
+        "target_subjects": [0],
+    })
+    with pytest.raises(ValueError, match="every subject and epoch"):
+        sweep.calibrate_selected(Namespace(output_dir=tmp_path))
+    assert not (tmp_path / "final_metrics.json").exists()

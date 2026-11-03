@@ -31,7 +31,7 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def configurations(path=DEFAULT_CONFIGS):
+def configurations(path=DEFAULT_CONFIGS, *, seed=None):
     document = json.loads(Path(path).read_text())
     records = []
     names = set()
@@ -44,6 +44,8 @@ def configurations(path=DEFAULT_CONFIGS):
         if unknown:
             raise ValueError(f"Unknown overrides: {sorted(unknown)}")
         config = {**document["base"], **entry["overrides"]}
+        if seed is not None:
+            config.update(mldg_seed=int(seed), mi_random_state=int(seed))
         if any(isinstance(value, dict) for value in config.values()):
             raise ValueError("Each array task must contain one fixed configuration, not a grid.")
         fingerprint = json.dumps(config, sort_keys=True)
@@ -158,6 +160,85 @@ def summarize(output):
     return result
 
 
+def calibrate_selected(args):
+    """Evaluate and calibrate the models from the selected common epoch."""
+    output = Path(args.output_dir).resolve()
+    summary = summarize(output)
+    if summary["status"] != "completed":
+        raise ValueError("Oracle selection must complete for every subject and epoch before calibration.")
+    execution = json.loads((output / "execution.json").read_text())
+    if execution.get("failures") or execution.get("interrupted"):
+        raise ValueError("Cannot calibrate a failed or interrupted oracle run.")
+    spec = json.loads((output / "task.json").read_text())
+    from eegproc.deep_learning.joint_architectures.SICModelv15 import sic_calibration_only_train as calibration
+
+    # This is a separate CLI process, after the TensorFlow-free source
+    # controller exits. The existing calibration runner reloads the selected
+    # checkpoint independently for every user and restores it for every fold.
+    calibration_args = calibration.build_parser().parse_args([
+        "--models-config", str(output / "oracle_models.json"),
+        "--out-dir", str(output / "calibration"),
+        "--run-name", "selected_oracle_epoch",
+        "--dataset", "dreamer",
+        "--raw-eeg-npy", spec["eeg"],
+        "--raw-labels-npy", spec["labels"],
+        "--label-dimension", "valence",
+        "--classification-level", "trial",
+        "--n-channels", "14", "--n-bands", "3",
+        "--source-batch-size", str(spec.get("source_batch_size", 64)),
+        "--calibration-epochs", str(args.calibration_epochs),
+        "--calibration-batch-size", str(args.calibration_batch_size),
+        "--calibration-level", "3", "6",
+        "--calibration-selection-shots", "3",
+        "--calibration-learning-rate", "0.0001",
+        "--calibration-optimizer", "adamw",
+        "--calibration-weight-decay", "0.00005",
+        "--calibration-seed", "42",
+        "--selection-metric", "balanced_accuracy",
+        "--decision-threshold", "0.5", "--ece-bins", "15",
+        "--n-jobs", "2", "--gpu-ids", "0", "1", "2", "3",
+        "--cpus-per-worker", "4",
+        "--seed", str(spec["seed"]),
+        "--label-threshold-mode", "global", "--median-label", "3",
+        "--window-sec", "1.0", "--fs", "128", "--window-overlap", "0.0",
+        "--window-normalization", "global_rms",
+    ])
+    outcome = calibration.run_calibration_only_search(calibration_args)
+    results = outcome["results"]
+    if results["n_failed"] or results["n_completed"] != 1:
+        raise ValueError("Expected one completed fixed calibration configuration.")
+    candidate = results["configurations"][0]
+    zero_shot = candidate["zero_shot_all_trials_mean_scores"]
+    if candidate["n_subjects"] != len(summary["target_subjects"]):
+        raise ValueError("Calibration did not evaluate every selected oracle model.")
+    if not math.isclose(zero_shot["balanced_accuracy"], summary["selection_score"],
+                        rel_tol=0, abs_tol=1e-10):
+        raise ValueError("Reloaded zero-shot metrics do not match the selected oracle epoch.")
+    final = {
+        "oracle": True,
+        "selection_metric": "balanced_accuracy",
+        "selection_rule": summary["selection_rule"],
+        "selected_epoch": summary["best_epoch"],
+        "selection_score": summary["selection_score"],
+        "target_subjects": summary["target_subjects"],
+        "models_config": "oracle_models.json",
+        "calibration_run_dir": outcome["run_dir"],
+        "evaluation_note": summary["evaluation_note"],
+        "mean_metrics_by_calibration_level": {
+            "0": zero_shot,
+            "3": candidate["calibration_level_metrics"]["3"]["calibrated_mean_scores"],
+        },
+    }
+    write_json(output / "final_metrics.json", final)
+    print(f"\nSelected common oracle epoch: {final['selected_epoch']} "
+          f"(mean balanced_accuracy={final['selection_score']:.12f})", flush=True)
+    print("Final mean metrics by calibration level (oracle-selected source models)", flush=True)
+    for shots, scores in final["mean_metrics_by_calibration_level"].items():
+        print(f"{shots}-shot: " + ", ".join(f"{key}={scores[key]:.6f}" for key in
+              ("accuracy", "balanced_accuracy", "brier_score")), flush=True)
+    return final
+
+
 def worker(spec_path, subject):
     # CUDA_VISIBLE_DEVICES has already been set by the controller.
     import numpy as np
@@ -165,6 +246,7 @@ def worker(spec_path, subject):
     from sklearn.metrics import balanced_accuracy_score
     from eegproc.deep_learning.cross_validation.probabilities import _predict_probabilities, _predict_labels
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
+    from eegproc.deep_learning.joint_architectures.sic_common.config import split_data_hyperparameters
 
     spec_path = Path(spec_path).resolve()
     output = spec_path.parent
@@ -177,17 +259,23 @@ def worker(spec_path, subject):
     tf.config.threading.set_intra_op_parallelism_threads(4)
     tf.config.threading.set_inter_op_parallelism_threads(1)
     tf.keras.utils.set_random_seed(spec["seed"] + subject)
+    if spec.get("deterministic_training", False):
+        tf.config.experimental.enable_op_determinism()
     arrays = {name: np.load(output / "data" / f"{name}.npy", mmap_mode="r")
               for name in ("features", "labels", "subjects", "trials")}
     mask = arrays["subjects"] == subject
     source = ~mask
     config = spec["configuration"]["hyperparameters"]
+    builder_config, _ = split_data_hyperparameters(config)
     model = build_sic_model(input_shape=tuple(arrays["features"].shape[1:]),
                             training_features=arrays["features"][source], training_labels=arrays["labels"][source],
                             training_subject_ids=arrays["subjects"][source], training_trial_ids=arrays["trials"][source],
-                            **config)
+                            **builder_config)
     if spec["gpus_per_fold"] > 1:
-        model.configure_fold_devices(tuple(device.name for device in tf.config.list_logical_devices("GPU")))
+        model.configure_fold_devices(
+            tuple(device.name for device in tf.config.list_logical_devices("GPU")),
+            deterministic_execution=spec.get("deterministic_training", False),
+        )
     folder = output / f"subject_{subject:02d}"
     folder.mkdir()
 
@@ -227,18 +315,21 @@ def worker(spec_path, subject):
                 self.model.stop_training = True
 
     model.fit(model.prepare_fit_inputs(arrays["features"][source], arrays["subjects"][source]),
-              arrays["labels"][source], epochs=spec["source_epochs"], verbose=2,
+              arrays["labels"][source], epochs=spec["source_epochs"],
+              batch_size=spec.get("source_batch_size", 64), verbose=2,
               callbacks=[tf.keras.callbacks.TerminateOnNaN(), SaveOracleEpoch()])
     completed = len(list(folder.glob("epoch_*.json"))) == spec["source_epochs"]
     return 0 if completed else 2
 
 
 def run(args):
-    records = configurations(args.configs)
+    seed = getattr(args, "seed", 42)
+    records = configurations(args.configs, seed=seed)
     if not 0 <= args.config_index < len(records):
         raise ValueError(f"Configuration index must be in 0..{len(records)-1}.")
     if args.source_epochs < 1 or args.time_budget_seconds <= 0:
         raise ValueError("Epoch count and time budget must be positive.")
+    configuration = records[args.config_index]
     masks = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3").split(",")
     if len(masks) != 4 or len(set(masks)) != 4 or any(not mask.strip() for mask in masks):
         raise ValueError("Exactly four distinct allocated GPUs are required.")
@@ -250,8 +341,10 @@ def run(args):
     targets = available if args.target_subjects is None else args.target_subjects
     if not targets or len(targets) != len(set(targets)) or not set(targets) <= set(available):
         raise ValueError("Target subjects must be unique IDs from the DREAMER data.")
-    spec = {"configuration": records[args.config_index], "source_epochs": args.source_epochs,
-            "target_subjects": targets, "seed": 42, "gpus_per_fold": 2, "deadline": deadline,
+    spec = {"configuration": configuration, "source_epochs": args.source_epochs,
+            "source_batch_size": getattr(args, "source_batch_size", 64),
+            "deterministic_training": getattr(args, "deterministic_training", False),
+            "target_subjects": targets, "seed": seed, "gpus_per_fold": 2, "deadline": deadline,
             "eeg": str(Path(args.eeg).resolve()), "labels": str(Path(args.labels).resolve()),
             "time_budget_seconds": args.time_budget_seconds, "started": started,
             "preprocessing": "128 Hz; 1s nonoverlapping windows; global RMS per window; valence >= 3"}
@@ -338,6 +431,7 @@ def main(argv=None):
     listing = commands.add_parser("list")
     listing.add_argument("--configs", type=Path, default=DEFAULT_CONFIGS)
     listing.add_argument("--count", action="store_true")
+    listing.add_argument("--seed", type=int)
     launch = commands.add_parser("run")
     launch.add_argument("--configs", type=Path, default=DEFAULT_CONFIGS)
     launch.add_argument("--config-index", type=int, required=True)
@@ -345,6 +439,9 @@ def main(argv=None):
     launch.add_argument("--eeg", type=Path, required=True)
     launch.add_argument("--labels", type=Path, required=True)
     launch.add_argument("--source-epochs", type=int, default=6)
+    launch.add_argument("--source-batch-size", type=int, default=64)
+    launch.add_argument("--seed", type=int, default=42)
+    launch.add_argument("--deterministic-training", action="store_true")
     launch.add_argument("--time-budget-seconds", type=int, default=21000)
     launch.add_argument("--target-subjects", nargs="+", type=int)
     fold = commands.add_parser("worker", help=argparse.SUPPRESS)
@@ -352,11 +449,15 @@ def main(argv=None):
     fold.add_argument("--subject", type=int, required=True)
     report = commands.add_parser("summarize")
     report.add_argument("output_dir", type=Path)
+    calibration = commands.add_parser("calibrate", help="Calibrate the selected common-epoch models")
+    calibration.add_argument("output_dir", type=Path)
+    calibration.add_argument("--calibration-epochs", type=int, default=1)
+    calibration.add_argument("--calibration-batch-size", type=int, default=64)
     ranking = commands.add_parser("rank")
     ranking.add_argument("suite", type=Path)
     args = parser.parse_args(argv)
     if args.command == "list":
-        records = configurations(args.configs)
+        records = configurations(args.configs, seed=args.seed)
         print(len(records) if args.count else json.dumps(records, indent=2))
     elif args.command == "run":
         return run(args)
@@ -366,6 +467,10 @@ def main(argv=None):
         result = summarize(args.output_dir)
         print(json.dumps(result, indent=2))
         return 0 if result["status"] == "completed" else 2
+    elif args.command == "calibrate":
+        if args.calibration_epochs < 1 or args.calibration_batch_size < 1:
+            parser.error("Calibration epochs and batch size must be positive.")
+        calibrate_selected(args)
     elif args.command == "rank":
         print(json.dumps(rank(args.suite), indent=2))
     return 0

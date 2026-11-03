@@ -1,9 +1,8 @@
-"""Check full valence array coverage and launch routing without Slurm or GPUs."""
-import itertools
+"""Check the fixed full-run launch and oracle/calibration routing without GPUs."""
+import importlib.util
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import subprocess
 import sys
@@ -12,65 +11,66 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/full_run_v15_valence.sh"
-TRAINER = "src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_train"
+SIC = ROOT / "src/eegproc/deep_learning/joint_architectures/SICModelv15"
+SCRIPT = SIC / "SLURM_scripts/full_run_v15_valence.sh"
+MANIFEST = SIC / "sic_v15_valence_run_5168991_12.json"
 
 
 class ValenceArrayChecks(unittest.TestCase):
-    def test_all_tasks_cover_the_grid_once_in_original_order(self):
+    def test_only_the_pasted_run_configuration_is_available(self):
         source = SCRIPT.read_text()
-        self.assertIn("#SBATCH --array=0-35%2", source)
+        self.assertIn("#SBATCH --array=0\n", source)
         self.assertIn("full_run_v15_valence_%A_%a.out", source)
-        self.assertIn("full_run_v15_valence_%A_%a.err", source)
-        code = re.search(r"MODEL_CONFIG=\"\$\(python - <<'PY'\n(.*?)\nPY\n\)\"", source, re.S).group(1)
-        expected = list(itertools.product([0.0, 0.5, 1.0, 2.0],
-                                         [0.0, 0.3, 0.6], [0.0, 0.4, 0.8]))
-        observed = []
-        for index in range(36):
-            result = subprocess.run([sys.executable, "-c", code], check=True,
-                                    env={**os.environ, "TRAINING_SEED": "99", "SLURM_ARRAY_TASK_ID": str(index)},
-                                    capture_output=True, text=True)
-            config = json.loads(result.stdout)
-            self.assertFalse(any(isinstance(v, dict) and "grid" in v for v in config.values()))
-            self.assertEqual(config["gcn_units"], {"fixed": [128, 64]})
-            self.assertEqual(config["classifier_rnn_units"], {"fixed": [128, 64]})
-            self.assertEqual(config["mldg_seed"], 99)
-            self.assertEqual(config["mi_random_state"], 99)
-            observed.append(tuple(config[key] for key in
-                                  ("focal_gamma", "subject_loss_weight", "reconstruction_loss_weight")))
-        self.assertEqual(observed, expected)
-        self.assertEqual(len(set(observed)), 36)
+        spec = importlib.util.spec_from_file_location("oracle_sweep", SIC / "sic_v15_valence_sweep.py")
+        sweep = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sweep)
+        records = sweep.configurations(MANIFEST)
+        self.assertEqual(len(records), 1)
+        config = records[0]["hyperparameters"]
+        for key, expected in {
+            "focal_gamma": .5, "subject_loss_weight": .3,
+            "reconstruction_loss_weight": 0., "mldg_meta_train_subjects": 12,
+            "mldg_meta_test_subjects": 6, "mldg_trials_per_subject": 2,
+            "mldg_steps_per_epoch": 10, "vc_alpha": 2., "vc_beta": .6,
+            "vc_lambda": .05, "vc_logit_scale": 16.,
+            "gcn_units": [128, 64], "classifier_rnn_units": [128, 64],
+            "classifier_rnn_dropout": .4, "remove_median_label": False,
+        }.items():
+            self.assertEqual(config[key], expected)
+        self.assertFalse(any(isinstance(value, dict) for value in config.values()))
 
     def test_missing_or_invalid_task_fails_before_cluster_setup(self):
-        for task in (None, "-1", "36", "abc", "01"):
+        for task in (None, "-1", "1", "12", "35", "abc", "01"):
             with self.subTest(task=task):
                 env = {k: v for k, v in os.environ.items() if k != "SLURM_ARRAY_TASK_ID"}
                 if task is not None:
                     env["SLURM_ARRAY_TASK_ID"] = task
                 result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("SLURM_ARRAY_TASK_ID must be 0..35", result.stderr)
+                self.assertIn("SLURM_ARRAY_TASK_ID must be 0", result.stderr)
                 self.assertNotIn("module: command not found", result.stderr)
 
-    def test_shell_launches_one_configuration_per_task_in_distinct_folders(self):
+    def test_shell_uses_selected_models_and_stops_if_source_run_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary) / "project checkout"
             venv = project / "venv312"
             binaries = venv / "bin"
             binaries.mkdir(parents=True)
-            # Replace only cluster commands and training. Execute the real shell
-            # launcher and its real configuration generator end to end.
             python = binaries / "python"
             python.write_text(f"#!{sys.executable}\n" + "\n".join([
                 "import json, os, pathlib, sys",
-                f"if sys.argv[1:3] == ['-m', {TRAINER!r}]:",
-                "    pathlib.Path(os.environ['TRAINING_CAPTURE']).write_text(json.dumps(sys.argv[1:]))",
+                "if len(sys.argv) > 2 and sys.argv[1].endswith('sic_v15_valence_sweep.py'):",
+                "    if sys.argv[2] == 'list':",
+                f"        print(pathlib.Path({str(MANIFEST)!r}).read_text())",
+                "    else:",
+                "        with pathlib.Path(os.environ['TRAINING_CAPTURE']).open('a') as handle:",
+                "            handle.write(json.dumps(sys.argv[1:]) + '\\n')",
+                "        if sys.argv[2] == 'run':",
+                "            sys.exit(int(os.environ.get('SOURCE_RETURN_CODE', '0')))",
                 "elif sys.argv[1:3] == ['-m', 'src.tests.test_sic_v15_multi_gpu']:",
                 "    pass",
                 "elif sys.argv[1:] == ['-']:",
-                "    code = sys.stdin.read()",
-                "    if 'import tensorflow as tf' not in code:",
-                "        exec(compile(code, '<launcher>', 'exec'), {'__name__': '__main__'})",
+                "    pass  # GPU visibility preflight",
                 "else:",
                 f"    os.execv({sys.executable!r}, [{sys.executable!r}] + sys.argv[1:])",
             ]) + "\n")
@@ -85,32 +85,33 @@ class ValenceArrayChecks(unittest.TestCase):
             libdevice = venv / "lib/python3.12/site-packages/nvidia/nvvm/libdevice/libdevice.10.bc"
             libdevice.parent.mkdir(parents=True)
             libdevice.touch()
-            outputs = []
-            for task in (0, 1, 35):
-                capture = project / f"capture_{task}.json"
+            for code in (0, 2):
+                capture = project / f"capture_{code}.jsonl"
                 env = {**os.environ, "PROJECT_DIR": str(project), "VENV_DIR": str(venv),
-                       "SLURM_ARRAY_JOB_ID": "100", "SLURM_JOB_ID": str(200 + task),
-                       "SLURM_ARRAY_TASK_ID": str(task), "TRAINING_CAPTURE": str(capture),
+                       "SLURM_ARRAY_JOB_ID": "100", "SLURM_JOB_ID": "200",
+                       "SLURM_ARRAY_TASK_ID": "0", "TRAINING_CAPTURE": str(capture),
                        "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
-                       "TRAINING_SEED": "99", "SOURCE_EPOCHS": "12", "CALIBRATION_EPOCHS": "1"}
+                       "TRAINING_SEED": "99", "SOURCE_EPOCHS": "12", "CALIBRATION_EPOCHS": "1",
+                       "SOURCE_RETURN_CODE": str(code)}
+                env.pop("OUTPUT_DIR", None)
                 result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                args = json.loads(capture.read_text())
+                self.assertEqual(result.returncode, code, result.stderr)
+                calls = [json.loads(line) for line in capture.read_text().splitlines()]
+                self.assertEqual(len(calls), 2 if code == 0 else 1)
+                args = calls[0]
                 def value(flag):
                     return args[args.index(flag) + 1]
-                outputs.append(value("--out-dir"))
-                self.assertIn(f"suite_100/task_{task}/full", outputs[-1])
-                self.assertTrue(value("--run-name").endswith(f"_task_{task}"))
+                self.assertEqual(args[1], "run")
                 self.assertEqual(value("--source-epochs"), "12")
-                self.assertEqual(value("--calibration-epochs"), "1")
-                self.assertEqual(args[args.index("--calibration-level") + 1:][:2], ["3", "6"])
-                self.assertEqual(value("--n-jobs"), "2")
-                self.assertEqual(value("--gpus-per-fold"), "2")
-                self.assertEqual(value("--hyperparameter-selection-level"), "losocv")
+                self.assertEqual(value("--source-batch-size"), "64")
+                self.assertEqual(value("--config-index"), "0")
+                self.assertTrue(value("--configs").endswith(MANIFEST.name))
+                self.assertEqual(value("--seed"), "99")
                 self.assertIn("--deterministic-training", args)
-                config = json.loads(value("--hyperparameters-json"))
-                self.assertFalse(any(isinstance(v, dict) and "grid" in v for v in config.values()))
-            self.assertEqual(len(set(outputs)), 3)
+                self.assertIn("suite_100/task_0", value("--output-dir"))
+                if code == 0:
+                    self.assertEqual(calls[1][1:3], ["calibrate", value("--output-dir")])
+                    self.assertEqual(calls[1][-4:], ["--calibration-epochs", "1", "--calibration-batch-size", "64"])
 
 
 if __name__ == "__main__":

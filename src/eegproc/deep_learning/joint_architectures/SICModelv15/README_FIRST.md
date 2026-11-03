@@ -129,33 +129,38 @@ sbatch src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/f
 sbatch src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/full_run_v15_valence.sh
 ```
 
-Each task reserves **four GPUs**, runs **two folds concurrently with two GPUs
-per fold**, and covers all 23 LOSO targets using all other 22 subjects as the
-source pool. Valence submits a **36-task Slurm array**, with at most two tasks
-running concurrently (`--array=0-35%2`), using up to eight GPUs. Running arousal
-alongside both active valence tasks can use twelve GPUs in total.
-Both launchers request 8 CPUs and 128 GB RAM per task. The valence launcher
-uses 12 source epochs with 10 MLDG steps per epoch, then one calibration epoch
-at 3 shots (6 folds). Its 36 configurations cross focal gamma 0.0/0.5/1.0/2.0,
-subject-loss weights 0.0/0.3/0.6, and reconstruction weights 0.0/0.4/0.8.
-Each array task receives one fixed configuration and its own 24-hour limit.
-Reconstruction weight varies fastest, then subject loss, then focal gamma;
-task 0 is (0.0, 0.0, 0.0), and task 35 is (2.0, 0.6, 0.8).
-Use `sbatch --array=0-35%1 .../full_run_v15_valence.sh` to cap valence at four
-GPUs, or `sbatch --array=7 .../full_run_v15_valence.sh` to rerun only task 7.
-Use `squeue -r -u "$USER"` to display each array task on a separate line.
-The arousal launcher uses 10 source epochs with 12 MLDG steps per epoch,
-one calibration epoch at 3/6/9/12 shots, fixed subject-loss weight 0.2 and
-reconstruction weight 0.6, within a 12-hour limit. Both enable deterministic
-training and report zero-shot LOSO balanced accuracy. Valence's per-task
-`best_hyperparameters.json` describes that task's single configuration; compare
-`selection_score` across all completed tasks to select the suite's best
-configuration. Each training invocation no longer sees the entire suite.
+Each task reserves **four GPUs**, eight CPUs and 128 GB RAM, and runs two
+source folds concurrently with two GPUs per fold. Every target source model
+uses the other 22 users; there is no validation holdout.
 
-For the separate valence oracle sweep (one fixed configuration per six-hour
-array task), use `SLURM_scripts/full_run_v15_valence_sweep.sh`; see
-`VALENCE_SWEEP.md`. The full-run launchers above keep their own budgets
-and reporting protocol.
+The valence launcher now has **one fixed configuration**, matching
+`full_run_v15_valence_5168991_12.out`: focal gamma **0.5**, subject-loss weight
+**0.3**, reconstruction weight **0.0**, and all other model settings recorded
+in `sic_v15_valence_run_5168991_12.json`. The single array task (`--array=0`)
+uses 12 source epochs, ten MLDG steps per epoch, and a 24-hour allocation.
+
+After every source epoch, evaluate all 18 trials of its held-out user at
+threshold 0.5 and save that epoch's model. Once all 23 source fits finish,
+select **one common epoch** maximizing the unweighted mean of the 23 users'
+balanced accuracies; exact ties choose the earliest epoch. Reload only those
+selected models for final zero-shot evaluation and one calibration epoch at
+3 shots / 6 folds. The reloaded mean zero-shot balanced accuracy must match
+the selected oracle score before `final_metrics.json` is written. The selected
+epoch is printed beside the final metrics and saved in that file.
+
+This is explicitly an oracle experiment: held-out labels select the common
+epoch, while source gradients and MI-adjacency fitting still use source users
+only. All epochs' checkpoints and predictions remain available for auditing.
+`SOURCE_EPOCHS`, `CALIBRATION_EPOCHS`, `TRAINING_SEED`, `TIME_BUDGET_SECONDS`
+(default 82,800 source-training seconds), and `OUTPUT_DIR` can be overridden.
+Use a new output directory for each submission; the runner does not resume.
+
+The arousal launcher retains its existing settings: ten source epochs,
+12 MLDG steps per epoch, one calibration epoch at 3/6/9/12 shots, subject-loss
+weight 0.2, reconstruction weight 0.6, and a 12-hour allocation.
+The separate 16-configuration, six-hour oracle screening sweep remains
+available as `SLURM_scripts/full_run_v15_valence_sweep.sh`; see
+`VALENCE_SWEEP.md`. Its settings are independent of the fixed full run.
 
 | Target | Meta-train / meta-test subjects | Trials per subject | Global trials, train / test | Trials per GPU, train / test |
 | --- | --- | --- | --- | --- |
@@ -171,5 +176,9 @@ exclusions are introduced.
 Both launchers run the same two-GPU correctness preflight as the smoke job and
 stop if it fails. Valence logs are `full_run_v15_valence_ARRAY_ID_TASK_ID.out/.err`;
 its results are under
-`runs/full/sic_v15_valence_best_20260918/DREAMER/valence/suite_ARRAY_ID/task_TASK_ID/full`.
+`runs/full/sic_v15_valence_oracle_5168991_12/suite_ARRAY_ID/task_0/`.
+`oracle_epoch_means.csv` contains every epoch's average; `oracle_models.json`
+identifies the selected checkpoints. `final_metrics.json` records the selected
+epoch and final zero-shot/3-shot means; detailed calibration results are in
+its `calibration/` subdirectory.
 The full datasets and CUDA memory use must still be verified on Longleaf.

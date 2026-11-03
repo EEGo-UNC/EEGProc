@@ -156,8 +156,24 @@ This oracle runner keeps its original 16 configurations, source-only protocol,
 and six-hour task limits. Its manifest baseline was taken from the earlier
 `origin/fix/arousal-v11-calibration-level` commit
 `e6201db95b6657608b346803cfce4415470643be`, specifically
-`SICModelv15/SLURM_scripts/full_run_v15_valence.sh`. The imported full-run
-launcher has a separate 36-configuration grid (focal gamma x subject loss x
-reconstruction loss), with one fixed configuration per array task and a
-24-hour limit per task. It retains its LOSO/calibration protocol and does not
-replace this oracle sweep.
+`SICModelv15/SLURM_scripts/full_run_v15_valence.sh`. The full-run launcher now uses the single configuration from
+`full_run_v15_valence_5168991_12.out`, stored separately in
+`sic_v15_valence_run_5168991_12.json`: focal gamma 0.5, subject-loss weight 0.3,
+reconstruction weight 0.0, and 12/6 meta-train/meta-test subjects with two
+trials per subject. It retains a 24-hour allocation and 12 source epochs.
+
+```bash
+sbatch src/eegproc/deep_learning/joint_architectures/SICModelv15/SLURM_scripts/full_run_v15_valence.sh
+```
+
+This fixed full run uses the same common-epoch oracle selection as the sweep.
+After selection it reloads the selected models for zero-shot evaluation and
+3-shot / 6-fold calibration (one epoch). It refuses to publish final metrics
+if the reloaded zero-shot mean balanced accuracy differs from the selected
+oracle score. `final_metrics.json` records the common epoch, selected score,
+and final zero-shot and calibrated means. Source selection must finish for
+every user and epoch before calibration starts. Each selected model is
+restored independently for every calibration fold.
+
+The independent 16-configuration screening manifest and six-hour launcher
+above are unchanged.
