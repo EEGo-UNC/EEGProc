@@ -25,8 +25,8 @@ def trial_features(windows):
 def scale_blocks(x, trial_c, eeg_c):
     """Apply block penalties after training-only standardization.
 
-    Scaling EEG by sqrt(eeg_c/trial_c) gives penalty ||b_id||²/(2*trial_c)
-    plus ||b_eeg||²/(2*eeg_c) in standardized feature coordinates.
+    Scaling EEG by sqrt(eeg_c/trial_c) gives penalty ||b_id||**2/(2*trial_c)
+    plus ||b_eeg||**2/(2*eeg_c) in standardized feature coordinates.
     """
     import numpy as np
     if trial_c <= 0 or eeg_c < 0:
