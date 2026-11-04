@@ -1,0 +1,201 @@
+"""Verified rebuilt data: four memorization gates, then validation-selected LOSO."""
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+import tarfile
+import time
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+VARIANTS = ("cnn", "cnn_reconstruction", "cnn_transformer", "cnn_transformer_reconstruction")
+
+
+def configuration(index, check):
+    return dict(classification_level="trial", use_decoder=index in (1, 3),
+        use_transformer=index in (2, 3), conv_filters=[32, 64], spatial_pool_sizes=[2, 2],
+        temporal_pool_sizes=[], temporal_kernel_size=7, spatial_kernel_size=3,
+        emb_dim=128, classifier_units=128, dropout=0.0 if check else 0.1,
+        classifier_dropout=0.0 if check else 0.1, weight_decay=0.0,
+        learning_rate=0.001, label_smoothing=0.0, focal_gamma=0.0,
+        use_recurrent_classifier=False, use_variational_head=False,
+        use_subject_adversarial=False, training_method="erm", reconstruction_loss_weight=0.1)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("mode", choices=["prepare", "check", "train", "summarize", "collect"])
+    p.add_argument("--root", required=True, type=Path)
+    p.add_argument("--rebuild-dir", type=Path)
+    p.add_argument("--index", type=int, default=0)
+    p.add_argument("--epochs", type=int, default=500)
+    p.add_argument("--check-epochs", type=int, default=1000)
+    args = p.parse_args()
+    if min(args.epochs, args.check_epochs) < 1:
+        p.error("Epoch budgets must be positive.")
+    root = args.root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    def write(path, value):
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(value, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    if args.mode == "prepare":
+        from permutation_audit import digest
+        from eegproc.deep_learning.joint_architectures.SICModelv16.data import prepare_data
+        rebuild = args.rebuild_dir
+        if rebuild is None:
+            candidates = list((Path(os.environ["SIC_V16_WORK_ROOT"]) / "crop-rebuild-comparison").glob("job-*/comparison.json"))
+            if not candidates:
+                raise ValueError("No completed rebuild; set REBUILD_DIR.")
+            rebuild = max(candidates, key=lambda path: path.stat().st_mtime).parent
+        report = json.loads((rebuild / "crop_verification.json").read_text())
+        if report["summary"]["identified"] != 414:
+            raise ValueError("Incomplete crop verification.")
+        data = rebuild / "centred_full_filter"
+        hashes = {name: digest(data / name) for name in ("dreamer_eeg.npy", "dreamer_labels.npy")}
+        if hashes["dreamer_eeg.npy"] != report["centred_full_filter"]["eeg_sha256"] or hashes["dreamer_labels.npy"] != report["centred_full_filter"]["labels_sha256"]:
+            raise ValueError("Rebuilt dataset hash mismatch.")
+        if (root / "provenance.json").exists():
+            raise ValueError("Sweep already prepared; use a new sweep directory.")
+        prepare_data(data / "dreamer_eeg.npy", data / "dreamer_labels.npy", root / "data", data_subjects=list(range(23)))
+        write(root / "provenance.json", dict(data_dir=str(data.resolve()), hashes=hashes,
+            epochs=args.epochs, check_epochs=args.check_epochs, seed=42,
+            validation_subjects=2, source_subjects_per_fold=20,
+            selection="highest mean validation-subject balanced accuracy; lower validation cross-entropy on ties; earliest exact tie",
+            variants=list(VARIANTS), checkpoint_policy="retain best validation checkpoint only; evaluate test once after selection",
+            early_stopping="after at least 200 epochs, stop after 100 epochs without validation selection improvement"))
+        return
+    if args.mode == "collect":
+        archive = root / "rebuilt-four-model-partial-diagnostics.tar.gz"
+        with tarfile.open(archive, "w:gz") as bundle:
+            for path in root.rglob("*"):
+                if path.is_file() and path.suffix in (".json", ".txt", ".log"):
+                    bundle.add(path, arcname=str(path.relative_to(root)))
+        print(f"Download: {archive}", flush=True)
+        return
+    if args.mode == "summarize":
+        results = []
+        for index in range(92):
+            result = json.loads((root / f"fold-{index:02d}" / "result.json").read_text())
+            if result["status"] != "completed":
+                raise ValueError("Incomplete fold.")
+            results.append(result)
+        import statistics
+        write(root / "comparison.json", {name: dict(
+            balanced_accuracy=statistics.mean(r["test"]["balanced_accuracy"] for r in results if r["variant"] == name),
+            roc_auc=statistics.mean(r["test"]["roc_auc"] for r in results if r["variant"] == name)) for name in VARIANTS})
+        archive = root / "rebuilt-four-model-diagnostics.tar.gz"
+        with tarfile.open(archive, "w:gz") as bundle:
+            for path in root.rglob("*"):
+                if path.is_file() and path.suffix in (".json", ".txt", ".log"):
+                    bundle.add(path, arcname=str(path.relative_to(root)))
+        print(f"Download: {archive}", flush=True)
+        return
+    import numpy as np
+    import tensorflow as tf
+    from sklearn.metrics import balanced_accuracy_score, roc_auc_score, confusion_matrix
+    from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import fold_subjects
+    from eegproc.deep_learning.joint_architectures.SICModelv16.sic_model import build_sic_model
+    from overfit_eight import select_trials
+    check = args.mode == "check"
+    if not 0 <= args.index < (4 if check else 92):
+        raise ValueError("Invalid task index")
+    variant = args.index if check else args.index // 23
+    target = 0 if check else args.index % 23
+    spec = json.loads((root / "provenance.json").read_text())
+    if not check:
+        for index in range(4):
+            if json.loads((root / f"check-{index}" / "result.json").read_text())["status"] != "passed":
+                raise ValueError("All four learning gates must pass before full training.")
+    gpus = tf.config.list_physical_devices("GPU")
+    if len(gpus) != 1:
+        raise RuntimeError("Exactly one GPU required")
+    tf.config.experimental.set_memory_growth(gpus[0], True)
+    tf.config.threading.set_intra_op_parallelism_threads(4)
+    tf.config.threading.set_inter_op_parallelism_threads(1)
+    tf.keras.utils.set_random_seed(42 + target)
+    arrays = {name: np.load(root / "data" / f"{name}.npy", mmap_mode="r")
+              for name in ("features", "labels", "subjects", "trials")}
+    sources, validation = fold_subjects(arrays["subjects"], target, 2, 42)
+    train = np.flatnonzero(np.isin(arrays["subjects"], sources))
+    val = np.flatnonzero(np.isin(arrays["subjects"], validation))
+    test = np.flatnonzero(arrays["subjects"] == target)
+    if check:
+        train = np.asarray(select_trials(arrays["labels"], arrays["subjects"], arrays["trials"], [2, 3]))
+        val = train  # Memorization gate, explicitly not a validation estimate.
+    folder = root / (f"check-{args.index}" if check else f"fold-{args.index:02d}")
+    folder.mkdir(exist_ok=False)
+    config = configuration(variant, check)
+    write(folder / "config.json", dict(model=config, variant=VARIANTS[variant], target_subject=target,
+        train_subjects=sorted(set(arrays["subjects"][train].tolist())), validation_subjects=validation if not check else [],
+        train_trials=[dict(subject=int(arrays["subjects"][i]), trial=int(arrays["trials"][i])) for i in train]))
+    model = build_sic_model(input_shape=tuple(arrays["features"].shape[1:]),
+        training_subject_ids=arrays["subjects"][train], training_trial_ids=arrays["trials"][train], **config)
+    def evaluate(indices):
+        probabilities = np.concatenate([tf.nn.softmax(model(arrays["features"][i:i+1], training=False), axis=-1).numpy() for i in indices])
+        if not np.isfinite(probabilities).all():
+            raise ValueError("Nonfinite inference probabilities")
+        labels = arrays["labels"][indices]
+        prediction = (probabilities[:, 1] >= 0.5).astype(int)
+        return dict(accuracy=float(np.mean(prediction == labels)),
+            balanced_accuracy=float(balanced_accuracy_score(labels, prediction)),
+            roc_auc=float(roc_auc_score(labels, probabilities[:, 1])),
+            cross_entropy=float(-np.log(np.maximum(probabilities[np.arange(len(labels)), labels.astype(int)], 1e-12)).mean()),
+            single_class_predictions=bool(len(set(prediction.tolist())) == 1),
+            probability_min=float(probabilities[:, 1].min()), probability_max=float(probabilities[:, 1].max()),
+            confusion_matrix=confusion_matrix(labels, prediction, labels=[0, 1]).tolist(),
+            labels=labels.tolist(), probabilities=probabilities.tolist(),
+            subjects=arrays["subjects"][indices].tolist(), trials=arrays["trials"][indices].tolist())
+    history = []
+    class Monitor(tf.keras.callbacks.Callback):
+        best = None
+        best_epoch = 0
+        passed = False
+        def on_epoch_end(self, epoch, logs=None):
+            values = {k: float(v) for k, v in (logs or {}).items()}
+            if not all(np.isfinite(v) for v in values.values()):
+                raise ValueError("Nonfinite training metrics")
+            training = evaluate(train)
+            valid = training if check else evaluate(val)
+            if check:
+                score = valid["balanced_accuracy"]
+            else:
+                labels = np.asarray(valid["labels"])
+                probabilities = np.asarray(valid["probabilities"])
+                groups = np.asarray(valid["subjects"])
+                score = float(np.mean([balanced_accuracy_score(labels[groups == s],
+                    (probabilities[groups == s, 1] >= 0.5).astype(int)) for s in validation]))
+            key = (score, -valid["cross_entropy"])
+            if self.best is None or key > self.best:
+                self.best, self.best_epoch = key, epoch + 1
+                if not check:
+                    temporary = folder / "best.tmp.keras"
+                    model.save(temporary)
+                    temporary.replace(folder / "best.keras")
+            history.append(dict(epoch=epoch + 1, training_metrics=values, training=training,
+                                validation=None if check else valid, validation_subject_mean_BA=score))
+            write(folder / "history.json", history)
+            self.passed = check and training["accuracy"] == 1.0 and training["cross_entropy"] <= 0.1
+            print(f"{VARIANTS[variant]} epoch={epoch+1} train_BA={training['balanced_accuracy']:.3f} selection_BA={score:.3f} best_epoch={self.best_epoch}", flush=True)
+            if self.passed or (not check and epoch + 1 >= 200 and epoch + 1 - self.best_epoch >= 100):
+                model.stop_training = True
+    monitor = Monitor()
+    start = time.monotonic()
+    model.fit(model.prepare_fit_inputs(arrays["features"][train], arrays["subjects"][train]),
+              arrays["labels"][train], batch_size=1, epochs=spec["check_epochs"] if check else spec["epochs"],
+              verbose=2, callbacks=[monitor])
+    result = dict(status="passed" if check and monitor.passed else "failed" if check else "completed",
+                  variant=VARIANTS[variant], target_subject=target, elapsed_seconds=time.monotonic()-start,
+                  completed_epochs=len(history), best_epoch=monitor.best_epoch, best_validation_score=monitor.best)
+    if not check:
+        model = tf.keras.models.load_model(folder / "best.keras", compile=False)
+        result["test"] = evaluate(test)
+        result["selected_validation"] = history[monitor.best_epoch-1]["validation"]
+    write(folder / "result.json", result)
+    if check and not monitor.passed:
+        raise RuntimeError("Learning check did not memorize eight trials; full sweep remains blocked.")
+
+
+if __name__ == "__main__":
+    main()
