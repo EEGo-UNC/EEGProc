@@ -169,3 +169,29 @@ def test_ablation_launcher_physiology_options(launcher_env, script):
     launcher_env["REPAIR_BASELINE"] = "yes"
     result = subprocess.run(["bash", str(script)], env=launcher_env, text=True, capture_output=True)
     assert result.returncode == 2
+
+
+@pytest.mark.parametrize("script", [SCRIPT, VALENCE_SCRIPT])
+def test_ablation_launcher_temporal_phase_options(launcher_env, script):
+    from eegproc.model_explainability.typicality.runner import parse_args
+
+    def command(env):
+        result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+        line = next(l.removeprefix("Command: ") for l in result.stdout.splitlines() if l.startswith("Command: "))
+        return parse_args(shlex.split(line)[3:])
+
+    defaults = command(launcher_env)
+    assert defaults.temporal_sparsity_weight == 0
+    assert defaults.temporal_tv_weight == 0
+    assert defaults.decoded_distance == "mse"
+
+    launcher_env.update(TEMPORAL_SPARSITY_WEIGHT="0.1", TEMPORAL_TV_WEIGHT="0.2", DECODED_DISTANCE="envelope")
+    enabled = command(launcher_env)
+    assert enabled.temporal_sparsity_weight == 0.1
+    assert enabled.temporal_tv_weight == 0.2
+    assert enabled.decoded_distance == "envelope"
+
+    launcher_env["DECODED_DISTANCE"] = "phase"
+    result = subprocess.run(["bash", str(script)], env=launcher_env, text=True, capture_output=True)
+    assert result.returncode == 2

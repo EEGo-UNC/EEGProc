@@ -30,6 +30,12 @@ set -euo pipefail
 #   AMPLITUDE_SPECTRAL_MARGIN=0.0         shrink source intervals inside that penalty
 #   REPAIR_BASELINE=1                     per trial, first find the repair-only z_rep and
 #                                         report every arm's change against R(z_rep)
+# Temporal / phase options (defaults reproduce the original suite):
+#   TEMPORAL_SPARSITY_WEIGHT=0.1          fused lasso: mean |delta| on the latent edit,
+#                                         standardized by the source latent std
+#   TEMPORAL_TV_WEIGHT=0.1                fused lasso: mean |delta_{t+1} - delta_t|
+#   DECODED_DISTANCE=envelope             phase-invariant decoded proximity (log
+#                                         band-power envelopes) instead of mse
 # Local command preview (no GPU, module loads, or result writes):
 #   DRY_RUN=1 VENV_DIR=venv bash src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
 
@@ -164,6 +170,9 @@ COMMAND=("$VENV_DIR/bin/python" -m eegproc.model_explainability.typicality.runne
     --physiology-required-fraction "${PHYSIOLOGY_REQUIRED_FRACTION:-0.95}"
     --amplitude-spectral-weight "${AMPLITUDE_SPECTRAL_WEIGHT:-0.0}"
     --amplitude-spectral-margin "${AMPLITUDE_SPECTRAL_MARGIN:-0.0}"
+    --temporal-sparsity-weight "${TEMPORAL_SPARSITY_WEIGHT:-0.0}"
+    --temporal-tv-weight "${TEMPORAL_TV_WEIGHT:-0.0}"
+    --decoded-distance "${DECODED_DISTANCE:-mse}"
     --fs 128 --seed "${SEED:-42}" --log-every "${LOG_EVERY:-10}" --out-dir "$OUT_DIR")
 case "${STOP_ON_SUCCESS:-1}" in
     1) COMMAND+=(--stop-on-success) ;;
@@ -183,6 +192,10 @@ fi
 if [[ -n "${PHYSIOLOGICAL_TOLERANCE_QUANTILE:-}" ]]; then
     COMMAND+=(--physiological-tolerance-quantile "$PHYSIOLOGICAL_TOLERANCE_QUANTILE")
 fi
+case "${DECODED_DISTANCE:-mse}" in
+    mse|envelope) ;;
+    *) echo "ERROR: DECODED_DISTANCE must be mse or envelope." >&2; exit 2 ;;
+esac
 case "${REPAIR_BASELINE:-0}" in
     1) COMMAND+=(--include-repair-baseline) ;;
     0) ;;

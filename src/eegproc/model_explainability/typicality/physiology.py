@@ -8,9 +8,10 @@ No amplitude threshold is described as microvolts without unit metadata.
 
 from dataclasses import dataclass
 import itertools
+import warnings
 
 import numpy as np
-from scipy.signal import periodogram
+from scipy.signal import hilbert, periodogram
 
 FAMILIES = ("amplitude", "spectral_power", "aperiodic_exponent", "coherence", "debiased_wpli_squared")
 DEFAULT_BANDS = ((4.0, 8.0), (8.0, 13.0), (13.0, 30.0))
@@ -77,6 +78,80 @@ def signal_diagnostics(signal, *, fs, n_channels, band_edges=DEFAULT_BANDS,
         "coherence": coherence, "debiased_wpli_squared": dwpli,
         "frequencies_hz": frequencies, "psd": mean_psd,
         "rms": np.sqrt(np.mean(x ** 2, axis=(0, 1))), "pair_indices": pairs,
+    }
+
+
+def seam_diagnostics(signal, *, n_channels, band_edges=DEFAULT_BANDS,
+                     feature_order="channel-major", neighbors=8):
+    """Phase and amplitude continuity across window boundaries.
+
+    Windows are concatenated in time order and each channel x band series
+    gets one analytic signal (Hilbert) over the whole trial. The Hilbert
+    phase of a discontinuity is spread over several samples, so the phase
+    check compares the phase advance over a span of 2k+1 increments centred
+    on each boundary (k = neighbors) with the advance expected from the
+    median increment in the 2k increments on each side of that span:
+
+      phase residual = |wrap(advance over span - (2k+1) x median increment)|,
+                       in radians;
+      amplitude jump = |x[b+1] - x[b]| / median |x[t+1] - x[t]| within k
+                       samples of the boundary b (the last sample of a window).
+
+    A continuous recording gives a residual near 0 and a jump ratio near 1;
+    a decoder that rebuilds windows independently leaves seams (larger
+    residuals and ratios). Pass physical-unit signals: per-window
+    normalization creates artificial amplitude steps. Broadband or
+    non-stationary signals also have nonzero residuals and with
+    non-contiguous windows (overlap or gaps) real data show seams too, which
+    is why the real trial is always reported alongside as the reference.
+    Returns per-band medians over boundaries and channels.
+    """
+    x = np.asarray(signal, dtype=np.float64)
+    if x.ndim == 4 and x.shape[0] == 1:
+        x = x[0]
+    if x.ndim != 3 or x.shape[-1] != n_channels * len(band_edges) or not np.isfinite(x).all():
+        raise ValueError("Signal must be a finite (windows,time,channels*bands) trial")
+    if int(neighbors) < 1:
+        raise ValueError("neighbors must be a positive integer")
+    k = int(neighbors)
+    windows, samples = x.shape[:2]
+    if feature_order == "channel-major":
+        x = x.reshape(windows, samples, n_channels, len(band_edges))
+    elif feature_order == "band-major":
+        x = x.reshape(windows, samples, len(band_edges), n_channels).transpose(0, 1, 3, 2)
+    else:
+        raise ValueError("feature_order must be channel-major or band-major")
+    if windows < 2 or samples < 2:
+        return {"n_boundaries": 0, "neighbors": k,
+                "phase_residual_median_rad": None, "amplitude_jump_ratio_median": None}
+    series = x.reshape(windows * samples, n_channels, len(band_edges))
+    last_sample = series.shape[0] - 1
+    phase = np.unwrap(np.angle(hilbert(series, axis=0)), axis=0)
+    increments = np.diff(phase, axis=0)            # increment i: sample i -> i+1
+    steps = np.abs(np.diff(series, axis=0))
+    residuals, jumps = [], []
+    for boundary in (w * samples - 1 for w in range(1, windows)):
+        low, high = max(boundary - k, 0), min(boundary + k + 1, last_sample)
+        reference = np.concatenate([increments[max(low - 2 * k, 0):low],
+                                    increments[high:min(high + 2 * k, last_sample)]])
+        expected = (high - low) * np.median(reference, axis=0)
+        advance = phase[high] - phase[low]
+        residuals.append(np.abs(np.angle(np.exp(1j * (advance - expected)))))
+        nearby = [i for i in range(boundary - k, boundary + k + 1) if i != boundary and 0 <= i < last_sample]
+        typical = np.median(steps[nearby], axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            jumps.append(np.where(typical > 0, steps[boundary] / typical, np.nan))
+    residuals, jumps = np.stack(residuals), np.stack(jumps)          # (boundaries, C, B)
+    with warnings.catch_warnings():
+        # A flat channel x band has no typical step; its ratio is NaN and is
+        # reported as missing when every channel is flat.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        jump_median = np.nanmedian(jumps, axis=(0, 1))
+    return {
+        "n_boundaries": windows - 1,
+        "neighbors": k,
+        "phase_residual_median_rad": np.median(residuals, axis=(0, 1)),
+        "amplitude_jump_ratio_median": jump_median,
     }
 
 
@@ -156,13 +231,18 @@ def source_vcsc_calibration(source_features):
             "source_dwpli_squared": calibration["reference_dwpli_squared"]}
 
 
-def make_vcsc_loss(calibration, amplitude_spectral=None, **weights):
+def make_vcsc_loss(calibration, amplitude_spectral=None, temporal_scale=None, **weights):
     """Use the existing CFO objective with fixed VCSC reference constants.
 
     amplitude_spectral, if given, is a counterfactuals.amplitude_spectral.
     AmplitudeSpectralReference built from the same source subjects. It adds
     the amplitude/spectral-power term to the objective (weighted by
     amplitude_spectral_weight; 0 keeps it a logged diagnostic).
+
+    temporal_scale, if given, is the per-latent-feature standard deviation over
+    the fold's source trials (counterfactuals.temporal_phase.latent_scale). The
+    temporal smoothing terms and the latent_edit statistics are computed on
+    the edit divided by it.
     """
     import tensorflow as tf
     from ..counterfactuals.loss import (CounterfactualLoss, _vcsc_band_coherence_wpli,
@@ -171,9 +251,17 @@ def make_vcsc_loss(calibration, amplitude_spectral=None, **weights):
     if weights.get("amplitude_spectral_weight", 0.0) > 0 and amplitude_spectral is None:
         raise ValueError("amplitude_spectral_weight > 0 requires an amplitude/spectral reference")
 
+    if temporal_scale is not None:
+        temporal_scale = np.asarray(temporal_scale, dtype=np.float32)
+        if temporal_scale.ndim != 1 or not np.all(np.isfinite(temporal_scale)) or np.any(temporal_scale <= 0):
+            raise ValueError("temporal_scale must be a finite, positive vector (one value per latent feature)")
+
     class CalibratedVCSCLoss(CounterfactualLoss):
         def amplitude_spectral_reference(self):
             return amplitude_spectral
+
+        def temporal_scale(self):
+            return temporal_scale
 
         def physiological_validity(self, x_prime):
             c, w = _vcsc_band_coherence_wpli(x_prime)

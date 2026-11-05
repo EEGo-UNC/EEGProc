@@ -33,8 +33,12 @@ import tensorflow as tf
 
 if __package__:
     from .amplitude_spectral import amplitude_and_power
+    from .temporal_phase import envelope_distance_tf, temporal_penalties
 else:
     from amplitude_spectral import amplitude_and_power
+    from temporal_phase import envelope_distance_tf, temporal_penalties
+
+DECODED_METRICS = ("mse", "envelope")
 
 """
 Standard DREAMER/AMIGOS/eegemotions_27 14-channel Emotiv EPOC montage, in the
@@ -293,7 +297,11 @@ class CounterfactualLoss:
     The objective is target_weight * target_loss + latent_weight * MSE(z', z)
     + decoded_weight * mean_r MSE(R_r(z'), R_r(z)) + physiological_weight *
     mean_r VCSC(R_r(z')) [+ amplitude_spectral_weight * mean_r A(R_r(z')) when
-    a source amplitude/spectral reference is supplied]. The optimizer supplies the selected reconstruction
+    a source amplitude/spectral reference is supplied] [+ temporal_sparsity_weight
+    * mean|delta| + temporal_tv_weight * mean|delta_{t+1} - delta_t| on the
+    standardized latent edit, when either weight is positive]. decoded_metric
+    "envelope" replaces the decoded MSE with a phase-invariant distance between
+    log band-power envelopes (counterfactuals.temporal_phase). The optimizer supplies the selected reconstruction
     paths: independent branch decoders or the saved joint reconstruction.
     The physiological term only participates in optimization when
     physiological_weight is nonzero, and that weight defaults to 0.
@@ -315,6 +323,9 @@ class CounterfactualLoss:
     vcsc_z0: float = 2.0
     vcsc_z_max: float = 20.0
     amplitude_spectral_weight: float = 0.0
+    temporal_sparsity_weight: float = 0.0
+    temporal_tv_weight: float = 0.0
+    decoded_metric: str = "mse"
 
     def __post_init__(self):
         for name in (
@@ -327,12 +338,16 @@ class CounterfactualLoss:
             "vcsc_z0",
             "vcsc_z_max",
             "amplitude_spectral_weight",
+            "temporal_sparsity_weight",
+            "temporal_tv_weight",
         ):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and nonnegative.")
         if self.target_weight == 0:
             raise ValueError("target_weight must be positive.")
+        if self.decoded_metric not in DECODED_METRICS:
+            raise ValueError(f"decoded_metric must be one of {DECODED_METRICS}.")
         if self.vcsc_tau_cm <= 0:
             raise ValueError("vcsc_tau_cm must be positive.")
         if self.vcsc_z_max <= self.vcsc_z0:
@@ -397,8 +412,10 @@ class CounterfactualLoss:
         reconstructions = decoder(z_prime)
         if not reconstructions or set(reconstructions) != set(reference_reconstructions):
             raise ValueError("Candidate and original reconstruction paths must match and be nonempty.")
+        metric = (self.latent_distance if self.decoded_metric == "mse"
+                  else lambda a, b: tf.cast(envelope_distance_tf(a, b), a.dtype))
         distances = {
-            name: self.latent_distance(value, reference_reconstructions[name])
+            name: metric(value, reference_reconstructions[name])
             for name, value in reconstructions.items()
         }
         return (
@@ -444,6 +461,14 @@ class CounterfactualLoss:
         #Mean, not sum, over the 91 pairs: keeps the penalty's scale comparable
         #to the target/latent/decoded terms instead of growing with pair count.
         return tf.cast(tf.reduce_mean(weight * penalty), x_prime.dtype)
+
+    def temporal_scale(self):
+        """Per-latent-feature scale for the temporal terms, or None (unit).
+
+        typicality.physiology.make_vcsc_loss supplies the source-trial latent
+        standard deviation, so the terms are comparable across features.
+        """
+        return None
 
     def amplitude_spectral_reference(self):
         """Source bounds for the amplitude/spectral term, or None.
@@ -521,6 +546,12 @@ class CounterfactualLoss:
             )
             / len(reconstructions),
         }
+        if self.temporal_sparsity_weight > 0 or self.temporal_tv_weight > 0:
+            # Present only when enabled, so default losses keep their
+            # historical terms. Both are logged whenever either is active.
+            sparsity, tv = temporal_penalties(z_prime, z, self.temporal_scale())
+            terms["temporal_sparsity"] = tf.cast(sparsity, z_prime.dtype)
+            terms["temporal_tv"] = tf.cast(tv, z_prime.dtype)
         amplitude_spectral_diagnostics = {}
         if self.amplitude_spectral_reference() is not None:
             # Present only with a source reference, so losses without one keep

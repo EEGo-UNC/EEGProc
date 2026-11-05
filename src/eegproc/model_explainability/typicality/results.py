@@ -99,6 +99,13 @@ def population_summary(rows):
     for field in ("d_z", "delta_dec", "e_rec"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
             result[f"{field}_{key}"] = value
+    # Phase-invariant distances and latent-edit structure exist only in runs
+    # made with the temporal/phase code; older archives keep their columns.
+    for field in ("delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
+                  "latent_edit_l1", "latent_edit_tv", "latent_edit_active_fraction", "latent_edit_episodes"):
+        if any(field in r for r in rows):
+            for key, value in _quantiles([r.get(field) for r in rows]).items():
+                result[f"{field}_{key}"] = value
     for field in ("reconstruction_confidence_drop", "counterfactual_target_probability_drop",
                   "reconstruction_embedding_cycle_rmse", "counterfactual_embedding_cycle_rmse"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
@@ -184,6 +191,16 @@ def collect_study(root):
                             physiological_required_count=physiology["required_count"],
                             available_physiological_checks_passed=physiology["available_checks_passed"],
                         )
+                        if "decoded_change_env" in decoded:
+                            # RMS difference of log band-power envelopes:
+                            # insensitive to phase shifts that dominate MSE.
+                            record.update(delta_env=float(np.sqrt(decoded["decoded_change_env"])),
+                                          e_rec_env=float(np.sqrt(decoded["original_reconstruction_env"])))
+                        edit = summary.get("latent_edit")
+                        if edit:
+                            record.update(latent_edit_l1=edit["l1_mean"], latent_edit_tv=edit["tv_mean"],
+                                          latent_edit_active_fraction=edit["active_fraction"],
+                                          latent_edit_episodes=edit["n_episodes"])
                         repair = summary.get("repair_baseline")
                         if repair and repair.get("available"):
                             # Change measured against the repaired decoder output
@@ -195,6 +212,10 @@ def collect_study(root):
                                 repair_preserves_prediction=repair["preserves_prediction"],
                                 vcsc_repair=repair["vcsc_repair"],
                             )
+                            if "explanation_change_env" in repair:
+                                record.update(
+                                    delta_env_explanation=float(np.sqrt(repair["explanation_change_env"])),
+                                    delta_env_repair=float(np.sqrt(repair["repair_change_env"])))
                         if "counterfactual" in decoded and "original_reconstruction" in decoded:
                             cf, rec = decoded["counterfactual"], decoded["original_reconstruction"]
                             record.update(

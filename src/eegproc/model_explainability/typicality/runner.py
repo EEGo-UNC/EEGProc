@@ -22,13 +22,15 @@ from ..counterfactuals.optimizer import CounterfactualOptimizer, EVALUATION_PROT
 from ..counterfactuals.fusion import validate_fixed_joint_alpha
 from ..counterfactuals.loss import _VCSC_CHANNELS
 from ..counterfactuals.amplitude_spectral import AmplitudeSpectralReference
+from ..counterfactuals.loss import DECODED_METRICS
+from ..counterfactuals.temporal_phase import envelope_distance_np, latent_scale
 from ..model_agnostic.runner import _metadata_arrays
 from ..model_agnostic.sic_adapter import create_sic_adapter
 from .sic_embedding import SICTrialEmbedding
 from .core import TypicalityRegion, SCHEMA_VERSION, SCORE_DEFINITION, REPRESENTATION
 from .artifacts import (write_json, write_csv, file_sha256,
                                   array_sha256, TrialRecorder, completed_attempt, next_attempt)
-from .physiology import (signal_diagnostics, PhysiologicalReference,
+from .physiology import (signal_diagnostics, seam_diagnostics, PhysiologicalReference,
                                    vcsc_calibration, make_vcsc_loss, DEFAULT_BANDS, FAMILIES)
 from .results import recognition_metrics, build_report
 
@@ -91,6 +93,15 @@ def build_parser():
                              "intervals used by the reported physiology checks). 0 disables it.")
     parser.add_argument("--amplitude-spectral-margin", type=_nonnegative_float, default=0.0,
                         help="Shrink each source interval by this fraction of its half-width inside the penalty, in [0,1).")
+    parser.add_argument("--temporal-sparsity-weight", type=_nonnegative_float, default=0.0,
+                        help="Fused-lasso sparsity: weight of mean |delta| on the latent edit standardized by the "
+                             "fold's source-trial latent std. 0 disables it.")
+    parser.add_argument("--temporal-tv-weight", type=_nonnegative_float, default=0.0,
+                        help="Fused-lasso smoothness: weight of mean |delta_{t+1} - delta_t| (total variation over "
+                             "time) on the same standardized edit. 0 disables it.")
+    parser.add_argument("--decoded-distance", choices=DECODED_METRICS, default="mse",
+                        help="Decoded proximity term: sample-wise mse (historical) or envelope, a phase-invariant "
+                             "distance between log band-power envelopes. Both are always reported.")
     parser.add_argument("--include-repair-baseline", action="store_true",
                         help="Per eligible trial, first find the smallest latent edit that makes the decoded trial "
                              "physiologically feasible with NO target term (z_rep). Every arm then also reports its "
@@ -185,6 +196,16 @@ def _diagnostics(dataset, index, values, args):
                               feature_order=dataset.feature_order or "channel-major")
 
 
+def _seams(dataset, index, values):
+    """Window-seam continuity of one trial in physical units, JSON-safe."""
+    seams = seam_diagnostics(_physical_signal(dataset, index, values), n_channels=14,
+                             band_edges=DEFAULT_BANDS, feature_order=dataset.feature_order or "channel-major")
+    for key in ("phase_residual_median_rad", "amplitude_jump_ratio_median"):
+        if seams[key] is not None:
+            seams[key] = [float(v) if np.isfinite(v) else None for v in np.asarray(seams[key], dtype=float)]
+    return seams
+
+
 def _objective_names(args):
     names = ["base", "typicality"]
     if args.include_target_latent:
@@ -211,6 +232,8 @@ def _protocol(args, dataset, folds):
         package_dir / "counterfactuals" / "optimizer.py",
         package_dir / "counterfactuals" / "fusion.py",
         package_dir / "counterfactuals" / "loss.py",
+        package_dir / "counterfactuals" / "amplitude_spectral.py",
+        package_dir / "counterfactuals" / "temporal_phase.py",
         package_dir / "model_agnostic" / "adapter.py",
         package_dir / "model_agnostic" / "runner.py",
         package_dir / "model_agnostic" / "sic_adapter.py",
@@ -231,6 +254,16 @@ def _protocol(args, dataset, folds):
                 "weight * mean relu(|v-m|/h - (1-margin))^2 over amplitude and spectral-power source intervals; "
                 "feasible iff each family meets the physiology required fraction"
                 if args.amplitude_spectral_weight > 0 else None),
+            "temporal_smoothing_objective": (
+                "fused lasso on delta = (z' - z) / sigma_source flattened over windows x timesteps: "
+                "sparsity_weight * mean smooth|delta| + tv_weight * mean smooth|delta_{t+1} - delta_t|, "
+                "smooth|x| = sqrt(x^2 + 1e-6) - 1e-3; sigma_source = per-feature latent std over the "
+                "fold's source trials"
+                if args.temporal_sparsity_weight > 0 or args.temporal_tv_weight > 0 else None),
+            "decoded_distance": (
+                "mean squared difference of log(pooled Hann-tapered Hilbert envelope + 1e-3), "
+                "pooled over up to 32 samples per window"
+                if args.decoded_distance == "envelope" else "sample-wise mse"),
             "dataset_sha256": {name: array_sha256(value) for name, value in arrays.items()},
             "source_sha256": {
                 p.relative_to(package_dir).as_posix(): file_sha256(p)
@@ -350,6 +383,7 @@ def _repair_baseline(args, dataset, index, subject, trial, entry, optimizer, los
             summary.update(
                 repair_change_mse=repair_change,
                 delta_dec_repair=float(np.sqrt(repair_change)),
+                repair_change_env=envelope_distance_np(reconstruction, baseline),
                 vcsc_repair=float(loss.physiological_validity(tf.convert_to_tensor(reconstruction)).numpy()),
                 vcsc_original_reconstruction=float(loss.physiological_validity(tf.convert_to_tensor(baseline)).numpy()),
                 physiology=physiological.assess(_diagnostics(dataset, index, reconstruction, args)),
@@ -374,6 +408,7 @@ def _repair_baseline(args, dataset, index, subject, trial, entry, optimizer, los
             "stop_reason": summary["stop_reason"],
             "repair_change_mse": summary["repair_change_mse"],
             "delta_dec_repair": summary["delta_dec_repair"],
+            "repair_change_env": summary["repair_change_env"],
             "vcsc_repair": summary["vcsc_repair"],
         },
     }, 0
@@ -400,10 +435,19 @@ def run_fold(args, dataset, entry, out):
     source_embeddings = []
     source_probabilities = []
     print(f"Subject {subject}: encoding {len(source)} source trials for calibration", flush=True)
-    for index in source:
-        features = model.get_encoder_features(dataset.features[index:index + 1])
-        source_embeddings.append(features["classification_embedding"].numpy()[0])
-        source_probabilities.append(features["probabilities"].numpy()[0])
+
+    def encode_source():
+        # Streams each source trial's latent sequence into latent_scale, so
+        # source latents are never all held in memory.
+        for index in source:
+            features = model.get_encoder_features(dataset.features[index:index + 1])
+            source_embeddings.append(features["classification_embedding"].numpy()[0])
+            source_probabilities.append(features["probabilities"].numpy()[0])
+            yield features["window_features"].numpy()
+    # Per-feature latent std over the source trials: the unit in which the
+    # temporal smoothing terms and the reported latent-edit structure are
+    # measured. Source-derived, like every other calibration constant here.
+    temporal_scale = latent_scale(encode_source())
     source_embeddings = np.stack(source_embeddings)
     region = TypicalityRegion.calibrate(
         source_embeddings, prior_mean=prior_mean, prior_variance=prior_variance,
@@ -412,6 +456,10 @@ def run_fold(args, dataset, entry, out):
     )
     region.save(directory / "calibration")
     write_json(directory / "calibration" / "representation.json", embedding_map.metadata())
+    write_json(directory / "calibration" / "latent_scale.json", {
+        "latent_std": temporal_scale, "n_source_trials": int(len(source)),
+        "definition": "per-feature std of window_features over source trials, windows and timesteps; "
+                      "floored at 1e-3 x median"})
     write_json(directory / "calibration" / "source_trials.json", dict(
         probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
         subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source]))
@@ -445,10 +493,13 @@ def run_fold(args, dataset, entry, out):
     amplitude_spectral = (
         AmplitudeSpectralReference.from_physiological_reference(physiological, margin=args.amplitude_spectral_margin)
         if args.amplitude_spectral_weight > 0 else None)
-    loss = make_vcsc_loss(vcsc, amplitude_spectral=amplitude_spectral,
+    loss = make_vcsc_loss(vcsc, amplitude_spectral=amplitude_spectral, temporal_scale=temporal_scale,
                           target_weight=args.target_weight, latent_weight=args.latent_weight,
                           decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
                           amplitude_spectral_weight=args.amplitude_spectral_weight,
+                          temporal_sparsity_weight=args.temporal_sparsity_weight,
+                          temporal_tv_weight=args.temporal_tv_weight,
+                          decoded_metric=args.decoded_distance,
                           target_probability=args.target_probability)
     physiological_tolerance = args.physiological_tolerance
     if args.physiological_tolerance_quantile is not None:
@@ -500,7 +551,8 @@ def run_fold(args, dataset, entry, out):
         target_latent = CounterfactualOptimizer(
             model, typicality_weight=0.0, stop_on_success=args.stop_on_success,
             **{**common, "loss": replace(loss, decoded_weight=0.0, physiological_weight=0.0,
-                                         amplitude_spectral_weight=0.0)},
+                                         amplitude_spectral_weight=0.0, temporal_sparsity_weight=0.0,
+                                         temporal_tv_weight=0.0)},
         )
         optimizers = {"target_latent": target_latent, **optimizers}
     if args.include_typicality_no_physiology:
@@ -608,11 +660,19 @@ def run_fold(args, dataset, entry, out):
                         **repair["summary"],
                         "explanation_change_mse": explanation,
                         "delta_dec_explanation": float(np.sqrt(explanation)),
+                        "explanation_change_env": envelope_distance_np(counterfactual, repair["reconstruction"]),
                     }
                 elif repair_optimizer is not None:
                     summary["repair_baseline"] = {"available": False}
                 write_json(recorder.directory / "band_power.json", band_power)
                 write_json(recorder.directory / "physiology.json", {name: physiological.assess(d) for name, d in diagnostic_sets.items()})
+                # Kept out of physiology.json, whose schema downstream graders read.
+                seam_signals = {"original": original, "reconstruction": baseline, "counterfactual": counterfactual}
+                if repair is not None:
+                    seam_signals["repair"] = repair["reconstruction"]
+                write_json(recorder.directory / "seams.json", {
+                    "band_names": dataset.band_names,
+                    **{name: _seams(dataset, index, values) for name, values in seam_signals.items()}})
                 recorder.finish(result, metadata)
             except (FloatingPointError, RuntimeError, ValueError, tf.errors.OpError) as error:
                 recorder.fail(error, metadata)

@@ -14,9 +14,11 @@ import tensorflow as tf
 if __package__:
     from .loss import CounterfactualLoss
     from .fusion import FrozenJointFusion, validate_fixed_joint_alpha
+    from .temporal_phase import edit_structure, envelope_distance_np
 else:
     from loss import CounterfactualLoss
     from fusion import FrozenJointFusion, validate_fixed_joint_alpha
+    from temporal_phase import edit_structure, envelope_distance_np
 
 
 EVALUATION_PROTOCOL = "latent_only"
@@ -457,7 +459,8 @@ class CounterfactualOptimizer:
             )
             proximity = sum(
                 values[f"weighted_{name}"]
-                for name in ("latent", "decoded", "physiological", "amplitude_spectral")
+                for name in ("latent", "decoded", "physiological", "amplitude_spectral",
+                             "temporal_sparsity", "temporal_tv")
                 if f"weighted_{name}" in values
             )
             if self.typicality_weight > 0:
@@ -618,6 +621,11 @@ class CounterfactualOptimizer:
                 "decoded_change_mse": float(
                     self.loss.latent_distance(reconstruction, baseline).numpy()
                 ),
+                # Phase-invariant versions (log band-power envelopes), reported
+                # whatever decoded_metric the objective used.
+                "original_reconstruction_env": envelope_distance_np(baseline.numpy(), x.numpy()),
+                "counterfactual_to_original_env": envelope_distance_np(reconstruction.numpy(), x.numpy()),
+                "decoded_change_env": envelope_distance_np(reconstruction.numpy(), baseline.numpy()),
                 "vcsc_original_reconstruction": float(
                     self.loss.physiological_validity(baseline).numpy()
                 ),
@@ -672,6 +680,17 @@ class CounterfactualOptimizer:
                    if self.repair_only else {}),
                 "selected_physiological_valid": bool(final_physiological_valid),
                 "decoded_trials": decoded_results,
+                "decoded_metric": getattr(self.loss, "decoded_metric", "mse"),
+                # How the latent edit is spread over time (fused-lasso
+                # smoothing targets this); standardized when the loss has a
+                # latent scale, reported for every objective.
+                "latent_edit": edit_structure(
+                    arrays["z"], arrays["z_prime"],
+                    self.loss.temporal_scale() if hasattr(self.loss, "temporal_scale") else None),
+                "temporal_weights": {
+                    "sparsity": getattr(self.loss, "temporal_sparsity_weight", 0.0),
+                    "tv": getattr(self.loss, "temporal_tv_weight", 0.0),
+                },
                 "selected_losses": {
                     k: float(v.numpy()) for k, v in final_terms.items()
                 },

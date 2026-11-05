@@ -437,6 +437,65 @@ fractions, coherence/wPLI in range, counterfactual VCSC relative to
 `vcsc_original_input`, `delta_dec_explanation` vs `delta_dec`, and latent
 target success.
 
+## Temporal smoothing and phase-invariant distance
+
+Implemented in `counterfactuals/temporal_phase.py`. All three options are
+off by default and the defaults reproduce the earlier runs.
+
+`--temporal-sparsity-weight A` and `--temporal-tv-weight B` (launcher:
+`TEMPORAL_SPARSITY_WEIGHT`, `TEMPORAL_TV_WEIGHT`). A fused lasso
+(Tibshirani et al. 2005) on the latent edit `delta = (z' - z) / sigma`,
+where sigma is each latent feature's standard deviation over the fold's
+source trials (`calibration/latent_scale.json`). The edit is flattened over
+windows x timesteps in time order and the objective adds
+`A * mean|delta| + B * mean|delta_{t+1} - delta_t|`, with `|x|` smoothed
+as `sqrt(x^2 + 1e-6) - 1e-3`. Sparsity alone favours edits that are zero
+for most of the trial; TV alone favours piecewise-constant edits; together
+they favour a few constant episodes. The flattening assumes contiguous
+windows (overlap 0). `target_latent` drops these terms (it stays target +
+latent MSE); `typicality_no_physiology` keeps them.
+
+`--decoded-distance envelope` (launcher: `DECODED_DISTANCE=envelope`).
+Replaces the sample-wise MSE decoded proximity with the mean squared
+difference of log Hilbert envelopes (Hann-tapered per window, pooled over up
+to 32 samples = 250 ms, +1e-3 before the log). A phase shift with unchanged
+band power costs almost nothing; a power change does.
+
+Reported for every run, whatever the options:
+
+* `result.json` → `decoded_trials.<path>`: `original_reconstruction_env`,
+  `counterfactual_to_original_env`, `decoded_change_env` (envelope versions
+  of the three MSEs, in model-input units);
+* `result.json` → `latent_edit`: `l1_mean`, `tv_mean`, `active_fraction`
+  and `n_episodes` of the standardized edit (a time step is active when its
+  mean |delta| exceeds 0.1 x the trial's maximum);
+* `repair_baseline` adds `explanation_change_env` and `repair_change_env`;
+* `seams.json` per arm: window-seam continuity of the original,
+  reconstruction, counterfactual (and repair) in physical units. Per band,
+  the median over boundaries and channels of the phase residual (radians;
+  phase advance over 17 samples centred on each boundary minus the advance
+  expected from nearby increments) and of the amplitude-jump ratio (step at
+  the boundary / median nearby step). Compare against the `original` row:
+  real band-limited EEG is not a pure sinusoid, so its residual is not 0.
+  `physiology.json` is unchanged;
+* `trial_metrics.csv`: `delta_env`, `e_rec_env` (RMS of the envelope
+  distances), `delta_env_explanation`, `delta_env_repair`, and
+  `latent_edit_l1/_tv/_active_fraction/_episodes`, with medians/IQRs in
+  the population tables.
+
+Suggested ablation on top of the repair suite:
+
+```bash
+REPAIR_BASELINE=1 PHYSIOLOGICAL_TOLERANCE_QUANTILE=0.5 AMPLITUDE_SPECTRAL_WEIGHT=1.0 \
+TEMPORAL_SPARSITY_WEIGHT=0.1 TEMPORAL_TV_WEIGHT=0.1 DECODED_DISTANCE=envelope \
+  sbatch --array=0-22%4 src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
+```
+
+The weights are starting points, not tuned values; choose them on source
+subjects. Compare `latent_edit_episodes`/`latent_edit_active_fraction`,
+`delta_env_explanation`, seam residuals relative to `original`, and latent
+target success against the run without these options.
+
 ## Physiology and subject-identification limits
 
 VCSC is calibrated without labels on real source-subject EEG. A `--trial-ids`
