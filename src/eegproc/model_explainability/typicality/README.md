@@ -33,6 +33,45 @@ python src/eegproc/model_explainability/typicality/grade_physiology.py \
 
 `--which` accepts `counterfactual`, `original`, or `reconstruction`.
 
+## Saving component values for new runs
+
+`PhysiologicalReference.assess()` now includes a JSON-safe `components` object
+alongside the existing checks and graded scores. A runner that saves the three
+state assessments in `physiology.json` therefore retains actual component
+values for `original`, `reconstruction`, and `counterfactual` automatically.
+This applies equally to `target_latent`, `base`, `typicality`, and
+`typicality_no_physiology`; exporting diagnostics does not depend on an
+objective's physiological optimization weight.
+
+For DREAMER, every state contains `amplitude` and `spectral_power` arrays shaped
+`(14, 3)` (42 values each), plus `coherence` and signed
+`debiased_wpli_squared` arrays shaped `(91, 3)` (273 each): 630 numeric
+components per state. Values retain their diagnostic precision; undefined
+values, including the 14 unavailable aperiodic exponents, are JSON `null`.
+Band edges and zero-based channel-pair indices describe the axes. Callers can
+pass `channel_names`, `band_names`, and `signal_unit` to `assess()`; these fields
+remain null when unknown. Signals, full PSDs, and other large tensors are not
+included.
+
+For example, a suite runner can save the compact assessments with:
+
+```python
+assessments = {
+    state: reference.assess(diagnostics, channel_names=channel_names,
+                            band_names=band_names, signal_unit=signal_unit)
+    for state, diagnostics in diagnostic_sets.items()
+}
+with open(attempt_dir / "physiology.json", "w") as handle:
+    json.dump(assessments, handle, allow_nan=False)
+```
+
+The `valence-enhancement` branch contains the diagnostics and grading tools;
+the suite runner remains on `SIC-model`. Use this updated shared assessment
+code when generating new archives. `diagnostic_components()` is also exported
+for callers that write separate `physiology_<state>.json` files. Existing
+summary-only archives cannot recover missing component values from their pass
+fractions and need regeneration from checkpoints/data or historical arrays.
+
 ## Graded inputs
 
 Graded mode accepts any of these archives:
@@ -41,16 +80,21 @@ Graded mode accepts any of these archives:
    `mean_family_exceedance`, or per-family `deviation.exceedance_mean` for every
    evaluable family. These are reported as saved, with an explicit notice that
    the reference bounds were not independently recomputed.
-2. `physiology_<which>.json` containing the component arrays `amplitude`,
+2. `physiology.json` with per-state `components` objects produced by `assess()`.
+   The grader recomputes grades from these component values even when the
+   assessment also contains saved graded scores.
+3. `physiology_<which>.json` containing the component arrays `amplitude`,
    `spectral_power`, `aperiodic_exponent`, `coherence`, and
    `debiased_wpli_squared`. Undefined array entries can be JSON `null`.
-3. Legacy `physiology_<which>.npz` component arrays.
+4. Legacy `physiology_<which>.npz` component arrays.
 
 Component archives also require the saved binary checks in `physiology.json`
 and raw EEG/labels (`--eeg`/`--labels`, or the default DREAMER dataset paths).
 The grader refits the source-only reference and requires all recomputed
-in-range fractions to match the saved fractions. JSON component arrays and
-legacy NPZ use the same bounds gate. The original float32 normalization and
+in-range fractions to match the saved fractions. Embedded JSON values,
+separate JSON component files, and legacy NPZ use the same bounds gate.
+Separate component files take precedence when both forms are present.
+The original float32 normalization and
 inverse transform are preserved.
 
 For graded tables, `--statistic worst` (default) reports the worst-family

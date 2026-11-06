@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Rescore an archived counterfactual's physiological checks on a graded scale.
 
-Reads physiology.json for saved binary checks or saved graded distances.
+Reads physiology.json for saved binary checks, graded distances, or per-state
+component values embedded by PhysiologicalReference.assess().
 Optional physiology_<which>.json component arrays and legacy NPZ archives
 can be rescored against a source-only reference.
 

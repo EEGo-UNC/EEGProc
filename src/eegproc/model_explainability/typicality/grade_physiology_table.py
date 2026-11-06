@@ -3,7 +3,7 @@
 
 Reads saved physiology JSON for every attempt. --report binary summarizes
 the recorded checks per objective/family. Graded reporting accepts saved
-exceedances, JSON component arrays, or legacy NPZ component arrays.
+exceedances, embedded or separate JSON component arrays, or legacy NPZ arrays.
 
 Component arrays are rescored against source-only references and must match
 archived binary fractions. Saved graded summaries are reported as saved;
@@ -13,8 +13,7 @@ and graded reporting exits nonzero instead of treating them as zero.
 Expected layout (as archived by runner.py):
 
     <suite>/fold_NN/subject_N/trial_M/<objective>/attempt_0001/
-        physiology.json
-        physiology_counterfactual.npz
+        physiology.json  # checks, grades, and per-state compact components
 
 Usage
 -----

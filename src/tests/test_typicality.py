@@ -1,7 +1,50 @@
 """Regression tests for restored physiological diagnostics and graded checks."""
 
+import json
+
 import numpy as np
 import pytest
+
+
+def test_compact_physiology_preserves_components_and_undefined_values():
+    from eegproc.model_explainability.typicality.physiology import (
+        FAMILIES, PhysiologicalReference, diagnostic_components, signal_diagnostics,
+    )
+    signal = np.random.default_rng(31).normal(size=(4, 128, 42))
+    diagnostics = signal_diagnostics(signal, fs=128, n_channels=14)
+    reference = PhysiologicalReference.fit([diagnostics, diagnostics])
+    diagnostics['debiased_wpli_squared'][0, 0] = -0.12345678901234567
+    diagnostics['coherence'][0, 0] = np.nan
+    diagnostics['coherence'][0, 1] = np.inf
+    metadata = dict(channel_names=[f'C{i}' for i in range(14)],
+                    band_names=['theta', 'alpha', 'beta'], signal_unit='uV')
+    payload = diagnostic_components(diagnostics, **metadata)
+    summary = reference.assess(diagnostics, **metadata)
+    assert summary['components'] == payload
+    saved = json.loads(json.dumps(payload, allow_nan=False))
+    for family in FAMILIES:
+        np.testing.assert_array_equal(np.asarray(saved[family], dtype=float),
+                                      np.where(np.isfinite(diagnostics[family]), diagnostics[family], np.nan))
+    assert saved['debiased_wpli_squared'][0][0] == -0.12345678901234567
+    assert saved['coherence'][0][:2] == [None, None]
+    assert saved['aperiodic_exponent'] == [None] * 14
+    assert saved['pair_indices'][:2] == [[0, 1], [0, 2]]
+    assert saved['pair_indices'][-1] == [12, 13]
+    assert saved['signal_unit'] == 'uV'
+    assert not {'psd', 'frequencies_hz', 'rms'} & saved.keys()
+
+
+def test_compact_physiology_retains_custom_band_edges():
+    from eegproc.model_explainability.typicality.physiology import diagnostic_components, signal_diagnostics
+
+    edges = ((2., 6.), (6., 12.), (12., 25.))
+    diagnostics = signal_diagnostics(np.random.default_rng(7).normal(size=(3, 128, 6)),
+                                     fs=128, n_channels=2, band_edges=edges)
+    components = diagnostic_components(diagnostics)
+    assert components['band_edges_hz'] == [list(pair) for pair in edges]
+    assert components['pair_indices'] == [[0, 1]]
+    assert components['channel_names'] is None
+    assert components['signal_unit'] is None
 
 
 def test_band_filtered_physiology_never_claims_complete_pass():

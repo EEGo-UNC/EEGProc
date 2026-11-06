@@ -129,13 +129,15 @@ def test_zero_width_and_undefined_deviations_are_unscorable():
     assert reference.deviation("amplitude", np.array([1., np.nan])) is None
 
 
-def summaries_only(attempts, *, binary=False, family_only=False):
+def summaries_only(attempts, *, binary=False, family_only=False, keep_components=False):
     for attempt in attempts:
         for path in attempt.glob('physiology_*.npz'):
             path.unlink()
         path = attempt / 'physiology.json'
         payload = json.loads(path.read_text())
         for summary in payload.values():
+            if not keep_components:
+                summary.pop('components', None)
             if binary or family_only:
                 for key in ('graded_count', 'exceedance_by_family',
                             'worst_family_exceedance', 'mean_family_exceedance'):
@@ -211,6 +213,41 @@ def test_json_component_arrays_preserve_the_bounds_gate(archived_suite):
     result = run_grader('grade_physiology_table.py', args)
     assert result.returncode == 1
     assert 'GATE FAILED on 1 trials' in result.stdout
+
+
+@pytest.mark.parametrize('task', ['arousal', 'valence'])
+@pytest.mark.parametrize('which', ['original', 'reconstruction', 'counterfactual'])
+def test_embedded_components_grade_all_four_objectives_without_npz(archived_suite, task, which):
+    import shutil
+
+    eeg, labels, suite, attempts = archived_suite
+    for objective in ('target_latent', 'typicality_no_physiology'):
+        destination = attempts[0].parent.parent / objective / 'attempt_0001'
+        shutil.copytree(attempts[0], destination)
+        attempts.append(destination)
+    summaries_only(attempts, binary=True, keep_components=True)
+    assert not list(suite.rglob('*.npz'))
+    for attempt in attempts:
+        document = json.loads((attempt / 'physiology.json').read_text())
+        components = document[which]['components']
+        assert [np.size(components[key]) for key in
+                ('amplitude', 'spectral_power', 'coherence', 'debiased_wpli_squared')] == [42, 42, 273, 273]
+        assert components['aperiodic_exponent'] == [None] * 14
+    args = ['--suite', suite, '--task', task, '--which', which, '--eeg', eeg, '--labels', labels]
+    result = run_grader('grade_physiology_table.py', args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'recomputed_components=5' in result.stdout
+    objectives = {'target_latent', 'base', 'typicality', 'typicality_no_physiology'}
+    rows = [line.split() for line in result.stdout.splitlines()
+            if line.startswith(tuple(objective + ' ' for objective in objectives))]
+    assert {row[0] for row in rows} == objectives
+    saved = attempts[0] / 'physiology.json'
+    document = json.loads(saved.read_text())
+    document[which]['checks']['amplitude']['fraction_in_range'] = .123456
+    saved.write_text(json.dumps(document, allow_nan=False))
+    mismatch = run_grader('grade_physiology_table.py', args)
+    assert mismatch.returncode == 1
+    assert 'GATE FAILED on 1 trials' in mismatch.stdout
 
 
 def test_empty_suite_is_not_reported_as_a_successful_table(tmp_path):

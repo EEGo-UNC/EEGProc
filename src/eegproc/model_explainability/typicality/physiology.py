@@ -2,7 +2,7 @@
 
 The SIC decoder produces band-filtered signals. An aperiodic exponent cannot
 be recovered reliably from those bands; it is explicitly unavailable here.
-Stored signals and PSDs allow later offline assessment with another estimator.
+Compact component values support offline grading without storing signals or PSDs.
 No amplitude threshold is described as microvolts without unit metadata.
 """
 
@@ -14,6 +14,32 @@ from scipy.signal import periodogram
 
 FAMILIES = ("amplitude", "spectral_power", "aperiodic_exponent", "coherence", "debiased_wpli_squared")
 DEFAULT_BANDS = ((4.0, 8.0), (8.0, 13.0), (13.0, 30.0))
+
+
+def diagnostic_components(diagnostics, *, channel_names=None, band_names=None,
+                          signal_unit=None, band_edges=None):
+    """JSON-safe endpoint values, without signals, full PSDs, or other tensors.
+
+    Preserve precision, array shape, and signed wPLI estimates. Undefined
+    components are null, including the unavailable aperiodic exponent. Names
+    and units remain null unless supplied by the caller; pair indices use the
+    same zero-based channel order as signal_diagnostics().
+    """
+    if band_edges is None:
+        band_edges = diagnostics.get("band_edges_hz", DEFAULT_BANDS)
+    pairs = diagnostics.get("pair_indices")
+    if pairs is None:
+        pairs = list(itertools.combinations(range(np.shape(diagnostics["amplitude"])[0]), 2))
+    return {
+        "schema_version": 1,
+        "channel_names": list(channel_names) if channel_names is not None else None,
+        "band_names": list(band_names) if band_names is not None else None,
+        "band_edges_hz": np.asarray(band_edges).tolist(),
+        "signal_unit": signal_unit,
+        "pair_indices": np.asarray(pairs, dtype=int).reshape(-1, 2).tolist(),
+        **{family: np.where(np.isfinite(diagnostics[family]), diagnostics[family], None).tolist()
+           for family in FAMILIES},
+    }
 
 
 def signal_diagnostics(signal, *, fs, n_channels, band_edges=DEFAULT_BANDS,
@@ -77,6 +103,7 @@ def signal_diagnostics(signal, *, fs, n_channels, band_edges=DEFAULT_BANDS,
         "coherence": coherence, "debiased_wpli_squared": dwpli,
         "frequencies_hz": frequencies, "psd": mean_psd,
         "rms": np.sqrt(np.mean(x ** 2, axis=(0, 1))), "pair_indices": pairs,
+        "band_edges_hz": np.asarray(band_edges, dtype=float),
     }
 
 
@@ -138,7 +165,12 @@ class PhysiologicalReference:
             "unit": "half_interval_widths",
         }
 
-    def assess(self, diagnostics):
+    def assess(self, diagnostics, *, channel_names=None, band_names=None, signal_unit=None):
+        """Return checks, grades, and compact component values for this state.
+
+        Saving these assessments for original/reconstruction/counterfactual
+        retains everything needed for subsequent component-based grading.
+        """
         checks = {}
         for family in FAMILIES:
             values = diagnostics[family]
@@ -156,7 +188,10 @@ class PhysiologicalReference:
             }
         available = [v["passed"] for v in checks.values() if v["passed"] is not None]
         graded = {name: v["deviation"] for name, v in checks.items() if v["deviation"] is not None}
-        return {"checks": checks, "passed_count": sum(available), "available_count": len(available),
+        return {"checks": checks,
+                "components": diagnostic_components(diagnostics, channel_names=channel_names,
+                                                      band_names=band_names, signal_unit=signal_unit),
+                "passed_count": sum(available), "available_count": len(available),
                 "required_count": len(FAMILIES),
                 "all_required_passed": all(available) if len(available) == len(FAMILIES) else None,
                 "available_checks_passed": all(available) if available else None,

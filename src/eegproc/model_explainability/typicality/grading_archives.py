@@ -92,6 +92,14 @@ def assess_attempt(attempt, which, held_out, references):
             values = {family: archive[family] for family in FAMILIES if family in archive.files}
         if len(values) != len(FAMILIES):
             raise GradingUnavailable(f"Incomplete diagnostic components in {component_npz}")
+    elif "components" in recorded:
+        try:
+            values = {family: np.asarray(recorded["components"][family], dtype=float)
+                      for family in FAMILIES}
+        except (ValueError, KeyError, TypeError) as error:
+            raise GradingUnavailable(
+                f"Invalid embedded diagnostic components in {attempt / 'physiology.json'}: {error}"
+            ) from error
     else:
         graded_score(recorded, "worst")
         graded_score(recorded, "mean")
