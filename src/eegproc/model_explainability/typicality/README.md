@@ -487,12 +487,17 @@ Suggested ablation on top of the repair suite:
 
 ```bash
 REPAIR_BASELINE=1 PHYSIOLOGICAL_TOLERANCE_QUANTILE=0.5 AMPLITUDE_SPECTRAL_WEIGHT=1.0 \
-TEMPORAL_SPARSITY_WEIGHT=0.1 TEMPORAL_TV_WEIGHT=0.1 DECODED_DISTANCE=envelope \
+TEMPORAL_SPARSITY_WEIGHT=0.003 TEMPORAL_TV_WEIGHT=0.003 DECODED_DISTANCE=envelope \
   sbatch --array=0-22%4 src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
 ```
 
 The weights are starting points, not tuned values; choose them on source
-subjects. Compare `latent_edit_episodes`/`latent_edit_active_fraction`,
+subjects. Scale matters: on earlier v15 DREAMER counterfactuals the
+standardized edit had mean |delta| of 12-50 and mean |delta_{t+1} -
+delta_t| of 16-65, against a raw latent MSE of 0.7-9 (weighted by 0.1). A
+weight of 0.003 puts each smoothing term at roughly the latent term's
+size; 0.1 would make it dominate and block the target. Sweep 0.001, 0.003
+and 0.01. Compare `latent_edit_episodes`/`latent_edit_active_fraction`,
 `delta_env_explanation`, seam residuals relative to `original`, and latent
 target success against the run without these options.
 

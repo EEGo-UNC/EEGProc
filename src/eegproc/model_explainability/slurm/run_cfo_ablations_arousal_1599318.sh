@@ -31,9 +31,9 @@ set -euo pipefail
 #   REPAIR_BASELINE=1                     per trial, first find the repair-only z_rep and
 #                                         report every arm's change against R(z_rep)
 # Temporal / phase options (defaults reproduce the original suite):
-#   TEMPORAL_SPARSITY_WEIGHT=0.1          fused lasso: mean |delta| on the latent edit,
+#   TEMPORAL_SPARSITY_WEIGHT=0.003        fused lasso: mean |delta| on the latent edit,
 #                                         standardized by the source latent std
-#   TEMPORAL_TV_WEIGHT=0.1                fused lasso: mean |delta_{t+1} - delta_t|
+#   TEMPORAL_TV_WEIGHT=0.003              fused lasso: mean |delta_{t+1} - delta_t|
 #   DECODED_DISTANCE=envelope             phase-invariant decoded proximity (log
 #                                         band-power envelopes) instead of mse
 # Local command preview (no GPU, module loads, or result writes):
