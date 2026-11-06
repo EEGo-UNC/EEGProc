@@ -249,6 +249,16 @@ def test_runner_with_temporal_smoothing_and_envelope_distance(tmp_path, monkeypa
         assert decoded["decoded_change_env"] >= 0 and decoded["original_reconstruction_env"] >= 0
         assert result["repair_baseline"]["explanation_change_env"] >= 0
         assert result["repair_baseline"]["repair_change_env"] >= 0
+        # Every arm's delivered EEG is re-encoded, with the reconstruction
+        # and the repair scored as controls.
+        for key in ("decoded_counterfactual", "decoded_reconstruction", "decoded_repair"):
+            scored = result[key]
+            assert scored["target_class"] == 1 and len(scored["probabilities"]) == 2
+            assert scored["target_probability"] == scored["probabilities"][1]
+            assert scored["success"] == (scored["predicted_class"] == 1
+                                         and scored["target_probability"] >= args.target_probability)
+            assert scored["typical"] == (scored["discrepancy"] <= scored["source_threshold"])
+        assert result["decoded_counterfactual"]["input"] == "decoded_counterfactual_eeg_reencoded_by_frozen_classifier"
         seams = json.loads((attempt / "seams.json").read_text())
         assert set(seams) == {"band_names", "original", "reconstruction", "counterfactual", "repair"}
         assert seams["counterfactual"]["n_boundaries"] == 2
@@ -261,6 +271,11 @@ def test_runner_with_temporal_smoothing_and_envelope_distance(tmp_path, monkeypa
 
     with open(out / "report/trial_metrics.csv", newline="") as handle:
         rows = list(csv.DictReader(handle))
-    for column in ("physiological_worst_exceedance", "physiological_exceedance_amplitude", "delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
+    for column in ("reencoded_target_success", "reencoded_typical", "reencoded_reconstruction_target_success",
+                   "reencoded_repair_typical", "physiological_worst_exceedance", "physiological_exceedance_amplitude", "delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
                    "latent_edit_tv", "latent_edit_episodes"):
         assert all(row[column] != "" for row in rows if row["status"] == "completed"), column
+    with open(out / "report/population_counterfactuals.csv", newline="") as handle:
+        populations = list(csv.DictReader(handle))
+    assert populations and all(row["reencoded_target_success_percent"] != "" for row in populations)
+    assert all(row["reencoded_repair_typical_percent"] != "" for row in populations)

@@ -89,6 +89,13 @@ def population_summary(rows):
         unknown = any(r["status"] == "completed" and r.get(field) is None for r in rows)
         result[f"{field}_percent"] = (100 * sum(r.get(field) is True for r in rows) / n
                                       if n and expected and not unknown else None)
+    for prefix in ("reencoded", "reencoded_reconstruction", "reencoded_repair"):
+        # Percent of ELIGIBLE trials (failed/pending count as not successful),
+        # matching the latent rates above; only when this run scored them.
+        if any(f"{prefix}_target_success" in r for r in rows):
+            for field in ("target_success", "typical", "success_and_typical"):
+                result[f"{prefix}_{field}_percent"] = (
+                    100 * sum(r.get(f"{prefix}_{field}") is True for r in rows) / n if n else None)
     if any("delta_dec_explanation" in r for r in rows):
         for field in ("repair_feasible", "repair_preserves_prediction"):
             known = [r[field] for r in rows if field in r]
@@ -199,6 +206,21 @@ def collect_study(root):
                                 physiological_mean_exceedance=physiology["mean_family_exceedance"],
                                 **{f"physiological_exceedance_{family}": value
                                    for family, value in physiology["exceedance_by_family"].items()})
+                        # Re-encoded delivered EEG (all arms in newer runs; only the
+                        # typicality arm in older ones). Kept apart from the
+                        # round_trip_* protocol columns, which describe selection.
+                        for prefix, key in (("reencoded", "decoded_counterfactual"),
+                                            ("reencoded_reconstruction", "decoded_reconstruction"),
+                                            ("reencoded_repair", "decoded_repair")):
+                            scored = summary.get(key)
+                            if not scored:
+                                continue
+                            record[f"{prefix}_probability"] = scored["probabilities"][1]
+                            record[f"{prefix}_discrepancy"] = scored["discrepancy"]
+                            if "success" in scored:
+                                record[f"{prefix}_target_success"] = scored["success"]
+                                record[f"{prefix}_typical"] = scored["typical"]
+                                record[f"{prefix}_success_and_typical"] = bool(scored["success"] and scored["typical"])
                         if "decoded_change_env" in decoded:
                             # RMS difference of log band-power envelopes:
                             # insensitive to phase shifts that dominate MSE.

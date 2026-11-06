@@ -313,11 +313,15 @@ def _initial_reconstructions(adapter, features, output_name):
         yield reconstruction[0]
 
 
-def _score_decoded_counterfactual(model, region, decoded, *, report_output):
+def _score_decoded_counterfactual(model, region, decoded, *, report_output, target_probability=None,
+                                  input_name="decoded_counterfactual_eeg_reencoded_by_frozen_classifier"):
     """Score the generated EEG after a fresh pass through the frozen encoder.
 
     This differs from the optimizer's D(Zcf): the decoder and encoder need not
     be an exact inverse, so only this score describes the delivered waveform.
+    With target_probability, also apply the latent success rule (argmax is the
+    target and its probability >= target_probability) and the typicality rule
+    (D <= tau) to the re-encoded trial.
     """
     signal = np.asarray(decoded, dtype=np.float32)
     if signal.ndim != 4 or signal.shape[0] != 1 or not np.isfinite(signal).all():
@@ -330,8 +334,8 @@ def _score_decoded_counterfactual(model, region, decoded, *, report_output):
     if (probabilities.shape != (1, 2) or not np.isfinite(probabilities).all()
             or np.any(probabilities < 0) or not np.allclose(probabilities.sum(axis=1), 1, atol=1e-5)):
         raise ValueError("Re-encoded decoded counterfactual has invalid probabilities")
-    return {
-        "input": "decoded_counterfactual_eeg_reencoded_by_frozen_classifier",
+    score = {
+        "input": input_name,
         "report_output": report_output,
         "target_class": 1,
         "classification_embedding": embedding[0].tolist(),
@@ -340,6 +344,11 @@ def _score_decoded_counterfactual(model, region, decoded, *, report_output):
         "discrepancy": float(region.score(embedding)[0]),
         "source_threshold": float(region.tau),
     }
+    if target_probability is not None:
+        score.update(target_probability=float(probabilities[0, 1]),
+                     success=bool(score["predicted_class"] == 1 and probabilities[0, 1] >= target_probability),
+                     typical=bool(score["discrepancy"] <= score["source_threshold"]))
+    return score
 
 
 def _normalization(dataset, index):
@@ -639,9 +648,24 @@ def run_fold(args, dataset, entry, out):
                                d_z=float(np.sqrt(np.mean((arrays["classification_embedding_prime"] - arrays["classification_embedding"]) ** 2))),
                                decoder_latent_rmse=float(np.sqrt(summary["selected_losses"]["latent"])),
                                report_output=args.report_output)
-                if objective == "typicality":
-                    summary["decoded_counterfactual"] = _score_decoded_counterfactual(
-                        model, region, counterfactual, report_output=args.report_output,
+                # Every arm's delivered EEG is re-encoded by the frozen classifier
+                # (reviewer request): does the decoded counterfactual itself flip
+                # and land in the region? The reconstruction R(z) and, when run,
+                # the repair R(z_rep) are scored the same way as controls.
+                summary["decoded_counterfactual"] = _score_decoded_counterfactual(
+                    model, region, counterfactual, report_output=args.report_output,
+                    target_probability=args.target_probability,
+                )
+                summary["decoded_reconstruction"] = _score_decoded_counterfactual(
+                    model, region, baseline, report_output=args.report_output,
+                    target_probability=args.target_probability,
+                    input_name="decoded_reconstruction_eeg_reencoded_by_frozen_classifier",
+                )
+                if repair is not None:
+                    summary["decoded_repair"] = _score_decoded_counterfactual(
+                        model, region, repair["reconstruction"], report_output=args.report_output,
+                        target_probability=args.target_probability,
+                        input_name="decoded_repair_eeg_reencoded_by_frozen_classifier",
                     )
                 # A channel-by-band summary supports the report's scalp maps
                 # without retaining decoded signals or full spectral arrays.
