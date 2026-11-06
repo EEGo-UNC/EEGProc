@@ -255,10 +255,12 @@ def test_runner_with_temporal_smoothing_and_envelope_distance(tmp_path, monkeypa
         assert len(seams["counterfactual"]["phase_residual_median_rad"]) == 3
         physiology = json.loads((attempt / "physiology.json").read_text())
         assert set(physiology) == {"original", "reconstruction", "counterfactual", "repair"}
+        assert physiology["counterfactual"]["graded_count"] >= 1
+        assert physiology["counterfactual"]["checks"]["amplitude"]["deviation"]["unit"] == "half_interval_widths"
     assert len(list(out.rglob("*.npz"))) == 1
 
     with open(out / "report/trial_metrics.csv", newline="") as handle:
         rows = list(csv.DictReader(handle))
-    for column in ("delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
+    for column in ("physiological_worst_exceedance", "physiological_exceedance_amplitude", "delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
                    "latent_edit_tv", "latent_edit_episodes"):
         assert all(row[column] != "" for row in rows if row["status"] == "completed"), column

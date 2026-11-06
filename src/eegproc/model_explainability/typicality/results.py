@@ -101,7 +101,7 @@ def population_summary(rows):
             result[f"{field}_{key}"] = value
     # Phase-invariant distances and latent-edit structure exist only in runs
     # made with the temporal/phase code; older archives keep their columns.
-    for field in ("delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
+    for field in ("physiological_worst_exceedance", "physiological_mean_exceedance", "delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
                   "latent_edit_l1", "latent_edit_tv", "latent_edit_active_fraction", "latent_edit_episodes"):
         if any(field in r for r in rows):
             for key, value in _quantiles([r.get(field) for r in rows]).items():
@@ -191,6 +191,14 @@ def collect_study(root):
                             physiological_required_count=physiology["required_count"],
                             available_physiological_checks_passed=physiology["available_checks_passed"],
                         )
+                        if physiology.get("graded_count"):
+                            # Graded deviation (half-interval widths past the
+                            # source interval); absent in older archives.
+                            record.update(
+                                physiological_worst_exceedance=physiology["worst_family_exceedance"],
+                                physiological_mean_exceedance=physiology["mean_family_exceedance"],
+                                **{f"physiological_exceedance_{family}": value
+                                   for family, value in physiology["exceedance_by_family"].items()})
                         if "decoded_change_env" in decoded:
                             # RMS difference of log band-power envelopes:
                             # insensitive to phase shifts that dominate MSE.
