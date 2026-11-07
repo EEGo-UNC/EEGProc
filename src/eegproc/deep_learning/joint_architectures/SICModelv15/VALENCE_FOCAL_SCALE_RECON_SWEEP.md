@@ -9,7 +9,7 @@ It contains **24 fixed configurations**:
 | `vc_logit_scale` | 8, 16, 32 |
 | `reconstruction_loss_weight` | 0.0, 0.4 |
 | `mldg_steps_per_epoch` | 8, 16 |
-| Outer/source epochs | **24**, increased from 12 |
+| Outer/source epochs | **48**, increased from 24 |
 | `subject_loss_weight` | 0.3, fixed |
 
 All remaining model/data hyperparameters match the saved run-12 configuration,
@@ -20,7 +20,7 @@ fixed architecture lists, with no implicit extra search dimensions.
 
 The inner-count axis means complete **MLDG episodes per source epoch**. Each
 episode still has one temporary inner adaptation step and one persistent outer
-update. The two settings produce 192 and 384 episodes over 24 epochs.
+update. The two settings produce 384 and 768 episodes over 48 epochs.
 They intentionally vary the training budget. They do not introduce multiple
 adaptation steps inside an episode.
 
@@ -111,11 +111,11 @@ python "$SIC_V15/sic_v15_valence_sweep.py" rank \
 The manifest order is focal gamma, then logit scale, then reconstruction, then
 episode count (fastest). **Configuration 4** uses the original run-12 model
 settings with 8 episodes per epoch; **configuration 16** uses the original
-run-21 model settings with 8 episodes per epoch. Both use 24 source epochs.
+run-21 model settings with 8 episodes per epoch. Both use 48 source epochs.
 Source array task IDs are `3 * configuration + shard`; collector task IDs are configuration IDs.
 
-All per-epoch checkpoints are retained: a full 24-configuration run with 24
-epochs contains **13,248 source model files**, plus metric rows and shard data
+All per-epoch checkpoints are retained: a full 24-configuration run with 48
+epochs contains **26,496 source model files**, plus metric rows and shard data
 caches. Use an output filesystem with suitable capacity. Jobs refuse to
 overwrite an existing shard directory; use a new suite for a fresh run.
 The fixed run-12 launcher and the separate earlier screening sweep remain

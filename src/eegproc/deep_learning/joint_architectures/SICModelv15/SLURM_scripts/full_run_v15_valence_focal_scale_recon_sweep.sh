@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-# 24 fixed configurations, each with 24 source epochs:
+# 24 fixed configurations, each with 48 source epochs:
 # gamma 0.5/1.0 x logit scale 8/16/32 x reconstruction 0/0.4
 # x MLDG episodes per epoch 8/16. Subject loss stays 0.3.
 # Three source jobs cover each configuration's targets: 0-7, 8-15, 16-22.
@@ -30,7 +30,7 @@ VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/runs/sweeps/sic_v15_valence_focal_scale_recon}"
-SOURCE_EPOCHS="${SOURCE_EPOCHS:-24}"
+SOURCE_EPOCHS="${SOURCE_EPOCHS:-48}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"

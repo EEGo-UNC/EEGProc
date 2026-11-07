@@ -52,7 +52,7 @@ def test_dry_run_submits_nothing_and_shows_both_arrays(tmp_path):
     assert '--array=0-23%2' in result.stdout
     assert '--dependency=afterany:SOURCE_ARRAY_ID' in result.stdout
     assert '24 configurations; 72 source tasks' in result.stdout
-    assert 'Outer/source epochs: 24' in result.stdout
+    assert 'Outer/source epochs: 48' in result.stdout
     assert '24:00:00 per task' in result.stdout
 
 
@@ -79,7 +79,7 @@ print('7001;longleaf' if any(arg.startswith('--dependency=') for arg in sys.argv
     assert '--export=ALL,SWEEP_SUITE_ID=7000' in calls[1]['args']
     assert '--gres=gpu:2' in calls[1]['args']
     assert calls[1]['args'][-1] == '--collect'
-    assert all(call['epochs'] == '24' and call['project'] == str(ROOT) for call in calls)
+    assert all(call['epochs'] == '48' and call['project'] == str(ROOT) for call in calls)
 
 
 @pytest.mark.parametrize('phase,index', [('--task', '-1'), ('--task', '72'), ('--task', 'abc'),
@@ -146,7 +146,7 @@ def test_source_tasks_route_to_exact_configuration_and_user_shard(tmp_path, inde
     assert value('--config-index') == str(index // 3)
     assert value('--output-dir').endswith(f'/suite_7000/configuration_{index // 3}/shard_{index % 3}')
     assert [int(user) for user in args[args.index('--target-subjects') + 1:]] == list(SHARD_TARGETS[index % 3])
-    assert value('--source-epochs') == '24'
+    assert value('--source-epochs') == '48'
     assert value('--source-batch-size') == '64'
     assert value('--time-budget-seconds') == '70000'
     assert value('--seed') == '99' and '--deterministic-training' in args
