@@ -10,7 +10,8 @@
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
 
-set -euo pipefail
+set -Eeuo pipefail
+trap 'status=$?; printf "ERROR: line %s exited %s: %s\n" "$LINENO" "$status" "$BASH_COMMAND" >&2; exit "$status"' ERR
 
 # 24 fixed configurations, each with 48 source epochs:
 # gamma 0.5/1.0 x logit scale 8/16/32 x reconstruction 0/0.4
@@ -26,10 +27,14 @@ SIC_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/SICModelv15"
 RUNNER="$SIC_DIR/sic_v15_valence_sweep.py"
 COLLECTOR="$SIC_DIR/collect_valence_sweep_shards.py"
 CONFIGS="$SIC_DIR/sic_v15_valence_focal_scale_recon_configs.json"
+STORAGE="$SIC_DIR/valence_sweep_storage.py"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/runs/sweeps/sic_v15_valence_focal_scale_recon}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-}"
+LOG_DIR="${LOG_DIR:-}"
+MIN_FREE_GIB="${MIN_FREE_GIB:-100}"
+MIN_FREE_INODES="${MIN_FREE_INODES:-100000}"
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-48}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
@@ -49,12 +54,21 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     fi
     [[ "$MAX_CONCURRENT" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid MAX_CONCURRENT." >&2; exit 1; }
     SUBMIT_PYTHON="${SUBMIT_PYTHON:-python3}"
+    STORAGE_PATHS="$("$SUBMIT_PYTHON" "$STORAGE" paths --storage-root "${SWEEP_STORAGE_ROOT:-}" \
+        --output-root "$OUTPUT_ROOT" --log-dir "$LOG_DIR")"
+    { IFS= read -r OUTPUT_ROOT; IFS= read -r LOG_DIR; } <<< "$STORAGE_PATHS"
+    "$SUBMIT_PYTHON" "$STORAGE" check --output-root "$OUTPUT_ROOT" --log-dir "$LOG_DIR" \
+        --min-free-gib "$MIN_FREE_GIB" --min-free-inodes "$MIN_FREE_INODES" --show-quota
     COUNT="$("$SUBMIT_PYTHON" "$RUNNER" list --configs "$CONFIGS" --count)"
     SOURCE_TASKS=$((COUNT * 3))
     export PROJECT_DIR VENV_DIR EEG_PATH LABELS_PATH OUTPUT_ROOT
+    export LOG_DIR MIN_FREE_GIB MIN_FREE_INODES
     export SOURCE_EPOCHS SOURCE_BATCH_SIZE CALIBRATION_EPOCHS CALIBRATION_BATCH_SIZE
     export RUN_CALIBRATION TRAINING_SEED TIME_BUDGET_SECONDS
-    SOURCE_SUBMIT=(sbatch --parsable --array="0-$((SOURCE_TASKS-1))%${MAX_CONCURRENT}" --chdir="$PROJECT_DIR" "$SCRIPT_PATH" --task)
+    # Slurm opens logs before the batch script runs: set absolute paths here.
+    SOURCE_SUBMIT=(sbatch --parsable --array="0-$((SOURCE_TASKS-1))%${MAX_CONCURRENT}" --chdir="$PROJECT_DIR"
+                   --export=ALL --output="$LOG_DIR/v15_valence_focal_scale_recon_%A_%a.out"
+                   --error="$LOG_DIR/v15_valence_focal_scale_recon_%A_%a.err" "$SCRIPT_PATH" --task)
     if [[ "${DRY_RUN:-0}" == 1 ]]; then
         SOURCE_JOB_ID="SOURCE_ARRAY_ID"
     else
@@ -64,6 +78,7 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     fi
     COLLECT_SUBMIT=(sbatch --parsable --dependency="afterany:${SOURCE_JOB_ID}" --array="0-$((COUNT-1))%${MAX_CONCURRENT}"
                     --job-name=v15_valence_collect --gres=gpu:2 --chdir="$PROJECT_DIR"
+                    --output="$LOG_DIR/v15_valence_collect_%A_%a.out" --error="$LOG_DIR/v15_valence_collect_%A_%a.err"
                     --export="ALL,SWEEP_SUITE_ID=${SOURCE_JOB_ID}" "$SCRIPT_PATH" --collect)
     if [[ "${DRY_RUN:-0}" == 1 ]]; then
         printf 'Source submission: '; printf '%q ' "${SOURCE_SUBMIT[@]}"; printf '\n'
@@ -72,10 +87,12 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
         echo "24:00:00 per task; at most $MAX_CONCURRENT concurrent tasks; source 4 GPUs/task, collector 2 GPUs/task."
         echo "Gamma 0.5/1.0; scale 8/16/32; reconstruction 0/0.4; MLDG episodes 8/16; subject loss 0.3"
         echo "Outer/source epochs: $SOURCE_EPOCHS; calibration enabled: $RUN_CALIBRATION"
+        echo "Outputs: $OUTPUT_ROOT; Slurm logs: $LOG_DIR"
         exit 0
     fi
     COLLECT_JOB="$("${COLLECT_SUBMIT[@]}")"
     echo "Submitted collector array ${COLLECT_JOB%%;*}, dependent on source array $SOURCE_JOB_ID"
+    echo "Outputs: $OUTPUT_ROOT/suite_$SOURCE_JOB_ID; Slurm logs: $LOG_DIR"
     exit 0
 fi
 
@@ -91,6 +108,10 @@ else
     SHARD_INDEX=$((ARRAY_INDEX % 3))
 fi
 
+[[ -n "$OUTPUT_ROOT" && -n "$LOG_DIR" ]] || {
+    echo "Submit with bash (the wrapper), so storage is checked and Slurm logs are routed before submission." >&2
+    exit 1
+}
 cd "$PROJECT_DIR"
 module purge
 module load python/3.12.4
@@ -98,6 +119,8 @@ module load cuda/12.9
 module load cudnn/9.11.0
 [[ -x "$VENV_DIR/bin/python" ]] || { echo "Prepare the environment at $VENV_DIR first." >&2; exit 1; }
 source "$VENV_DIR/bin/activate"
+python "$STORAGE" check --output-root "$OUTPUT_ROOT" --log-dir "$LOG_DIR" \
+    --min-free-gib "$MIN_FREE_GIB" --min-free-inodes "$MIN_FREE_INODES"
 export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 TF_GPU_ALLOCATOR=cuda_malloc_async
 export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export TRAINING_SEED PYTHONHASHSEED="$TRAINING_SEED"

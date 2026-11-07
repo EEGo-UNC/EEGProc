@@ -24,6 +24,8 @@ def clean_environment():
                'SOURCE_EPOCHS', 'SOURCE_BATCH_SIZE', 'CALIBRATION_EPOCHS', 'CALIBRATION_BATCH_SIZE',
                'TIME_BUDGET_SECONDS', 'OUTPUT_ROOT', 'MAX_CONCURRENT', 'RUN_CALIBRATION',
                'DRY_RUN', 'EBROOTCUDA', 'CUDA_HOME', 'GPU_PREFLIGHT'}
+    removed.update({'SWEEP_STORAGE_ROOT', 'LOG_DIR', 'MIN_FREE_GIB', 'MIN_FREE_INODES',
+                    'SBATCH_OUTPUT', 'SBATCH_ERROR', 'SBATCH_EXPORT'})
     return {key: value for key, value in os.environ.items() if key not in removed}
 
 
@@ -46,7 +48,8 @@ def test_complete_cartesian_grid_keeps_run12_baseline():
 
 def test_dry_run_submits_nothing_and_shows_both_arrays(tmp_path):
     result = subprocess.run(['bash', str(SCRIPT)], cwd=tmp_path,
-        env={**clean_environment(), 'DRY_RUN': '1', 'SUBMIT_PYTHON': sys.executable},
+        env={**clean_environment(), 'DRY_RUN': '1', 'SUBMIT_PYTHON': sys.executable,
+             'OUTPUT_ROOT': str(tmp_path / 'outputs'), 'MIN_FREE_GIB': '0', 'MIN_FREE_INODES': '0'},
         capture_output=True, text=True, check=True)
     assert '--array=0-71%2' in result.stdout
     assert '--array=0-23%2' in result.stdout
@@ -54,6 +57,8 @@ def test_dry_run_submits_nothing_and_shows_both_arrays(tmp_path):
     assert '24 configurations; 72 source tasks' in result.stdout
     assert 'Outer/source epochs: 48' in result.stdout
     assert '24:00:00 per task' in result.stdout
+    assert str(tmp_path / 'outputs/logs/v15_valence_focal_scale_recon_%A_%a.out') in result.stdout
+    assert str(tmp_path / 'outputs/logs/v15_valence_collect_%A_%a.err') in result.stdout
 
 
 def test_submission_connects_collector_to_source_array(tmp_path):
@@ -70,7 +75,9 @@ print('7001;longleaf' if any(arg.startswith('--dependency=') for arg in sys.argv
     sbatch.chmod(0o755)
     result = subprocess.run(['bash', str(SCRIPT)], cwd=tmp_path, env={
         **clean_environment(), 'PATH': str(binaries) + os.pathsep + os.environ['PATH'],
-        'SUBMISSION_CAPTURE': str(capture), 'SUBMIT_PYTHON': sys.executable},
+        'SUBMISSION_CAPTURE': str(capture), 'SUBMIT_PYTHON': sys.executable,
+        'OUTPUT_ROOT': str(tmp_path / 'outputs'), 'LOG_DIR': str(tmp_path / 'logs'),
+        'MIN_FREE_GIB': '0', 'MIN_FREE_INODES': '0'},
         capture_output=True, text=True, check=True)
     calls = [json.loads(line) for line in capture.read_text().splitlines()]
     assert len(calls) == 2
@@ -80,6 +87,10 @@ print('7001;longleaf' if any(arg.startswith('--dependency=') for arg in sys.argv
     assert '--gres=gpu:2' in calls[1]['args']
     assert calls[1]['args'][-1] == '--collect'
     assert all(call['epochs'] == '48' and call['project'] == str(ROOT) for call in calls)
+    for call, name in zip(calls, ('v15_valence_focal_scale_recon', 'v15_valence_collect')):
+        assert f'--output={tmp_path}/logs/{name}_%A_%a.out' in call['args']
+        assert f'--error={tmp_path}/logs/{name}_%A_%a.err' in call['args']
+        assert (tmp_path / 'logs').is_dir()
 
 
 @pytest.mark.parametrize('phase,index', [('--task', '-1'), ('--task', '72'), ('--task', 'abc'),
@@ -96,6 +107,7 @@ def cluster_environment(tmp_path):
     project = tmp_path / 'project checkout'
     sic = project / SIC.relative_to(ROOT); sic.mkdir(parents=True)
     (sic / MANIFEST.name).write_bytes(MANIFEST.read_bytes())
+    (sic / 'valence_sweep_storage.py').write_bytes((SIC / 'valence_sweep_storage.py').read_bytes())
     venv = project / 'venv312'; binaries = venv / 'bin'; binaries.mkdir(parents=True)
     python = binaries / 'python'
     python.write_text(f'#!{sys.executable}\n' + """
@@ -128,6 +140,7 @@ else:
             'PATH': str(binaries) + os.pathsep + os.environ['PATH'],
             'SLURM_ARRAY_JOB_ID': '7000', 'SLURM_JOB_ID': '7000',
             'TRAINING_SEED': '99', 'REAL_TEST_PYTHON': sys.executable,
+            'LOG_DIR': str(project / 'logs'), 'MIN_FREE_GIB': '0', 'MIN_FREE_INODES': '0',
             'OUTPUT_ROOT': str(project / 'outputs'), 'TIME_BUDGET_SECONDS': '70000'}
 
 
@@ -204,6 +217,37 @@ def test_global_selection_uses_all_23_users_not_local_shard_winners(tmp_path):
         assert (output / checkpoint).is_file()
     assert len(list(output.glob('subject_*/epoch_*.json'))) == 23 * 3
     assert not list(output.glob('subject_*/*.keras'))
+
+
+def test_audit_preserves_results_and_distinguishes_missing_execution_status(tmp_path):
+    from audit_valence_sweep import audit_suite
+    configuration = make_shards(tmp_path / 'configuration_4')
+    (configuration / 'shard_1/execution.json').unlink()
+    before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    result = audit_suite(tmp_path, MANIFEST)
+    rows = {row['task_id']: row for row in result['shards']}
+    assert rows[12]['ready_for_collector']
+    assert rows[13]['complete_epoch_files']
+    assert rows[13]['execution_status'] == 'missing'
+    assert not rows[13]['ready_for_collector']
+    assert len(result['missing_tasks']) == 69
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+
+
+def test_audit_full_archive_check_rejects_truncated_checkpoints(tmp_path):
+    import zipfile
+    from audit_valence_sweep import audit_suite
+    configuration = make_shards(tmp_path / 'configuration_4')
+    for path in configuration.rglob('*.keras'):
+        with zipfile.ZipFile(path, 'w') as archive:
+            for member in ('config.json', 'metadata.json', 'model.weights.h5'):
+                archive.writestr(member, 'test fixture')
+    checkpoint = configuration / 'shard_1/subject_08/epoch_001.keras'
+    checkpoint.write_bytes(checkpoint.read_bytes()[:20])
+    rows = {row['task_id']: row for row in audit_suite(tmp_path, MANIFEST, True)['shards']}
+    assert rows[12]['ready_for_collector']
+    assert not rows[13]['ready_for_collector']
+    assert rows[13]['errors']
 
 
 @pytest.mark.parametrize('failure', ['missing_shard', 'missing_epoch', 'missing_model',

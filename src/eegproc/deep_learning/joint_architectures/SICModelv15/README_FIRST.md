@@ -1,5 +1,10 @@
 # SICModelv15: joint decoder reconstruction
 
+For the valence focal/scale/reconstruction sweep, submit its wrapper with
+`bash`. Results and Slurm logs use work storage outside home; see
+[storage checks and quota recovery](VALENCE_FOCAL_SCALE_RECON_SWEEP.md#submit).
+`SWEEP_STORAGE_ROOT` selects another work/project or scratch location.
+
 SICModelv15 carries forward the current SICModelv11 architecture and training
 pipeline. Its only architectural addition is a learned convex fusion of the two
 same-shaped decoder outputs in the original EEG feature space:

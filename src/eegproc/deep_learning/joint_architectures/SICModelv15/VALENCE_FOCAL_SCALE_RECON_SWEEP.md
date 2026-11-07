@@ -31,7 +31,33 @@ does not change binary labels at threshold 0.5.
 ## Submit
 
 Prepare `venv312` with the project's `deep-learning` dependencies, then run
-the wrapper from the cluster checkout:
+the wrapper with **bash** from the cluster checkout. The wrapper checks storage
+before requesting GPUs and supplies absolute Slurm log paths for both arrays;
+do not submit it directly with `sbatch`.
+
+By default, outputs go under
+`/work/users/<first>/<second>/<onyen>/EEGProc/runs/sweeps/sic_v15_valence_focal_scale_recon`.
+The existing account directory must be available. There is no fallback to home.
+Set `SWEEP_STORAGE_ROOT` to use another work/project directory. For example,
+if your Longleaf scratch allocation is available:
+
+```bash
+export SWEEP_STORAGE_ROOT="/pine/scr/${USER:0:1}/${USER:1:1}/$USER/EEGProc"
+```
+
+Scratch is temporary storage subject to site retention policies. Copy final
+results to retained storage. `OUTPUT_ROOT` overrides the results directory
+directly; `LOG_DIR` defaults to `OUTPUT_ROOT/logs`. Both paths must resolve
+outside home, including through symlinks.
+
+The preflight creates both directories, writes and flushes a temporary file in
+each to catch exhausted quota or write permissions, then checks filesystem free
+space and inodes. It runs before submission and again in each array task.
+`MIN_FREE_GIB=100` and `MIN_FREE_INODES=100000` are default minimum guards,
+not estimates or reservations for a whole sweep. The wrapper displays `quota -s`
+when available. Filesystem free space does **not** measure remaining personal or
+group quota; verify sufficient allocation for the complete run. The dry run also
+creates/probes the directories but submits no jobs.
 
 ```bash
 SIC_V15=src/eegproc/deep_learning/joint_architectures/SICModelv15
@@ -63,9 +89,13 @@ Source workers have an 82,800-second soft budget with time to finish a current
 batch/checkpoint; the allocation is a cap, not a measured runtime estimate.
 The wrapper prints both array IDs. Collector output directories use the source
 array ID so all results remain in one suite.
+Source logs are `LOG_DIR/v15_valence_focal_scale_recon_ARRAY_TASK.out/.err`;
+collector logs are `LOG_DIR/v15_valence_collect_ARRAY_TASK.out/.err`.
+Shell failures include the failed command and line number in the error log.
 
 `MAX_CONCURRENT=1` limits source work to four GPUs at once. Other overrides are
-`PROJECT_DIR`, `VENV_DIR`, `EEG_PATH`, `LABELS_PATH`, `OUTPUT_ROOT`, `SOURCE_EPOCHS`,
+`PROJECT_DIR`, `VENV_DIR`, `EEG_PATH`, `LABELS_PATH`, `SWEEP_STORAGE_ROOT`,
+`OUTPUT_ROOT`, `LOG_DIR`, `MIN_FREE_GIB`, `MIN_FREE_INODES`, `SOURCE_EPOCHS`,
 `SOURCE_BATCH_SIZE`, `TRAINING_SEED`, `TIME_BUDGET_SECONDS`, `GPU_PREFLIGHT`,
 `CALIBRATION_EPOCHS`, and `CALIBRATION_BATCH_SIZE`. `SUBMIT_PYTHON` selects the
 submission host's Python. `RUN_CALIBRATION=0` retains common-epoch selection
@@ -83,7 +113,7 @@ only small metric JSON files and references the saved models in their shards.
 Results are under:
 
 ```text
-runs/sweeps/sic_v15_valence_focal_scale_recon/suite_SOURCE_ARRAY_ID/
+OUTPUT_ROOT/suite_SOURCE_ARRAY_ID/
   configuration_N/
     shard_0/  shard_1/  shard_2/
     task.json
@@ -105,7 +135,7 @@ the epoch, while source gradients and adjacency fitting use source users only.
 
 ```bash
 python "$SIC_V15/sic_v15_valence_sweep.py" rank \
-  runs/sweeps/sic_v15_valence_focal_scale_recon/suite_SOURCE_ARRAY_ID
+  /absolute/output/root/suite_SOURCE_ARRAY_ID
 ```
 
 The manifest order is focal gamma, then logit scale, then reconstruction, then
@@ -120,3 +150,39 @@ caches. Use an output filesystem with suitable capacity. Jobs refuse to
 overwrite an existing shard directory; use a new suite for a fresh run.
 The fixed run-12 launcher and the separate earlier screening sweep remain
 available independently.
+
+## Recovering suite 8061088 after quota exhaustion
+
+Stop any remaining jobs writing to this suite before transferring it. The
+wrapper does not cancel jobs, move results, delete files, recreate status files,
+or resume existing shards. First inspect the current results without writing:
+
+```bash
+python "$SIC_V15/audit_valence_sweep.py" \
+  runs/sweeps/sic_v15_valence_focal_scale_recon/suite_8061088
+```
+
+After selecting `SWEEP_STORAGE_ROOT` on storage with sufficient quota, copy the
+suite and verify the transfer with a checksum dry run:
+
+```bash
+OLD_SUITE="$PWD/runs/sweeps/sic_v15_valence_focal_scale_recon/suite_8061088"
+NEW_SUITE="$SWEEP_STORAGE_ROOT/runs/sweeps/sic_v15_valence_focal_scale_recon/suite_8061088"
+mkdir -p "$NEW_SUITE"
+rsync -a --info=progress2 "$OLD_SUITE/" "$NEW_SUITE/"
+rsync -acn --itemize-changes "$OLD_SUITE/" "$NEW_SUITE/"
+python "$SIC_V15/audit_valence_sweep.py" "$NEW_SUITE" --verify-checkpoints
+```
+
+The checksum dry run should finish successfully without reporting file changes.
+The full audit reads every saved Keras archive and verifies its CRCs, which can
+take substantial I/O. It checks saved epoch coverage, configuration/target
+identity, checkpoints and execution status separately, and never edits the
+suite. Archive integrity does not replace evaluating a reloaded model.
+
+Only remove the home copy after the transfer is verified and the results you
+need are preserved. This frees home quota; redirecting new outputs alone does
+not free existing space. Complete epoch files with missing `execution.json`
+need review before collection: do not invent a successful status. Incomplete
+shards need retraining; automatic checkpoint resume is not implemented. A new
+wrapper submission uses a new suite ID and refuses to overwrite old shards.
