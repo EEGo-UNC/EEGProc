@@ -4,6 +4,9 @@ For the valence focal/scale/reconstruction sweep, submit its wrapper with
 `bash`. Results and Slurm logs use work storage outside home; see
 [storage checks and quota recovery](VALENCE_FOCAL_SCALE_RECON_SWEEP.md#submit).
 `SWEEP_STORAGE_ROOT` selects another work/project or scratch location.
+The sweep defaults to `METRICS_ONLY=1`: per-epoch scores, oracle selection and
+logs, without model files, retained processed data or calibration. Use
+`METRICS_ONLY=0` for a future run that retains models/data and enables calibration.
 
 SICModelv15 carries forward the current SICModelv11 architecture and training
 pipeline. Its only architectural addition is a learned convex fusion of the two

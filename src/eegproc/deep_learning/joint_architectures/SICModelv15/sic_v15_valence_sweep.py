@@ -3,7 +3,7 @@
 
 The controller never imports TensorFlow. Each fold starts in a fresh process
 with its GPU mask installed before importing the model. Oracle labels are used
-for checkpoint selection only, never for gradients or MI adjacency estimation.
+for epoch selection only, never for gradients or MI adjacency estimation.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -105,7 +106,7 @@ def prepare_data(eeg_path, labels_path, cache, expected_subjects=23):
     return list(range(n_subjects))
 
 
-def select_oracle(rows, subjects, epochs):
+def select_oracle(rows, subjects, epochs, *, metrics_only=False):
     """Maximize the unweighted subject mean at one shared epoch; ties go early."""
     subjects = list(subjects)
     if not subjects or len(subjects) != len(set(subjects)) or epochs < 1:
@@ -135,34 +136,72 @@ def select_oracle(rows, subjects, epochs):
     if not missing:
         best = max(means, key=lambda row: row["mean_balanced_accuracy"])
         result.update(best_epoch=best["epoch"], selection_score=best["mean_balanced_accuracy"],
-                      selected_models={str(subject): indexed[subject, best["epoch"]]["checkpoint"] for subject in subjects})
+                      selected_subject_metrics={str(subject): {
+                          key: value for key, value in indexed[subject, best["epoch"]].items()
+                          if key in ("epoch", "balanced_accuracy", "accuracy")
+                      } for subject in subjects})
+        if all("accuracy" in indexed[subject, best["epoch"]] for subject in subjects):
+            result["selected_mean_accuracy"] = math.fsum(
+                indexed[subject, best["epoch"]]["accuracy"] for subject in subjects) / len(subjects)
+        if not metrics_only:
+            result["selected_models"] = {
+                str(subject): indexed[subject, best["epoch"]]["checkpoint"] for subject in subjects}
     return result
+
+
+def validate_checkpoints(output, rows, *, metrics_only=False):
+    """Keep metrics-only and checkpoint-backed runs explicit and distinct."""
+    output = Path(output).resolve()
+    paths = []
+    for row in rows:
+        if metrics_only:
+            if row.get("checkpoint") is not None:
+                raise ValueError("Metrics-only epoch rows cannot reference model checkpoints.")
+            continue
+        checkpoint = (output / row["checkpoint"]).resolve()
+        if not checkpoint.is_relative_to(output) or not checkpoint.is_file():
+            raise ValueError(f"Missing or invalid checkpoint: {checkpoint}")
+        paths.append(checkpoint)
+    return paths
 
 
 def summarize(output):
     output = Path(output)
     spec = json.loads((output / "task.json").read_text())
     rows = [json.loads(p.read_text()) for p in sorted(output.glob("subject_*/epoch_*.json"))]
-    for row in rows:
-        if not (output / row["checkpoint"]).is_file():
-            raise ValueError(f"Missing checkpoint for saved epoch: {row['checkpoint']}")
-    result = select_oracle(rows, spec["target_subjects"], spec["source_epochs"])
+    metrics_only = spec.get("metrics_only", False)
+    validate_checkpoints(output, rows, metrics_only=metrics_only)
+    result = select_oracle(rows, spec["target_subjects"], spec["source_epochs"], metrics_only=metrics_only)
     result.update(configuration=spec["configuration"], source_epochs=spec["source_epochs"],
-                  target_subjects=spec["target_subjects"], decision_threshold=0.5)
+                  target_subjects=spec["target_subjects"], decision_threshold=0.5, metrics_only=metrics_only)
     write_json(output / "oracle_summary.json", result)
     with (output / "oracle_epoch_means.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["epoch", "mean_balanced_accuracy"])
         writer.writeheader()
         writer.writerows(result["epoch_means"])
-    if result["status"] == "completed":
+    if result["status"] == "completed" and not metrics_only:
         write_json(output / "oracle_models.json", {"epoch": result["best_epoch"],
                    "mean_balanced_accuracy": result["selection_score"], "models": result["selected_models"]})
+    elif result["status"] == "completed":
+        final = {"oracle": True, "metrics_only": True, "selected_epoch": result["best_epoch"],
+                 "selection_rule": result["selection_rule"], "selection_score": result["selection_score"],
+                 "mean_balanced_accuracy": result["selection_score"],
+                 "subject_metrics": result["selected_subject_metrics"],
+                 "target_subjects": result["target_subjects"], "source_epochs": result["source_epochs"],
+                 "configuration": result["configuration"], "decision_threshold": 0.5,
+                 "evaluation_note": result["evaluation_note"]}
+        if "selected_mean_accuracy" in result:
+            final["mean_accuracy"] = result["selected_mean_accuracy"]
+        write_json(output / "final_metrics.json", final)
     return result
 
 
 def calibrate_selected(args):
     """Evaluate and calibrate the models from the selected common epoch."""
     output = Path(args.output_dir).resolve()
+    spec = json.loads((output / "task.json").read_text())
+    if spec.get("metrics_only", False):
+        raise ValueError("Calibration requires saved models. Rerun training with METRICS_ONLY=0.")
     summary = summarize(output)
     if summary["status"] != "completed":
         raise ValueError("Oracle selection must complete for every subject and epoch before calibration.")
@@ -243,7 +282,7 @@ def worker(spec_path, subject):
     # CUDA_VISIBLE_DEVICES has already been set by the controller.
     import numpy as np
     import tensorflow as tf
-    from sklearn.metrics import balanced_accuracy_score
+    from sklearn.metrics import accuracy_score, balanced_accuracy_score
     from eegproc.deep_learning.cross_validation.probabilities import _predict_probabilities, _predict_labels
     from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model import build_sic_model
     from eegproc.deep_learning.joint_architectures.sic_common.config import split_data_hyperparameters
@@ -261,7 +300,8 @@ def worker(spec_path, subject):
     tf.keras.utils.set_random_seed(spec["seed"] + subject)
     if spec.get("deterministic_training", False):
         tf.config.experimental.enable_op_determinism()
-    arrays = {name: np.load(output / "data" / f"{name}.npy", mmap_mode="r")
+    data_dir = Path(spec.get("data_dir", output / "data"))
+    arrays = {name: np.load(data_dir / f"{name}.npy", mmap_mode="r")
               for name in ("features", "labels", "subjects", "trials")}
     mask = arrays["subjects"] == subject
     source = ~mask
@@ -300,15 +340,18 @@ def worker(spec_path, subject):
             predictions = _predict_labels(probabilities, decision_threshold=0.5)
             score = float(balanced_accuracy_score(arrays["labels"][mask], predictions))
             number = epoch + 1
-            checkpoint = folder / f"epoch_{number:03d}.keras"
-            temporary = folder / f"epoch_{number:03d}.tmp.keras"
-            self.model.save(temporary)
-            temporary.replace(checkpoint)
             row = {"target_subject": subject, "epoch": number, "balanced_accuracy": score,
-                   "decision_threshold": 0.5, "checkpoint": str(checkpoint.relative_to(output)),
+                   "accuracy": float(accuracy_score(arrays["labels"][mask], predictions)),
+                   "decision_threshold": 0.5,
                    "epoch_seconds": time.monotonic() - self.started,
                    "y_true": arrays["labels"][mask].tolist(), "probabilities": probabilities.tolist(),
                    "trial_ids": arrays["trials"][mask].tolist()}
+            if not spec.get("metrics_only", False):
+                checkpoint = folder / f"epoch_{number:03d}.keras"
+                temporary = folder / f"epoch_{number:03d}.tmp.keras"
+                self.model.save(temporary)
+                temporary.replace(checkpoint)
+                row["checkpoint"] = str(checkpoint.relative_to(output))
             write_json(folder / f"epoch_{number:03d}.json", row)
             print(f"ORACLE subject={subject} epoch={number} balanced_accuracy={score:.6f}", flush=True)
             if time.time() >= spec["deadline"]:
@@ -335,13 +378,26 @@ def run(args):
         raise ValueError("Exactly four distinct allocated GPUs are required.")
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=False)
+    metrics_only = getattr(args, "metrics_only", False)
+    if metrics_only:
+        temporary_root = Path(os.environ.get("SLURM_TMPDIR") or tempfile.gettempdir()).resolve()
+        if temporary_root.is_relative_to(Path.home().resolve()):
+            raise ValueError("Temporary training data must be outside home. Set TMPDIR to node scratch.")
+        with tempfile.TemporaryDirectory(prefix="sic-v15-data-", dir=temporary_root) as data_dir:
+            return _run_source(args, configuration, masks, output, Path(data_dir), metrics_only=True)
+    return _run_source(args, configuration, masks, output, output / "data", metrics_only=False)
+
+
+def _run_source(args, configuration, masks, output, data_dir, *, metrics_only):
+    seed = getattr(args, "seed", 42)
     started = time.time()
     deadline = started + args.time_budget_seconds
-    available = prepare_data(args.eeg, args.labels, output / "data")
+    available = prepare_data(args.eeg, args.labels, data_dir)
     targets = available if args.target_subjects is None else args.target_subjects
     if not targets or len(targets) != len(set(targets)) or not set(targets) <= set(available):
         raise ValueError("Target subjects must be unique IDs from the DREAMER data.")
     spec = {"configuration": configuration, "source_epochs": args.source_epochs,
+            "metrics_only": metrics_only, "data_dir": str(data_dir), "data_retained": not metrics_only,
             "source_batch_size": getattr(args, "source_batch_size", 64),
             "deterministic_training": getattr(args, "deterministic_training", False),
             "target_subjects": targets, "seed": seed, "gpus_per_fold": 2, "deadline": deadline,
@@ -379,7 +435,7 @@ def run(args):
                     if code != 0:
                         failures.append({"subject": subject, "returncode": code})
             # A five-minute margin normally lets the final batch, inference and
-            # checkpoint finish. The Slurm six-hour limit remains the hard cap.
+            # checkpoint finish. The Slurm task limit remains the hard cap.
             if interrupted or time.time() >= deadline + 240:
                 break
             if not active and (failures or time.time() >= deadline):
@@ -444,6 +500,8 @@ def main(argv=None):
     launch.add_argument("--deterministic-training", action="store_true")
     launch.add_argument("--time-budget-seconds", type=int, default=21000)
     launch.add_argument("--target-subjects", nargs="+", type=int)
+    launch.add_argument("--metrics-only", action="store_true",
+                        help="Save scores without model files; remove temporary processed data when workers exit.")
     fold = commands.add_parser("worker", help=argparse.SUPPRESS)
     fold.add_argument("--spec", type=Path, required=True)
     fold.add_argument("--subject", type=int, required=True)

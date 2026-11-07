@@ -23,7 +23,7 @@ def clean_environment():
     removed = {'PROJECT_DIR', 'SLURM_SUBMIT_DIR', 'SLURM_ARRAY_TASK_ID', 'SWEEP_SUITE_ID',
                'SOURCE_EPOCHS', 'SOURCE_BATCH_SIZE', 'CALIBRATION_EPOCHS', 'CALIBRATION_BATCH_SIZE',
                'TIME_BUDGET_SECONDS', 'OUTPUT_ROOT', 'MAX_CONCURRENT', 'RUN_CALIBRATION',
-               'DRY_RUN', 'EBROOTCUDA', 'CUDA_HOME', 'GPU_PREFLIGHT'}
+               'DRY_RUN', 'EBROOTCUDA', 'CUDA_HOME', 'GPU_PREFLIGHT', 'METRICS_ONLY'}
     removed.update({'SWEEP_STORAGE_ROOT', 'LOG_DIR', 'MIN_FREE_GIB', 'MIN_FREE_INODES',
                     'SBATCH_OUTPUT', 'SBATCH_ERROR', 'SBATCH_EXPORT'})
     return {key: value for key, value in os.environ.items() if key not in removed}
@@ -56,6 +56,8 @@ def test_dry_run_submits_nothing_and_shows_both_arrays(tmp_path):
     assert '--dependency=afterany:SOURCE_ARRAY_ID' in result.stdout
     assert '24 configurations; 72 source tasks' in result.stdout
     assert 'Outer/source epochs: 48' in result.stdout
+    assert 'calibration enabled: 0' in result.stdout
+    assert 'Metrics only: 1' in result.stdout
     assert '24:00:00 per task' in result.stdout
     assert str(tmp_path / 'outputs/logs/v15_valence_focal_scale_recon_%A_%a.out') in result.stdout
     assert str(tmp_path / 'outputs/logs/v15_valence_collect_%A_%a.err') in result.stdout
@@ -69,7 +71,8 @@ def test_submission_connects_collector_to_source_array(tmp_path):
 import json, os, pathlib, sys
 with pathlib.Path(os.environ['SUBMISSION_CAPTURE']).open('a') as handle:
     handle.write(json.dumps({'args': sys.argv[1:], 'project': os.environ['PROJECT_DIR'],
-                             'epochs': os.environ['SOURCE_EPOCHS']}) + '\\n')
+                             'epochs': os.environ['SOURCE_EPOCHS'], 'metrics_only': os.environ['METRICS_ONLY'],
+                             'calibration': os.environ['RUN_CALIBRATION']}) + '\\n')
 print('7001;longleaf' if any(arg.startswith('--dependency=') for arg in sys.argv) else '7000;longleaf')
 """)
     sbatch.chmod(0o755)
@@ -87,6 +90,7 @@ print('7001;longleaf' if any(arg.startswith('--dependency=') for arg in sys.argv
     assert '--gres=gpu:2' in calls[1]['args']
     assert calls[1]['args'][-1] == '--collect'
     assert all(call['epochs'] == '48' and call['project'] == str(ROOT) for call in calls)
+    assert all(call['metrics_only'] == '1' and call['calibration'] == '0' for call in calls)
     for call, name in zip(calls, ('v15_valence_focal_scale_recon', 'v15_valence_collect')):
         assert f'--output={tmp_path}/logs/{name}_%A_%a.out' in call['args']
         assert f'--error={tmp_path}/logs/{name}_%A_%a.err' in call['args']
@@ -163,6 +167,7 @@ def test_source_tasks_route_to_exact_configuration_and_user_shard(tmp_path, inde
     assert value('--source-batch-size') == '64'
     assert value('--time-budget-seconds') == '70000'
     assert value('--seed') == '99' and '--deterministic-training' in args
+    assert '--metrics-only' in args
     config = json.loads(next(line.split(': ', 1)[1] for line in result.stdout.splitlines()
                              if line.startswith('Selected configuration: ')))['hyperparameters']
     assert config == configurations(MANIFEST, seed=99)[index // 3]['hyperparameters']
@@ -173,7 +178,7 @@ def test_collector_routes_only_successful_global_selection_to_calibration(tmp_pa
     capture = tmp_path / 'collect.jsonl'
     env = {**cluster_environment(tmp_path), 'SLURM_ARRAY_TASK_ID': '4', 'SWEEP_SUITE_ID': '7000',
            'TRAINING_CAPTURE': str(capture), 'COLLECT_RETURN_CODE': str(collector_code),
-           'RUN_CALIBRATION': calibrate}
+           'RUN_CALIBRATION': calibrate, 'METRICS_ONLY': '0'}
     result = subprocess.run(['bash', str(SCRIPT), '--collect'], env=env, capture_output=True, text=True)
     assert result.returncode == collector_code, result.stdout + result.stderr
     calls = [json.loads(line) for line in capture.read_text().splitlines()]
@@ -185,23 +190,57 @@ def test_collector_routes_only_successful_global_selection_to_calibration(tmp_pa
         assert calls[1][-4:] == ['--calibration-epochs', '1', '--calibration-batch-size', '64']
 
 
-def make_shards(tmp_path):
+def test_full_data_flag_retains_original_source_mode(tmp_path):
+    capture = tmp_path / 'training.jsonl'
+    result = subprocess.run(['bash', str(SCRIPT), '--task'], env={
+        **cluster_environment(tmp_path), 'SLURM_ARRAY_TASK_ID': '0', 'METRICS_ONLY': '0',
+        'TRAINING_CAPTURE': str(capture)}, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = json.loads(capture.read_text())
+    assert '--metrics-only' not in args
+    assert 'calibration enabled: 1' in result.stdout
+
+
+def test_metrics_only_collector_skips_models_and_calibration(tmp_path):
+    capture = tmp_path / 'collect.jsonl'
+    env = {**cluster_environment(tmp_path), 'SLURM_ARRAY_TASK_ID': '4', 'SWEEP_SUITE_ID': '7000',
+           'TRAINING_CAPTURE': str(capture)}
+    # Metrics-only selection needs neither libdevice nor TensorFlow.
+    next(Path(env['VENV_DIR']).rglob('libdevice.10.bc')).unlink()
+    result = subprocess.run(['bash', str(SCRIPT), '--collect'], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert len(calls) == 1 and calls[0][0].endswith('collect_valence_sweep_shards.py')
+
+
+def test_metrics_only_cannot_request_calibration(tmp_path):
+    result = subprocess.run(['bash', str(SCRIPT)], env={
+        **clean_environment(), 'METRICS_ONLY': '1', 'RUN_CALIBRATION': '1'},
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'cannot calibrate unsaved models' in result.stderr
+
+
+def make_shards(tmp_path, metrics_only=False):
     config = configurations(MANIFEST)[4]
     for shard_number, targets in enumerate(SHARD_TARGETS):
         shard = tmp_path / f'shard_{shard_number}'
         write_json(shard / 'task.json', {'configuration': config, 'source_epochs': 3,
             'source_batch_size': 64, 'seed': 42, 'gpus_per_fold': 2, 'deterministic_training': True,
             'target_subjects': list(targets), 'eeg': '/data/eeg.npy', 'labels': '/data/labels.npy',
-            'preprocessing': 'same full run'})
+            'preprocessing': 'same full run', 'metrics_only': metrics_only})
         write_json(shard / 'execution.json', {'status': 'completed', 'failures': [], 'interrupted': False})
         scores = (.9, .5, .8) if shard_number == 0 else (.4, .8, .5)
         for user in targets:
             for epoch, score in enumerate(scores, 1):
                 checkpoint = shard / f'subject_{user:02d}/epoch_{epoch:03d}.keras'
-                checkpoint.parent.mkdir(parents=True, exist_ok=True); checkpoint.touch()
-                write_json(checkpoint.with_suffix('.json'), {'target_subject': user, 'epoch': epoch,
-                    'balanced_accuracy': score, 'decision_threshold': .5,
-                    'checkpoint': str(checkpoint.relative_to(shard))})
+                checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                record = {'target_subject': user, 'epoch': epoch, 'balanced_accuracy': score,
+                          'accuracy': .4 if epoch == 2 else .99, 'decision_threshold': .5}
+                if not metrics_only:
+                    checkpoint.touch()
+                    record['checkpoint'] = str(checkpoint.relative_to(shard))
+                write_json(checkpoint.with_suffix('.json'), record)
     return tmp_path
 
 
@@ -217,6 +256,27 @@ def test_global_selection_uses_all_23_users_not_local_shard_winners(tmp_path):
         assert (output / checkpoint).is_file()
     assert len(list(output.glob('subject_*/epoch_*.json'))) == 23 * 3
     assert not list(output.glob('subject_*/*.keras'))
+
+
+def test_metrics_only_collection_uses_balanced_accuracy_at_one_common_epoch(tmp_path):
+    from audit_valence_sweep import audit_suite
+    output = make_shards(tmp_path / 'configuration_4', metrics_only=True)
+    result = collect(output)
+    assert result['best_epoch'] == 2
+    assert result['selection_score'] == pytest.approx((8 * .5 + 15 * .8) / 23)
+    assert result['selected_mean_accuracy'] == pytest.approx(.4)
+    assert len(result['selected_subject_metrics']) == 23
+    assert all(row['epoch'] == 2 for row in result['selected_subject_metrics'].values())
+    assert 'selected_models' not in result
+    assert not (output / 'oracle_models.json').exists()
+    assert not list(output.rglob('*.keras'))
+    final = json.loads((output / 'final_metrics.json').read_text())
+    assert final['selected_epoch'] == 2 and final['metrics_only']
+    assert final['mean_balanced_accuracy'] == result['selection_score']
+    assert final['mean_accuracy'] == pytest.approx(.4)
+    assert final['subject_metrics'] == result['selected_subject_metrics']
+    audit = audit_suite(tmp_path, MANIFEST, verify_checkpoints=True)
+    assert all(row['ready_for_collector'] and row['metrics_only'] for row in audit['shards'])
 
 
 def test_audit_preserves_results_and_distinguishes_missing_execution_status(tmp_path):
@@ -251,7 +311,7 @@ def test_audit_full_archive_check_rejects_truncated_checkpoints(tmp_path):
 
 
 @pytest.mark.parametrize('failure', ['missing_shard', 'missing_epoch', 'missing_model',
-                                    'failed_worker', 'budget_mismatch', 'configuration_mismatch'])
+                                    'failed_worker', 'budget_mismatch', 'configuration_mismatch', 'mode_mismatch'])
 def test_partial_or_mixed_shards_cannot_publish_a_winner(tmp_path, failure):
     output = make_shards(tmp_path)
     shard = output / 'shard_1'
@@ -267,6 +327,8 @@ def test_partial_or_mixed_shards_cannot_publish_a_winner(tmp_path, failure):
         path = shard / 'task.json'; spec = json.loads(path.read_text())
         if failure == 'budget_mismatch':
             spec['source_epochs'] = 2
+        elif failure == 'mode_mismatch':
+            spec['metrics_only'] = True
         else:
             spec['configuration']['hyperparameters']['mldg_steps_per_epoch'] = 16
         write_json(path, spec)

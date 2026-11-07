@@ -37,6 +37,15 @@ def test_equal_subject_weight_and_earliest_tie():
     assert sweep.select_oracle(rows, [0, 1], 2)["best_epoch"] == 1
 
 
+def test_metrics_only_oracle_keeps_common_epoch_and_earliest_tie_without_models():
+    rows = [{key: value for key, value in row(subject, epoch, score).items() if key != 'checkpoint'}
+            for subject, epoch, score in [(0, 1, 1), (1, 1, 0), (0, 2, 0), (1, 2, 1)]]
+    result = sweep.select_oracle(rows, [0, 1], 2, metrics_only=True)
+    assert result['best_epoch'] == 1 and result['selection_score'] == .5
+    assert 'selected_models' not in result
+    assert result['selected_subject_metrics']['0']['balanced_accuracy'] == 1
+
+
 def test_incomplete_task_cannot_win():
     result = sweep.select_oracle([row(0, 1, 1), row(1, 1, 1), row(0, 2, 1)], [0, 1], 2)
     assert result["status"] == "incomplete"
@@ -153,6 +162,49 @@ def test_worker_pairs_preserve_slurm_uuid_masks(tmp_path, monkeypatch):
     assert masks == ["GPU-a,GPU-b", "GPU-c,GPU-d"]
 
 
+@pytest.mark.parametrize('worker_code', [0, 3])
+def test_metrics_only_controller_removes_temporary_data_after_workers_exit(tmp_path, monkeypatch, worker_code):
+    from argparse import Namespace
+    paths = []
+    monkeypatch.setenv('CUDA_VISIBLE_DEVICES', 'GPU-a,GPU-b,GPU-c,GPU-d')
+    monkeypatch.setenv('SLURM_TMPDIR', str(tmp_path))
+    def prepare(eeg, labels, data):
+        paths.append(data)
+        (data / 'features.npy').touch()
+        return [0, 1]
+    monkeypatch.setattr(sweep, 'prepare_data', prepare)
+    class FakeProcess:
+        def __init__(self, command, *, env, stdout, stderr):
+            spec_path = Path(command[command.index('--spec') + 1])
+            spec = json.loads(spec_path.read_text())
+            assert spec['metrics_only'] and not spec['data_retained']
+            assert Path(spec['data_dir']).is_dir()
+            if worker_code == 0:
+                subject = int(command[-1])
+                record = row(subject, 1, .75)
+                del record['checkpoint']
+                sweep.write_json(spec_path.parent / f'subject_{subject:02d}/epoch_001.json', record)
+        def poll(self):
+            return worker_code
+    monkeypatch.setattr(sweep.subprocess, 'Popen', FakeProcess)
+    output = tmp_path / 'run'
+    args = Namespace(configs=sweep.DEFAULT_CONFIGS, config_index=0, source_epochs=1,
+                     time_budget_seconds=100, output_dir=output, eeg=tmp_path / 'eeg.npy',
+                     labels=tmp_path / 'labels.npy', target_subjects=None, metrics_only=True)
+    assert sweep.run(args) == (0 if worker_code == 0 else 2)
+    assert paths and all(not path.exists() for path in paths)
+    assert not (output / 'data').exists() and not list(output.rglob('*.keras'))
+    assert (output / 'final_metrics.json').exists() == (worker_code == 0)
+
+
+def test_metrics_only_calibration_is_rejected_before_publishing(tmp_path):
+    from argparse import Namespace
+    sweep.write_json(tmp_path / 'task.json', {'metrics_only': True})
+    with pytest.raises(ValueError, match='requires saved models'):
+        sweep.calibrate_selected(Namespace(output_dir=tmp_path))
+    assert not (tmp_path / 'final_metrics.json').exists()
+
+
 def test_real_cpu_worker_saves_reloadable_oracle_model(tmp_path):
     pytest.importorskip("tensorflow")
     data = tmp_path / "data"
@@ -186,6 +238,29 @@ def test_real_cpu_worker_saves_reloadable_oracle_model(tmp_path):
     saved = json.loads(selected.with_suffix(".json").read_text())
     probabilities = _predict_probabilities(restored, features[:2], batch_size=1)
     np.testing.assert_allclose(probabilities, saved["probabilities"], rtol=1e-5, atol=1e-6)
+
+    # Changing storage mode must not change training, predictions or selection.
+    metrics_output = tmp_path / 'metrics'
+    metrics_spec = json.loads((tmp_path / 'task.json').read_text())
+    metrics_spec.update(metrics_only=True, data_dir=str(data))
+    sweep.write_json(metrics_output / 'task.json', metrics_spec)
+    metrics_run = subprocess.run([sys.executable, str(SCRIPT), 'worker', '--spec',
+        str(metrics_output / 'task.json'), '--subject', '0'], env=env,
+        capture_output=True, text=True, timeout=240)
+    assert metrics_run.returncode == 0, metrics_run.stdout + metrics_run.stderr
+    metrics_result = sweep.summarize(metrics_output)
+    assert metrics_result['best_epoch'] == result['best_epoch']
+    assert metrics_result['selection_score'] == result['selection_score']
+    assert not list(metrics_output.rglob('*.keras'))
+    assert not (metrics_output / 'data').exists()
+    assert not (metrics_output / 'oracle_models.json').exists()
+    for epoch in (1, 2):
+        full = json.loads((tmp_path / f'subject_00/epoch_{epoch:03d}.json').read_text())
+        scores = json.loads((metrics_output / f'subject_00/epoch_{epoch:03d}.json').read_text())
+        assert 'checkpoint' not in scores
+        assert scores['accuracy'] == full['accuracy']
+        assert scores['balanced_accuracy'] == full['balanced_accuracy']
+        np.testing.assert_allclose(scores['probabilities'], full['probabilities'], rtol=1e-5, atol=1e-6)
 
 
 def test_final_metrics_use_reloaded_common_epoch_models(tmp_path, monkeypatch):

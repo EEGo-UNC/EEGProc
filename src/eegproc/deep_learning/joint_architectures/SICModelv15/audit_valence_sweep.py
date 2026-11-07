@@ -8,7 +8,7 @@ from pathlib import Path
 import zipfile
 
 from collect_valence_sweep_shards import SHARD_TARGETS
-from sic_v15_valence_sweep import configurations, select_oracle
+from sic_v15_valence_sweep import configurations, select_oracle, validate_checkpoints
 
 
 def audit_suite(suite, configs, verify_checkpoints=False):
@@ -32,12 +32,11 @@ def audit_suite(suite, configs, verify_checkpoints=False):
                 if spec["configuration"] != expected or tuple(spec["target_subjects"]) != targets:
                     raise ValueError("Task configuration or held-out users do not match this shard.")
                 epochs = int(spec["source_epochs"])
+                row["metrics_only"] = spec.get("metrics_only", False)
                 metrics = [json.loads(item.read_text()) for item in sorted(path.glob("subject_*/epoch_*.json"))]
-                summary = select_oracle(metrics, targets, epochs)
-                for metric in metrics:
-                    checkpoint = (path / metric["checkpoint"]).resolve()
-                    if not checkpoint.is_relative_to(path) or not checkpoint.is_file():
-                        raise ValueError(f"Missing or invalid checkpoint: {checkpoint}")
+                summary = select_oracle(metrics, targets, epochs, metrics_only=row["metrics_only"])
+                checkpoints = validate_checkpoints(path, metrics, metrics_only=row["metrics_only"])
+                for checkpoint in checkpoints:
                     if verify_checkpoints:
                         with zipfile.ZipFile(checkpoint) as archive:
                             required = {"config.json", "metadata.json", "model.weights.h5"}
@@ -58,7 +57,8 @@ def audit_suite(suite, configs, verify_checkpoints=False):
             except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, RuntimeError) as error:
                 row["errors"].append(str(error))
             shards.append(row)
-    return {"suite": str(suite), "checkpoint_check": "archive CRC" if verify_checkpoints else "existence only",
+    return {"suite": str(suite), "checkpoint_check":
+                ("archive CRC" if verify_checkpoints else "existence only") + " for checkpoint-backed shards",
             "missing_tasks": missing, "shards": shards,
             "note": "No files were changed. Complete epoch files with missing execution.json require review; "
                     "this audit does not declare a failed job successful or resume training."}
@@ -84,7 +84,7 @@ def main(argv=None):
         for row in result["shards"]:
             print(f"Task {row['task_id']}: epochs {row.get('epoch_files', '?')}/"
                   f"{row.get('expected_epoch_files', '?')}; execution={row['execution_status']}; "
-                  f"collector-ready={row['ready_for_collector']}")
+                  f"collector-ready={row['ready_for_collector']}; metrics_only={row.get('metrics_only', False)}")
             for error in row["errors"]:
                 print(f"  {error}")
         print("Missing tasks: " + ", ".join(map(str, result["missing_tasks"])))

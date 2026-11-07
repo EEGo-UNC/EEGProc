@@ -35,6 +35,28 @@ the wrapper with **bash** from the cluster checkout. The wrapper checks storage
 before requesting GPUs and supplies absolute Slurm log paths for both arrays;
 do not submit it directly with `sbatch`.
 
+The `METRICS_ONLY` flag controls retained outputs without changing training or
+the common-epoch balanced-accuracy selection rule:
+
+| Flag | Retained outputs | Calibration |
+| --- | --- | --- |
+| `METRICS_ONLY=1` (default) | Per-epoch accuracy, balanced accuracy, trial predictions, settings, oracle summaries and logs | Off |
+| `METRICS_ONLY=0` | All of the above, every epoch's model checkpoint, processed EEG data and calibration results | On by default |
+
+In metrics-only mode, processed arrays are temporary working files shared by
+the two workers in each active task. They use `SLURM_TMPDIR` when set, otherwise
+Python's temporary directory (`TMPDIR` or the system default). This location
+must be outside home. The controller removes its temporary directory after all
+workers exit, including when a worker fails. Abrupt termination such as SIGKILL
+can bypass cleanup; use node temporary storage with the site's job cleanup.
+No processed arrays or `.keras` files are retained in the results directory.
+The temporary arrays still need enough local space while training runs.
+
+The full-data mode is available for future submissions. Switching the flag does
+not change running jobs, recover unsaved models, or populate old metrics-only
+results: rerun the chosen configuration when model files are needed. Explicit
+`METRICS_ONLY=1 RUN_CALIBRATION=1` is rejected because calibration requires models.
+
 By default, outputs go under
 `/work/users/<first>/<second>/<onyen>/EEGProc/runs/sweeps/sic_v15_valence_focal_scale_recon`.
 The existing account directory must be available. There is no fallback to home.
@@ -53,7 +75,8 @@ outside home, including through symlinks.
 The preflight creates both directories, writes and flushes a temporary file in
 each to catch exhausted quota or write permissions, then checks filesystem free
 space and inodes. It runs before submission and again in each array task.
-`MIN_FREE_GIB=100` and `MIN_FREE_INODES=100000` are default minimum guards,
+`MIN_FREE_GIB` defaults to 1 for metrics-only runs and 100 for full-data runs;
+`MIN_FREE_INODES=100000` applies to both. These are minimum guards,
 not estimates or reservations for a whole sweep. The wrapper displays `quota -s`
 when available. Filesystem free space does **not** measure remaining personal or
 group quota; verify sufficient allocation for the complete run. The dry run also
@@ -63,10 +86,13 @@ creates/probes the directories but submits no jobs.
 SIC_V15=src/eegproc/deep_learning/joint_architectures/SICModelv15
 
 # Print both planned submissions without starting jobs:
-DRY_RUN=1 bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh"
+METRICS_ONLY=1 DRY_RUN=1 bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh"
 
-# Submit source jobs and their dependent collectors:
-bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh"
+# Current accuracy sweep: scores only, no model files or calibration:
+METRICS_ONLY=1 bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh"
+
+# Future full-data run, retaining models/data and enabling calibration:
+METRICS_ONLY=0 RUN_CALIBRATION=1 bash "$SIC_V15/SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh"
 ```
 
 The wrapper submits two arrays:
@@ -78,10 +104,11 @@ The wrapper submits two arrays:
    within smaller per-job workloads.
 2. **24 collectors**, dependent on the entire source array finishing. Each
    collector requests two GPUs, combines its configuration's three shards,
-   chooses one common epoch over all 23 users, and evaluates/calibrates only
-   those selected models. It verifies matching settings and complete epoch
-   coverage before publishing a model set. An incomplete or failed shard
-   prevents that configuration from being selected or calibrated.
+   chooses one common epoch over all 23 users, and publishes its saved scores.
+   With `METRICS_ONLY=0`, it also references the selected models for optional
+   calibration. It verifies matching settings, storage mode and complete epoch
+   coverage. An incomplete or failed shard prevents that configuration from
+   being selected or calibrated.
 
 Both arrays default to two concurrent tasks. Source jobs can therefore use
 eight GPUs at once, and collectors four. Both retain a 24-hour Slurm allocation.
@@ -95,7 +122,7 @@ Shell failures include the failed command and line number in the error log.
 
 `MAX_CONCURRENT=1` limits source work to four GPUs at once. Other overrides are
 `PROJECT_DIR`, `VENV_DIR`, `EEG_PATH`, `LABELS_PATH`, `SWEEP_STORAGE_ROOT`,
-`OUTPUT_ROOT`, `LOG_DIR`, `MIN_FREE_GIB`, `MIN_FREE_INODES`, `SOURCE_EPOCHS`,
+`OUTPUT_ROOT`, `LOG_DIR`, `METRICS_ONLY`, `MIN_FREE_GIB`, `MIN_FREE_INODES`, `SOURCE_EPOCHS`,
 `SOURCE_BATCH_SIZE`, `TRAINING_SEED`, `TIME_BUDGET_SECONDS`, `GPU_PREFLIGHT`,
 `CALIBRATION_EPOCHS`, and `CALIBRATION_BATCH_SIZE`. `SUBMIT_PYTHON` selects the
 submission host's Python. `RUN_CALIBRATION=0` retains common-epoch selection
@@ -107,8 +134,10 @@ the same source epoch budget, seed and preprocessing.
 For each configuration, compute trial balanced accuracy for each held-out user
 at every completed epoch, using threshold 0.5. Select the epoch maximizing the
 unweighted mean over **all 23 users**; exact ties select the earliest epoch.
-Shard-local winners do not determine the final model set. The collector copies
-only small metric JSON files and references the saved models in their shards.
+Shard-local winners do not determine the final result. Accuracy is reported
+from the same epoch that maximizes mean balanced accuracy; it is not optimized
+separately. The collector copies only small metric JSON files and, in full-data
+mode, references the saved models in their shards. No validation split is added.
 
 Results are under:
 
@@ -121,15 +150,21 @@ OUTPUT_ROOT/suite_SOURCE_ARRAY_ID/
     subject_NN/epoch_EEE.json
     oracle_epoch_means.csv
     oracle_summary.json
-    oracle_models.json
     final_metrics.json
-    calibration/
 ```
 
-Calibration defaults to one epoch at 3 shots / 6 folds. `final_metrics.json`
-records the selected common epoch and the final zero-shot/3-shot means, with
-the existing check that reloaded zero-shot balanced accuracy matches selection.
-With calibration disabled, the selection score is in `oracle_summary.json`.
+In metrics-only mode, `final_metrics.json` records the selected common epoch,
+mean accuracy and balanced accuracy, and each held-out user's scores from that
+same epoch. `oracle_epoch_means.csv` preserves the complete balanced-accuracy
+curve, and `oracle_summary.json` preserves the selection and settings. No model
+manifest is published, since no model files exist.
+
+Full-data mode additionally produces `oracle_models.json` and optional
+`calibration/`. Calibration defaults to one epoch at 3 shots / 6 folds. Its
+`final_metrics.json` records the selected epoch and final zero-shot/3-shot means,
+with the existing check that reloaded zero-shot balanced accuracy matches
+selection. With full-data calibration disabled, the selection score remains in
+`oracle_summary.json`.
 These scores are explicitly oracle estimates because held-out labels select
 the epoch, while source gradients and adjacency fitting use source users only.
 
@@ -144,9 +179,10 @@ settings with 8 episodes per epoch; **configuration 16** uses the original
 run-21 model settings with 8 episodes per epoch. Both use 48 source epochs.
 Source array task IDs are `3 * configuration + shard`; collector task IDs are configuration IDs.
 
-All per-epoch checkpoints are retained: a full 24-configuration run with 48
-epochs contains **26,496 source model files**, plus metric rows and shard data
-caches. Use an output filesystem with suitable capacity. Jobs refuse to
+Metrics-only mode retains the **26,496 small source metric records**, without
+model files or permanent EEG caches. Full-data mode retains **26,496 source model
+files**, plus metric rows and 72 processed EEG caches. Use an output filesystem
+with suitable capacity for the selected mode. Jobs refuse to
 overwrite an existing shard directory; use a new suite for a fresh run.
 The fixed run-12 launcher and the separate earlier screening sweep remain
 available independently.

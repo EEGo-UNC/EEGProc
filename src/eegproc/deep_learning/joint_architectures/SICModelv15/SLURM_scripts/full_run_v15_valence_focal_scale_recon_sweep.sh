@@ -33,13 +33,20 @@ EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
 LABELS_PATH="${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-}"
 LOG_DIR="${LOG_DIR:-}"
-MIN_FREE_GIB="${MIN_FREE_GIB:-100}"
+METRICS_ONLY="${METRICS_ONLY:-1}"
+[[ "$METRICS_ONLY" =~ ^[01]$ ]] || { echo "METRICS_ONLY must be 0 or 1." >&2; exit 1; }
+if [[ "$METRICS_ONLY" == 1 ]]; then
+    MIN_FREE_GIB="${MIN_FREE_GIB:-1}"
+    RUN_CALIBRATION="${RUN_CALIBRATION:-0}"
+else
+    MIN_FREE_GIB="${MIN_FREE_GIB:-100}"
+    RUN_CALIBRATION="${RUN_CALIBRATION:-1}"
+fi
 MIN_FREE_INODES="${MIN_FREE_INODES:-100000}"
 SOURCE_EPOCHS="${SOURCE_EPOCHS:-48}"
 SOURCE_BATCH_SIZE="${SOURCE_BATCH_SIZE:-64}"
 CALIBRATION_EPOCHS="${CALIBRATION_EPOCHS:-1}"
 CALIBRATION_BATCH_SIZE="${CALIBRATION_BATCH_SIZE:-64}"
-RUN_CALIBRATION="${RUN_CALIBRATION:-1}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
 TIME_BUDGET_SECONDS="${TIME_BUDGET_SECONDS:-82800}"
 MAX_CONCURRENT="${MAX_CONCURRENT:-2}"
@@ -47,6 +54,10 @@ PHASE="${1:---task}"
 
 [[ "$PHASE" == --task || "$PHASE" == --collect ]] || { echo "Use --task or --collect." >&2; exit 1; }
 [[ "$RUN_CALIBRATION" =~ ^[01]$ ]] || { echo "RUN_CALIBRATION must be 0 or 1." >&2; exit 1; }
+[[ "$METRICS_ONLY" != 1 || "$RUN_CALIBRATION" == 0 ]] || {
+    echo "METRICS_ONLY=1 cannot calibrate unsaved models. Set RUN_CALIBRATION=0 or METRICS_ONLY=0." >&2
+    exit 1
+}
 if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     if [[ $# -gt 0 ]]; then
         echo "ERROR: --task/--collect require SLURM_ARRAY_TASK_ID." >&2
@@ -64,7 +75,7 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     export PROJECT_DIR VENV_DIR EEG_PATH LABELS_PATH OUTPUT_ROOT
     export LOG_DIR MIN_FREE_GIB MIN_FREE_INODES
     export SOURCE_EPOCHS SOURCE_BATCH_SIZE CALIBRATION_EPOCHS CALIBRATION_BATCH_SIZE
-    export RUN_CALIBRATION TRAINING_SEED TIME_BUDGET_SECONDS
+    export METRICS_ONLY RUN_CALIBRATION TRAINING_SEED TIME_BUDGET_SECONDS
     # Slurm opens logs before the batch script runs: set absolute paths here.
     SOURCE_SUBMIT=(sbatch --parsable --array="0-$((SOURCE_TASKS-1))%${MAX_CONCURRENT}" --chdir="$PROJECT_DIR"
                    --export=ALL --output="$LOG_DIR/v15_valence_focal_scale_recon_%A_%a.out"
@@ -87,6 +98,7 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
         echo "24:00:00 per task; at most $MAX_CONCURRENT concurrent tasks; source 4 GPUs/task, collector 2 GPUs/task."
         echo "Gamma 0.5/1.0; scale 8/16/32; reconstruction 0/0.4; MLDG episodes 8/16; subject loss 0.3"
         echo "Outer/source epochs: $SOURCE_EPOCHS; calibration enabled: $RUN_CALIBRATION"
+        echo "Metrics only: $METRICS_ONLY (1: scores only, temporary data removed; 0: retain models and processed data)"
         echo "Outputs: $OUTPUT_ROOT; Slurm logs: $LOG_DIR"
         exit 0
     fi
@@ -115,8 +127,10 @@ fi
 cd "$PROJECT_DIR"
 module purge
 module load python/3.12.4
-module load cuda/12.9
-module load cudnn/9.11.0
+if [[ "$PHASE" != --collect || "$METRICS_ONLY" == 0 ]]; then
+    module load cuda/12.9
+    module load cudnn/9.11.0
+fi
 [[ -x "$VENV_DIR/bin/python" ]] || { echo "Prepare the environment at $VENV_DIR first." >&2; exit 1; }
 source "$VENV_DIR/bin/activate"
 python "$STORAGE" check --output-root "$OUTPUT_ROOT" --log-dir "$LOG_DIR" \
@@ -125,6 +139,11 @@ export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 TF_GPU_ALLOCATOR=cuda_malloc_async
 export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export TRAINING_SEED PYTHONHASHSEED="$TRAINING_SEED"
 export TF_DETERMINISTIC_OPS=1 TF_CUDNN_DETERMINISTIC=1 CUBLAS_WORKSPACE_CONFIG=:4096:8
+
+# Metrics-only collection uses the saved epoch scores, without CUDA or models.
+if [[ "$PHASE" == --collect && "$METRICS_ONLY" == 1 ]]; then
+    exec python "$COLLECTOR" "$OUTPUT_ROOT/suite_${SWEEP_SUITE_ID}/configuration_${CONFIG_INDEX}"
+fi
 
 # Reuse the prepared CUDA environment; array tasks do not install packages.
 MODULE_CUDA_ROOT="${EBROOTCUDA:-${CUDA_HOME:-}}"
@@ -161,6 +180,7 @@ echo "SICv15 focal/scale/reconstruction/episode sweep: suite $SUITE_ID configura
 echo "Selected configuration: $MODEL_CONFIG"
 echo "Outer/source epochs: $SOURCE_EPOCHS; MLDG 12/6 subjects x 2 trials; no validation split"
 echo "Oracle: one common epoch maximizing mean balanced accuracy over all 23 held-out users at threshold 0.5"
+echo "Metrics only: $METRICS_ONLY; calibration enabled: $RUN_CALIBRATION"
 echo "Git commit: $(git rev-parse HEAD)"
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     echo "WARNING: tracked worktree changes are present; preserve this exact checkout with the results."
@@ -191,7 +211,11 @@ TARGET_GROUPS=("0 1 2 3 4 5 6 7" "8 9 10 11 12 13 14 15" "16 17 18 19 20 21 22")
 read -r -a TARGET_LIST <<< "${TARGET_GROUPS[$SHARD_INDEX]}"
 echo "Source shard $SHARD_INDEX: held-out users ${TARGET_LIST[*]}; each uses all 22 other source users"
 echo "Source soft budget: $TIME_BUDGET_SECONDS seconds; Slurm hard limit: 24 hours"
-exec python "$RUNNER" run \
+RUN_COMMAND=(python "$RUNNER" run)
+if [[ "$METRICS_ONLY" == 1 ]]; then
+    RUN_COMMAND+=(--metrics-only)
+fi
+exec "${RUN_COMMAND[@]}" \
     --configs "$CONFIGS" \
     --config-index "$CONFIG_INDEX" \
     --output-dir "$OUTPUT_DIR/shard_${SHARD_INDEX}" \
