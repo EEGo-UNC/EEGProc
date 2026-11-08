@@ -84,8 +84,9 @@ class TrialRecorder:
     """One attempt directory with per-step scalars and endpoint metrics.
 
     Step s is the state BEFORE update s+1. Every finite step is written to
-    the scalar history. Signal, latent, gradient, and optimizer tensors are
-    never persisted.
+    the scalar history. Signals, window latents, gradients and optimizer
+    tensors are not persisted. Small terminal classification embeddings may
+    be retained in endpoint summaries for independent distributional scoring.
     Completed trials can be reused; unfinished trials retain all attempts.
     """
 

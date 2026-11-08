@@ -68,7 +68,8 @@ def test_defaults_use_both_directions_four_arms_and_only_tenth_percentile():
         parse_args(argv + ['--directions', '1_to_0', '1_to_0'])
 
 
-def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkeypatch):
+@pytest.mark.parametrize('knn_k', [1, 5])
+def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkeypatch, knn_k):
     tf = pytest.importorskip('tensorflow')
     from eegproc.model_explainability.typicality import runner
     from eegproc.model_explainability.typicality.artifacts import completed_attempt
@@ -122,7 +123,7 @@ def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkey
     out = tmp_path / 'suite'
     args = runner.parse_args(['--models-json', str(manifest), '--task', 'valence', '--trials-npz', str(data),
         '--subjects', '0', '--trial-ids', '0', '1', '2', '--fixed-joint-alpha', '.5',
-        '--max-steps', '1', '--log-every', '0', '--out-dir', str(out)])
+        '--max-steps', '1', '--log-every', '0', '--knn-k', str(knn_k), '--out-dir', str(out)])
     calls = []
     optimize = runner.CounterfactualOptimizer.optimize
     fail_once = [True]
@@ -151,6 +152,28 @@ def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkey
         assert fold['eligible_trial_ids'] == [1 - target]
         assert fold['objective_losses']['target_latent']['physiological_weight'] == 0
         assert fold['objective_losses']['typicality_no_physiology']['physiological_weight'] == 0
+        source_vectors = json.loads((out / direction / 'subject_0/calibration/source_trials.json').read_text())
+        observed_vectors = json.loads((out / direction / 'subject_0/observations.json').read_text())
+        assert np.asarray(source_vectors['embeddings']).shape == (8, 1)
+        assert np.asarray(observed_vectors['embeddings']).shape == (4, 1)
+        assert fold['encoded_neighbors']['status'] == ('calibrated' if knn_k == 1 else 'unavailable')
+        for endpoint_path in (out / direction / 'subject_0').glob('trial_*/*/attempt_*/result.json'):
+            endpoint = json.loads(endpoint_path.read_text())
+            if endpoint['status'] != 'completed':
+                continue
+            assert set(endpoint['classification_embeddings']) == {
+                'original', 'optimized', 'decoded_reconstruction', 'decoded_counterfactual'}
+            assert endpoint['encoded_neighbors_status'] == ('calibrated' if knn_k == 1 else 'unavailable')
+            if knn_k == 1:
+                assert endpoint['encoded_neighbors']['optimized']['k'] == 1
+                assert endpoint['encoded_neighbors']['optimized']['quantile'] == .10
+    if knn_k == 1:
+        independent = json.loads((out / 'knn_report/knn_report.json').read_text())
+        optimized = [r for r in independent['population'] if r['role'] == 'optimized_counterfactual']
+        assert len(optimized) == 8 and sum(r['n_attempt_errors'] for r in optimized) == 1
+        assert {r['direction'] for r in optimized} == {'0_to_1', '1_to_0'}
+    else:
+        assert json.loads((out / 'knn_report/status.json').read_text())['status'] == 'unavailable'
     assert build_report([out], tmp_path / 'rebuilt') == result
     with (out / 'report/exclusions.csv').open() as stream:
         exclusions = list(csv.DictReader(stream))
@@ -234,6 +257,12 @@ def test_saved_sic_model_supports_reverse_target_without_weight_changes(tmp_path
     result = CounterfactualOptimizer(loaded, loss=loss, typicality=region,
                                     decoder_mode='joint', max_steps=1).optimize(x, target_class=0)
     assert result['summary']['target_class'] == 0
+    from eegproc.model_explainability.typicality.knn_evaluation import evaluate_trial_embeddings
+    exported = evaluate_trial_embeddings(loaded, result['arrays'], report_output='joint')
+    assert set(exported['classification_embeddings']) == {
+        'original', 'optimized', 'decoded_reconstruction', 'decoded_counterfactual'}
+    dimension = int(loaded.vc_target.prior_mu.shape[-1])
+    assert all(len(vector) == dimension for vector in exported['classification_embeddings'].values())
     probabilities = result['summary']['latent_counterfactual']['probabilities']
     assert result['summary']['latent_counterfactual']['target_probability'] == probabilities[0]
     for old, weight in zip(before, loaded.weights):

@@ -158,3 +158,27 @@ is used for displacement and physiology; decoded/re-encoded classification
 validity is unmeasured. The band-filtered decoder cannot estimate the required
 aperiodic exponent, so passing the four available physiological checks never
 silently implies passing all five.
+
+
+## Independent encoded-neighbour evaluation
+
+The runner also evaluates distance to the fifth-nearest real target-class
+source embedding, with a separate source-calibrated 10th-percentile cutoff.
+Source participants are split into a reference bank and disjoint cutoff
+calibration group; the outer held-out participant enters neither group.
+This score is evaluated after optimization and never affects its objective,
+early stopping or selected iterate. Both directions use their own target class.
+
+Defaults are `--knn-evaluation --knn-k 5 --knn-quantile 0.10
+--knn-calibration-fraction 0.25`. A small source shard with fewer than five
+bank trials is explicitly marked unavailable rather than assigned a score.
+`--no-knn-evaluation` disables this diagnostic while retaining terminal vectors.
+
+Source, held-out, original, optimized, and decoded-then-re-encoded terminal
+vectors are saved for independent evaluators. Optimized and re-encoded
+counterfactuals remain separate. Independent reports are written under
+`knn_report/`; errors and pending attempts remain visible in their denominators.
+Raw distances are reported per trial; cross-fold summaries use normalized
+distance and calibration percentiles.
+
+See [the protocol and standalone report command](../src/eegproc/model_explainability/typicality/ENCODED_NEIGHBORS.md).

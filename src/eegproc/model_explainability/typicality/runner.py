@@ -26,6 +26,9 @@ from ..model_agnostic.sic_adapter import create_sic_adapter
 from .sic_embedding import SICTrialEmbedding
 from .core import TypicalityRegion, SCHEMA_VERSION, SCORE_DEFINITION, REPRESENTATION, TYPICALITY_QUANTILE
 from .coverage import eligibility_records
+from .neighbors import EncodedKNNReference, InsufficientSourceDataError, KNN_DEFINITION
+from .knn_evaluation import evaluate_trial_embeddings
+from .knn_report import build_knn_report
 from .artifacts import (write_json, write_csv, file_sha256,
                                   array_sha256, TrialRecorder, completed_attempt, next_attempt)
 from .physiology import (signal_diagnostics, PhysiologicalReference,
@@ -57,6 +60,14 @@ def build_parser():
     parser.add_argument("--typicality-weight", type=_positive_float, default=1.0)
     parser.add_argument("--typicality-quantile", type=_positive_float, default=TYPICALITY_QUANTILE,
                         choices=(TYPICALITY_QUANTILE,), help="Closest 10%% of source target-class discrepancies only (0.10).")
+    parser.add_argument("--knn-evaluation", action=argparse.BooleanOptionalAction, default=True,
+                        help="Evaluate fixed real-target neighbours after optimization; never an optimization or selection criterion.")
+    parser.add_argument("--knn-k", type=int, default=5,
+                        help="Distance to this kth real target-class neighbour (not an average).")
+    parser.add_argument("--knn-quantile", type=_positive_float, default=0.10,
+                        help="Source-participant-calibrated neighbour-distance cutoff; lower is stricter.")
+    parser.add_argument("--knn-calibration-fraction", type=_positive_float, default=0.25,
+                        help="Fraction of source participants reserved for neighbour cutoff calibration, disjoint from the bank.")
     parser.add_argument("--variance-floor", type=_positive_float, default=1e-6)
     parser.add_argument("--decoder-mode", choices=("branches", "joint"), default="joint")
     parser.add_argument("--fixed-joint-alpha", type=float,
@@ -108,6 +119,8 @@ def parse_args(argv=None):
     for name in ("target_probability", "typicality_quantile", "physiology_quantile"):
         if getattr(args, name) >= 1:
             parser.error(f"--{name.replace('_', '-')} must be below 1")
+    if args.knn_k < 1 or args.knn_quantile >= 1 or args.knn_calibration_fraction >= 1:
+        parser.error("--knn-k must be positive; neighbour quantile and calibration fraction must be in (0, 1)")
     if args.physiology_required_fraction > 1 or args.ece_bins < 1:
         parser.error("Invalid physiology fraction or ECE bin count")
     if (args.min_gradient_norm == 0) != (args.low_gradient_patience == 0):
@@ -232,7 +245,13 @@ def _protocol(args, dataset, folds):
             "round_trip_evaluation": EVALUATION_PROTOCOL,
             "counterfactual_validity": "target argmax and confidence on the optimized full-trial classification embedding; all eligible trials retained",
             "counterfactual_validity_prediction_space": "latent",
-            "decoded_evaluation": "reconstruction displacement and physiological diagnostics only",
+            "decoded_evaluation": "displacement, physiology, and separately archived frozen re-encoded embeddings for neighbour diagnostics; optimization success remains latent-only",
+            "encoded_neighbors": {"enabled": args.knn_evaluation, "definition": KNN_DEFINITION,
+                "representation": REPRESENTATION, "k": args.knn_k, "quantile": args.knn_quantile,
+                "calibration_fraction": args.knn_calibration_fraction, "seed": args.seed,
+                "selection": "true target-class source trials; disjoint bank/calibration participants",
+                "role": "evaluation only after optimize returns; never a loss, early-stop, or iterate-selection criterion"},
+            "embedding_archival": "full terminal vectors in source_trials, observations and per-attempt classification_embeddings; no window latents or decoded signals",
             "typicality_definition": SCORE_DEFINITION,
             "typicality_representation": REPRESENTATION,
             "typicality_formula": "mean((classification_embedding - prior_mean)^2 / max(prior_variance, variance_floor))",
@@ -284,8 +303,25 @@ def run_fold(args, dataset, entry, out):
     region.save(directory / "calibration")
     write_json(directory / "calibration" / "representation.json", embedding_map.metadata())
     write_json(directory / "calibration" / "source_trials.json", dict(
-        probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
+        embeddings=source_embeddings, probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
         subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source]))
+    neighbors = None
+    neighbor_info = {"enabled": args.knn_evaluation, "status": "disabled"}
+    if args.knn_evaluation:
+        try:
+            neighbors = EncodedKNNReference.fit_source(
+                source_embeddings, labels=dataset.labels[source], subject_ids=dataset.subject_ids[source],
+                trial_ids=dataset.trial_ids[source], held_out_subject=subject, target_class=args.target_class,
+                k=args.knn_k, quantile=args.knn_quantile,
+                calibration_fraction=args.knn_calibration_fraction, seed=args.seed)
+        except InsufficientSourceDataError as error:
+            neighbor_info = {"enabled": True, "status": "unavailable", "reason": str(error)}
+            print(f"Subject {subject}: neighbour evaluation unavailable: {error}", flush=True)
+        else:
+            neighbors.save(directory / "calibration" / "knn_reference.json")
+            neighbor_info = {"enabled": True, "status": "calibrated", **neighbors.metadata,
+                             "threshold": neighbors.threshold}
+    write_json(directory / "calibration" / "knn_status.json", neighbor_info)
     #Real source-subject EEG, matching the typicality region and the physiology
     #reference above. Calibrating on the held-out subject's own decoder
     #reconstructions instead leaks that subject into a reference the paper
@@ -356,7 +392,7 @@ def run_fold(args, dataset, entry, out):
         )
     if args.report_output not in optimizers["base"].decoded_names:
         raise ValueError("The selected report output is not present in this checkpoint")
-    predictions, discrepancies, eligible = [], [], []
+    predictions, discrepancies, held_embeddings, eligible = [], [], [], []
     for index in held:
         features = model.get_encoder_features(dataset.features[index:index + 1])
         embedding = features["classification_embedding"]
@@ -366,12 +402,14 @@ def run_fold(args, dataset, entry, out):
         d = float(region.discrepancy(embedding).numpy())
         predictions.append(probabilities)
         discrepancies.append(d)
+        held_embeddings.append(embedding.numpy()[0])
     audit = eligibility_records(task=args.task, direction=args.direction, subject=subject,
                                 trial_ids=dataset.trial_ids[held], labels=dataset.labels[held],
                                 probabilities=np.stack(predictions), trial_filter=args.trial_ids)
     eligible = [index for index, record in zip(held, audit) if record["eligible"]]
     write_json(directory / "eligibility.json", audit)
     observations = dict(trial_ids=dataset.trial_ids[held], labels=dataset.labels[held],
+                        embeddings=np.stack(held_embeddings),
                         probabilities=np.stack(predictions), discrepancy=np.asarray(discrepancies))
     write_json(directory / "observations.json", observations)
     fold_info = {"subject_id": subject, "status": "running", "checkpoint": entry,
@@ -379,7 +417,7 @@ def run_fold(args, dataset, entry, out):
                  "target_class": args.target_class, "typicality_quantile": args.typicality_quantile,
                  "reconstruction": adapter.metadata(),
                  "threshold": region.tau, "representation": embedding_map.metadata(),
-                 "typicality_definition": SCORE_DEFINITION,
+                 "typicality_definition": SCORE_DEFINITION, "encoded_neighbors": neighbor_info,
                  "eligible_trial_ids": dataset.trial_ids[eligible].tolist(),
                  "all_trial_ids": dataset.trial_ids[held].tolist(), "loss": asdict(loss),
                  "objective_losses": {name: asdict(optimizer.loss) for name, optimizer in optimizers.items()},
@@ -424,6 +462,11 @@ def run_fold(args, dataset, entry, out):
                                d_z=float(np.sqrt(np.mean((arrays["classification_embedding_prime"] - arrays["classification_embedding"]) ** 2))),
                                decoder_latent_rmse=float(np.sqrt(summary["selected_losses"]["latent"])),
                                report_output=args.report_output)
+                # Evaluation starts after optimization has selected its endpoint.
+                # These vectors support independent scorers without retaining EEG.
+                summary.update(evaluate_trial_embeddings(model, arrays,
+                    report_output=args.report_output, reference=neighbors))
+                summary["encoded_neighbors_status"] = neighbor_info["status"]
                 # A channel-by-band summary supports the report's scalp maps
                 # without retaining decoded signals or full spectral arrays.
                 write_json(recorder.directory / "band_power.json", {
@@ -526,7 +569,17 @@ def run(args):
         study_args.out_dir = args.out_dir / direction
         run_study(study_args)
         roots.append(study_args.out_dir)
-    return build_report(roots, args.out_dir / "report")
+    result = build_report(roots, args.out_dir / "report")
+    if args.knn_evaluation:
+        try:
+            build_knn_report(roots, args.out_dir / "knn_report", k=args.knn_k,
+                quantile=args.knn_quantile, calibration_fraction=args.knn_calibration_fraction, seed=args.seed)
+        except InsufficientSourceDataError as error:
+            # A small development shard can be valid for optimization while
+            # lacking enough independent real target references for k=5.
+            write_json(args.out_dir / "knn_report" / "status.json",
+                       {"status": "unavailable", "reason": str(error)})
+    return result
 
 
 def main(argv=None):
