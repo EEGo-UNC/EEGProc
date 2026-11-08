@@ -96,8 +96,8 @@ def build_parser():
     return parser
 
 
-def parse_args(argv=None):
-    parser = build_parser()
+def parse_args(argv=None, *, parser=None):
+    parser = parser or build_parser()
     args = parser.parse_args(argv)
     if len(args.directions) != len(set(args.directions)):
         parser.error("--directions must not contain duplicates")
