@@ -32,6 +32,7 @@ def main():
     p.add_argument("--index", type=int, default=0)
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--check-epochs", type=int, default=1000)
+    p.add_argument("--lr-diagnostic", action="store_true")
     args = p.parse_args()
     if min(args.epochs, args.check_epochs) < 1:
         p.error("Epoch budgets must be positive.")
@@ -68,9 +69,9 @@ def main():
             early_stopping="after at least 200 epochs, stop after 100 epochs without validation selection improvement"))
         return
     if args.mode == "diagnostic_summary":
-        results = [json.loads((root / f"diagnostic-{i}" / "result.json").read_text()) for i in range(4)]
+        results = [json.loads((root / f"diagnostic-{i}" / "result.json").read_text()) for i in range(2 if args.lr_diagnostic else 4)]
         write(root / "diagnostic_comparison.json", results)
-        archive = root / "classifier-collapse-diagnostics.tar.gz"
+        archive = root / ("learning-rate-diagnostics.tar.gz" if args.lr_diagnostic else "classifier-collapse-diagnostics.tar.gz")
         with tarfile.open(archive, "w:gz") as bundle:
             for path in root.rglob("*"):
                 if path.is_file() and path.suffix in (".json", ".txt", ".log"):
@@ -140,7 +141,7 @@ def main():
     folder.mkdir(exist_ok=False)
     config = configuration(variant, check)
     weights = None
-    if diagnostic:
+    if diagnostic and not args.lr_diagnostic:
         if args.index == 1:
             config.update(dropout=0.0, classifier_dropout=0.0)
         if args.index == 2:
@@ -150,9 +151,15 @@ def main():
             config["class_weight_batch_mean"] = True
             counts = np.bincount(arrays["labels"][train].astype(int), minlength=2)
             weights = {c: float(len(train)/(2*counts[c])) for c in (0, 1)}
+    arm_name = DIAGNOSTICS[args.index] if diagnostic else None
+    if diagnostic and args.lr_diagnostic:
+        if args.index not in (0, 1):
+            raise ValueError("Learning-rate diagnostic index must be 0 or 1")
+        config["learning_rate"] = (0.0001, 0.00001)[args.index]
+        arm_name = f"learning_rate_{config['learning_rate']}"
     write(folder / "config.json", dict(model=config, variant=VARIANTS[variant], target_subject=target,
         train_subjects=sorted(set(arrays["subjects"][train].tolist())), validation_subjects=validation if not check else [],
-        class_weight=weights, diagnostic_arm=DIAGNOSTICS[args.index] if diagnostic else None,
+        class_weight=weights, diagnostic_arm=arm_name,
         train_trials=[dict(subject=int(arrays["subjects"][i]), trial=int(arrays["trials"][i])) for i in train]))
     model = build_sic_model(input_shape=tuple(arrays["features"].shape[1:]),
         training_subject_ids=arrays["subjects"][train], training_trial_ids=arrays["trials"][train], **config)
@@ -188,6 +195,30 @@ def main():
             confusion_matrix=confusion_matrix(labels, prediction, labels=[0, 1]).tolist(),
             labels=labels.tolist(), probabilities=probabilities.tolist(),
             subjects=arrays["subjects"][indices].tolist(), trials=arrays["trials"][indices].tolist())
+    if diagnostic and args.lr_diagnostic:
+        from layer_measurements import representation_summary, weight_changes
+        # Two labels from each of four source subjects; fixed across both runs.
+        probes = []
+        for subject in sources[:4]:
+            for label in (0, 1):
+                probes.append(int(next(i for i in train if arrays["subjects"][i] == subject and arrays["labels"][i] == label)))
+        write(folder / "probe_trials.json", [dict(subject=int(arrays["subjects"][i]), trial=int(arrays["trials"][i]), label=int(arrays["labels"][i])) for i in probes])
+        def layer_activity():
+            stages = {}
+            for i in probes:
+                out = model._encode(arrays["features"][i:i+1], training=False)
+                pool = model.trial_recurrent_classifier.layers[0](out["classifier_sequence"])
+                dense = model.trial_recurrent_classifier.layers[1]
+                tensors = dict(encoder_sequence=out["graph_sequence"], pooled_encoder=pool,
+                    classifier_preactivation=tf.matmul(pool, dense.kernel)+dense.bias,
+                    classifier_embedding=out["classification_embedding"], logits=out["logits"])
+                for band_index, band in enumerate(("theta", "alpha", "beta")):
+                    tensors[band+"_encoder"] = out["graph_sequence"][..., band_index*128:(band_index+1)*128]
+                for name, tensor in tensors.items():
+                    stages.setdefault(name, []).append(tensor.numpy())
+            return {name: representation_summary(values) for name, values in stages.items()}
+        write(folder / "initial_layer_activity.json", layer_activity())
+        update_history = []
     if diagnostic:
         write(folder / "initial_metrics.json", dict(training=evaluate(train), validation=evaluate(val)))
     history = []
@@ -195,6 +226,20 @@ def main():
         best = None
         best_epoch = 0
         passed = False
+        def on_epoch_begin(self, epoch, logs=None):
+            if diagnostic and args.lr_diagnostic:
+                self.epoch_before = [v.numpy().copy() for v in model.trainable_variables]
+        def on_train_batch_begin(self, batch, logs=None):
+            if diagnostic and args.lr_diagnostic:
+                self.step = int(model.main_optimizer.iterations.numpy())
+                self.batch_before = ([v.numpy().copy() for v in model.trainable_variables]
+                    if self.step < 20 or self.step in (49,99,199,499) or self.step % 1000 == 0 else None)
+        def on_train_batch_end(self, batch, logs=None):
+            if diagnostic and args.lr_diagnostic and self.batch_before is not None:
+                update_history.append(dict(step=self.step+1, layers=weight_changes(
+                    [getattr(v,"path",v.name) for v in model.trainable_variables],
+                    self.batch_before, [v.numpy() for v in model.trainable_variables])))
+                write(folder / "sampled_batch_updates.json", update_history)
         def on_epoch_end(self, epoch, logs=None):
             values = {k: float(v) for k, v in (logs or {}).items()}
             if not all(np.isfinite(v) for v in values.values()):
@@ -218,6 +263,11 @@ def main():
                     temporary.replace(folder / "best.keras")
             history.append(dict(epoch=epoch + 1, training_metrics=values, training=training,
                                 validation=None if check else valid, validation_subject_mean_BA=score))
+            if diagnostic and args.lr_diagnostic:
+                history[-1]["layer_activity"] = layer_activity()
+                history[-1]["epoch_net_weight_changes"] = weight_changes(
+                    [getattr(v,"path",v.name) for v in model.trainable_variables],
+                    self.epoch_before, [v.numpy() for v in model.trainable_variables])
             write(folder / "history.json", history)
             self.passed = check and training["accuracy"] == 1.0 and training["cross_entropy"] <= 0.1
             print(f"{VARIANTS[variant]} epoch={epoch+1} train_BA={training['balanced_accuracy']:.3f} selection_BA={score:.3f} best_epoch={self.best_epoch}", flush=True)
@@ -228,11 +278,13 @@ def main():
     model.fit(model.prepare_fit_inputs(arrays["features"][train], arrays["subjects"][train]),
               arrays["labels"][train], batch_size=1, epochs=spec["check_epochs"] if check else spec["epochs"],
               verbose=2, callbacks=[monitor], class_weight=weights)
+    if diagnostic and args.lr_diagnostic:
+        model.save(folder / "last.keras")
     result = dict(status="passed" if check and monitor.passed else "failed" if check else "completed",
                   variant=VARIANTS[variant], target_subject=target, elapsed_seconds=time.monotonic()-start,
                   completed_epochs=len(history), best_epoch=monitor.best_epoch, best_validation_score=monitor.best)
     if diagnostic:
-        result.update(diagnostic_arm=DIAGNOSTICS[args.index], final_training=history[-1]["training"],
+        result.update(diagnostic_arm=arm_name, final_training=history[-1]["training"],
                       final_validation=history[-1]["validation"], class_weight=weights)
     if not check and not diagnostic:
         model = tf.keras.models.load_model(folder / "best.keras", compile=False)
