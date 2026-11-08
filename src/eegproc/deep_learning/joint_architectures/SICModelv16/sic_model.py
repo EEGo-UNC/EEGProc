@@ -130,11 +130,15 @@ class ThreeBandDecoder(tf.keras.Model):
 class ThreeBandSICModel(SICModel):
     def __init__(self, *, graph_encoder, gcn_gru_decoder=None,
                  use_recurrent_classifier=False, use_variational_head=False,
-                 classifier_units=128, classifier_dropout=0.2, **kwargs):
+                 classifier_units=128, classifier_dropout=0.2, classifier_activation="relu", class_weight_batch_mean=False, **kwargs):
         self.use_recurrent_classifier = bool(use_recurrent_classifier)
         self.use_variational_head = bool(use_variational_head)
         self.classifier_units = int(classifier_units)
         self.classifier_dropout = float(classifier_dropout)
+        if classifier_activation not in ("relu", "leaky_relu"):
+            raise ValueError("Unsupported classifier activation")
+        self.classifier_activation = classifier_activation
+        self.class_weight_batch_mean = bool(class_weight_batch_mean)
         if self.classifier_units < 1 or not 0 <= self.classifier_dropout < 1:
             raise ValueError("Invalid dense classifier width or dropout.")
         # Reject configurations that would silently restore SIC's original branches.
@@ -181,7 +185,7 @@ class ThreeBandSICModel(SICModel):
         else:
             self.trial_recurrent_classifier = tf.keras.Sequential([
                 layers.GlobalAveragePooling1D(),
-                layers.Dense(self.classifier_units, activation="relu"),
+                layers.Dense(self.classifier_units, activation=("relu" if self.classifier_activation == "relu" else layers.LeakyReLU(negative_slope=0.01))),
                 layers.Dropout(self.classifier_dropout),
             ], name="temporal_pool_dense")
             self.classification_embedding_dim = self.classifier_units
@@ -229,7 +233,9 @@ class ThreeBandSICModel(SICModel):
                           gamma=self.focal_gamma, alpha=self.focal_alpha,
                           label_smoothing=self.label_smoothing))
         loss = tf.reduce_mean(per_sample)
-        weighted = self._weighted_mean(per_sample, sample_weight)
+        weighted = (tf.reduce_mean(per_sample * tf.cast(tf.reshape(sample_weight, [-1]), per_sample.dtype))
+                    if self.class_weight_batch_mean and sample_weight is not None
+                    else self._weighted_mean(per_sample, sample_weight))
         zero = tf.zeros((), logits.dtype)
         return dict(total_loss=weighted, classification_loss=loss,
             weighted_classification_loss=weighted, focal_loss=loss, weighted_focal_loss=weighted,
@@ -290,7 +296,9 @@ class ThreeBandSICModel(SICModel):
     def get_config(self):
         return {**super().get_config(), "use_recurrent_classifier": self.use_recurrent_classifier,
                 "use_variational_head": self.use_variational_head,
-                "classifier_units": self.classifier_units, "classifier_dropout": self.classifier_dropout}
+                "classifier_units": self.classifier_units, "classifier_dropout": self.classifier_dropout,
+                "classifier_activation": self.classifier_activation,
+                "class_weight_batch_mean": self.class_weight_batch_mean}
 
     @classmethod
     def from_config(cls, config):

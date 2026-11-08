@@ -9,6 +9,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+DIAGNOSTICS = ("reference", "no_dropout", "leaky_relu", "class_weighted")
 VARIANTS = ("cnn", "cnn_reconstruction", "cnn_transformer", "cnn_transformer_reconstruction")
 
 
@@ -25,7 +26,7 @@ def configuration(index, check):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=["prepare", "check", "train", "summarize", "collect"])
+    p.add_argument("mode", choices=["prepare", "check", "train", "summarize", "collect", "diagnose", "diagnostic_summary"])
     p.add_argument("--root", required=True, type=Path)
     p.add_argument("--rebuild-dir", type=Path)
     p.add_argument("--index", type=int, default=0)
@@ -66,6 +67,16 @@ def main():
             variants=list(VARIANTS), checkpoint_policy="retain best validation checkpoint only; evaluate test once after selection",
             early_stopping="after at least 200 epochs, stop after 100 epochs without validation selection improvement"))
         return
+    if args.mode == "diagnostic_summary":
+        results = [json.loads((root / f"diagnostic-{i}" / "result.json").read_text()) for i in range(4)]
+        write(root / "diagnostic_comparison.json", results)
+        archive = root / "classifier-collapse-diagnostics.tar.gz"
+        with tarfile.open(archive, "w:gz") as bundle:
+            for path in root.rglob("*"):
+                if path.is_file() and path.suffix in (".json", ".txt", ".log"):
+                    bundle.add(path, arcname=str(path.relative_to(root)))
+        print(f"Download: {archive}", flush=True)
+        return
     if args.mode == "collect":
         archive = root / "rebuilt-four-model-partial-diagnostics.tar.gz"
         with tarfile.open(archive, "w:gz") as bundle:
@@ -98,13 +109,14 @@ def main():
     from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import fold_subjects
     from eegproc.deep_learning.joint_architectures.SICModelv16.sic_model import build_sic_model
     from overfit_eight import select_trials
+    diagnostic = args.mode == "diagnose"
     check = args.mode == "check"
-    if not 0 <= args.index < (4 if check else 92):
+    if not 0 <= args.index < (4 if check or diagnostic else 92):
         raise ValueError("Invalid task index")
-    variant = args.index if check else args.index // 23
-    target = 0 if check else args.index % 23
+    variant = 0 if diagnostic else args.index if check else args.index // 23
+    target = 0 if check or diagnostic else args.index % 23
     spec = json.loads((root / "provenance.json").read_text())
-    if not check:
+    if not check and not diagnostic:
         for index in range(4):
             if json.loads((root / f"check-{index}" / "result.json").read_text())["status"] != "passed":
                 raise ValueError("All four learning gates must pass before full training.")
@@ -124,21 +136,50 @@ def main():
     if check:
         train = np.asarray(select_trials(arrays["labels"], arrays["subjects"], arrays["trials"], [2, 3]))
         val = train  # Memorization gate, explicitly not a validation estimate.
-    folder = root / (f"check-{args.index}" if check else f"fold-{args.index:02d}")
+    folder = root / (f"diagnostic-{args.index}" if diagnostic else f"check-{args.index}" if check else f"fold-{args.index:02d}")
     folder.mkdir(exist_ok=False)
     config = configuration(variant, check)
+    weights = None
+    if diagnostic:
+        if args.index == 1:
+            config.update(dropout=0.0, classifier_dropout=0.0)
+        if args.index == 2:
+            config["classifier_activation"] = "leaky_relu"
+        if args.index == 3:
+            config["use_class_weight"] = True
+            config["class_weight_batch_mean"] = True
+            counts = np.bincount(arrays["labels"][train].astype(int), minlength=2)
+            weights = {c: float(len(train)/(2*counts[c])) for c in (0, 1)}
     write(folder / "config.json", dict(model=config, variant=VARIANTS[variant], target_subject=target,
         train_subjects=sorted(set(arrays["subjects"][train].tolist())), validation_subjects=validation if not check else [],
+        class_weight=weights, diagnostic_arm=DIAGNOSTICS[args.index] if diagnostic else None,
         train_trials=[dict(subject=int(arrays["subjects"][i]), trial=int(arrays["trials"][i])) for i in train]))
     model = build_sic_model(input_shape=tuple(arrays["features"].shape[1:]),
         training_subject_ids=arrays["subjects"][train], training_trial_ids=arrays["trials"][train], **config)
     def evaluate(indices):
-        probabilities = np.concatenate([tf.nn.softmax(model(arrays["features"][i:i+1], training=False), axis=-1).numpy() for i in indices])
+        probabilities_list, embeddings, preactivations = [], [], []
+        for i in indices:
+            out = model._encode(arrays["features"][i:i+1], training=False)
+            probabilities_list.append(out["probabilities"].numpy())
+            if diagnostic:
+                pooled = model.trial_recurrent_classifier.layers[0](out["classifier_sequence"])
+                dense = model.trial_recurrent_classifier.layers[1]
+                preactivations.append((tf.matmul(pooled, dense.kernel)+dense.bias).numpy())
+                embeddings.append(out["classification_embedding"].numpy())
+        probabilities = np.concatenate(probabilities_list)
+        activity = {}
+        if diagnostic:
+            emb, pre = np.concatenate(embeddings), np.concatenate(preactivations)
+            activity = dict(mean_positive_preactivation_units=float(np.mean(np.sum(pre>0,axis=1))),
+                positive_unit_union=int(np.sum(np.any(pre>0,axis=0))),
+                mean_nonzero_embedding_units=float(np.mean(np.sum(np.abs(emb)>1e-8,axis=1))),
+                embedding_between_trial_std=float(np.mean(np.std(emb,axis=0))),
+                prediction_std=float(np.std(probabilities[:,1])))
         if not np.isfinite(probabilities).all():
             raise ValueError("Nonfinite inference probabilities")
         labels = arrays["labels"][indices]
         prediction = (probabilities[:, 1] >= 0.5).astype(int)
-        return dict(accuracy=float(np.mean(prediction == labels)),
+        return dict(classifier_activity=activity, accuracy=float(np.mean(prediction == labels)),
             balanced_accuracy=float(balanced_accuracy_score(labels, prediction)),
             roc_auc=float(roc_auc_score(labels, probabilities[:, 1])),
             cross_entropy=float(-np.log(np.maximum(probabilities[np.arange(len(labels)), labels.astype(int)], 1e-12)).mean()),
@@ -147,6 +188,8 @@ def main():
             confusion_matrix=confusion_matrix(labels, prediction, labels=[0, 1]).tolist(),
             labels=labels.tolist(), probabilities=probabilities.tolist(),
             subjects=arrays["subjects"][indices].tolist(), trials=arrays["trials"][indices].tolist())
+    if diagnostic:
+        write(folder / "initial_metrics.json", dict(training=evaluate(train), validation=evaluate(val)))
     history = []
     class Monitor(tf.keras.callbacks.Callback):
         best = None
@@ -178,17 +221,20 @@ def main():
             write(folder / "history.json", history)
             self.passed = check and training["accuracy"] == 1.0 and training["cross_entropy"] <= 0.1
             print(f"{VARIANTS[variant]} epoch={epoch+1} train_BA={training['balanced_accuracy']:.3f} selection_BA={score:.3f} best_epoch={self.best_epoch}", flush=True)
-            if self.passed or (not check and epoch + 1 >= 200 and epoch + 1 - self.best_epoch >= 100):
+            if self.passed or (not diagnostic and not check and epoch + 1 >= 200 and epoch + 1 - self.best_epoch >= 100):
                 model.stop_training = True
     monitor = Monitor()
     start = time.monotonic()
     model.fit(model.prepare_fit_inputs(arrays["features"][train], arrays["subjects"][train]),
               arrays["labels"][train], batch_size=1, epochs=spec["check_epochs"] if check else spec["epochs"],
-              verbose=2, callbacks=[monitor])
+              verbose=2, callbacks=[monitor], class_weight=weights)
     result = dict(status="passed" if check and monitor.passed else "failed" if check else "completed",
                   variant=VARIANTS[variant], target_subject=target, elapsed_seconds=time.monotonic()-start,
                   completed_epochs=len(history), best_epoch=monitor.best_epoch, best_validation_score=monitor.best)
-    if not check:
+    if diagnostic:
+        result.update(diagnostic_arm=DIAGNOSTICS[args.index], final_training=history[-1]["training"],
+                      final_validation=history[-1]["validation"], class_weight=weights)
+    if not check and not diagnostic:
         model = tf.keras.models.load_model(folder / "best.keras", compile=False)
         result["test"] = evaluate(test)
         result["selected_validation"] = history[monitor.best_epoch-1]["validation"]
