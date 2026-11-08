@@ -65,9 +65,11 @@ with open(attempt_dir / "physiology.json", "w") as handle:
     json.dump(assessments, handle, allow_nan=False)
 ```
 
-The `valence-enhancement` branch contains the diagnostics and grading tools;
-the suite runner remains on `SIC-model`. Use this updated shared assessment
-code when generating new archives. `diagnostic_components()` is also exported
+The `CFX-update` branch also includes the bidirectional suite runner with
+source-only 10th-percentile target-class typicality. See
+[the coverage guide](../../../../docs/CFX_COVERAGE.md) for commands and
+exclusion/failure accounting. Use this updated shared assessment code when
+generating new archives. `diagnostic_components()` is also exported
 for callers that write separate `physiology_<state>.json` files. Existing
 summary-only archives cannot recover missing component values from their pass
 fractions and need regeneration from checkpoints/data or historical arrays.
