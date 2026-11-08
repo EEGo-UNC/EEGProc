@@ -194,10 +194,12 @@ The full datasets and CUDA memory use must still be verified on Longleaf.
 
 ## Extended valence hyperparameter sweep
 
-`SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh` adds 24
-configurations crossing focal gamma, logit scale, reconstruction weights 0.0/0.4,
-and 8/16 MLDG episodes per source epoch. It uses 48 source epochs and the
-run-12 baseline for all other settings. Source jobs shard the 23 held-out users;
-dependent collectors select one common oracle epoch over all users and then
-calibrate the selected models. Use the bash wrapper to submit both arrays.
+`SLURM_scripts/full_run_v15_valence_focal_scale_recon_sweep.sh` tests three
+logit scales (8/16/32), fixing focal gamma at 0.5, reconstruction weight at 0.4,
+and MLDG episodes per source epoch at 8. It uses 48 source epochs and the
+run-12 baseline for all other settings. Nine source jobs shard the 23 held-out
+users; three dependent collectors select one common oracle epoch per
+configuration. Metrics-only mode remains the default, with calibration off.
+The active manifest is `sic_v15_valence_scale_configs.json`; the legacy grid
+is preserved for previously queued jobs. Use the bash wrapper to submit both arrays.
 See [the extended sweep instructions](VALENCE_FOCAL_SCALE_RECON_SWEEP.md).

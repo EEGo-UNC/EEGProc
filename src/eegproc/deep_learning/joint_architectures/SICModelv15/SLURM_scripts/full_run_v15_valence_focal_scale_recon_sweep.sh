@@ -4,7 +4,7 @@
 #SBATCH --error=v15_valence_focal_scale_recon_%A_%a.err
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
-#SBATCH --array=0-71%2
+#SBATCH --array=0-8%2
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
@@ -13,9 +13,10 @@
 set -Eeuo pipefail
 trap 'status=$?; printf "ERROR: line %s exited %s: %s\n" "$LINENO" "$status" "$BASH_COMMAND" >&2; exit "$status"' ERR
 
-# 24 fixed configurations, each with 48 source epochs:
-# gamma 0.5/1.0 x logit scale 8/16/32 x reconstruction 0/0.4
-# x MLDG episodes per epoch 8/16. Subject loss stays 0.3.
+# Three logit-scale configurations (8/16/32), each with 48 source epochs.
+# Fixed: focal gamma 0.5, reconstruction weight 0.4,
+# and 8 MLDG episodes per epoch. Subject loss stays 0.3.
+# Keep the legacy 24-configuration manifest for previously queued jobs.
 # Three source jobs cover each configuration's targets: 0-7, 8-15, 16-22.
 # Collectors select ONE epoch across all 23 users after the source array ends.
 # Run with bash to submit both arrays. DRY_RUN=1 previews without submitting.
@@ -26,7 +27,7 @@ PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 SIC_DIR="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/SICModelv15"
 RUNNER="$SIC_DIR/sic_v15_valence_sweep.py"
 COLLECTOR="$SIC_DIR/collect_valence_sweep_shards.py"
-CONFIGS="$SIC_DIR/sic_v15_valence_focal_scale_recon_configs.json"
+CONFIGS="$SIC_DIR/sic_v15_valence_scale_configs.json"
 STORAGE="$SIC_DIR/valence_sweep_storage.py"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 EEG_PATH="${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}"
@@ -96,7 +97,7 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
         printf 'Collect submission: '; printf '%q ' "${COLLECT_SUBMIT[@]}"; printf '\n'
         echo "$COUNT configurations; $SOURCE_TASKS source tasks (3 shards each); $COUNT collectors."
         echo "24:00:00 per task; at most $MAX_CONCURRENT concurrent tasks; source 4 GPUs/task, collector 2 GPUs/task."
-        echo "Gamma 0.5/1.0; scale 8/16/32; reconstruction 0/0.4; MLDG episodes 8/16; subject loss 0.3"
+        echo "Gamma 0.5; scale 8/16/32; reconstruction 0.4; MLDG episodes 8; subject loss 0.3"
         echo "Outer/source epochs: $SOURCE_EPOCHS; calibration enabled: $RUN_CALIBRATION"
         echo "Metrics only: $METRICS_ONLY (1: scores only, temporary data removed; 0: retain models and processed data)"
         echo "Outputs: $OUTPUT_ROOT; Slurm logs: $LOG_DIR"
@@ -111,11 +112,11 @@ fi
 ARRAY_INDEX="$SLURM_ARRAY_TASK_ID"
 [[ "$ARRAY_INDEX" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "Invalid SLURM_ARRAY_TASK_ID." >&2; exit 1; }
 if [[ "$PHASE" == --collect ]]; then
-    [[ "$ARRAY_INDEX" -lt 24 ]] || { echo "Collector array index must be 0..23." >&2; exit 1; }
+    [[ "$ARRAY_INDEX" -lt 3 ]] || { echo "Collector array index must be 0..2." >&2; exit 1; }
     [[ -n "${SWEEP_SUITE_ID:-}" ]] || { echo "Collectors require SWEEP_SUITE_ID from the source array." >&2; exit 1; }
     CONFIG_INDEX="$ARRAY_INDEX"
 else
-    [[ "$ARRAY_INDEX" -lt 72 ]] || { echo "Source array index must be 0..71." >&2; exit 1; }
+    [[ "$ARRAY_INDEX" -lt 9 ]] || { echo "Source array index must be 0..8." >&2; exit 1; }
     CONFIG_INDEX=$((ARRAY_INDEX / 3))
     SHARD_INDEX=$((ARRAY_INDEX % 3))
 fi

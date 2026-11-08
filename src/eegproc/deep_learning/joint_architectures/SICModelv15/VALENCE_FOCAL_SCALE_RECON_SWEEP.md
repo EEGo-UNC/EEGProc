@@ -1,14 +1,14 @@
-# Valence focal, logit-scale, reconstruction and episode sweep
+# Valence logit-scale sweep
 
 This sweep starts from the model/data settings of array run `5168991_12`.
-It contains **24 fixed configurations**:
+It contains **three fixed configurations**, varying logit scale only:
 
 | Setting | Values |
 | --- | --- |
-| `focal_gamma` | 0.5, 1.0 |
+| `focal_gamma` | 0.5, fixed |
 | `vc_logit_scale` | 8, 16, 32 |
-| `reconstruction_loss_weight` | 0.0, 0.4 |
-| `mldg_steps_per_epoch` | 8, 16 |
+| `reconstruction_loss_weight` | 0.4, fixed |
+| `mldg_steps_per_epoch` | 8, fixed |
 | Outer/source epochs | **48**, increased from 24 |
 | `subject_loss_weight` | 0.3, fixed |
 
@@ -18,11 +18,10 @@ learning rates 0.0001, weight decay 0.00005, and seed 42. Each target model
 uses all 22 other users; there is no validation holdout. Layer widths are
 fixed architecture lists, with no implicit extra search dimensions.
 
-The inner-count axis means complete **MLDG episodes per source epoch**. Each
-episode still has one temporary inner adaptation step and one persistent outer
-update. The two settings produce 384 and 768 episodes over 48 epochs.
-They intentionally vary the training budget. They do not introduce multiple
-adaptation steps inside an episode.
+The fixed count means eight complete **MLDG episodes per source epoch**,
+for 384 episodes over 48 epochs. Each episode still has one temporary inner
+adaptation step and one persistent outer update. The value eight is not a
+count of consecutive inner adaptation steps inside an episode.
 
 Logit scale is applied during training. Increasing it lowers the effective
 softmax temperature. A positive rescaling of an already trained checkpoint
@@ -97,12 +96,12 @@ METRICS_ONLY=0 RUN_CALIBRATION=1 bash "$SIC_V15/SLURM_scripts/full_run_v15_valen
 
 The wrapper submits two arrays:
 
-1. **72 source tasks**: three target-user shards per configuration, with held-out
+1. **9 source tasks**: three target-user shards per configuration, with held-out
    users 0-7, 8-15, and 16-22. Each source task requests four GPUs and runs two
    folds concurrently on separate GPU pairs. Every fold retains its full
-   22-user source pool. Splitting targets keeps the longer training settings
-   within smaller per-job workloads.
-2. **24 collectors**, dependent on the entire source array finishing. Each
+   22-user source pool. Splitting targets keeps training within smaller
+   per-job workloads.
+2. **3 collectors**, dependent on the entire source array finishing. Each
    collector requests two GPUs, combines its configuration's three shards,
    chooses one common epoch over all 23 users, and publishes its saved scores.
    With `METRICS_ONLY=0`, it also references the selected models for optional
@@ -173,15 +172,30 @@ python "$SIC_V15/sic_v15_valence_sweep.py" rank \
   /absolute/output/root/suite_SOURCE_ARRAY_ID
 ```
 
-The manifest order is focal gamma, then logit scale, then reconstruction, then
-episode count (fastest). **Configuration 4** uses the original run-12 model
-settings with 8 episodes per epoch; **configuration 16** uses the original
-run-21 model settings with 8 episodes per epoch. Both use 48 source epochs.
-Source array task IDs are `3 * configuration + shard`; collector task IDs are configuration IDs.
+The active manifest is `sic_v15_valence_scale_configs.json`:
 
-Metrics-only mode retains the **26,496 small source metric records**, without
-model files or permanent EEG caches. Full-data mode retains **26,496 source model
-files**, plus metric rows and 72 processed EEG caches. Use an output filesystem
+| New configuration | Logit scale | Equivalent legacy configuration | Source tasks |
+| --- | --- | --- | --- |
+| 0 | 8 | 2 | 0-2 |
+| 1 | 16 | 6 | 3-5 |
+| 2 | 32 | 10 | 6-8 |
+
+All three fix gamma 0.5, reconstruction weight 0.4 and eight episodes per
+epoch. Source array task IDs remain `3 * configuration + shard`; collector
+task IDs are configuration IDs. The launcher submits source indices 0-8
+and collector indices 0-2.
+
+The original `sic_v15_valence_focal_scale_recon_configs.json` is retained
+unchanged for historical results and already queued jobs, including suite
+8415767. Those jobs keep their original 24-configuration mapping; updating
+this checkout does not cancel or trim that array. Submit the reduced grid
+as a new suite and keep its new configuration indices separate from the old
+suite. Audit older suites with the legacy manifest; for a reduced suite,
+pass `--configs "$SIC_V15/sic_v15_valence_scale_configs.json"` to the audit tool.
+
+Metrics-only mode retains the **3,312 small source metric records**, without
+model files or permanent EEG caches. Full-data mode retains **3,312 source model
+files**, plus metric rows and 9 processed EEG caches. Use an output filesystem
 with suitable capacity for the selected mode. Jobs refuse to
 overwrite an existing shard directory; use a new suite for a fresh run.
 The fixed run-12 launcher and the separate earlier screening sweep remain
