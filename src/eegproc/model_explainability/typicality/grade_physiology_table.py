@@ -3,7 +3,9 @@
 
 Walks a counterfactual suite, refits each fold's PhysiologicalReference from
 source-subject EEG, scores every archived counterfactual against it, and prints
-median [Q1, Q3] worst-family exceedance per objective.
+median [Q1, Q3] worst-family exceedance per objective. With --which all (the
+default) it also scores the real held-out EEG and its reconstruction once per
+trial, so each objective can be compared against what real EEG achieves.
 
 Every trial passes through the same gate as grade_physiology.py: the refit
 bounds must reproduce the archived fraction_in_range values. Trials that fail
@@ -57,8 +59,10 @@ def main():
     parser.add_argument("--suite", required=True, type=Path,
                         help="suite root containing fold_NN directories")
     parser.add_argument("--task", default="arousal", choices=("arousal", "valence"))
-    parser.add_argument("--which", default="counterfactual",
-                        choices=("counterfactual", "original", "reconstruction"))
+    parser.add_argument("--which", default="all",
+                        choices=("all", "counterfactual", "original", "reconstruction"),
+                        help="all: real EEG and reconstruction once per trial, then every "
+                             "objective's counterfactual")
     parser.add_argument("--repo", default=Path("."), type=Path)
     parser.add_argument("--eeg", default=None, type=Path)
     parser.add_argument("--labels", default=None, type=Path)
@@ -120,59 +124,77 @@ def main():
         return reference_cache[held_out]
 
     subject_pattern = re.compile(r"subject_(\d+)")
-    per_objective = defaultdict(list)
+    trial_pattern = re.compile(r"trial_(\d+)")
+    rows = defaultdict(list)          # row label -> per-trial statistic
+    passes = defaultdict(list)        # row label -> all available checks passed
     gate_failures = []
     missing = 0
+    key = ("worst_family_exceedance" if args.statistic == "worst"
+           else "mean_family_exceedance")
+    signals = (("original", "reconstruction", "counterfactual") if args.which == "all"
+               else (args.which,))
+    seen_trials = set()
 
-    attempts = sorted(args.suite.rglob(f"attempt_*/physiology_{args.which}.npz"))
-    print(f"found {len(attempts)} archived {args.which} files under {args.suite}\n")
+    for which in signals:
+        attempts = sorted(args.suite.rglob(f"attempt_*/physiology_{which}.npz"))
+        print(f"found {len(attempts)} archived {which} files under {args.suite}")
+        for npz_path in attempts:
+            attempt = npz_path.parent
+            objective = attempt.parent.name
+            subject = subject_pattern.search(str(attempt))
+            trial = trial_pattern.search(str(attempt))
+            summary_path = attempt / "physiology.json"
+            if subject is None or trial is None or not summary_path.exists():
+                missing += 1
+                continue
+            held_out = int(subject.group(1))
+            if which == "counterfactual":
+                label = objective
+            else:
+                # The original EEG and its reconstruction are the same for every
+                # objective of a trial, so score them once per trial.
+                trial_key = (which, held_out, int(trial.group(1)))
+                if trial_key in seen_trials:
+                    continue
+                seen_trials.add(trial_key)
+                label = {"original": "real EEG (original)",
+                         "reconstruction": "reconstruction R(Z)"}[which]
 
-    for npz_path in attempts:
-        attempt = npz_path.parent
-        objective = attempt.parent.parent.name
-        match = subject_pattern.search(str(attempt))
-        if match is None:
-            missing += 1
-            continue
-        held_out = int(match.group(1))
-        summary_path = attempt / "physiology.json"
-        if not summary_path.exists():
-            missing += 1
-            continue
+            reference = reference_for(held_out)
+            archive = np.load(npz_path)
+            values = {family: archive[family] for family in FAMILIES if family in archive.files}
+            summary = reference.assess(values)
 
-        reference = reference_for(held_out)
-        archive = np.load(npz_path)
-        values = {family: archive[family] for family in FAMILIES if family in archive.files}
-        summary = reference.assess(values)
+            recorded = json.loads(summary_path.read_text())[which]
+            ok = True
+            for family, archived in recorded["checks"].items():
+                got = summary["checks"][family]["fraction_in_range"]
+                want = archived["fraction_in_range"]
+                if want is None or got is None:
+                    ok = ok and (want is got)
+                elif abs(got - want) > args.tolerance:
+                    ok = False
+            if not ok:
+                gate_failures.append(f"{attempt} ({which})")
+                continue
 
-        recorded = json.loads(summary_path.read_text())[args.which]
-        ok = True
-        for family, archived in recorded["checks"].items():
-            got = summary["checks"][family]["fraction_in_range"]
-            want = archived["fraction_in_range"]
-            if want is None or got is None:
-                ok = ok and (want is got)
-            elif abs(got - want) > args.tolerance:
-                ok = False
-        if not ok:
-            gate_failures.append(str(attempt))
-            continue
-
-        key = ("worst_family_exceedance" if args.statistic == "worst"
-               else "mean_family_exceedance")
-        if summary[key] is not None:
-            per_objective[objective].append(summary[key])
+            if summary[key] is not None:
+                rows[label].append(summary[key])
+            passes[label].append(recorded["passed_count"] == recorded["available_count"])
 
     print()
-    label = "worst-family" if args.statistic == "worst" else "mean-family"
-    print(f"{args.task}: median [Q1, Q3] {label} exceedance, half-interval widths\n")
-    print(f"{'objective':<34}{'n':>5}{'median':>10}{'Q1':>10}{'Q3':>10}")
-    print("-" * 69)
-    for objective in sorted(per_objective):
-        values = per_objective[objective]
+    stat = "worst-family" if args.statistic == "worst" else "mean-family"
+    print(f"{args.task}: median [Q1, Q3] {stat} exceedance, half-interval widths; "
+          f"'all pass' = every available check family met the required fraction\n")
+    print(f"{'signal / objective':<34}{'n':>5}{'median':>10}{'Q1':>10}{'Q3':>10}{'all pass':>10}")
+    print("-" * 79)
+    reference_rows = [r for r in ("real EEG (original)", "reconstruction R(Z)") if r in rows]
+    for label in reference_rows + sorted(r for r in rows if r not in reference_rows):
+        values = rows[label]
         median, q1, q3 = quantiles(values)
-        print(f"{objective:<34}{len(values):>5}{median:>10.3f}{q1:>10.3f}{q3:>10.3f}")
-        print(f"{'':34}  -> LaTeX cell:  {median:.3f} [{q1:.2f}, {q3:.2f}]")
+        rate = 100.0 * float(np.mean(passes[label])) if passes[label] else float("nan")
+        print(f"{label:<34}{len(values):>5}{median:>10.3f}{q1:>10.3f}{q3:>10.3f}{rate:>9.1f}%")
+        print(f"{'':34}  -> LaTeX cell:  {median:.3f} [{q1:.3f}, {q3:.3f}]")
 
     if missing:
         print(f"\nskipped {missing} attempt directories with no physiology.json or subject id")
