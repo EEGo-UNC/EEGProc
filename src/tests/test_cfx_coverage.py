@@ -69,7 +69,8 @@ def test_defaults_use_both_directions_four_arms_and_only_tenth_percentile():
 
 
 @pytest.mark.parametrize('knn_k', [1, 5])
-def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkeypatch, knn_k):
+@pytest.mark.parametrize('repair', [False, True])
+def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkeypatch, knn_k, repair):
     tf = pytest.importorskip('tensorflow')
     from eegproc.model_explainability.typicality import runner
     from eegproc.model_explainability.typicality.artifacts import completed_attempt
@@ -123,13 +124,17 @@ def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkey
     out = tmp_path / 'suite'
     args = runner.parse_args(['--models-json', str(manifest), '--task', 'valence', '--trials-npz', str(data),
         '--subjects', '0', '--trial-ids', '0', '1', '2', '--fixed-joint-alpha', '.5',
-        '--max-steps', '1', '--log-every', '0', '--knn-k', str(knn_k), '--out-dir', str(out)])
+        '--max-steps', '1', '--log-every', '0', '--knn-k', str(knn_k), '--out-dir', str(out)] +
+        (['--include-repair-baseline', '--temporal-sparsity-weight', '.003',
+          '--temporal-tv-weight', '.003', '--decoded-distance', 'envelope', '--target-weight', '0']
+         if repair else []))
     calls = []
     optimize = runner.CounterfactualOptimizer.optimize
     fail_once = [True]
     def capture(self, inputs, **kwargs):
-        calls.append(kwargs['target_class'])
-        if kwargs['target_class'] == 0 and fail_once[0]:
+        if not self.repair_only:
+            calls.append(kwargs['target_class'])
+        if not self.repair_only and kwargs['target_class'] == 0 and fail_once[0]:
             fail_once[0] = False
             raise FloatingPointError('injected optimization failure')
         return optimize(self, inputs, **kwargs)
@@ -142,7 +147,7 @@ def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkey
     assert all(r['n_eligible'] == 1 for r in result['population'])
     assert sum(r['n_unsuccessful'] for r in result['population']) == 7
     assert all(r['latent_target_success_percent'] == 0 for r in result['population'])
-    assert not list(out.rglob('*.npz'))
+    assert len(list(out.rglob('*.npz'))) == (2 if repair else 0)
     for direction, target in [('0_to_1', 1), ('1_to_0', 0)]:
         region = TypicalityRegion.load(out / direction / 'subject_0/calibration')
         assert region.metadata['target_class'] == target
@@ -161,9 +166,21 @@ def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkey
             endpoint = json.loads(endpoint_path.read_text())
             if endpoint['status'] != 'completed':
                 continue
+            assert endpoint['target_class'] == target
+            assert endpoint['direction'] == direction
+            if endpoint['objective'] == 'repair':
+                assert repair and endpoint['repair_only']
+                assert endpoint['selected_losses']['weighted_target'] == 0
+                continue
             assert set(endpoint['classification_embeddings']) == {
                 'original', 'optimized', 'decoded_reconstruction', 'decoded_counterfactual'}
             assert endpoint['encoded_neighbors_status'] == ('calibrated' if knn_k == 1 else 'unavailable')
+            for key in ('decoded_counterfactual', 'decoded_reconstruction') + (('decoded_repair',) if repair else ()):
+                scored = endpoint[key]
+                assert scored['target_class'] == target
+                assert scored['target_probability'] == scored['probabilities'][target]
+                assert scored['success'] == (scored['predicted_class'] == target and
+                                              scored['target_probability'] >= args.target_probability)
             if knn_k == 1:
                 assert endpoint['encoded_neighbors']['optimized']['k'] == 1
                 assert endpoint['encoded_neighbors']['optimized']['quantile'] == .10
