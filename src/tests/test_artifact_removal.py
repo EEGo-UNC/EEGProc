@@ -1,4 +1,4 @@
-"""remove_eye_artifacts on synthetic EEG where the true blink is known."""
+"""ICA artifact removal on synthetic EEG where the true blink is known."""
 
 import importlib.util
 import subprocess
@@ -9,8 +9,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from eegproc import bandpass_filter, feature_grouped_by_metadata, remove_eye_artifacts
+from eegproc import (
+    bandpass_filter,
+    feature_grouped_by_metadata,
+    remove_artifacts_with_iclabel,
+    remove_eye_artifacts,
+)
+from eegproc import artifact_removal
 from eegproc.artifact_removal import (
+    ICLABEL_LABELS,
     _drop_transients,
     _left_right_balance,
     _numerical_rank,
@@ -20,6 +27,12 @@ from eegproc.artifact_removal import (
 
 needs_mne = pytest.mark.skipif(
     importlib.util.find_spec("mne") is None, reason="requires eegproc[ica]"
+)
+needs_iclabel = pytest.mark.skipif(
+    importlib.util.find_spec("mne") is None
+    or importlib.util.find_spec("mne_icalabel") is None
+    or not (importlib.util.find_spec("onnxruntime") or importlib.util.find_spec("torch")),
+    reason="requires eegproc[iclabel]",
 )
 
 FS = 128
@@ -338,7 +351,7 @@ def test_missing_mne_explains_how_to_install_it(monkeypatch):
 
 
 def test_importing_eegproc_does_not_import_mne():
-    code = "import sys, eegproc; raise SystemExit('mne' in sys.modules)"
+    code = "import sys, eegproc; raise SystemExit('mne' in sys.modules or 'mne_icalabel' in sys.modules)"
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
 
 
@@ -385,7 +398,7 @@ def _change(front=-0.5, delta=0.0, alpha=0.0):
     ],
 )
 def test_power_check(change, reref, expected):
-    assert _passes_power_check(change, 0.1, reref) is expected
+    assert _passes_power_check(change, 0.1, not reref) is expected
 
 
 def test_rank_drops_by_one_after_common_average_reference():
@@ -399,3 +412,155 @@ def test_segments_follow_table_order_even_when_values_repeat():
     positions = _segment_positions(table, ["trial", "segment"])
     assert [p.tolist() for p in positions] == [[0], [1], [2, 3]]
     assert [p.tolist() for p in _segment_positions(table, ())] == [[0, 1, 2, 3]]
+
+
+# ICLabel ------------------------------------------------------------------------
+
+
+def _fixed_scores(rows, captured=None):
+    """Stand in for the ICLabel network: fixed probabilities for the first components."""
+    def scores(label_components, raw, ica, reref, highpass):
+        if captured is not None:
+            captured.update(raw=raw, ica=ica, reref=reref)
+        out = np.tile(np.eye(len(ICLABEL_LABELS))[0], (ica.n_components_, 1))  # all "brain"
+        for component, probabilities in rows.items():
+            out[component] = [probabilities.get(label, 0.0) for label in ICLABEL_LABELS]
+        return out
+    return scores
+
+
+ICLABEL_ROWS = {
+    0: {"eye blink": 0.9, "brain": 0.1},
+    1: {"eye blink": 0.7, "brain": 0.3},
+    2: {"muscle artifact": 0.95, "brain": 0.05},
+}
+
+
+@needs_iclabel
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, [0]),
+        ({"threshold": 0.6}, [0, 1]),
+        ({"labels": ("eye blink", "muscle artifact")}, [0, 2]),
+        ({"labels": ("heart beat",), "threshold": 0.01}, []),
+    ],
+)
+def test_iclabel_removes_components_by_label_and_threshold(monkeypatch, kwargs, expected):
+    monkeypatch.setattr(artifact_removal, "_iclabel_scores", _fixed_scores(ICLABEL_ROWS))
+    raw, _ = _recording()
+    report = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS, max_power_change=10.0,
+                                      report=report, **kwargs)
+    assert report[0]["components"] == expected
+    assert report[0]["status"] == ("cleaned" if expected else "no_matching_component")
+    assert len(report[0]["iclabel"]) == report[0]["n_components"]
+    assert report[0]["iclabel"][2]["muscle artifact"] == pytest.approx(0.95)
+
+
+@needs_iclabel
+def test_iclabel_without_a_match_returns_the_referenced_data_with_a_warning(monkeypatch):
+    monkeypatch.setattr(artifact_removal, "_iclabel_scores", _fixed_scores({}))
+    raw, _ = _recording()
+    with pytest.warns(RuntimeWarning, match="no component is labeled eye blink"):
+        out = remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS)
+    expected = raw[CHANNELS].sub(raw[CHANNELS].mean(axis=1), axis=0)
+    np.testing.assert_allclose(out[CHANNELS].to_numpy(), expected.to_numpy(), atol=1e-9)
+
+
+@needs_iclabel
+@pytest.mark.parametrize(
+    ("kwargs", "limit_back_falls"),
+    [
+        ({"reref": False}, True),  # blink removal should leave the back alone
+        ({"reref": False, "labels": ("eye blink", "muscle artifact")}, False),
+        ({"reref": True}, False),  # the reference spreads blinks to the back
+    ],
+)
+def test_iclabel_limits_back_of_head_falls_only_for_blinks(monkeypatch, kwargs, limit_back_falls):
+    monkeypatch.setattr(artifact_removal, "_iclabel_scores", _fixed_scores(ICLABEL_ROWS))
+    seen = []
+    monkeypatch.setattr(artifact_removal, "_passes_power_check",
+                        lambda change, limit, back: seen.append(back) or True)
+    raw, _ = _recording()
+    remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS, **kwargs)
+    assert seen == [limit_back_falls]
+
+
+@needs_iclabel
+def test_iclabel_sees_the_eeg_in_volts(monkeypatch):
+    raw, _ = _recording()
+    sizes = {}
+    for unit in (1e-6, 1e-3):
+        captured = {}
+        monkeypatch.setattr(artifact_removal, "_iclabel_scores", _fixed_scores({}, captured))
+        with pytest.warns(RuntimeWarning, match="no component"):
+            remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS, unit_in_volts=unit)
+        sizes[unit] = captured["raw"].get_data().std()
+    assert sizes[1e-3] / sizes[1e-6] == pytest.approx(1000.0)
+    referenced = raw[CHANNELS].sub(raw[CHANNELS].mean(axis=1), axis=0)
+    assert sizes[1e-6] == pytest.approx(referenced.to_numpy().std() * 1e-6, rel=0.25)
+
+
+@needs_iclabel
+def test_iclabel_scores_activity_above_45_hz(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(artifact_removal, "_iclabel_scores", _fixed_scores({}, captured))
+    raw, _ = _recording()
+    with pytest.warns(RuntimeWarning, match="no component"):
+        remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS)
+    from scipy.signal import welch
+
+    frequencies, power = welch(captured["raw"].get_data(), FS, nperseg=FS * 2)
+    high = power[:, (frequencies > 50) & (frequencies < 60)].mean()
+    middle = power[:, (frequencies > 20) & (frequencies < 30)].mean()
+    assert high > 0.3 * middle  # white-ish input: no low-pass at 45 Hz
+
+
+@needs_iclabel
+def test_real_iclabel_scores_every_component_without_filter_or_reference_warnings():
+    raw, _ = _recording()
+    report = []
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS, report=report)
+    scores = np.array([[row[label] for label in ICLABEL_LABELS] for row in report[0]["iclabel"]])
+    assert scores.shape == (report[0]["n_components"], len(ICLABEL_LABELS))
+    np.testing.assert_allclose(scores.sum(axis=1), 1.0, atol=1e-4)
+    messages = " ".join(str(warning.message) for warning in caught)
+    assert "100 Hz" not in messages
+    assert "common average" not in messages
+
+
+@needs_iclabel
+def test_real_iclabel_warns_when_data_is_not_average_referenced():
+    raw, _ = _recording()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS, reref=False)
+    assert any("common average" in str(warning.message) for warning in caught)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"labels": ("blink",)}, "labels must be chosen from"),
+        ({"labels": ()}, "labels must be chosen from"),
+        ({"threshold": 0.0}, "threshold"),
+        ({"threshold": 1.5}, "threshold"),
+        ({"unit_in_volts": 0.0}, "unit_in_volts"),
+    ],
+)
+def test_iclabel_bad_arguments_raise(kwargs, message):
+    raw, _ = _recording(seconds=5)
+    with pytest.raises(ValueError, match=message):
+        remove_artifacts_with_iclabel(raw, FS, eeg_channels=CHANNELS, **kwargs)
+
+
+def test_missing_iclabel_explains_how_to_install_it(monkeypatch):
+    monkeypatch.setitem(sys.modules, "mne_icalabel", None)
+    monkeypatch.setitem(sys.modules, "mne_icalabel.iclabel", None)
+    with pytest.raises(ImportError, match=r"eegproc\[iclabel\]"):
+        remove_artifacts_with_iclabel(pd.DataFrame({"AF3": [0.0]}), FS, eeg_channels=["AF3"])

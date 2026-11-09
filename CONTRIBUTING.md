@@ -32,7 +32,7 @@ pytest --ignore=src/tests/test_cross_validation.py   # what CI runs on the base 
 
 Tests that need TensorFlow or MNE skip themselves on a base install. CI runs the
 base suite on Python 3.10–3.13, the full suite on 3.10, 3.12 and 3.13, and the
-artifact removal tests with the `ica` extra on 3.10 and 3.13.
+artifact removal tests with the `ica` and `iclabel` extras on 3.10 and 3.13.
 
 Before submitting a change, run the tests, build a wheel, and check that it
 installs and imports. Describe any API changes in the review. Keep documentation

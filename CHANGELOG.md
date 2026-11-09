@@ -8,7 +8,12 @@
   per subject through `feature_grouped_by_metadata`. It leaves a subject's EEG
   unchanged and warns when no blink is found or removal fails a band-power
   check. `component_selector` accepts other component classifiers.
-- Add the optional `ica` extra for MNE-Python.
+- Add `remove_artifacts_with_iclabel`, which runs the same ICA steps but lets
+  the ICLabel classifier pick components by label and probability, starting
+  with eye blinks. It applies an average reference by default, and reads the
+  EEG as microvolts unless `unit_in_volts` says otherwise.
+- Add the optional `ica` extra for MNE-Python, and the `iclabel` extra for
+  mne-icalabel and onnxruntime.
 
 ## 2.0.0 — 2026-10-04
 

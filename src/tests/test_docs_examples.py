@@ -113,6 +113,18 @@ def test_readme_blink_removal(fake_read_csv):
     assert len(namespace["clean"]) == len(namespace["raw"])
 
 
+def test_readme_iclabel_removal(fake_read_csv):
+    pytest.importorskip("mne", reason="requires eegproc[iclabel]")
+    pytest.importorskip("mne_icalabel", reason="requires eegproc[iclabel]")
+    namespace = {}
+    with pytest.warns(RuntimeWarning, match="usable samples"):
+        exec(_block_containing(ROOT / "README.md", "remove_eye_artifacts"), namespace)
+        exec(_block_containing(ROOT / "README.md", "remove_artifacts_with_iclabel"), namespace)
+
+    assert len(namespace["report"]) == 3
+    assert all("iclabel" in entry for entry in namespace["report"])
+
+
 def test_readme_featurization_and_plotting(fake_read_csv, tmp_path, monkeypatch):
     namespace = {}
     exec(_block_containing(ROOT / "README.md", "shannons_entropy(psd)"), namespace)

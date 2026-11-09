@@ -1,15 +1,16 @@
-"""Remove eye-blink activity from EEG tables with independent component analysis."""
+"""Remove artifacts such as eye blinks from EEG tables with independent component analysis."""
 
 from __future__ import annotations
 
+import importlib.util
 import warnings
 from typing import Callable, Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.signal import welch
+from scipy.signal import butter, welch
 
-from .preprocessing import bandpass_filter, numeric_interp
+from .preprocessing import bandpass_filter, numeric_interp, sosfiltfilt_safe
 
 # Bands used to compare power before and after removal.
 _CHECK_BANDS = {
@@ -22,16 +23,40 @@ _CHECK_BANDS = {
 _MIN_SAMPLES_PER_WEIGHT = 20  # common rule of thumb: k * n_components ** 2 samples
 _BLINK_BAND_HZ = (1.0, 8.0)
 
+#: Component types scored by ICLabel, in the order of its output columns.
+ICLABEL_LABELS = (
+    "brain", "muscle artifact", "eye blink", "heart beat",
+    "line noise", "channel noise", "other",
+)
+_ICLABEL_TOP_HZ = 100.0  # ICLabel was trained on 1-100 Hz data
+
 
 def _require_mne():
     try:
         import mne
     except ImportError as error:
         raise ImportError(
-            "remove_eye_artifacts requires MNE-Python. "
+            "ICA artifact removal requires MNE-Python. "
             "Install it with: pip install 'eegproc[ica]'"
         ) from error
     return mne
+
+
+def _require_iclabel():
+    """The ICLabel scoring function, or an ImportError that says how to install it."""
+    try:
+        from mne_icalabel.iclabel import iclabel_label_components
+    except ImportError as error:
+        raise ImportError(
+            "remove_artifacts_with_iclabel requires mne-icalabel. "
+            "Install it with: pip install 'eegproc[iclabel]'"
+        ) from error
+    if not any(importlib.util.find_spec(name) for name in ("onnxruntime", "torch")):
+        raise ImportError(
+            "ICLabel needs onnxruntime or torch to run its network. "
+            "Install it with: pip install 'eegproc[iclabel]'"
+        )
+    return iclabel_label_components
 
 
 def _default_montage(mne) -> str:
@@ -72,10 +97,20 @@ def _eeg_signal(df: pd.DataFrame, channels: Sequence[str]) -> np.ndarray:
 
 
 def _filtered_copy(signal, segments, channels, fs, highpass, lowpass) -> np.ndarray:
-    """Join each segment's band-passed samples, shaped ``(n_channels, n_samples)``."""
+    """Join each segment's filtered samples, shaped ``(n_channels, n_samples)``.
+
+    ``lowpass=None`` applies only the high-pass, keeping everything up to Nyquist.
+    """
+    if lowpass is None and not 0 < highpass < fs / 2:
+        raise ValueError(f"highpass must satisfy 0 < highpass < fs/2={fs / 2:.3f}.")
+    high_only = butter(4, highpass / (fs / 2), btype="highpass", output="sos") if lowpass is None else None
     parts = []
     for positions in segments:
         if len(positions) < fs:  # too short to filter at the high-pass cutoff
+            continue
+        if high_only is not None:
+            filtered = np.stack([sosfiltfilt_safe(high_only, column) for column in signal[positions].T])
+            parts.append(filtered - filtered.mean(axis=1, keepdims=True))
             continue
         frame = pd.DataFrame(signal[positions], columns=channels)
         filtered = bandpass_filter(
@@ -202,19 +237,21 @@ def _power_change(before, after, front, back) -> dict[str, dict[str, float]]:
     }
 
 
-def _passes_power_check(change, limit: float, reref: bool) -> bool:
-    """Removal should lower frontal power and leave the back of the head alone.
+def _passes_power_check(change, limit: float, limit_back_falls: bool) -> bool:
+    """Removing an artifact should never add power, and blink removal should
+    leave the back of the head alone.
 
-    No band may rise by more than ``limit`` anywhere. Bands above delta may not
-    fall by more than ``limit`` at the back of the head either. Delta is exempt
-    because slow blink activity does reach those channels, and an average
-    reference exempts every band because it copies part of each blink onto all
-    channels.
+    No band may rise by more than ``limit`` anywhere. With ``limit_back_falls``,
+    bands above delta may not fall by more than ``limit`` at the back of the
+    head either. Delta is exempt because slow blink activity does reach those
+    channels. Callers turn the fall limit off under an average reference, which
+    copies part of each blink onto all channels, and when removing artifacts
+    such as muscle that do sit at the back of the head.
     """
     rises = [*change["front"].values(), *change["back"].values()]
     if max(rises) > limit:
         return False
-    if reref:
+    if not limit_back_falls:
         return True
     return min(value for band, value in change["back"].items() if band != "delta") >= -limit
 
@@ -363,6 +400,233 @@ def remove_eye_artifacts(
     ...     report=report,
     ... )
     """
+    return _remove_ica_components(
+        df, fs, eeg_channels=eeg_channels, segment_columns=segment_columns,
+        method=method, reref=reref, highpass=highpass, lowpass=lowpass,
+        transient_factor=transient_factor, max_power_change=max_power_change,
+        limit_back_falls=not reref, unit_in_volts=None, montage=montage,
+        random_state=random_state, report=report,
+        select=_rule_selector(
+            component_selector, min_correlation, min_front_back_ratio,
+            min_left_right_balance, min_low_frequency_share,
+        ),
+        no_match_status="no_blink_component",
+        no_match_message="no component looks like a blink.",
+    )
+
+
+def _rule_selector(component_selector, min_correlation, min_front_back_ratio,
+                   min_left_right_balance, min_low_frequency_share):
+    """The blink rules, or a caller's selector, in the shared pipeline's form."""
+    def select(ica, raw, context, summary):
+        if component_selector is not None:
+            return component_selector(ica, raw)
+        return _find_blink_components(
+            ica, raw, context["regions"], context["blink_channels"], context["fs"],
+            context["reref"], min_correlation, min_front_back_ratio,
+            min_left_right_balance, min_low_frequency_share,
+        )
+    return select
+
+
+def remove_artifacts_with_iclabel(
+    df: pd.DataFrame,
+    fs: float,
+    bands: dict[str, tuple[float, float]] | None = None,
+    *,
+    eeg_channels: Sequence[str],
+    segment_columns: Sequence[str] = (),
+    labels: Sequence[str] = ("eye blink",),
+    threshold: float = 0.9,
+    reref: bool = True,
+    highpass: float = 1.0,
+    transient_factor: float = 3.0,
+    max_power_change: float = 0.10,
+    unit_in_volts: float = 1e-6,
+    method: str = "infomax",
+    montage: str | None = None,
+    random_state: int = 42,
+    report: list | None = None,
+) -> pd.DataFrame:
+    """Remove ICA components that ICLabel classifies as artifacts.
+
+    Works like :func:`remove_eye_artifacts`, but a trained classifier decides
+    which components to remove instead of hand-written blink rules. ICLabel
+    (Pion-Tonachini et al., 2019) scores every component as brain, muscle
+    artifact, eye blink, heart beat, line noise, channel noise or other. Run it
+    per subject, before :func:`~eegproc.preprocessing.bandpass_filter`.
+    Requires the optional dependency: ``pip install 'eegproc[iclabel]'``.
+
+    Pipeline
+    --------
+    1) Optionally apply a common average reference, which ICLabel expects.
+
+    2) High-pass a copy of each continuous segment at ``highpass`` and join
+       them. ICLabel was trained on 1-100 Hz data, so the copy keeps everything
+       up to 100 Hz, or up to Nyquist when the sampling rate is lower.
+
+    3) Drop rare, very large transients from that copy, fit extended infomax
+       ICA, and score each component with ICLabel.
+
+    4) Select components whose probability for any of ``labels`` is at least
+       ``threshold``.
+
+    5) Compare power with and without those components. If any band rises, keep
+       the data unchanged and warn. Otherwise remove the components from the
+       original samples, keeping each channel's offset.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        One person's samples, one row per sample. Rows of a segment must be in
+        time order. Columns other than ``eeg_channels`` pass through unchanged.
+    fs : float
+        Sampling rate in Hz.
+    bands : dict, optional
+        Ignored. Accepted so this runs through
+        :func:`~eegproc.featurization.feature_grouped_by_metadata`.
+    eeg_channels : sequence of str
+        EEG columns, named as in ``montage``.
+    segment_columns : sequence of str, default=()
+        Columns that together identify a continuous recording, such as
+        ``("trial_id", "segment")``. Filtering does not cross these boundaries.
+    labels : sequence of str, default=("eye blink",)
+        Component types to remove, from :data:`ICLABEL_LABELS`. Add
+        ``"muscle artifact"`` or ``"heart beat"`` to remove those too.
+    threshold : float, default=0.9
+        Smallest ICLabel probability, between 0 and 1, for removal. 0.9 is the
+        cutoff EEGLAB commonly uses for eye and muscle components; lower values
+        also catch one-sided frontal components that are often electrode noise.
+    reref : bool, default=True
+        Apply a common average reference first, as ICLabel expects. The returned
+        EEG then keeps that reference, and one fewer component is available.
+        If later steps do not use an average reference, compare with
+        ``reref=False``: ICLabel then warns, but the reference stays unchanged.
+    highpass : float, default=1.0
+        High-pass cutoff in Hz of the copy used for fitting and scoring.
+    transient_factor : float, default=3.0
+        Drop one-second windows whose largest peak-to-peak amplitude exceeds
+        this multiple of the median window. Applies to the fitting copy only.
+    max_power_change : float, default=0.10
+        Largest allowed fractional rise in any band. When removing eye blinks
+        only and ``reref=False``, also the largest allowed fall above delta at
+        the back of the head.
+    unit_in_volts : float, default=1e-6
+        Volts per unit of the EEG columns; the default means microvolts.
+        ICLabel's spectrum feature depends on absolute amplitude, so this must
+        be right.
+    method : {"infomax", "picard", "fastica"}, default="infomax"
+        ICA algorithm. ICLabel was trained on extended infomax, which
+        ``"infomax"`` runs, and warns about the others.
+    montage : str, optional
+        Name of the MNE built-in montage that locates the channels. Defaults to
+        the 10-20 montage.
+    random_state : int, default=42
+        Seed for the ICA fit.
+    report : list, optional
+        Receives one dict per call with ``status``, ``components``,
+        ``n_components``, ``rejected_fraction``, ``power_change`` and
+        ``iclabel``: one dict of label probabilities per component. ``status``
+        is ``"cleaned"``, ``"no_matching_component"``,
+        ``"failed_power_check"`` or ``"not_enough_data"``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Same columns and row order as ``df``, with a default integer index.
+        Missing EEG samples are interpolated. When no components are removed,
+        the EEG is unchanged apart from that and ``reref``.
+
+    Raises
+    ------
+    ImportError
+        If MNE-Python, mne-icalabel, or both onnxruntime and torch are missing.
+    ValueError
+        If ``labels`` or ``threshold`` are invalid, or if ``eeg_channels`` or
+        ``segment_columns`` are missing, non-numeric, empty, or not in
+        ``montage``.
+
+    Warnings
+    --------
+    RuntimeWarning
+        Emitted whenever the EEG is returned without any component removed.
+
+    Notes
+    -----
+    ICLabel was trained on 1-100 Hz recordings, mostly from research caps with
+    many more channels than consumer headsets. Below 200 Hz sampling it fills
+    the spectrum above Nyquist with the last value, as the original EEGLAB code
+    does. Its scores on low-density or low-rate data have not been validated,
+    so inspect ``report`` and compare results with and without this step.
+
+    Examples
+    --------
+    >>> from eegproc import feature_grouped_by_metadata, remove_artifacts_with_iclabel
+    >>> report = []
+    >>> clean = feature_grouped_by_metadata(  # doctest: +SKIP
+    ...     raw, target_function=remove_artifacts_with_iclabel, fs=128,
+    ...     group_by_metadata_columns=["subject_id"],
+    ...     eeg_channels=CHANNELS, segment_columns=["trial_id", "segment"],
+    ...     report=report,
+    ... )
+    """
+    labels = tuple(labels)
+    unknown = [label for label in labels if label not in ICLABEL_LABELS]
+    if not labels or unknown:
+        raise ValueError(f"labels must be chosen from {ICLABEL_LABELS}; got {list(labels)}.")
+    if not 0 < threshold <= 1:
+        raise ValueError(f"threshold must be in (0, 1]; got {threshold}.")
+    if not unit_in_volts > 0:
+        raise ValueError(f"unit_in_volts must be positive; got {unit_in_volts}.")
+    label_components = _require_iclabel()
+
+    def select(ica, raw, context, summary):
+        scores = _iclabel_scores(label_components, raw, ica, context["reref"], highpass)
+        summary["iclabel"] = [
+            {label: float(p) for label, p in zip(ICLABEL_LABELS, row)} for row in scores
+        ]
+        columns = [ICLABEL_LABELS.index(label) for label in labels]
+        return np.flatnonzero(scores[:, columns].max(axis=1) >= threshold).tolist()
+
+    return _remove_ica_components(
+        df, fs, eeg_channels=eeg_channels, segment_columns=segment_columns,
+        method=method, reref=reref, highpass=highpass,
+        lowpass=_ICLABEL_TOP_HZ if fs / 2 > _ICLABEL_TOP_HZ else None,
+        transient_factor=transient_factor, max_power_change=max_power_change,
+        limit_back_falls=not reref and set(labels) == {"eye blink"},
+        unit_in_volts=unit_in_volts, montage=montage, random_state=random_state,
+        report=report, select=select, extra_summary={"iclabel": []},
+        no_match_status="no_matching_component",
+        no_match_message=f"no component is labeled {' or '.join(labels)} "
+                         f"with probability >= {threshold}.",
+    )
+
+
+def _iclabel_scores(label_components, raw, ica, reref: bool, highpass: float) -> np.ndarray:
+    """ICLabel probabilities, shaped ``(n_components, 7)``."""
+    scored = raw.copy()
+    if reref:
+        # The data is already average-referenced; this records that in its info.
+        scored.set_eeg_reference("average", projection=False, verbose=False)
+    with warnings.catch_warnings():
+        if highpass == 1.0:
+            # The copy is filtered from 1 Hz to 100 Hz, or to Nyquist when that is
+            # lower, which is as close to ICLabel's training data as the rate allows.
+            warnings.filterwarnings("ignore", message=".*not filtered between 1 and 100 Hz.*")
+        return np.asarray(label_components(scored, ica, inplace=False))
+
+
+def _remove_ica_components(
+    df, fs, *, eeg_channels, segment_columns, method, reref, highpass, lowpass,
+    transient_factor, max_power_change, limit_back_falls, unit_in_volts, montage,
+    random_state, report, select, no_match_status, no_match_message, extra_summary=None,
+) -> pd.DataFrame:
+    """Fit ICA on a filtered copy, remove the selected components, and check power.
+
+    ``select(ica, raw, context, summary)`` returns component indices; it may add
+    entries to ``summary``. ``unit_in_volts=None`` rescales the data to a fixed
+    size, which suits anything that ignores absolute amplitude.
+    """
     mne = _require_mne()
     channels = list(eeg_channels)
     signal = _eeg_signal(df, channels)
@@ -375,14 +639,14 @@ def remove_eye_artifacts(
 
     summary = {
         "status": "not_enough_data", "components": [], "n_components": 0,
-        "rejected_fraction": 0.0, "power_change": {},
+        "rejected_fraction": 0.0, "power_change": {}, **(extra_summary or {}),
     }
 
     def finish(data: np.ndarray, message: str | None = None) -> pd.DataFrame:
         if report is not None:
             report.append(summary)
         if message is not None:
-            warnings.warn(f"EEG returned without removal: {message}", RuntimeWarning, stacklevel=3)
+            warnings.warn(f"EEG returned without removal: {message}", RuntimeWarning, stacklevel=4)
         out = df.reset_index(drop=True)
         out[channels] = data
         return out
@@ -394,15 +658,12 @@ def remove_eye_artifacts(
 
     n_components = _numerical_rank(kept)
     summary["n_components"] = n_components
-    scale = 1e-5 / kept.std()  # MNE works in volts; ICA itself ignores scale
+    # MNE works in volts. The ICA itself ignores scale, so without known units
+    # the data is brought to a typical EEG size.
+    scale = unit_in_volts if unit_in_volts is not None else 1e-5 / kept.std()
     info = mne.create_info(channels, fs, "eeg")
-
-    def as_raw(data: np.ndarray):
-        raw = mne.io.RawArray(data * scale, info, verbose=False)
-        raw.set_montage(montage, verbose=False)
-        return raw
-
-    raw = as_raw(kept)
+    raw = mne.io.RawArray(kept * scale, info, verbose=False)
+    raw.set_montage(montage, verbose=False)
     ica = mne.preprocessing.ICA(
         n_components=n_components,
         method=method,
@@ -415,28 +676,22 @@ def remove_eye_artifacts(
         warnings.filterwarnings("ignore", message=".*high-pass filtered.*")
         ica.fit(raw, verbose=False)
 
-    if component_selector is None:
-        components = _find_blink_components(
-            ica, raw, regions, blink_channels, fs, reref,
-            min_correlation, min_front_back_ratio, min_left_right_balance,
-            min_low_frequency_share,
-        )
-    else:
-        components = sorted({int(component) for component in component_selector(ica, raw)})
-        if any(not 0 <= component < n_components for component in components):
-            raise ValueError(f"component_selector returned {components}; "
-                             f"valid indices stop at {n_components - 1}.")
+    context = {"regions": regions, "blink_channels": blink_channels, "fs": fs, "reref": reref}
+    components = sorted({int(component) for component in select(ica, raw, context, summary)})
+    if any(not 0 <= component < n_components for component in components):
+        raise ValueError(f"component_selector returned {components}; "
+                         f"valid indices stop at {n_components - 1}.")
     summary["components"] = components
     if not components:
-        summary["status"] = "no_blink_component"
-        return finish(signal, "no component looks like a blink.")
+        summary["status"] = no_match_status
+        return finish(signal, no_match_message)
 
     ica.exclude = components
     cleaned_copy = ica.apply(raw.copy(), verbose=False).get_data() / scale
     summary["power_change"] = _power_change(
         _band_powers(kept, fs), _band_powers(cleaned_copy, fs), front, back,
     )
-    if not _passes_power_check(summary["power_change"], max_power_change, reref):
+    if not _passes_power_check(summary["power_change"], max_power_change, limit_back_falls):
         summary["status"] = "failed_power_check"
         return finish(signal, f"removing components {components} failed the power check.")
 

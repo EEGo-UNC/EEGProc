@@ -50,7 +50,7 @@ jobs:
       - name: Run TensorFlow-free tests
         run: pytest -v --ignore=src/tests/test_cross_validation.py
 
-  # ICA artifact removal, which the base job skips without MNE.
+  # ICA artifact removal and ICLabel, which the base job skips without them.
   ica:
     name: ica extra (py${{ matrix.python-version }})
     runs-on: ubuntu-24.04
@@ -66,14 +66,14 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install with the ica extra
+      - name: Install with the ica and iclabel extras
         run: |
           python -m pip install -U pip
-          pip install ".[ica,dev]"
+          pip install ".[ica,iclabel,dev]"
           pip check
 
       - name: Run the artifact removal tests
-        run: pytest -v src/tests/test_artifact_removal.py
+        run: pytest -v src/tests/test_artifact_removal.py src/tests/test_docs_examples.py
 
   # The cross-validation stack, models, and counterfactuals.
   deep-learning:
