@@ -13,6 +13,8 @@
 
 # EEGProc
 
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/eegproc?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/eegproc)
+
 A lightweight Python library for EEG processing and deep
 learning, and model explanations. EEGProc is meant to be friendly to AI code writers and non-technical researchers, while still providing all the technical freedom and detail needed for EEG deep learning pipelines.
 
