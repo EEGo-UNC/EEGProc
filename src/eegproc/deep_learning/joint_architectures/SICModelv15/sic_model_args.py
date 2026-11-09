@@ -435,6 +435,26 @@ def validate_args(args, model_config: dict) -> None:
             )
         if not 0.0 <= decoder_dropout < 1.0:
             raise ValueError("decoder_dropout must be in [0, 1).")
+        for weight_name in (
+            "reconstruction_seam_weight",
+            "reconstruction_derivative_weight",
+        ):
+            weight = float(builder_config.get(weight_name, 0.0))
+            if not math.isfinite(weight) or weight < 0.0:
+                raise ValueError(f"{weight_name} must be finite and non-negative.")
+            if weight > 0.0 and builder_config.get("use_decoder", True) is False:
+                raise ValueError(f"{weight_name} > 0 requires use_decoder=true.")
+        if float(builder_config.get("reconstruction_seam_weight", 0.0)) > 0.0:
+            if args.classification_level != "trial":
+                raise ValueError(
+                    "reconstruction_seam_weight > 0 requires "
+                    "--classification-level trial."
+                )
+            if args.window_overlap != 0.0:
+                raise ValueError(
+                    "reconstruction_seam_weight > 0 requires --window-overlap 0; "
+                    "overlapping windows do not meet at a seam."
+                )
         if training_method == "mldg":
             meta_train_subjects = builder_config.get("mldg_meta_train_subjects")
             meta_test_subjects = int(builder_config.get("mldg_meta_test_subjects", 4))

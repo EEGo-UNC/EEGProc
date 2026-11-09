@@ -295,11 +295,14 @@ def train_sic_loso_validation(
         "Decoder grid: enabled=%s independent_branches=true "
         "joint_fusion=when_both_branches_active "
         "reconstruction_loss_weight=%s auxiliary_weight=%s initial_alpha=%s "
+        "seam_weight=%s derivative_weight=%s "
         "dropout=%s; frozen during calibration",
         model_config.get("use_decoder", True),
         model_config.get("reconstruction_loss_weight", 0.10),
         model_config.get("joint_reconstruction_auxiliary_weight", 0.25),
         model_config.get("joint_reconstruction_initial_alpha", 0.5),
+        model_config.get("reconstruction_seam_weight", 0.0),
+        model_config.get("reconstruction_derivative_weight", 0.0),
         model_config.get("decoder_dropout", 0.10),
     )
     logger.info(
@@ -649,11 +652,14 @@ def train_sic(
         "Decoder: enabled=%s independent GCN-GRU/BiLSTM plus convex joint "
         "reconstruction when both are active; reconstruction_loss_weight=%s "
         "auxiliary_weight=%s "
-        "initial_alpha=%s dropout=%s; frozen during calibration",
+        "initial_alpha=%s seam_weight=%s derivative_weight=%s "
+        "dropout=%s; frozen during calibration",
         model_config.get("use_decoder", True),
         model_config.get("reconstruction_loss_weight", 0.10),
         model_config.get("joint_reconstruction_auxiliary_weight", 0.25),
         model_config.get("joint_reconstruction_initial_alpha", 0.5),
+        model_config.get("reconstruction_seam_weight", 0.0),
+        model_config.get("reconstruction_derivative_weight", 0.0),
         model_config.get("decoder_dropout", 0.10),
     )
     logger.info(

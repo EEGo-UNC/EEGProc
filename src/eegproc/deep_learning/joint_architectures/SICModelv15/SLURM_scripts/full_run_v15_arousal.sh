@@ -43,6 +43,19 @@ PREDICTION_DIAGNOSTICS_MAX_SAMPLES="${PREDICTION_DIAGNOSTICS_MAX_SAMPLES:-100}"
 TRAINING_SEED="${TRAINING_SEED:-42}"
 VC_LOGIT_SCALE=64
 export VC_LOGIT_SCALE
+# Temporal reconstruction terms (off by default; 0 reproduces suite 1599318).
+# Seam: step across each 1-s window boundary in R(Z) should match the real EEG.
+# Derivative: sample-to-sample differences of R(Z) should match the real EEG.
+RECONSTRUCTION_SEAM_WEIGHT="${RECONSTRUCTION_SEAM_WEIGHT:-0}"
+RECONSTRUCTION_DERIVATIVE_WEIGHT="${RECONSTRUCTION_DERIVATIVE_WEIGHT:-0}"
+export RECONSTRUCTION_SEAM_WEIGHT RECONSTRUCTION_DERIVATIVE_WEIGHT
+# Optional subset of LOSO targets for pilots, e.g. TARGET_SUBJECTS="0 13".
+TARGET_SUBJECTS="${TARGET_SUBJECTS:-}"
+TARGET_SUBJECT_ARGS=()
+if [[ -n "$TARGET_SUBJECTS" ]]; then
+    read -r -a _targets <<< "$TARGET_SUBJECTS"
+    TARGET_SUBJECT_ARGS=(--target-subjects "${_targets[@]}")
+fi
 SUITE_ID="${SLURM_JOB_ID:-manual}"
 
 CALIBRATION_LEVEL_ARGS=(
@@ -200,6 +213,10 @@ print(json.dumps({
     "decoder_dropout": 0.1,
     "joint_reconstruction_auxiliary_weight": 0.25,
     "joint_reconstruction_initial_alpha": 0.5,
+    "reconstruction_seam_weight": float(os.environ["RECONSTRUCTION_SEAM_WEIGHT"]),
+    "reconstruction_derivative_weight": float(
+        os.environ["RECONSTRUCTION_DERIVATIVE_WEIGHT"]
+    ),
     "remove_median_label": False,
 
     "calibration_unfreeze_layers": 2,
@@ -216,7 +233,7 @@ echo "SIC builder: v15"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "Node: $(hostname)"
 echo "Dataset/target: DREAMER arousal"
-echo "Scope: all 23 LOSO target subjects"
+echo "Scope: ${TARGET_SUBJECTS:-all 23} LOSO target subjects"
 echo "Training: MLDG, $SOURCE_EPOCHS source epochs, 12+6 subjects x 2 trials = 36 trials/episode"
 echo "Parallelism: 2 folds x 2 GPUs; episode trials: 24 meta-train / 12 meta-test"
 echo "Per GPU: 12 meta-train / 6 meta-test trials; full-episode VC statistics"
@@ -227,6 +244,7 @@ echo "Within-task configuration: focal_gamma=1.0; vc_alpha=2.0; reconstruction=0
 echo "Selection: maximize zero-shot LOSO balanced accuracy"
 echo "Subject loss weight: 0.2"
 echo "Joint reconstruction: weight=0.6 initial alpha=0.5 auxiliary branch weight=0.25"
+echo "Temporal reconstruction terms: seam=$RECONSTRUCTION_SEAM_WEIGHT derivative=$RECONSTRUCTION_DERIVATIVE_WEIGHT"
 echo "Configurations: 1 fixed scale-64 configuration; subject loss weight fixed at 0.2"
 echo "Deterministic training: enabled; base seed=$TRAINING_SEED; subject seed=base+target ID"
 echo "TensorFlow GPU allocator: $TF_GPU_ALLOCATOR"
@@ -294,4 +312,5 @@ python -m src.eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_tr
     --fs 128 \
     --window-overlap 0.0 \
     --window-normalization global_rms \
-    --hyperparameters-json "$MODEL_CONFIG"
+    --hyperparameters-json "$MODEL_CONFIG" \
+    ${TARGET_SUBJECT_ARGS[@]+"${TARGET_SUBJECT_ARGS[@]}"}
