@@ -48,6 +48,8 @@ Issues = "https://github.com/EEGo-UNC/EEGProc/issues"
 Changelog = "https://github.com/EEGo-UNC/EEGProc/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+# ICA-based artifact removal.
+ica = ["mne>=1.10"]
 # Optional models, cross-validation, and differentiable counterfactuals.
 deep-learning = [
   "tensorflow>=2.16",

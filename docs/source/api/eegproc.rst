@@ -23,5 +23,6 @@ Submodules
 .. toctree::
    :maxdepth: 4
 
+   eegproc.artifact_removal
    eegproc.featurization
    eegproc.preprocessing

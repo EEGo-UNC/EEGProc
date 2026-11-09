@@ -8,6 +8,7 @@ from .preprocessing import (
     bandpass_filter,
     FREQUENCY_BANDS,
 )
+from .artifact_removal import remove_eye_artifacts
 from .featurization import (
     hjorth_params,
     psd_bandpowers,
@@ -34,6 +35,9 @@ __all__ = [
     "apply_notch_once",
     "bandpass_filter",
     "FREQUENCY_BANDS",
+
+    #ARTIFACT REMOVAL
+    "remove_eye_artifacts",
 
     #FEATURIZATION
     "hjorth_params",

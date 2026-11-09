@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.0 — unreleased
+
+### Preprocessing
+
+- Add `remove_eye_artifacts`, which removes blink components with ICA and runs
+  per subject through `feature_grouped_by_metadata`. It leaves a subject's EEG
+  unchanged and warns when no blink is found or removal fails a band-power
+  check. `component_selector` accepts other component classifiers.
+- Add the optional `ica` extra for MNE-Python.
+
 ## 2.0.0 — 2026-10-04
 
 ### Library structure
