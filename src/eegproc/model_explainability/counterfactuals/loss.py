@@ -344,8 +344,6 @@ class CounterfactualLoss:
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and nonnegative.")
-        if self.target_weight == 0:
-            raise ValueError("target_weight must be positive.")
         if self.decoded_metric not in DECODED_METRICS:
             raise ValueError(f"decoded_metric must be one of {DECODED_METRICS}.")
         if self.vcsc_tau_cm <= 0:

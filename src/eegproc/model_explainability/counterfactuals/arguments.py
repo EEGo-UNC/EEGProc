@@ -117,7 +117,7 @@ def build_parser():
     )
     parser.add_argument("--max-steps", type=_nonnegative_int, default=200)
     parser.add_argument("--gradient-clip-norm", type=_positive_float, default=5.0)
-    parser.add_argument("--target-weight", type=_positive_float, default=1.0)
+    parser.add_argument("--target-weight", type=_nonnegative_float, default=1.0)
     parser.add_argument("--latent-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument("--decoded-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument(

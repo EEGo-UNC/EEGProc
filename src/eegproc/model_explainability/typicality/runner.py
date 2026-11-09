@@ -63,7 +63,7 @@ def build_parser():
     parser.add_argument("--report-output", choices=("joint", "gcn_gru", "bilstm"), help="Mandatory in branch mode; joint is the default in joint mode.")
     parser.add_argument("--target-probability", type=_positive_float, default=0.8)
     parser.add_argument("--target-loss-component", choices=("confidence", "focal", "vc", "focal_vc"), default="confidence")
-    parser.add_argument("--target-weight", type=_positive_float, default=1.0)
+    parser.add_argument("--target-weight", type=_nonnegative_float, default=1.0)
     parser.add_argument("--latent-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument("--decoded-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument("--physiological-weight", type=_nonnegative_float, default=1.0,
