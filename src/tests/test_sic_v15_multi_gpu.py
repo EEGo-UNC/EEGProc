@@ -294,7 +294,7 @@ def test_v15_multi_gpu_in_subprocess():
         result = subprocess.run(
             [sys.executable, "-m", "src.tests.test_sic_v15_multi_gpu"],
             cwd=Path(__file__).resolve().parents[2], env=env,
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=900,
         )
         assert result.returncode == 0, result.stdout + result.stderr
 

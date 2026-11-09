@@ -91,7 +91,34 @@ else
 fi
 source "$VENV_DIR/bin/activate"
 
+# Import eegproc from this checkout. A shared venv may hold an editable
+# install of another worktree, which would otherwise train with its code.
+export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
+
+# A reused venv may predate a dependency this checkout imports (cloudpickle
+# was added after venv312 was built). Install only what is missing, never
+# the package itself, so a shared venv keeps serving other worktrees.
+MISSING_PACKAGES="$(python - <<'PY_DEPS'
+import importlib.util
+needed = {"cloudpickle": "cloudpickle>=2.2", "sklearn": "scikit-learn>=1.3",
+          "pywt": "PyWavelets>=1.4", "PyEMD": "EMD-signal>=1.6",
+          "pandas": "pandas>=2.0", "scipy": "scipy>=1.10"}
+print(" ".join(spec for module, spec in needed.items()
+               if importlib.util.find_spec(module) is None))
+PY_DEPS
+)"
+if [[ -n "$MISSING_PACKAGES" ]]; then
+    echo "Installing missing packages: $MISSING_PACKAGES"
+    # shellcheck disable=SC2086
+    python -m pip install $MISSING_PACKAGES
+fi
+for required_file in "$EEG_PATH" "$LABELS_PATH"; do
+    if [[ ! -f "$required_file" ]]; then
+        echo "ERROR: dataset file not found: $required_file" >&2
+        exit 1
+    fi
+done
 export PYTHONUNBUFFERED=1
 export TRAINING_SEED
 export PYTHONHASHSEED="$TRAINING_SEED"
@@ -254,6 +281,25 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
 fi
 python --version
 nvidia-smi
+
+# Stop before training if eegproc resolves outside this checkout or the
+# builder predates the temporal reconstruction terms.
+python - "$PROJECT_DIR" <<'PY_SOURCE'
+import inspect, sys
+from pathlib import Path
+from eegproc.deep_learning.joint_architectures.SICModelv15 import sic_model
+from eegproc.deep_learning.joint_architectures.sic_common import model as common
+root = Path(sys.argv[1]).resolve()
+for module in (sic_model, common):
+    path = Path(module.__file__).resolve()
+    print(f"eegproc source: {path}")
+    if root not in path.parents:
+        raise SystemExit(f"ERROR: {path} is not inside PROJECT_DIR {root}")
+parameters = inspect.signature(sic_model.build_sic_model).parameters
+for name in ("reconstruction_seam_weight", "reconstruction_derivative_weight"):
+    if name not in parameters:
+        raise SystemExit(f"ERROR: build_sic_model has no {name}; wrong checkout")
+PY_SOURCE
 
 # Verify the allocation and the two-GPU training path before the full run.
 python - <<'PY_GPU'
