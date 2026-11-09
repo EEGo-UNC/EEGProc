@@ -85,7 +85,9 @@ class TrialRecorder:
 
     Step s is the state BEFORE update s+1. Every finite step is written to
     the scalar history. Signals, window latents, gradients and optimizer
-    tensors are not persisted. Small terminal classification embeddings may
+    tensors are not automatically persisted. The optional repair baseline
+    separately saves its reconstruction, covered by the same commit marker.
+    Small terminal classification embeddings may
     be retained in endpoint summaries for independent distributional scoring.
     Completed trials can be reused; unfinished trials retain all attempts.
     """

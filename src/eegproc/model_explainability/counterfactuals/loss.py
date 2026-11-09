@@ -31,6 +31,15 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
+if __package__:
+    from .amplitude_spectral import amplitude_and_power
+    from .temporal_phase import envelope_distance_tf, temporal_penalties
+else:
+    from amplitude_spectral import amplitude_and_power
+    from temporal_phase import envelope_distance_tf, temporal_penalties
+
+DECODED_METRICS = ("mse", "envelope")
+
 """
 Standard DREAMER/AMIGOS/eegemotions_27 14-channel Emotiv EPOC montage, in the
 channel-major order used by eegproc.deep_learning.prepare_datasets.DREAMER_EEG_COLS
@@ -287,7 +296,12 @@ class CounterfactualLoss:
 
     The objective is target_weight * target_loss + latent_weight * MSE(z', z)
     + decoded_weight * mean_r MSE(R_r(z'), R_r(z)) + physiological_weight *
-    mean_r VCSC(R_r(z')). The optimizer supplies the selected reconstruction
+    mean_r VCSC(R_r(z')) [+ amplitude_spectral_weight * mean_r A(R_r(z')) when
+    a source amplitude/spectral reference is supplied] [+ temporal_sparsity_weight
+    * mean|delta| + temporal_tv_weight * mean|delta_{t+1} - delta_t| on the
+    standardized latent edit, when either weight is positive]. decoded_metric
+    "envelope" replaces the decoded MSE with a phase-invariant distance between
+    log band-power envelopes (counterfactuals.temporal_phase). The optimizer supplies the selected reconstruction
     paths: independent branch decoders or the saved joint reconstruction.
     The physiological term only participates in optimization when
     physiological_weight is nonzero, and that weight defaults to 0.
@@ -308,6 +322,10 @@ class CounterfactualLoss:
     vcsc_tau_cm: float = 4.0
     vcsc_z0: float = 2.0
     vcsc_z_max: float = 20.0
+    amplitude_spectral_weight: float = 0.0
+    temporal_sparsity_weight: float = 0.0
+    temporal_tv_weight: float = 0.0
+    decoded_metric: str = "mse"
 
     def __post_init__(self):
         for name in (
@@ -319,12 +337,17 @@ class CounterfactualLoss:
             "vcsc_tau_cm",
             "vcsc_z0",
             "vcsc_z_max",
+            "amplitude_spectral_weight",
+            "temporal_sparsity_weight",
+            "temporal_tv_weight",
         ):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and nonnegative.")
         if self.target_weight == 0:
             raise ValueError("target_weight must be positive.")
+        if self.decoded_metric not in DECODED_METRICS:
+            raise ValueError(f"decoded_metric must be one of {DECODED_METRICS}.")
         if self.vcsc_tau_cm <= 0:
             raise ValueError("vcsc_tau_cm must be positive.")
         if self.vcsc_z_max <= self.vcsc_z0:
@@ -389,8 +412,10 @@ class CounterfactualLoss:
         reconstructions = decoder(z_prime)
         if not reconstructions or set(reconstructions) != set(reference_reconstructions):
             raise ValueError("Candidate and original reconstruction paths must match and be nonempty.")
+        metric = (self.latent_distance if self.decoded_metric == "mse"
+                  else lambda a, b: tf.cast(envelope_distance_tf(a, b), a.dtype))
         distances = {
-            name: self.latent_distance(value, reference_reconstructions[name])
+            name: metric(value, reference_reconstructions[name])
             for name, value in reconstructions.items()
         }
         return (
@@ -437,6 +462,40 @@ class CounterfactualLoss:
         #to the target/latent/decoded terms instead of growing with pair count.
         return tf.cast(tf.reduce_mean(weight * penalty), x_prime.dtype)
 
+    def temporal_scale(self):
+        """Per-latent-feature scale for the temporal terms, or None (unit).
+
+        typicality.physiology.make_vcsc_loss supplies the source-trial latent
+        standard deviation, so the terms are comparable across features.
+        """
+        return None
+
+    def amplitude_spectral_reference(self):
+        """Source bounds for the amplitude/spectral term, or None.
+
+        The base loss has no physiological reference, so the term is absent.
+        typicality.physiology.make_vcsc_loss supplies one from the fold's
+        source subjects; see counterfactuals.amplitude_spectral.
+        """
+        return None
+
+    def amplitude_spectral(self, x_prime, *, signal_scale=None, signal_offset=None):
+        """Return (penalty, diagnostics) for one decoded trial.
+
+        signal_scale/signal_offset are the trial's normalization arrays, so the
+        descriptors are compared with the physical-unit source bounds.
+        """
+        reference = self.amplitude_spectral_reference()
+        if reference is None:
+            raise ValueError("This loss has no amplitude/spectral reference.")
+        amplitude, power = amplitude_and_power(
+            x_prime, fs=_VCSC_DEFAULT_FS, n_channels=len(_VCSC_CHANNELS),
+            band_edges=_VCSC_BAND_EDGES_HZ, scale=signal_scale, offset=signal_offset,
+        )
+        penalty, diagnostics = reference.penalty(
+            {"amplitude": amplitude, "spectral_power": power})
+        return tf.cast(penalty, x_prime.dtype), diagnostics
+
     def central_loss(
         self,
         *,
@@ -449,11 +508,16 @@ class CounterfactualLoss:
         reference_reconstructions=None,
         target_loss_override=None,
         target_components=None,
+        signal_scale=None,
+        signal_offset=None,
     ):
         """Return (loss_terms, reconstructions) for one optimization step.
 
         loss_terms contains total, the four unweighted terms, their four
-        weighted contributions, and decoded_<path> distances. All are scalar
+        weighted contributions, and decoded_<path> distances. A loss with an
+        amplitude/spectral reference adds a fifth term, amplitude_spectral,
+        its weighted contribution, and the worst-path in-range fractions and
+        largest graded deviation of each family. All are scalar
         tensors, allowing a single GradientTape to differentiate total. A
         model-aware optimizer may replace the default confidence target with
         a pre-gradient focal/VC component and supply separately logged target
@@ -482,6 +546,30 @@ class CounterfactualLoss:
             )
             / len(reconstructions),
         }
+        if self.temporal_sparsity_weight > 0 or self.temporal_tv_weight > 0:
+            # Present only when enabled, so default losses keep their
+            # historical terms. Both are logged whenever either is active.
+            sparsity, tv = temporal_penalties(z_prime, z, self.temporal_scale())
+            terms["temporal_sparsity"] = tf.cast(sparsity, z_prime.dtype)
+            terms["temporal_tv"] = tf.cast(tv, z_prime.dtype)
+        amplitude_spectral_diagnostics = {}
+        if self.amplitude_spectral_reference() is not None:
+            # Present only with a source reference, so losses without one keep
+            # exactly the four historical terms. With weight 0 the term is a
+            # logged diagnostic and contributes no gradient.
+            penalties, per_path = [], []
+            for reconstruction in reconstructions.values():
+                penalty, diagnostics = self.amplitude_spectral(
+                    reconstruction, signal_scale=signal_scale, signal_offset=signal_offset)
+                penalties.append(penalty)
+                per_path.append(diagnostics)
+            terms["amplitude_spectral"] = tf.add_n(penalties) / len(penalties)
+            # Feasibility must hold on every reconstruction path: keep the
+            # worst in-range fraction and the largest graded deviation.
+            for key in per_path[0]:
+                stack = tf.stack([d[key] for d in per_path])
+                amplitude_spectral_diagnostics[key] = (
+                    tf.reduce_min(stack) if key.endswith("_in_range") else tf.reduce_max(stack))
         weighted = {
             f"weighted_{name}": getattr(self, f"{name}_weight") * value
             for name, value in terms.items()
@@ -491,6 +579,7 @@ class CounterfactualLoss:
             **terms,
             **weighted,
             **{f"decoded_{name}": value for name, value in branch_distances.items()},
+            **amplitude_spectral_diagnostics,
         }
         if target_components:
             overlap = set(result).intersection(target_components)

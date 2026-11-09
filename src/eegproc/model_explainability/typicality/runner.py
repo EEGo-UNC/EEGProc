@@ -22,6 +22,9 @@ from ..counterfactuals.arguments import _positive_float, _nonnegative_float, _no
 from ..counterfactuals.optimizer import CounterfactualOptimizer, EVALUATION_PROTOCOL
 from ..counterfactuals.fusion import validate_fixed_joint_alpha
 from ..counterfactuals.loss import _VCSC_CHANNELS
+from ..counterfactuals.amplitude_spectral import AmplitudeSpectralReference
+from ..counterfactuals.loss import DECODED_METRICS
+from ..counterfactuals.temporal_phase import envelope_distance_np, latent_scale
 from ..model_agnostic.sic_adapter import create_sic_adapter
 from .sic_embedding import SICTrialEmbedding
 from .core import TypicalityRegion, SCHEMA_VERSION, SCORE_DEFINITION, REPRESENTATION, TYPICALITY_QUANTILE
@@ -31,7 +34,7 @@ from .knn_evaluation import evaluate_trial_embeddings
 from .knn_report import build_knn_report
 from .artifacts import (write_json, write_csv, file_sha256,
                                   array_sha256, TrialRecorder, completed_attempt, next_attempt)
-from .physiology import (signal_diagnostics, PhysiologicalReference,
+from .physiology import (signal_diagnostics, seam_diagnostics, PhysiologicalReference,
                                    vcsc_calibration, make_vcsc_loss, DEFAULT_BANDS, FAMILIES)
 from .results import recognition_metrics, build_report
 
@@ -96,6 +99,28 @@ def build_parser():
                         help="Minimum decrease in D that resets typicality improvement patience.")
     parser.add_argument("--physiological-tolerance", type=_nonnegative_float, default=1e-8,
                         help="Largest raw VCSC penalty considered physiologically feasible when its weight is positive.")
+    parser.add_argument("--physiological-tolerance-quantile", type=_positive_float,
+                        help="Replace --physiological-tolerance with this quantile (0,1) of VCSC on the fold's "
+                             "source-subject REAL trials, so feasible means 'as plausible as real EEG' rather "
+                             "than 'more typical than almost all real EEG'. Recorded in calibration/vcsc_tolerance.json.")
+    parser.add_argument("--amplitude-spectral-weight", type=_nonnegative_float, default=0.0,
+                        help="Weight of the amplitude/spectral-power penalty (graded exceedance of the source "
+                             "intervals used by the reported physiology checks). 0 disables it.")
+    parser.add_argument("--amplitude-spectral-margin", type=_nonnegative_float, default=0.0,
+                        help="Shrink each source interval by this fraction of its half-width inside the penalty, in [0,1).")
+    parser.add_argument("--temporal-sparsity-weight", type=_nonnegative_float, default=0.0,
+                        help="Fused-lasso sparsity: weight of mean |delta| on the latent edit standardized by the "
+                             "fold's source-trial latent std. 0 disables it.")
+    parser.add_argument("--temporal-tv-weight", type=_nonnegative_float, default=0.0,
+                        help="Fused-lasso smoothness: weight of mean |delta_{t+1} - delta_t| (total variation over "
+                             "time) on the same standardized edit. 0 disables it.")
+    parser.add_argument("--decoded-distance", choices=DECODED_METRICS, default="mse",
+                        help="Decoded proximity term: sample-wise mse (historical) or envelope, a phase-invariant "
+                             "distance between log band-power envelopes. Both are always reported.")
+    parser.add_argument("--include-repair-baseline", action="store_true",
+                        help="Per eligible trial, first find the smallest latent edit that makes the decoded trial "
+                             "physiologically feasible with NO target term (z_rep). Every arm then also reports its "
+                             "decoded change relative to R(z_rep), separating explanation from decoder repair.")
     parser.add_argument("--log-every", type=_nonnegative_int, default=10)
     parser.add_argument("--fs", type=_positive_float, default=128.0)
     parser.add_argument("--physiology-quantile", type=_positive_float, default=0.95)
@@ -123,6 +148,12 @@ def parse_args(argv=None):
         parser.error("--knn-k must be positive; neighbour quantile and calibration fraction must be in (0, 1)")
     if args.physiology_required_fraction > 1 or args.ece_bins < 1:
         parser.error("Invalid physiology fraction or ECE bin count")
+    if args.physiological_tolerance_quantile is not None and not 0 < args.physiological_tolerance_quantile < 1:
+        parser.error("--physiological-tolerance-quantile must be in (0, 1)")
+    if not 0 <= args.amplitude_spectral_margin < 1:
+        parser.error("--amplitude-spectral-margin must be in [0, 1)")
+    if args.include_repair_baseline and args.physiological_weight == 0 and args.amplitude_spectral_weight == 0:
+        parser.error("--include-repair-baseline needs a positive physiological or amplitude/spectral weight")
     if (args.min_gradient_norm == 0) != (args.low_gradient_patience == 0):
         parser.error("--min-gradient-norm and --low-gradient-patience must both be zero to disable stopping, or both be positive")
     if args.decoder_mode == "branches" and args.report_output not in ("gcn_gru", "bilstm"):
@@ -186,6 +217,16 @@ def _diagnostics(dataset, index, values, args):
                               feature_order=dataset.feature_order or "channel-major")
 
 
+def _seams(dataset, index, values):
+    """Window-seam continuity of one trial in physical units, JSON-safe."""
+    seams = seam_diagnostics(_physical_signal(dataset, index, values), n_channels=14,
+                             band_edges=DEFAULT_BANDS, feature_order=dataset.feature_order or "channel-major")
+    for key in ("phase_residual_median_rad", "amplitude_jump_ratio_median"):
+        if seams[key] is not None:
+            seams[key] = [float(v) if np.isfinite(v) else None for v in np.asarray(seams[key], dtype=float)]
+    return seams
+
+
 def _objective_names(args):
     names = ["base", "typicality"]
     if args.include_target_latent:
@@ -225,13 +266,38 @@ def _protocol(args, dataset, folds):
         package_dir / "counterfactuals" / "optimizer.py",
         package_dir / "counterfactuals" / "fusion.py",
         package_dir / "counterfactuals" / "loss.py",
+        package_dir / "counterfactuals" / "amplitude_spectral.py",
+        package_dir / "counterfactuals" / "temporal_phase.py",
         package_dir / "model_agnostic" / "adapter.py",
-        package_dir / "model_agnostic" / "runner.py",
+        package_dir / "model_agnostic" / "optimizer.py",
         package_dir / "model_agnostic" / "sic_adapter.py",
     ]
     return {"schema_version": SCHEMA_VERSION, "task": args.task, "arguments": arguments, "folds": folds,
             "artifact_format": "json_csv_summaries",
             "objectives": _objective_names(args),
+            "repair_baseline": bool(args.include_repair_baseline),
+            "repair_baseline_definition": ("z_rep = feasible latent edit of z under the physiological constraints and "
+                                           "latent/decoded proximity, with no target term; explanation change = "
+                                           "RMSE(dec(Hcf), dec(H_rep)), repair change = RMSE(dec(H_rep), dec(H))"
+                                           if args.include_repair_baseline else None),
+            "physiological_tolerance_rule": (
+                f"quantile {args.physiological_tolerance_quantile} of VCSC on source-subject real trials"
+                if args.physiological_tolerance_quantile is not None
+                else f"fixed {args.physiological_tolerance}"),
+            "amplitude_spectral_objective": (
+                "weight * mean relu(|v-m|/h - (1-margin))^2 over amplitude and spectral-power source intervals; "
+                "feasible iff each family meets the physiology required fraction"
+                if args.amplitude_spectral_weight > 0 else None),
+            "temporal_smoothing_objective": (
+                "fused lasso on delta = (z' - z) / sigma_source flattened over windows x timesteps: "
+                "sparsity_weight * mean smooth|delta| + tv_weight * mean smooth|delta_{t+1} - delta_t|, "
+                "smooth|x| = sqrt(x^2 + 1e-6) - 1e-3; sigma_source = per-feature latent std over the "
+                "fold's source trials"
+                if args.temporal_sparsity_weight > 0 or args.temporal_tv_weight > 0 else None),
+            "decoded_distance": (
+                "mean squared difference of log(pooled Hann-tapered Hilbert envelope + 1e-3), "
+                "pooled over up to 32 samples per window"
+                if args.decoded_distance == "envelope" else "sample-wise mse"),
             "dataset_sha256": {name: array_sha256(value) for name, value in arrays.items()},
             "source_sha256": {
                 p.relative_to(package_dir).as_posix(): file_sha256(p)
@@ -245,7 +311,8 @@ def _protocol(args, dataset, folds):
             "round_trip_evaluation": EVALUATION_PROTOCOL,
             "counterfactual_validity": "target argmax and confidence on the optimized full-trial classification embedding; all eligible trials retained",
             "counterfactual_validity_prediction_space": "latent",
-            "decoded_evaluation": "displacement, physiology, and separately archived frozen re-encoded embeddings for neighbour diagnostics; optimization success remains latent-only",
+            "decoded_evaluation": "post-hoc frozen re-encoding: target argmax/confidence, Gaussian typicality, and independent neighbours for every arm; optimization success remains latent-only",
+            "posthoc_decoded_evaluation": True,
             "encoded_neighbors": {"enabled": args.knn_evaluation, "definition": KNN_DEFINITION,
                 "representation": REPRESENTATION, "k": args.knn_k, "quantile": args.knn_quantile,
                 "calibration_fraction": args.knn_calibration_fraction, "seed": args.seed,
@@ -268,6 +335,118 @@ def _protocol(args, dataset, folds):
             "aperiodic_status": "unavailable from band-filtered decoder; never counted as passed"}
 
 
+def _score_decoded_counterfactual(model, region, decoded, *, report_output, target_probability=None,
+                                  input_name="decoded_counterfactual_eeg_reencoded_by_frozen_classifier"):
+    """Score the generated EEG after a fresh pass through the frozen encoder.
+
+    This differs from the optimizer's D(Zcf): the decoder and encoder need not
+    be an exact inverse, so only this score describes the delivered waveform.
+    With target_probability, also apply the latent success rule (argmax is the
+    target and its probability >= target_probability) and the typicality rule
+    (D <= tau) to the re-encoded trial.
+    """
+    signal = np.asarray(decoded, dtype=np.float32)
+    if signal.ndim != 4 or signal.shape[0] != 1 or not np.isfinite(signal).all():
+        raise ValueError("Decoded counterfactual must be one finite full EEG trial")
+    features = model.get_encoder_features(signal)
+    target = int(region.metadata["target_class"])
+    embedding = np.asarray(features["classification_embedding"], dtype=np.float64)
+    probabilities = np.asarray(features["probabilities"], dtype=np.float64)
+    if embedding.shape != (1, len(region.prior_mean)) or not np.isfinite(embedding).all():
+        raise ValueError("Re-encoded decoded counterfactual has an invalid embedding")
+    if (probabilities.shape != (1, 2) or not np.isfinite(probabilities).all()
+            or np.any(probabilities < 0) or not np.allclose(probabilities.sum(axis=1), 1, atol=1e-5)):
+        raise ValueError("Re-encoded decoded counterfactual has invalid probabilities")
+    score = {
+        "input": input_name,
+        "report_output": report_output,
+        "target_class": target,
+        "classification_embedding": embedding[0].tolist(),
+        "probabilities": probabilities[0].tolist(),
+        "predicted_class": int(probabilities[0].argmax()),
+        "discrepancy": float(region.score(embedding)[0]),
+        "source_threshold": float(region.tau),
+    }
+    if target_probability is not None:
+        score.update(target_probability=float(probabilities[0, target]),
+                     success=bool(score["predicted_class"] == target and probabilities[0, target] >= target_probability),
+                     typical=bool(score["discrepancy"] <= score["source_threshold"]))
+    return score
+
+
+def _normalization(dataset, index):
+    """This trial's normalization arrays (model units -> physical units)."""
+    if dataset.normalization_scale is None:
+        return None, None
+    return dataset.normalization_scale[index], dataset.normalization_offset[index]
+
+
+def _repair_baseline(args, dataset, index, subject, trial, entry, optimizer, loss,
+                     physiological, scale, offset, directory):
+    """Run (or reuse) the repair-only optimization for one trial.
+
+    Returns ({reconstruction, diagnostics, summary} or None, n_errors).
+    Its scalar metrics go in result.json like every arm. The repaired
+    reconstruction R(z_rep) itself is the one array this runner archives
+    (repair_reconstruction.npz, one per eligible trial, only with
+    --include-repair-baseline): the other arms are measured against it,
+    including after --resume, and it cannot be rebuilt from scalars.
+    """
+    arm_dir = directory / f"trial_{trial}" / "repair"
+    done = completed_attempt(arm_dir) if args.resume else None
+    if done is not None:
+        with np.load(done / "repair_reconstruction.npz", allow_pickle=False) as saved:
+            reconstruction = saved["x_repair"]
+        summary = json.loads((done / "result.json").read_text())
+    else:
+        seed = int(np.random.SeedSequence([args.seed, subject, trial]).generate_state(1)[0])
+        tf.keras.utils.set_random_seed(seed)
+        recorder = TrialRecorder(next_attempt(arm_dir))
+        metadata = {"schema_version": SCHEMA_VERSION, "task": args.task, "subject_id": subject, "trial_id": trial,
+                    "true_class": args.source_class, "source_class": args.source_class,
+                    "target_class": args.target_class, "direction": args.direction,
+                    "objective": "repair", "seed": seed, "report_output": args.report_output,
+                    "checkpoint_sha256": entry["sha256"], "round_trip_evaluation": EVALUATION_PROTOCOL}
+        try:
+            result = optimizer.optimize(dataset.features[index:index + 1], target_class=args.target_class,
+                                        progress=recorder.record, signal_scale=scale, signal_offset=offset)
+            arrays, summary = result["arrays"], result["summary"]
+            reconstruction = arrays[f"x_prime_{args.report_output}"]
+            baseline = arrays[f"x_reconstructed_{args.report_output}"]
+            repair_change = float(np.mean((reconstruction - baseline) ** 2))
+            summary.update(
+                repair_change_mse=repair_change,
+                delta_dec_repair=float(np.sqrt(repair_change)),
+                repair_change_env=envelope_distance_np(reconstruction, baseline),
+                vcsc_repair=float(loss.physiological_validity(tf.convert_to_tensor(reconstruction)).numpy()),
+                vcsc_original_reconstruction=float(loss.physiological_validity(tf.convert_to_tensor(baseline)).numpy()),
+                physiology=physiological.assess(_diagnostics(dataset, index, reconstruction, args)),
+            )
+            np.savez_compressed(recorder.directory / "repair_reconstruction.npz",
+                                x_repair=reconstruction.astype(np.float32))
+            summary = recorder.finish(result, metadata)
+        except (FloatingPointError, RuntimeError, ValueError, tf.errors.OpError) as error:
+            recorder.fail(error, metadata)
+            print(f"  FAILED s={subject} trial={trial} repair: {error}", flush=True)
+            return None, 1
+        finally:
+            recorder.close()
+    return {
+        "reconstruction": reconstruction,
+        "diagnostics": _diagnostics(dataset, index, reconstruction, args),
+        "summary": {
+            "available": True,
+            "feasible": bool(summary["selected_feasible"]),
+            "preserves_prediction": bool(summary.get("repair_preserves_prediction")),
+            "selected_step": summary["selected_step"],
+            "stop_reason": summary["stop_reason"],
+            "repair_change_mse": summary["repair_change_mse"],
+            "delta_dec_repair": summary["delta_dec_repair"],
+            "repair_change_env": summary["repair_change_env"],
+            "vcsc_repair": summary["vcsc_repair"],
+        },
+    }, 0
+
 
 def run_fold(args, dataset, entry, out):
     subject = entry["subject_id"]
@@ -289,10 +468,19 @@ def run_fold(args, dataset, entry, out):
     source_embeddings = []
     source_probabilities = []
     print(f"Subject {subject}: encoding {len(source)} source trials for calibration", flush=True)
-    for index in source:
-        features = model.get_encoder_features(dataset.features[index:index + 1])
-        source_embeddings.append(features["classification_embedding"].numpy()[0])
-        source_probabilities.append(features["probabilities"].numpy()[0])
+
+    def encode_source():
+        # Streams each source trial's latent sequence into latent_scale, so
+        # source latents are never all held in memory.
+        for index in source:
+            features = model.get_encoder_features(dataset.features[index:index + 1])
+            source_embeddings.append(features["classification_embedding"].numpy()[0])
+            source_probabilities.append(features["probabilities"].numpy()[0])
+            yield features["window_features"].numpy()
+    # Per-feature latent std over the source trials: the unit in which the
+    # temporal smoothing terms and the reported latent-edit structure are
+    # measured. Source-derived, like every other calibration constant here.
+    temporal_scale = latent_scale(encode_source())
     source_embeddings = np.stack(source_embeddings)
     region = TypicalityRegion.calibrate(
         source_embeddings, prior_mean=prior_mean, prior_variance=prior_variance,
@@ -302,6 +490,10 @@ def run_fold(args, dataset, entry, out):
     )
     region.save(directory / "calibration")
     write_json(directory / "calibration" / "representation.json", embedding_map.metadata())
+    write_json(directory / "calibration" / "latent_scale.json", {
+        "latent_std": temporal_scale, "n_source_trials": int(len(source)),
+        "definition": "per-feature std of window_features over source trials, windows and timesteps; "
+                      "floored at 1e-3 x median"})
     write_json(directory / "calibration" / "source_trials.json", dict(
         embeddings=source_embeddings, probabilities=np.stack(source_probabilities), discrepancy=region.score(source_embeddings),
         subject_ids=dataset.subject_ids[source], trial_ids=dataset.trial_ids[source], labels=dataset.labels[source]))
@@ -349,15 +541,45 @@ def run_fold(args, dataset, entry, out):
         "physiology_required_fraction": args.physiology_required_fraction,
         "source_component_arrays_saved": False,
     })
-    loss = make_vcsc_loss(vcsc, target_weight=args.target_weight, latent_weight=args.latent_weight,
-                            decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
-                            target_probability=args.target_probability)
+    amplitude_spectral = (
+        AmplitudeSpectralReference.from_physiological_reference(physiological, margin=args.amplitude_spectral_margin)
+        if args.amplitude_spectral_weight > 0 else None)
+    loss = make_vcsc_loss(vcsc, amplitude_spectral=amplitude_spectral, temporal_scale=temporal_scale,
+                          target_weight=args.target_weight, latent_weight=args.latent_weight,
+                          decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
+                          amplitude_spectral_weight=args.amplitude_spectral_weight,
+                          temporal_sparsity_weight=args.temporal_sparsity_weight,
+                          temporal_tv_weight=args.temporal_tv_weight,
+                          decoded_metric=args.decoded_distance,
+                          target_probability=args.target_probability)
+    physiological_tolerance = args.physiological_tolerance
+    if args.physiological_tolerance_quantile is not None:
+        # The same calibrated VCSC the optimizer uses, on the same real
+        # source trials it is calibrated from. In-sample, so slightly
+        # optimistic; held-out real-trial VCSC is archived per trial as
+        # vcsc_original_input for comparison.
+        score = tf.function(loss.physiological_validity)
+        source_vcsc = np.asarray([float(score(tf.convert_to_tensor(dataset.features[i][None], tf.float32)).numpy())
+                                  for i in source])
+        physiological_tolerance = float(np.quantile(source_vcsc, args.physiological_tolerance_quantile))
+        write_json(directory / "calibration" / "vcsc_tolerance.json", {
+            "rule": "quantile of VCSC on source-subject real trials",
+            "quantile": args.physiological_tolerance_quantile, "tolerance": physiological_tolerance,
+            "n_source_trials": len(source_vcsc),
+            "source_vcsc_quantiles": {str(q): float(np.quantile(source_vcsc, q))
+                                      for q in (0.05, 0.25, 0.5, 0.75, 0.95)},
+            "source_vcsc_fraction_zero": float(np.mean(source_vcsc == 0)),
+            "subject_ids": dataset.subject_ids[source], "trial_ids": dataset.trial_ids[source]})
+        print(f"Subject {subject}: VCSC feasibility tolerance {physiological_tolerance:.6g} "
+              f"(source real-trial quantile {args.physiological_tolerance_quantile})", flush=True)
+    if amplitude_spectral is not None:
+        write_json(directory / "calibration" / "amplitude_spectral.json", amplitude_spectral.metadata())
     common = dict(loss=loss, learning_rate=args.learning_rate, learning_rate_decay=args.learning_rate_decay,
                   target_loss_component=args.target_loss_component, max_steps=args.max_steps,
                   gradient_clip_norm=args.gradient_clip_norm,
                   min_gradient_norm=args.min_gradient_norm,
                   low_gradient_patience=args.low_gradient_patience,
-                  physiological_tolerance=args.physiological_tolerance,
+                  physiological_tolerance=physiological_tolerance,
                   decoder_mode=args.decoder_mode, fixed_joint_alpha=args.fixed_joint_alpha, typicality=region)
     # Both arms use identical seeds, frozen models, starts, budgets, and central
     # losses. Base stops at first feasible success; typicality then minimizes D.
@@ -379,7 +601,9 @@ def run_fold(args, dataset, entry, out):
         # contribution and the decoded proximity term for this arm only.
         target_latent = CounterfactualOptimizer(
             model, typicality_weight=0.0, stop_on_success=args.stop_on_success,
-            **{**common, "loss": replace(loss, decoded_weight=0.0, physiological_weight=0.0)},
+            **{**common, "loss": replace(loss, decoded_weight=0.0, physiological_weight=0.0,
+                                         amplitude_spectral_weight=0.0, temporal_sparsity_weight=0.0,
+                                         temporal_tv_weight=0.0)},
         )
         optimizers = {"target_latent": target_latent, **optimizers}
     if args.include_typicality_no_physiology:
@@ -388,10 +612,15 @@ def run_fold(args, dataset, entry, out):
             stop_on_success=False,
             typicality_improvement_patience=args.typicality_improvement_patience,
             typicality_min_delta=args.typicality_min_delta,
-            **{**common, "loss": replace(loss, physiological_weight=0.0)},
+            **{**common, "loss": replace(loss, physiological_weight=0.0, amplitude_spectral_weight=0.0)},
         )
     if args.report_output not in optimizers["base"].decoded_names:
         raise ValueError("The selected report output is not present in this checkpoint")
+    # Not an objective: a per-trial baseline the objectives are measured against.
+    # Stops at the first feasible iterate, so it is the smallest repair found.
+    repair_optimizer = (CounterfactualOptimizer(model, typicality_weight=0.0, stop_on_success=True,
+                                                repair_only=True, **common)
+                        if args.include_repair_baseline else None)
     predictions, discrepancies, held_embeddings, eligible = [], [], [], []
     for index in held:
         features = model.get_encoder_features(dataset.features[index:index + 1])
@@ -421,12 +650,20 @@ def run_fold(args, dataset, entry, out):
                  "eligible_trial_ids": dataset.trial_ids[eligible].tolist(),
                  "all_trial_ids": dataset.trial_ids[held].tolist(), "loss": asdict(loss),
                  "objective_losses": {name: asdict(optimizer.loss) for name, optimizer in optimizers.items()},
+                 "physiological_tolerance": physiological_tolerance,
+                 "repair_baseline": bool(repair_optimizer),
                  "recognition": recognition_metrics(dataset.labels[held], np.stack(predictions), ece_bins=args.ece_bins)}
     write_json(directory / "fold.json", fold_info)
     print(f"Subject {subject}: tau={region.tau:.6g}; {len(eligible)} eligible trials, objectives={','.join(optimizers)}", flush=True)
     errors = 0
     for index in eligible:
         trial = int(dataset.trial_ids[index])
+        scale, offset = _normalization(dataset, index)
+        repair = None
+        if repair_optimizer is not None:
+            repair, failed = _repair_baseline(args, dataset, index, subject, trial, entry, repair_optimizer,
+                                              loss, physiological, scale, offset, directory)
+            errors += failed
         for objective, optimizer in optimizers.items():
             arm_dir = directory / f"trial_{trial}" / objective
             if args.resume and completed_attempt(arm_dir):
@@ -450,7 +687,7 @@ def run_fold(args, dataset, entry, out):
 
             try:
                 result = optimizer.optimize(dataset.features[index:index + 1], target_class=args.target_class,
-                                             progress=progress)
+                                             progress=progress, signal_scale=scale, signal_offset=offset)
                 arrays, summary = result["arrays"], result["summary"]
                 original, baseline, counterfactual = (arrays[name] for name in
                     ("x", f"x_reconstructed_{args.report_output}", f"x_prime_{args.report_output}"))
@@ -467,17 +704,58 @@ def run_fold(args, dataset, entry, out):
                 summary.update(evaluate_trial_embeddings(model, arrays,
                     report_output=args.report_output, reference=neighbors))
                 summary["encoded_neighbors_status"] = neighbor_info["status"]
+                # Every arm's delivered EEG is re-encoded by the frozen classifier
+                # (reviewer request): does the decoded counterfactual itself flip
+                # and land in the region? The reconstruction R(z) and, when run,
+                # the repair R(z_rep) are scored the same way as controls.
+                summary["decoded_counterfactual"] = _score_decoded_counterfactual(
+                    model, region, counterfactual, report_output=args.report_output,
+                    target_probability=args.target_probability,
+                )
+                summary["decoded_reconstruction"] = _score_decoded_counterfactual(
+                    model, region, baseline, report_output=args.report_output,
+                    target_probability=args.target_probability,
+                    input_name="decoded_reconstruction_eeg_reencoded_by_frozen_classifier",
+                )
+                if repair is not None:
+                    summary["decoded_repair"] = _score_decoded_counterfactual(
+                        model, region, repair["reconstruction"], report_output=args.report_output,
+                        target_probability=args.target_probability,
+                        input_name="decoded_repair_eeg_reencoded_by_frozen_classifier",
+                    )
                 # A channel-by-band summary supports the report's scalp maps
                 # without retaining decoded signals or full spectral arrays.
-                write_json(recorder.directory / "band_power.json", {
+                band_power = {
                     "channel_names": dataset.channel_names, "band_names": dataset.band_names,
                     "power_change": (diagnostic_sets["counterfactual"]["spectral_power"]
                                      - diagnostic_sets["reconstruction"]["spectral_power"]),
-                })
+                }
+                if repair is not None:
+                    # Explanation = change relative to the repaired decoder output.
+                    diagnostic_sets["repair"] = repair["diagnostics"]
+                    band_power["power_change_vs_repair"] = (diagnostic_sets["counterfactual"]["spectral_power"]
+                                                            - repair["diagnostics"]["spectral_power"])
+                    explanation = float(np.mean((counterfactual - repair["reconstruction"]) ** 2))
+                    summary["repair_baseline"] = {
+                        **repair["summary"],
+                        "explanation_change_mse": explanation,
+                        "delta_dec_explanation": float(np.sqrt(explanation)),
+                        "explanation_change_env": envelope_distance_np(counterfactual, repair["reconstruction"]),
+                    }
+                elif repair_optimizer is not None:
+                    summary["repair_baseline"] = {"available": False}
+                write_json(recorder.directory / "band_power.json", band_power)
                 write_json(recorder.directory / "physiology.json", {
                     name: physiological.assess(d, channel_names=dataset.channel_names,
                         band_names=dataset.band_names, signal_unit=dataset.signal_unit)
                     for name, d in diagnostic_sets.items()})
+                # Kept out of physiology.json, whose schema downstream graders read.
+                seam_signals = {"original": original, "reconstruction": baseline, "counterfactual": counterfactual}
+                if repair is not None:
+                    seam_signals["repair"] = repair["reconstruction"]
+                write_json(recorder.directory / "seams.json", {
+                    "band_names": dataset.band_names,
+                    **{name: _seams(dataset, index, values) for name, values in seam_signals.items()}})
                 recorder.finish(result, metadata)
             except (FloatingPointError, RuntimeError, ValueError, tf.errors.OpError) as error:
                 recorder.fail(error, metadata)
@@ -550,7 +828,8 @@ def run_study(args):
             previous = json.loads(info.read_text())
             if previous["status"] == "completed" and all(
                 completed_attempt(info.parent / f"trial_{trial}" / objective)
-                for trial in previous["eligible_trial_ids"] for objective in protocol["objectives"]
+                for trial in previous["eligible_trial_ids"]
+                for objective in protocol["objectives"] + (["repair"] if protocol.get("repair_baseline") else [])
             ):
                 print(f"Subject {fold['subject_id']}: verified cached fold", flush=True)
                 continue

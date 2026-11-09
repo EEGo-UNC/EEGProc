@@ -91,9 +91,33 @@ def population_summary(rows):
         unknown = any(r["status"] == "completed" and r.get(field) is None for r in rows)
         result[f"{field}_percent"] = (100 * sum(r.get(field) is True for r in rows) / n
                                       if n and expected and not unknown else None)
+    for prefix in ("reencoded", "reencoded_reconstruction", "reencoded_repair"):
+        # Percent of ELIGIBLE trials (failed/pending count as not successful),
+        # matching the latent rates above; only when this run scored them.
+        if any(f"{prefix}_target_success" in r for r in rows):
+            result[f"{prefix}_n_evaluated"] = sum(f"{prefix}_target_success" in r for r in rows)
+            for field in ("target_success", "typical", "success_and_typical"):
+                unknown = any(r["status"] == "completed" and r.get(f"{prefix}_{field}") is None for r in rows)
+                result[f"{prefix}_{field}_percent"] = (
+                    100 * sum(r.get(f"{prefix}_{field}") is True for r in rows) / n
+                    if n and not unknown else None)
+    if any("delta_dec_explanation" in r for r in rows):
+        for field in ("repair_feasible", "repair_preserves_prediction"):
+            known = [r[field] for r in rows if field in r]
+            result[f"{field}_percent"] = 100 * sum(known) / len(known) if known else None
+        for field in ("delta_dec_explanation", "delta_dec_repair"):
+            for key, value in _quantiles([r.get(field) for r in rows]).items():
+                result[f"{field}_{key}"] = value
     for field in ("d_z", "delta_dec", "e_rec"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
             result[f"{field}_{key}"] = value
+    # Phase-invariant distances and latent-edit structure exist only in runs
+    # made with the temporal/phase code; older archives keep their columns.
+    for field in ("physiological_worst_exceedance", "physiological_mean_exceedance", "delta_env", "e_rec_env", "delta_env_explanation", "delta_env_repair",
+                  "latent_edit_l1", "latent_edit_tv", "latent_edit_active_fraction", "latent_edit_episodes"):
+        if any(field in r for r in rows):
+            for key, value in _quantiles([r.get(field) for r in rows]).items():
+                result[f"{field}_{key}"] = value
     for field in ("reconstruction_confidence_drop", "counterfactual_target_probability_drop",
                   "reconstruction_embedding_cycle_rmse", "counterfactual_embedding_cycle_rmse"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
@@ -219,6 +243,56 @@ def collect_study(root):
                             physiological_required_count=physiology["required_count"],
                             available_physiological_checks_passed=physiology["available_checks_passed"],
                         )
+                        if physiology.get("graded_count"):
+                            # Graded deviation (half-interval widths past the
+                            # source interval); absent in older archives.
+                            record.update(
+                                physiological_worst_exceedance=physiology["worst_family_exceedance"],
+                                physiological_mean_exceedance=physiology["mean_family_exceedance"],
+                                **{f"physiological_exceedance_{family}": value
+                                   for family, value in physiology["exceedance_by_family"].items()})
+                        # Re-encoded delivered EEG (all arms in newer runs; only the
+                        # typicality arm in older ones). Kept apart from the
+                        # round_trip_* protocol columns, which describe selection.
+                        for prefix, key in (("reencoded", "decoded_counterfactual"),
+                                            ("reencoded_reconstruction", "decoded_reconstruction"),
+                                            ("reencoded_repair", "decoded_repair")):
+                            scored = summary.get(key)
+                            if not scored:
+                                continue
+                            if scored.get("target_class", target) != target:
+                                raise ValueError("Decoded evaluation target disagrees with study direction")
+                            record[f"{prefix}_probability"] = scored["probabilities"][target]
+                            record[f"{prefix}_discrepancy"] = scored["discrepancy"]
+                            if "success" in scored:
+                                record[f"{prefix}_target_success"] = scored["success"]
+                                record[f"{prefix}_typical"] = scored["typical"]
+                                record[f"{prefix}_success_and_typical"] = bool(scored["success"] and scored["typical"])
+                        if "decoded_change_env" in decoded:
+                            # RMS difference of log band-power envelopes:
+                            # insensitive to phase shifts that dominate MSE.
+                            record.update(delta_env=float(np.sqrt(decoded["decoded_change_env"])),
+                                          e_rec_env=float(np.sqrt(decoded["original_reconstruction_env"])))
+                        edit = summary.get("latent_edit")
+                        if edit:
+                            record.update(latent_edit_l1=edit["l1_mean"], latent_edit_tv=edit["tv_mean"],
+                                          latent_edit_active_fraction=edit["active_fraction"],
+                                          latent_edit_episodes=edit["n_episodes"])
+                        repair = summary.get("repair_baseline")
+                        if repair and repair.get("available"):
+                            # Change measured against the repaired decoder output
+                            # instead of the raw reconstruction (see runner).
+                            record.update(
+                                delta_dec_explanation=repair["delta_dec_explanation"],
+                                delta_dec_repair=repair["delta_dec_repair"],
+                                repair_feasible=repair["feasible"],
+                                repair_preserves_prediction=repair["preserves_prediction"],
+                                vcsc_repair=repair["vcsc_repair"],
+                            )
+                            if "explanation_change_env" in repair:
+                                record.update(
+                                    delta_env_explanation=float(np.sqrt(repair["explanation_change_env"])),
+                                    delta_env_repair=float(np.sqrt(repair["repair_change_env"])))
                         if "counterfactual" in decoded and "original_reconstruction" in decoded:
                             cf, rec = decoded["counterfactual"], decoded["original_reconstruction"]
                             record.update(
@@ -370,7 +444,7 @@ def build_report(roots, output, *, expected_subjects=None, expected_tasks=None,
                           "Retries retain their attempt records and each eligible trial contributes once to each objective denominator.",
                           "Distances summarize all finite selected endpoints, including unsuccessful cases, with sample counts and quartiles.",
                           "Typicality uses the saved target-class Gaussian and source-only 10th-percentile cutoff in new studies.",
-                          "Latent success requires target argmax and confidence; decoded classification validity is unmeasured.",
+                          "Latent success requires target argmax and confidence. New runs separately report post-hoc decoded target success and typicality for every arm; older archives leave these unavailable.",
                           "Unknown physiological checks remain unavailable. Zero-eligible subjects have undefined rates."])
     write_json(output / "results.json", payload)
     write_json(output / "single_trial_examples.json", examples)
