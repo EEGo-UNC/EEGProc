@@ -28,6 +28,8 @@ We hope researchers will continue to contribute to this library, adding more mod
 ```bash
 pip install eegproc                   # preprocessing, features, conversion, plotting
 pip install "eegproc[deep-learning]"  # adds models, cross-validation, counterfactuals
+pip install "eegproc[ica]"            # adds ICA eye-blink removal
+pip install "eegproc[iclabel]"        # adds ICLabel artifact classification
 ```
 
 Requires Python 3.10 or newer. TensorFlow is optional and is installed with the
@@ -96,6 +98,65 @@ evaluation, and explanation components in this workflow. Your project connects
 the recording device, data storage, server, and application feedback loop.
 The [DREAMER example](https://github.com/EEGo-UNC/EEGProc/blob/main/examples/README.md) demonstrates the processing, training,
 evaluation, and explanation steps on a downloaded dataset.
+
+## Remove eye blinks
+
+`remove_eye_artifacts` uses ICA to find blink activity and subtract it from the
+signal. ICA needs several minutes from one wearer, so run it per subject, before
+filtering. The table keeps its columns and rows.
+
+```python
+import pandas as pd
+from eegproc import feature_grouped_by_metadata, remove_eye_artifacts
+
+channels = ["AF3", "F7", "F3", "FC5", "T7", "P7", "O1",
+            "O2", "P8", "T8", "FC6", "F4", "F8", "AF4"]
+raw = pd.read_csv("dreamer.csv.gz")    # rows in time order within each trial
+
+report = []
+clean = feature_grouped_by_metadata(
+    raw, target_function=remove_eye_artifacts, fs=128,
+    group_by_metadata_columns=["subject_id"],
+    eeg_channels=channels, segment_columns=["trial_id", "segment"],
+    report=report,                     # one entry per subject
+)
+```
+
+When no blink component is found, or removing it changes band power in a way a
+blink should not, that subject's EEG stays unchanged and a warning is raised.
+Check `report` to see what happened to each subject.
+
+Compare results with and without this step: removal also lowers frontal alpha
+and beta power, which may include brain activity, and its effect on decoding
+accuracy depends on the data. Skip it for data that already had eye artifacts
+removed, such as the preprocessed DEAP and AMIGOS files.
+
+### With ICLabel
+
+`remove_artifacts_with_iclabel` lets ICLabel, a classifier trained on labeled ICA
+components, decide what to remove instead of the blink rules above. It scores
+each component as brain, muscle, eye, heart, line noise, channel noise or other.
+
+```python
+from eegproc import remove_artifacts_with_iclabel
+
+report = []
+clean = feature_grouped_by_metadata(
+    raw, target_function=remove_artifacts_with_iclabel, fs=128,
+    group_by_metadata_columns=["subject_id"],
+    eeg_channels=channels, segment_columns=["trial_id", "segment"],
+    labels=("eye blink",),             # add "muscle artifact", "heart beat", ...
+    threshold=0.9,                     # smallest ICLabel probability to remove
+    report=report,                     # includes every component's scores
+)
+```
+
+ICLabel expects an average reference, so the returned EEG is average-referenced.
+That alone can change results if the rest of your pipeline does not use one:
+`reref=False` keeps the original reference, at the cost of a warning from ICLabel.
+It also needs the EEG's real amplitude: the columns are taken to be microvolts
+unless you set `unit_in_volts`. ICLabel was trained on 1-100 Hz research-cap
+recordings, so check `report` before trusting its labels on headset data.
 
 ## Featurization
 
@@ -211,6 +272,7 @@ pipeline, including preprocessing, features, model saving, and counterfactuals.
 | Module | Purpose |
 | --- | --- |
 | [`eegproc.preprocessing`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/preprocessing.py) | Filtering, detrending, and band decomposition |
+| [`eegproc.artifact_removal`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/artifact_removal.py) | ICA eye-blink removal, with optional ICLabel |
 | [`eegproc.featurization`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/featurization.py) | Spectral, Hjorth, wavelet, and IMF features |
 | [`eegproc.data`](https://github.com/EEGo-UNC/EEGProc/tree/main/src/eegproc/data) | Dataset conversion, table schema, and trial-safe windowing |
 | [`eegproc.deep_learning`](https://github.com/EEGo-UNC/EEGProc/blob/main/src/eegproc/deep_learning/README.md) | Reusable models, cross-validation, and domain generalization |
