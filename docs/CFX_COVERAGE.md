@@ -72,7 +72,9 @@ TASK/
 ```
 
 Histories are streamed to JSONL and CSV. Checkpoint/data/code hashes and
-calibration membership are archived. Large EEG/latent tensors are not saved.
+calibration membership are archived. EEG/latent tensors are not saved by
+default; an optional repair baseline retains its reconstruction for paired
+comparisons and verified resume.
 Every completed attempt includes physiology components for original EEG,
 its reconstruction, and the counterfactual in `physiology.json`, compatible
 with the existing binary/graded physiology tools. Unsuccessful finite
@@ -154,8 +156,10 @@ eligibility, and mismatched result identities.
 
 Success remains a **latent-space** criterion: target argmax and target
 confidence on the optimized full-trial classification embedding. Decoded EEG
-is used for displacement and physiology; decoded/re-encoded classification
-validity is unmeasured. The band-filtered decoder cannot estimate the required
+is also re-encoded after optimization for separate target-confidence and
+Gaussian-typicality checks for every objective, in both directions. These
+post-hoc outcomes do not select or optimize the endpoint. Older archives
+without these measurements leave them unavailable. The band-filtered decoder cannot estimate the required
 aperiodic exponent, so passing the four available physiological checks never
 silently implies passing all five.
 
@@ -182,3 +186,63 @@ Raw distances are reported per trial; cross-fold summaries use normalized
 distance and calibration percentiles.
 
 See [the protocol and standalone report command](../src/eegproc/model_explainability/typicality/ENCODED_NEIGHBORS.md).
+
+## Integrated repair, smoothing, and decoded evaluation
+
+The completed `vcsc-repair-baseline` work is integrated with this suite. The
+existing four objectives, target classes, failure denominators, source-only
+calibration, and independent neighbours are retained. Extra options are
+forwarded by `run_cfx_coverage.sh` to both directions:
+
+- `--include-repair-baseline`: a separate optimization with the target term
+  removed, measuring the physiological repair of the original reconstruction.
+  Its outcome is not a fifth class-targeting objective. Its one small signal
+  archive, `repair_reconstruction.npz`, is retained and verified on resume.
+  A failed repair does not discard the other objectives. Feasibility and
+  prediction preservation are reported; a feasible repair is not guaranteed.
+- `--physiological-tolerance-quantile Q`: source-real-trial VCSC tolerance.
+  `--amplitude-spectral-weight W` adds source-calibrated amplitude/power checks
+  to the active constraints. Both are optional and recorded in the manifest.
+- `--temporal-sparsity-weight A`, `--temporal-tv-weight B`: independently
+  controlled penalties on the source-standardized latent edit.
+- `--decoded-distance envelope`: phase-insensitive log-envelope proximity.
+  MSE and envelope distances are reported regardless of which is optimized.
+  These options act during counterfactual generation, not AE training.
+
+For example, after setting the frozen task inputs described above:
+
+```bash
+sbatch src/eegproc/model_explainability/slurm/run_cfx_coverage.sh \
+  --include-repair-baseline --physiological-tolerance-quantile 0.5 \
+  --amplitude-spectral-weight 1.0 --temporal-sparsity-weight 0.003 \
+  --temporal-tv-weight 0.003 --decoded-distance envelope
+```
+
+These numbers illustrate source-development options; freeze their values
+using source-only development before any held-out comparison. Use a fresh
+output directory after changing the protocol or implementation.
+
+Each completed objective now reports `decoded_counterfactual` and
+`decoded_reconstruction`; a completed repair also supplies `decoded_repair`.
+The target probability uses class 1 for `0_to_1` and class 0 for `1_to_0`.
+The CSV `reencoded_*` fields and population rates keep these measurements
+separate from latent success. Missing measurements remain unavailable rather
+than being interpreted as known successes. `seams.json` describes window
+boundaries, and `physiology.json` retains compact components and graded scores.
+
+## Typicality occupancy report
+
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.report_iclr_typicality_vacuity \
+  --suite runs/cfx_coverage_v1 --out runs/cfx_coverage_v1_occupancy
+```
+
+The report recursively finds task/fold/direction CSVs, deduplicates identical
+aggregate/shard rows, and rejects conflicting duplicates. Directions are
+reported separately. It counts original membership, membership without the
+typicality penalty, and paired baseline-to-typicality changes. It summarizes
+completed finite endpoints, so its occupancy denominator can differ from the
+main report's all-eligible success denominator. Identical endpoint discrepancy
+alone does not establish that the penalty never ran.
+
+See [remaining Table 2 displacement work](TABLE2_DISPLACEMENT_AUDIT.md).

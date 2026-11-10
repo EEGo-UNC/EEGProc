@@ -95,9 +95,12 @@ def population_summary(rows):
         # Percent of ELIGIBLE trials (failed/pending count as not successful),
         # matching the latent rates above; only when this run scored them.
         if any(f"{prefix}_target_success" in r for r in rows):
+            result[f"{prefix}_n_evaluated"] = sum(f"{prefix}_target_success" in r for r in rows)
             for field in ("target_success", "typical", "success_and_typical"):
+                unknown = any(r["status"] == "completed" and r.get(f"{prefix}_{field}") is None for r in rows)
                 result[f"{prefix}_{field}_percent"] = (
-                    100 * sum(r.get(f"{prefix}_{field}") is True for r in rows) / n if n else None)
+                    100 * sum(r.get(f"{prefix}_{field}") is True for r in rows) / n
+                    if n and not unknown else None)
     if any("delta_dec_explanation" in r for r in rows):
         for field in ("repair_feasible", "repair_preserves_prediction"):
             known = [r[field] for r in rows if field in r]
@@ -257,6 +260,8 @@ def collect_study(root):
                             scored = summary.get(key)
                             if not scored:
                                 continue
+                            if scored.get("target_class", target) != target:
+                                raise ValueError("Decoded evaluation target disagrees with study direction")
                             record[f"{prefix}_probability"] = scored["probabilities"][target]
                             record[f"{prefix}_discrepancy"] = scored["discrepancy"]
                             if "success" in scored:
@@ -439,7 +444,7 @@ def build_report(roots, output, *, expected_subjects=None, expected_tasks=None,
                           "Retries retain their attempt records and each eligible trial contributes once to each objective denominator.",
                           "Distances summarize all finite selected endpoints, including unsuccessful cases, with sample counts and quartiles.",
                           "Typicality uses the saved target-class Gaussian and source-only 10th-percentile cutoff in new studies.",
-                          "Latent success requires target argmax and confidence; decoded classification validity is unmeasured.",
+                          "Latent success requires target argmax and confidence. New runs separately report post-hoc decoded target success and typicality for every arm; older archives leave these unavailable.",
                           "Unknown physiological checks remain unavailable. Zero-eligible subjects have undefined rates."])
     write_json(output / "results.json", payload)
     write_json(output / "single_trial_examples.json", examples)

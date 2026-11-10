@@ -122,6 +122,7 @@ from eegproc.deep_learning.joint_architectures.sic_common.model import (
     StreamingBalancedAccuracy,
     StreamingR2,
     GradientReversal,
+    temporal_reconstruction_losses,
 )
 
 
@@ -234,6 +235,8 @@ class SICModel(SICModelCore):
         reconstruction_loss_weight: float = 0.10,
         joint_reconstruction_auxiliary_weight: float = 0.25,
         joint_reconstruction_initial_alpha: float = 0.5,
+        reconstruction_seam_weight: float = 0.0,
+        reconstruction_derivative_weight: float = 0.0,
         training_method: str | None = None,
         use_vrex: bool = False,
         vrex_penalty_weight: float = 1.0,
@@ -399,11 +402,18 @@ class SICModel(SICModelCore):
                 "joint_reconstruction_auxiliary_weight",
                 joint_reconstruction_auxiliary_weight,
             ),
+            ("reconstruction_seam_weight", reconstruction_seam_weight),
+            ("reconstruction_derivative_weight", reconstruction_derivative_weight),
             ("subject_adversarial_weight", subject_adversarial_weight),
             ("subject_loss_weight", subject_loss_weight),
         ):
             if not np.isfinite(float(value)) or float(value) < 0.0:
                 raise ValueError(f"{loss_name} must be finite and non-negative.")
+        if float(reconstruction_seam_weight) > 0.0 and classification_level != "trial":
+            raise ValueError(
+                "reconstruction_seam_weight requires classification_level='trial'; "
+                "window-level batches carry no window order to define a seam."
+            )
         if (
             not np.isfinite(float(joint_reconstruction_initial_alpha))
             or not 0.0 < float(joint_reconstruction_initial_alpha) < 1.0
@@ -480,6 +490,10 @@ class SICModel(SICModelCore):
         )
         self.joint_reconstruction_initial_alpha = float(
             joint_reconstruction_initial_alpha
+        )
+        self.reconstruction_seam_weight = float(reconstruction_seam_weight)
+        self.reconstruction_derivative_weight = float(
+            reconstruction_derivative_weight
         )
         self.use_joint_reconstruction = bool(
             self.use_decoder
@@ -592,6 +606,12 @@ class SICModel(SICModelCore):
         self.joint_reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="joint_reconstruction_loss"
         )
+        self.reconstruction_seam_loss_tracker = tf.keras.metrics.Mean(
+            name="reconstruction_seam_loss"
+        )
+        self.reconstruction_derivative_loss_tracker = tf.keras.metrics.Mean(
+            name="reconstruction_derivative_loss"
+        )
         self.joint_decoder_r2_tracker = StreamingR2(
             name="joint_decoder_r2"
         )
@@ -644,15 +664,30 @@ class SICModel(SICModelCore):
             name="subject_accuracy"
         )
 
+    def _uses_temporal_reconstruction_terms(self):
+        return bool(
+            self.use_decoder
+            and (
+                self.reconstruction_seam_weight > 0.0
+                or self.reconstruction_derivative_weight > 0.0
+            )
+        )
+
     def _extra_decoder_metrics(self):
-        if not self.use_joint_reconstruction:
-            return []
-        return [
-            self.joint_reconstruction_loss_tracker,
-            self.joint_decoder_r2_tracker,
-            self.joint_reconstruction_alpha_tracker,
-            self.joint_reconstruction_gain_tracker,
-        ]
+        metrics = []
+        if self.use_joint_reconstruction:
+            metrics += [
+                self.joint_reconstruction_loss_tracker,
+                self.joint_decoder_r2_tracker,
+                self.joint_reconstruction_alpha_tracker,
+                self.joint_reconstruction_gain_tracker,
+            ]
+        if self._uses_temporal_reconstruction_terms():
+            metrics += [
+                self.reconstruction_seam_loss_tracker,
+                self.reconstruction_derivative_loss_tracker,
+            ]
+        return metrics
 
     def _source_callbacks(self, callbacks):
         if len(getattr(self, "_fold_devices", ())) > 1:
@@ -677,6 +712,8 @@ class SICModel(SICModelCore):
             joint_reconstruction_alpha=zero,
             joint_reconstruction_gain_vs_best_branch=zero,
             joint_reconstruction=None,
+            reconstruction_seam_loss=zero,
+            reconstruction_derivative_loss=zero,
         )
         if not self.use_decoder:
             return components
@@ -726,9 +763,67 @@ class SICModel(SICModelCore):
             )
         else:
             components["reconstruction_loss"] = branch_reconstruction_loss
+        if self._uses_temporal_reconstruction_terms():
+            self._add_temporal_reconstruction_terms(components, target, outputs)
         return components
 
+    def _add_temporal_reconstruction_terms(self, components, target, outputs):
+        """Add the seam and derivative penalties to ``reconstruction_loss``.
+
+        They are blended across reconstruction paths exactly like the MSE
+        (joint path plus auxiliary-weighted mean branch), so they sit inside
+        ``reconstruction_loss`` and are scaled by ``reconstruction_loss_weight``
+        on every training path. Both are off at weight 0.
+        """
+        n_windows = (
+            outputs.get("n_windows") if self.classification_level == "trial" else None
+        )
+        branch_terms = [
+            temporal_reconstruction_losses(target, components[name], n_windows)
+            for name in ("gcn_gru_reconstruction", "bilstm_reconstruction")
+            if components[name] is not None
+        ]
+        count = tf.cast(len(branch_terms), target.dtype)
+        branch_seam = tf.add_n([seam for seam, _ in branch_terms]) / count
+        branch_derivative = tf.add_n([diff for _, diff in branch_terms]) / count
+        if self.use_joint_reconstruction:
+            joint_seam, joint_derivative = temporal_reconstruction_losses(
+                target, components["joint_reconstruction"], n_windows
+            )
+            auxiliary_weight = tf.cast(
+                self.joint_reconstruction_auxiliary_weight, target.dtype
+            )
+            seam = (joint_seam + auxiliary_weight * branch_seam) / (
+                1.0 + auxiliary_weight
+            )
+            derivative = (
+                joint_derivative + auxiliary_weight * branch_derivative
+            ) / (1.0 + auxiliary_weight)
+        else:
+            seam, derivative = branch_seam, branch_derivative
+        components["reconstruction_seam_loss"] = seam
+        components["reconstruction_derivative_loss"] = derivative
+        components["reconstruction_loss"] = (
+            components["reconstruction_loss"]
+            + tf.cast(self.reconstruction_seam_weight, target.dtype) * seam
+            + tf.cast(self.reconstruction_derivative_weight, target.dtype) * derivative
+        )
+
     def _update_extra_decoder_metrics(self, outputs, reconstruction_components, zero):
+        if self._uses_temporal_reconstruction_terms():
+            for key, tracker in (
+                ("reconstruction_seam_loss", self.reconstruction_seam_loss_tracker),
+                (
+                    "reconstruction_derivative_loss",
+                    self.reconstruction_derivative_loss_tracker,
+                ),
+            ):
+                value = (
+                    zero
+                    if reconstruction_components is None
+                    else reconstruction_components.get(key, zero)
+                )
+                tracker.update_state(value)
         if self.use_joint_reconstruction:
             joint_loss = (
                 zero
@@ -892,6 +987,8 @@ class SICModel(SICModelCore):
             vc_logit_scale=self.vc_logit_scale,
             joint_reconstruction_auxiliary_weight=self.joint_reconstruction_auxiliary_weight,
             joint_reconstruction_initial_alpha=self.joint_reconstruction_initial_alpha,
+            reconstruction_seam_weight=self.reconstruction_seam_weight,
+            reconstruction_derivative_weight=self.reconstruction_derivative_weight,
         )
         return config
 
@@ -948,6 +1045,8 @@ def build_sic_model(
     reconstruction_loss_weight: float = 0.10,
     joint_reconstruction_auxiliary_weight: float = 0.25,
     joint_reconstruction_initial_alpha: float = 0.5,
+    reconstruction_seam_weight: float = 0.0,
+    reconstruction_derivative_weight: float = 0.0,
     training_method: str | None = None,
     use_vrex: bool = False,
     vrex_penalty_weight: float = 1.0,
@@ -1174,6 +1273,8 @@ def build_sic_model(
         joint_reconstruction_initial_alpha=float(
             joint_reconstruction_initial_alpha
         ),
+        reconstruction_seam_weight=float(reconstruction_seam_weight),
+        reconstruction_derivative_weight=float(reconstruction_derivative_weight),
         training_method=training_method,
         use_vrex=bool(use_vrex),
         vrex_penalty_weight=float(vrex_penalty_weight),

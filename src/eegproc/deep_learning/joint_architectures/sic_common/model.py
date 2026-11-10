@@ -30,6 +30,47 @@ _TRAINING_METHOD_ALIASES = {
 }
 
 
+def temporal_reconstruction_losses(target, reconstruction, n_windows=None):
+    """Return (seam, derivative) penalties of a reconstruction against its target.
+
+    Both tensors are flattened windows of shape (trials * windows, timesteps,
+    features), in trial-major, chronological window order.
+
+    derivative = mean over windows, steps and features of
+                 ((r[t+1] - r[t]) - (x[t+1] - x[t]))**2
+    seam       = mean over trials, window boundaries and features of
+                 ((r[w+1, 0] - r[w, T-1]) - (x[w+1, 0] - x[w, T-1]))**2
+
+    The derivative term makes the reconstruction follow the signal's
+    sample-to-sample dynamics, which plain MSE lets the decoder smooth over.
+    The seam term asks the step across each 1-s window boundary to match the
+    recorded step, so independently decoded windows join like real EEG. The
+    seam term needs ``n_windows`` (windows per trial) and is zero when it is
+    unknown or a trial has a single window.
+    """
+    target = tf.cast(target, reconstruction.dtype)
+    zero = tf.zeros((), dtype=reconstruction.dtype)
+    derivative = tf.reduce_mean(tf.square(
+        (reconstruction[:, 1:, :] - reconstruction[:, :-1, :])
+        - (target[:, 1:, :] - target[:, :-1, :])
+    ))
+    if n_windows is None:
+        return zero, derivative
+    shape = tf.shape(reconstruction)
+    windows = tf.cast(n_windows, tf.int32)
+    trial_shape = tf.stack([-1, windows, shape[1], shape[2]])
+    r = tf.reshape(reconstruction, trial_shape)
+    x = tf.reshape(target, trial_shape)
+    seam = tf.cond(
+        windows > 1,
+        lambda: tf.reduce_mean(tf.square(
+            (r[:, 1:, 0, :] - r[:, :-1, -1, :]) - (x[:, 1:, 0, :] - x[:, :-1, -1, :])
+        )),
+        lambda: zero,
+    )
+    return seam, derivative
+
+
 _CALIBRATION_LOSS_ALIASES = {
     "ce": "cross_entropy",
     "crossentropy": "cross_entropy",

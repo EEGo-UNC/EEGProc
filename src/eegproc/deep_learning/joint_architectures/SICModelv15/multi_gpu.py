@@ -165,6 +165,7 @@ def reconstruction_on_devices(model, outputs, *, training):
             names = tuple(key for key in (
                 "flat_windows", "graph_sequence", "bilstm_sequence"
             ) if local_outputs[key] is not None)
+            n_windows = local_outputs.get("n_windows")
 
             def reconstruct(*values, names=names):
                 local = dict.fromkeys(("graph_sequence", "bilstm_sequence"))
@@ -173,6 +174,8 @@ def reconstruction_on_devices(model, outputs, *, training):
                     local["graph_sequence"] if local["graph_sequence"] is not None
                     else local["bilstm_sequence"]
                 )
+                # Shards hold complete trials, so the seam term stays per trial.
+                local["n_windows"] = n_windows
                 return model._reconstruction_components(local, training)
 
             components.append(_call_with_device_gradient(

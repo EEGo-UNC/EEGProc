@@ -216,20 +216,19 @@ def test_runner_with_temporal_smoothing_and_envelope_distance(tmp_path, monkeypa
     out = tmp_path / "study"
     args = study.parse_args([
         "--models-json", str(manifest), "--task", "valence", "--trials-npz", str(data_path),
-        "--out-dir", str(out), "--subjects", "0", "--directions", "0_to_1", "--trial-ids", "0", "--max-steps", "2", "--log-every", "0",
+        "--out-dir", str(out), "--directions", "0_to_1", "--subjects", "0", "--trial-ids", "0", "--max-steps", "2", "--log-every", "0",
         "--include-target-latent", "--include-typicality-no-physiology", "--include-repair-baseline",
         "--temporal-sparsity-weight", "0.1", "--temporal-tv-weight", "0.2", "--decoded-distance", "envelope"])
     study.run(args)
-    out = out / "0_to_1"
 
-    study_json = json.loads((out / "study.json").read_text())
+    study_json = json.loads((out / "0_to_1/study.json").read_text())
     assert "fused lasso" in study_json["temporal_smoothing_objective"]
     assert "envelope" in study_json["decoded_distance"]
     assert any(name.endswith("temporal_phase.py") for name in study_json["source_sha256"])
-    scale = json.loads((out / "subject_0/calibration/latent_scale.json").read_text())
+    scale = json.loads((out / "0_to_1/subject_0/calibration/latent_scale.json").read_text())
     assert scale["n_source_trials"] == 4 and all(v > 0 for v in scale["latent_std"])
 
-    losses = json.loads((out / "subject_0/fold.json").read_text())["objective_losses"]
+    losses = json.loads((out / "0_to_1/subject_0/fold.json").read_text())["objective_losses"]
     assert losses["target_latent"]["temporal_sparsity_weight"] == 0
     assert losses["target_latent"]["temporal_tv_weight"] == 0
     for arm in ("base", "typicality", "typicality_no_physiology"):
@@ -238,7 +237,7 @@ def test_runner_with_temporal_smoothing_and_envelope_distance(tmp_path, monkeypa
         assert losses[arm]["decoded_metric"] == "envelope"
 
     for arm in ("target_latent", "base", "typicality", "typicality_no_physiology"):
-        attempt = completed_attempt(out / f"subject_0/trial_0/{arm}")
+        attempt = completed_attempt(out / f"0_to_1/subject_0/trial_0/{arm}")
         result = json.loads((attempt / "result.json").read_text())
         assert result["latent_edit"]["standardized"] is True
         assert ("temporal_sparsity" in result["selected_losses"]) == (arm != "target_latent")

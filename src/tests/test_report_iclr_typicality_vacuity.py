@@ -2,6 +2,7 @@
 
 import csv
 import json
+import pytest
 
 from eegproc.model_explainability import report_iclr_typicality_vacuity as vacuity
 
@@ -58,6 +59,42 @@ def test_vacuity_counts_per_task(tmp_path):
     assert {r["task"] for r in rows} == {"arousal", "valence"}
 
 
+def test_bidirectional_shards_are_found_without_pooling_or_double_counting(tmp_path):
+    suites = tmp_path / 'suite'
+    columns = COLUMNS + ['direction']
+    for direction, score in [('0_to_1', .5), ('1_to_0', 2.)]:
+        path = suites / 'valence/fold_00' / direction / 'report/trial_metrics.csv'
+        path.parent.mkdir(parents=True)
+        with path.open('w', newline='') as handle:
+            writer = csv.writer(handle)
+            writer.writerow(columns)
+            writer.writerow(['valence', 0, 0, 'base', 'completed', 1., score, score, direction])
+    rows, files = vacuity.load_rows([suites])
+    result = vacuity.summarize(rows)
+    assert len(files) == 2
+    assert result['valence/0_to_1']['original_inside_count'] == 1
+    assert result['valence/1_to_0']['original_inside_count'] == 0
+    assert result['valence/1_to_0']['target_class'] == 0
+    assert len(vacuity.load_rows([suites, suites])[0]) == 2
+
+    path = tmp_path / 'conflict.csv'
+    with path.open('w', newline='') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(columns)
+        writer.writerow(['valence', 0, 0, 'base', 'completed', 1., .9, .9, '0_to_1'])
+    with pytest.raises(ValueError, match='Conflicting occupancy'):
+        vacuity.load_rows([suites, path])
+
+
+def test_zero_threshold_still_counts_membership(tmp_path):
+    path = tmp_path / 'zero.csv'
+    _write(path, [['arousal', 0, 0, 'base', 'completed', 0., 0., 0.]])
+    rows, _ = vacuity.load_rows([path])
+    result = vacuity.summarize(rows)['arousal']
+    assert result['original_inside_count'] == 1
+    assert result['original_margin_median'] is None
+
+
 def test_nested_suites_keep_directions_separate_and_deduplicate_reports(tmp_path):
     suite = tmp_path / "suite"
     for direction, original, endpoint in (("0_to_1", 1.2, .8), ("1_to_0", .7, 1.3)):
@@ -91,3 +128,20 @@ def test_zero_cutoff_keeps_membership_and_marks_ratios_unavailable(tmp_path):
     assert report["original_margin_median"] is None
     assert report["inside_per_arm"]["typicality"]["count"] == 1
     assert report["discrepancy_ratio_median_per_arm"]["base"] is None
+
+
+def test_legacy_and_explicit_forward_reports_keep_distinct_protocols(tmp_path):
+    legacy = tmp_path / "legacy.csv"
+    _write(legacy, [["valence", 0, 0, "base", "completed", 1., .5, .5]])
+    explicit = tmp_path / "forward.csv"
+    with explicit.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(COLUMNS + ["direction"])
+        writer.writerow(["valence", 0, 0, "base", "completed", 1., 2., 2., "0_to_1"])
+    rows, _ = vacuity.load_rows([legacy, explicit])
+    report = vacuity.summarize(rows)
+    assert set(report) == {"valence", "valence/0_to_1"}
+    assert report["valence"]["original_inside_count"] == 1
+    assert report["valence/0_to_1"]["original_inside_count"] == 0
+    assert all(result["source_class"] == 0 and result["target_class"] == 1
+               for result in report.values())

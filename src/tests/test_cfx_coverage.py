@@ -249,6 +249,40 @@ def test_paired_suite_errors_retries_resume_and_offline_reports(tmp_path, monkey
     with pytest.raises(ValueError, match='protocol changed'):
         runner.run(args)
 
+    if knn_k == 1:
+        # The incoming repair/temporal features must also work in the reverse
+        # direction, with all four arms and independent neighbour evaluation.
+        monkeypatch.setattr(runner, 'create_sic_adapter', lambda **kwargs: adapter)
+        options = runner.parse_args(['--models-json', str(manifest), '--task', 'valence',
+            '--trials-npz', str(data), '--subjects', '0', '--trial-ids', '0', '1', '2',
+            '--fixed-joint-alpha', '.5', '--max-steps', '1', '--log-every', '0', '--knn-k', '1',
+            '--out-dir', str(tmp_path / 'integrated'), '--include-repair-baseline',
+            '--physiological-tolerance-quantile', '.5', '--amplitude-spectral-weight', '1',
+            '--temporal-sparsity-weight', '.001', '--temporal-tv-weight', '.002',
+            '--decoded-distance', 'envelope'])
+        integrated = runner.run(options)
+        assert integrated['complete'] and len(integrated['population']) == 8
+        for direction, target in [('0_to_1', 1), ('1_to_0', 0)]:
+            fold_root = options.out_dir / direction / 'subject_0'
+            repair = completed_attempt(fold_root / f'trial_{1-target}/repair')
+            repair_result = json.loads((repair / 'result.json').read_text())
+            assert repair_result['target_class'] == target
+            assert repair_result['source_class'] == 1-target
+            assert repair_result['direction'] == direction
+            assert repair_result['repair_only']
+            for arm in ('target_latent', 'base', 'typicality', 'typicality_no_physiology'):
+                endpoint = completed_attempt(fold_root / f'trial_{1-target}' / arm)
+                saved = json.loads((endpoint / 'result.json').read_text())
+                assert saved['decoded_repair']['target_class'] == target
+                assert saved['decoded_repair']['target_probability'] == saved['decoded_repair']['probabilities'][target]
+                assert saved['repair_baseline']['available']
+                assert (endpoint / 'seams.json').is_file()
+                assert saved['physiology']['components']['channel_names'] is None
+        previous = len(calls)
+        options.resume = True
+        assert runner.run(options) == integrated
+        assert len(calls) == previous
+
 
 def test_saved_sic_model_supports_reverse_target_without_weight_changes(tmp_path):
     tf = pytest.importorskip('tensorflow')
@@ -286,3 +320,14 @@ def test_saved_sic_model_supports_reverse_target_without_weight_changes(tmp_path
         np.testing.assert_array_equal(old, weight.numpy())
     assert flags == [weight.trainable for weight in loaded.weights]
     assert result['summary']['counterfactual_validity_prediction_space'] == 'latent'
+
+
+def test_posthoc_decoded_rates_preserve_unknown_completed_measurements():
+    scored = dict(status='completed', reencoded_target_success=True,
+                  reencoded_typical=True, reencoded_success_and_typical=True)
+    failed = population_summary([scored, dict(status='error')])
+    assert failed['reencoded_n_evaluated'] == 1
+    assert failed['reencoded_target_success_percent'] == 50
+    unknown = population_summary([scored, dict(status='completed')])
+    assert unknown['reencoded_n_evaluated'] == 1
+    assert unknown['reencoded_target_success_percent'] is None

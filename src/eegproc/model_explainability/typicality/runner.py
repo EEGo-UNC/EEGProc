@@ -269,7 +269,7 @@ def _protocol(args, dataset, folds):
         package_dir / "counterfactuals" / "amplitude_spectral.py",
         package_dir / "counterfactuals" / "temporal_phase.py",
         package_dir / "model_agnostic" / "adapter.py",
-        package_dir / "model_agnostic" / "runner.py",
+        package_dir / "model_agnostic" / "optimizer.py",
         package_dir / "model_agnostic" / "sic_adapter.py",
     ]
     return {"schema_version": SCHEMA_VERSION, "task": args.task, "arguments": arguments, "folds": folds,
@@ -311,7 +311,8 @@ def _protocol(args, dataset, folds):
             "round_trip_evaluation": EVALUATION_PROTOCOL,
             "counterfactual_validity": "target argmax and confidence on the optimized full-trial classification embedding; all eligible trials retained",
             "counterfactual_validity_prediction_space": "latent",
-            "decoded_evaluation": "displacement, physiology, and separately archived frozen re-encoded embeddings for neighbour diagnostics; optimization success remains latent-only",
+            "decoded_evaluation": "post-hoc frozen re-encoding: target argmax/confidence, Gaussian typicality, and independent neighbours for every arm; optimization success remains latent-only",
+            "posthoc_decoded_evaluation": True,
             "encoded_neighbors": {"enabled": args.knn_evaluation, "definition": KNN_DEFINITION,
                 "representation": REPRESENTATION, "k": args.knn_k, "quantile": args.knn_quantile,
                 "calibration_fraction": args.knn_calibration_fraction, "seed": args.seed,
@@ -334,7 +335,7 @@ def _protocol(args, dataset, folds):
             "aperiodic_status": "unavailable from band-filtered decoder; never counted as passed"}
 
 
-def _score_decoded_counterfactual(model, region, decoded, *, report_output, target_class=1, target_probability=None,
+def _score_decoded_counterfactual(model, region, decoded, *, report_output, target_class=None, target_probability=None,
                                   input_name="decoded_counterfactual_eeg_reencoded_by_frozen_classifier"):
     """Score the generated EEG after a fresh pass through the frozen encoder.
 
@@ -348,6 +349,9 @@ def _score_decoded_counterfactual(model, region, decoded, *, report_output, targ
     if signal.ndim != 4 or signal.shape[0] != 1 or not np.isfinite(signal).all():
         raise ValueError("Decoded counterfactual must be one finite full EEG trial")
     features = model.get_encoder_features(signal)
+    target = int(region.metadata["target_class"])
+    if target_class is not None and target_class != target:
+        raise ValueError("Decoded evaluation target disagrees with calibrated region")
     embedding = np.asarray(features["classification_embedding"], dtype=np.float64)
     probabilities = np.asarray(features["probabilities"], dtype=np.float64)
     if embedding.shape != (1, len(region.prior_mean)) or not np.isfinite(embedding).all():
@@ -358,7 +362,7 @@ def _score_decoded_counterfactual(model, region, decoded, *, report_output, targ
     score = {
         "input": input_name,
         "report_output": report_output,
-        "target_class": target_class,
+        "target_class": target,
         "classification_embedding": embedding[0].tolist(),
         "probabilities": probabilities[0].tolist(),
         "predicted_class": int(probabilities[0].argmax()),
@@ -366,8 +370,8 @@ def _score_decoded_counterfactual(model, region, decoded, *, report_output, targ
         "source_threshold": float(region.tau),
     }
     if target_probability is not None:
-        score.update(target_probability=float(probabilities[0, target_class]),
-                     success=bool(score["predicted_class"] == target_class and probabilities[0, target_class] >= target_probability),
+        score.update(target_probability=float(probabilities[0, target]),
+                     success=bool(score["predicted_class"] == target and probabilities[0, target] >= target_probability),
                      typical=bool(score["discrepancy"] <= score["source_threshold"]))
     return score
 

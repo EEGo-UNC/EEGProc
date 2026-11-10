@@ -7,8 +7,8 @@ all in the fold's own frozen classifier space and against the fold's
 source-calibrated threshold tau. New bidirectional archives are reported
 separately for each direction; legacy archives retain class-0-to-1 semantics:
 
-  1. original_inside: fraction of eligible class-0 trials whose ORIGINAL
-     embedding is already inside the class-1 typicality region
+  1. original_inside: fraction of completed source-class trials whose ORIGINAL
+     embedding is already inside the direction's target-class typicality region
      (original_discrepancy <= tau). If this is high, "every counterfactual is
      typical" says little, because most starting points already were.
   2. inside_per_arm: fraction of counterfactuals inside the region for each arm.
@@ -17,13 +17,15 @@ separately for each direction; legacy archives retain class-0-to-1 semantics:
      typical at the moment the ``typicality`` arm switches its penalty on.
   3. moved_by_typicality: among trials that were NOT inside after ``base``,
      the fraction the ``typicality`` arm brought inside. This is the only part
-     of the typicality pass rate the penalty can take credit for. It also
+     of the typicality pass rate with a paired region-entry difference. It also
      counts trials whose ``typicality`` result is identical to ``base``: the
      penalty switches on only once the target is reached, so identical
-     results mean it never ran.
+     endpoints do not establish whether the penalty ran.
 
-Only completed attempts are counted; each (subject, trial) is counted once per
-arm. Output: JSON and CSV next to --out, and a short table on stdout.
+Only completed finite attempts are counted; each (direction, subject, trial)
+is counted once per arm. These are occupancy rates among completed endpoints,
+not all-eligible success rates. Directions are never pooled. Output: JSON and
+CSV next to --out, and a short table on stdout.
 
     python -m eegproc.model_explainability.report_iclr_typicality_vacuity \\
         --suite runs/counterfactuals/arousal_suite_..._2111899 \\
@@ -59,13 +61,13 @@ def _ratio_median(rows, value):
 
 def load_rows(suites):
     """Completed rows, one per (task, direction, subject, trial, objective)."""
-    rows, seen, files = [], set(), []
+    rows, seen, files = [], {}, []
     for suite in suites:
         suite = Path(suite)
         if suite.is_file():
             candidates = [suite]
         else:
-            candidates = sorted(suite.rglob("report/trial_metrics.csv"))
+            candidates = sorted(suite.rglob("trial_metrics.csv"))
         for path in candidates:
             files.append(str(path))
             with path.open(newline="", encoding="utf-8") as handle:
@@ -74,13 +76,18 @@ def load_rows(suites):
                         continue
                     direction = row.get("direction") or "legacy_0_to_1"
                     key = (row["task"], direction, row["subject_id"], row["trial_id"], row["objective"])
-                    if key in seen:
-                        continue
+                    if direction not in ("legacy_0_to_1", "0_to_1", "1_to_0"):
+                        raise ValueError("Unknown counterfactual direction")
                     threshold, original, discrepancy = (_float(row.get(k)) for k in
                                                         ("threshold", "original_discrepancy", "discrepancy"))
                     if threshold is None or threshold < 0 or original is None or discrepancy is None:
                         continue
-                    seen.add(key)
+                    values = (threshold, original, discrepancy)
+                    if key in seen:
+                        if seen[key] != values:
+                            raise ValueError("Conflicting occupancy rows; keep protocols in separate reports")
+                        continue
+                    seen[key] = values
                     rows.append({"task": row["task"], "direction": direction,
                                  "subject": row["subject_id"], "trial": row["trial_id"],
                                  "objective": row["objective"], "threshold": threshold,
@@ -104,8 +111,10 @@ def summarize(rows):
         per_subject = defaultdict(list)
         for (subject, _), row in trials.items():
             per_subject[subject].append(row["original"] <= row["threshold"])
+        source, target = map(int, direction.removeprefix("legacy_").split("_to_"))
         result = {
             "task": task, "direction": direction,
+            "source_class": source, "target_class": target,
             "n_trials": len(trials),
             "n_subjects": len(per_subject),
             "original_inside": float(np.mean(original_inside)),
@@ -154,7 +163,7 @@ def write_outputs(out, summary, files):
                                  values["n"], direction])
             moved = result.get("moved_by_typicality")
             if moved:
-                writer.writerow([task, "brought_inside_by_typicality", "typicality",
+                writer.writerow([result["task"], "brought_inside_by_typicality", "typicality",
                                  moved["fraction_of_typicality_passes_owed_to_penalty"],
                                  moved["brought_inside_by_typicality"], moved["n_paired"], direction])
 
@@ -173,7 +182,8 @@ def main(argv=None):
     def ratio_text(value):
         return "N/A (zero cutoff)" if value is None else f"{value:.3f}"
     for task, result in summary.items():
-        print(f"\n{task}: {result['n_trials']} eligible trials from {result['n_subjects']} held-out subjects")
+        print(f"\n{task}: {result['n_trials']} completed class-{result['source_class']} trials "
+              f"from {result['n_subjects']} held-out subjects ({result['direction']})")
         print(f"  original already inside region: {result['original_inside_count']}/{result['n_trials']}"
               f" ({100 * result['original_inside']:.1f}%), median original/tau {ratio_text(result['original_margin_median'])}")
         for arm, values in result["inside_per_arm"].items():
@@ -184,7 +194,7 @@ def main(argv=None):
         if moved:
             print(f"  outside after base: {moved['outside_after_base']}/{moved['n_paired']};"
                   f" brought inside by the typicality penalty: {moved['brought_inside_by_typicality']};"
-                  f" typicality identical to base (penalty never ran): "
+                  f" typicality identical to base: "
                   f"{moved['typicality_identical_to_base']}/{moved['n_paired']}")
 
 

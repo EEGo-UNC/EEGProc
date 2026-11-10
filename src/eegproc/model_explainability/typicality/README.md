@@ -138,7 +138,7 @@ tolerance; and amplitude and spectral power, which VCSC cannot see, fail in
 every arm. These additions are opt-in. The CFX-update defaults remain both
 class directions and the source target-class 10th-percentile typicality cutoff.
 
-`--include-repair-baseline` (launcher: `REPAIR_BASELINE=1`). For each eligible
+`--include-repair-baseline`. For each eligible
 trial, first optimize z with the physiological constraints and the
 latent/decoded proximity terms but no target term, stopping at the first
 feasible iterate. Its decoded output R(z_rep) is the baseline:
@@ -155,8 +155,7 @@ repair is not an objective; it lives in `trial_<id>/repair/` with its own
 (`x_repair`), needed to measure the other arms and to resume. Report
 explanation topographies from `power_change_vs_repair`, not `power_change`.
 
-`--physiological-tolerance-quantile Q` (launcher:
-`PHYSIOLOGICAL_TOLERANCE_QUANTILE=Q`). Replaces the fixed VCSC tolerance with
+`--physiological-tolerance-quantile Q`. Replaces the fixed VCSC tolerance with
 the Q-quantile of the same calibrated VCSC on the fold's source-subject real
 trials, so feasible means "as plausible as real EEG". The tolerance and the
 source distribution are saved in `calibration/vcsc_tolerance.json`. The
@@ -164,8 +163,7 @@ source trials are also the calibration set, so the quantile is in-sample and
 slightly optimistic; held-out real-trial VCSC is archived per trial as
 `vcsc_original_input`.
 
-`--amplitude-spectral-weight W` and `--amplitude-spectral-margin M` (launcher:
-`AMPLITUDE_SPECTRAL_WEIGHT`, `AMPLITUDE_SPECTRAL_MARGIN`). Adds
+`--amplitude-spectral-weight W` and `--amplitude-spectral-margin M`. Adds
 `W * mean relu(|v-m|/h - (1-M))^2` over the amplitude and spectral-power
 components, where m and h are the midpoint and half-width of each source
 interval used by the reported checks. The TensorFlow descriptors in
@@ -181,8 +179,9 @@ broadband shift; report that limitation. `target_latent` and
 Suggested ablation suite:
 
 ```bash
-REPAIR_BASELINE=1 PHYSIOLOGICAL_TOLERANCE_QUANTILE=0.5 AMPLITUDE_SPECTRAL_WEIGHT=1.0 \
-  sbatch --array=0-22%4 src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
+sbatch src/eegproc/model_explainability/slurm/run_cfx_coverage.sh \
+  --include-repair-baseline --physiological-tolerance-quantile 0.5 \
+  --amplitude-spectral-weight 1.0
 ```
 
 Compare against the original suite on: amplitude/spectral in-range
@@ -195,8 +194,7 @@ target success.
 Implemented in `counterfactuals/temporal_phase.py`. All three options are
 off by default and the defaults reproduce the earlier runs.
 
-`--temporal-sparsity-weight A` and `--temporal-tv-weight B` (launcher:
-`TEMPORAL_SPARSITY_WEIGHT`, `TEMPORAL_TV_WEIGHT`). A fused lasso
+`--temporal-sparsity-weight A` and `--temporal-tv-weight B`. A fused lasso
 (Tibshirani et al. 2005) on the latent edit `delta = (z' - z) / sigma`,
 where sigma is each latent feature's standard deviation over the fold's
 source trials (`calibration/latent_scale.json`). The edit is flattened over
@@ -208,7 +206,7 @@ they favour a few constant episodes. The flattening assumes contiguous
 windows (overlap 0). `target_latent` drops these terms (it stays target +
 latent MSE); `typicality_no_physiology` keeps them.
 
-`--decoded-distance envelope` (launcher: `DECODED_DISTANCE=envelope`).
+`--decoded-distance envelope`.
 Replaces the sample-wise MSE decoded proximity with the mean squared
 difference of log Hilbert envelopes (Hann-tapered per window, pooled over up
 to 32 samples = 250 ms, +1e-3 before the log). A phase shift with unchanged
@@ -239,9 +237,10 @@ Reported for every run, whatever the options:
 Suggested ablation on top of the repair suite:
 
 ```bash
-REPAIR_BASELINE=1 PHYSIOLOGICAL_TOLERANCE_QUANTILE=0.5 AMPLITUDE_SPECTRAL_WEIGHT=1.0 \
-TEMPORAL_SPARSITY_WEIGHT=0.003 TEMPORAL_TV_WEIGHT=0.003 DECODED_DISTANCE=envelope \
-  sbatch --array=0-22%4 src/eegproc/model_explainability/slurm/run_cfo_ablations_arousal_1599318.sh
+sbatch src/eegproc/model_explainability/slurm/run_cfx_coverage.sh \
+  --include-repair-baseline --physiological-tolerance-quantile 0.5 \
+  --amplitude-spectral-weight 1.0 --temporal-sparsity-weight 0.003 \
+  --temporal-tv-weight 0.003 --decoded-distance envelope
 ```
 
 The weights are starting points, not tuned values; choose them on source
@@ -253,3 +252,10 @@ size; 0.1 would make it dominate and block the target. Sweep 0.001, 0.003
 and 0.01. Compare `latent_edit_episodes`/`latent_edit_active_fraction`,
 `delta_env_explanation`, seam residuals relative to `original`, and latent
 target success against the run without these options.
+
+
+These options regularize counterfactual generation, not AE training. All are
+optional: the default four-objective study keeps its existing objective
+settings. See [the bidirectional run protocol](../../../../docs/CFX_COVERAGE.md)
+for the required task-specific environment and output layout. Numerical
+examples above are development settings, not held-out-selected recommendations.

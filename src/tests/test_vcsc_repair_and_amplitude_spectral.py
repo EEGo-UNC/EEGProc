@@ -115,7 +115,7 @@ def test_runner_repair_baseline_tolerance_quantile_and_amplitude_spectral(tmp_pa
     out = tmp_path / "study"
     args = study.parse_args([
         "--models-json", str(manifest), "--task", "valence", "--trials-npz", str(data_path),
-        "--out-dir", str(out), "--subjects", "0", "--directions", "0_to_1", "--trial-ids", "0", "--max-steps", "2", "--log-every", "0",
+        "--out-dir", str(out), "--directions", "0_to_1", "--subjects", "0", "--trial-ids", "0", "--max-steps", "2", "--log-every", "0",
         "--include-target-latent", "--include-typicality-no-physiology",
         "--include-repair-baseline", "--physiological-tolerance-quantile", "0.5",
         "--amplitude-spectral-weight", "1.0", "--amplitude-spectral-margin", "0.1"])
@@ -127,28 +127,27 @@ def test_runner_repair_baseline_tolerance_quantile_and_amplitude_spectral(tmp_pa
         return optimize(self, *a, **k)
     monkeypatch.setattr(study.CounterfactualOptimizer, "optimize", capture)
     study.run(args)
-    out = out / "0_to_1"
 
     # The repair arm runs first and every arm receives the trial's normalization.
     assert calls[0][0] is True and sum(c[0] for c in calls) == 1
-    study_json = json.loads((out / "study.json").read_text())
+    study_json = json.loads((out / "0_to_1/study.json").read_text())
     assert study_json["repair_baseline"] is True
     assert "repair" not in study_json["objectives"]
     assert "quantile 0.5" in study_json["physiological_tolerance_rule"]
 
-    tolerance = json.loads((out / "subject_0/calibration/vcsc_tolerance.json").read_text())
-    fold = json.loads((out / "subject_0/fold.json").read_text())
+    tolerance = json.loads((out / "0_to_1/subject_0/calibration/vcsc_tolerance.json").read_text())
+    fold = json.loads((out / "0_to_1/subject_0/fold.json").read_text())
     assert fold["physiological_tolerance"] == tolerance["tolerance"] == pytest.approx(
         tolerance["source_vcsc_quantiles"]["0.5"])
     assert tolerance["n_source_trials"] == 4
-    assert (out / "subject_0/calibration/amplitude_spectral.json").is_file()
+    assert (out / "0_to_1/subject_0/calibration/amplitude_spectral.json").is_file()
     # Ablation arms drop BOTH physiological constraints.
     for arm in ("target_latent", "typicality_no_physiology"):
         assert fold["objective_losses"][arm]["physiological_weight"] == 0
         assert fold["objective_losses"][arm]["amplitude_spectral_weight"] == 0
     assert fold["objective_losses"]["base"]["amplitude_spectral_weight"] == 1.0
 
-    repair_dir = completed_attempt(out / "subject_0/trial_0/repair")
+    repair_dir = completed_attempt(out / "0_to_1/subject_0/trial_0/repair")
     repair = json.loads((repair_dir / "result.json").read_text())
     assert repair["repair_only"] is True
     assert repair["selected_losses"]["weighted_target"] == 0.0
@@ -158,14 +157,14 @@ def test_runner_repair_baseline_tolerance_quantile_and_amplitude_spectral(tmp_pa
     assert len(list(out.rglob("*.npz"))) == 1
 
     for arm in ("base", "typicality", "target_latent", "typicality_no_physiology"):
-        result = json.loads((completed_attempt(out / f"subject_0/trial_0/{arm}") / "result.json").read_text())
+        result = json.loads((completed_attempt(out / f"0_to_1/subject_0/trial_0/{arm}") / "result.json").read_text())
         baseline = result["repair_baseline"]
         assert baseline["available"] and baseline["delta_dec_repair"] == pytest.approx(repair["delta_dec_repair"])
         assert baseline["delta_dec_explanation"] >= 0
         assert "amplitude_spectral" in result["selected_losses"]
         assert "amplitude_in_range" in result["selected_losses"]
         assert result["physiological_tolerance"] == fold["physiological_tolerance"]
-        power = json.loads((completed_attempt(out / f"subject_0/trial_0/{arm}") / "band_power.json").read_text())
+        power = json.loads((completed_attempt(out / f"0_to_1/subject_0/trial_0/{arm}") / "band_power.json").read_text())
         assert "power_change_vs_repair" in power
 
     metrics = (out / "report/trial_metrics.csv").read_text()
