@@ -78,7 +78,7 @@ def build_parser():
     parser.add_argument("--report-output", choices=("joint", "gcn_gru", "bilstm"), help="Mandatory in branch mode; joint is the default in joint mode.")
     parser.add_argument("--target-probability", type=_positive_float, default=0.8)
     parser.add_argument("--target-loss-component", choices=("confidence", "focal", "vc", "focal_vc"), default="confidence")
-    parser.add_argument("--target-weight", type=_positive_float, default=1.0)
+    parser.add_argument("--target-weight", type=_nonnegative_float, default=1.0)
     parser.add_argument("--latent-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument("--decoded-weight", type=_nonnegative_float, default=0.1)
     parser.add_argument("--physiological-weight", type=_nonnegative_float, default=1.0,
@@ -335,7 +335,7 @@ def _protocol(args, dataset, folds):
             "aperiodic_status": "unavailable from band-filtered decoder; never counted as passed"}
 
 
-def _score_decoded_counterfactual(model, region, decoded, *, report_output, target_probability=None,
+def _score_decoded_counterfactual(model, region, decoded, *, report_output, target_class=None, target_probability=None,
                                   input_name="decoded_counterfactual_eeg_reencoded_by_frozen_classifier"):
     """Score the generated EEG after a fresh pass through the frozen encoder.
 
@@ -350,6 +350,8 @@ def _score_decoded_counterfactual(model, region, decoded, *, report_output, targ
         raise ValueError("Decoded counterfactual must be one finite full EEG trial")
     features = model.get_encoder_features(signal)
     target = int(region.metadata["target_class"])
+    if target_class is not None and target_class != target:
+        raise ValueError("Decoded evaluation target disagrees with calibrated region")
     embedding = np.asarray(features["classification_embedding"], dtype=np.float64)
     probabilities = np.asarray(features["probabilities"], dtype=np.float64)
     if embedding.shape != (1, len(region.prior_mean)) or not np.isfinite(embedding).all():
@@ -710,17 +712,17 @@ def run_fold(args, dataset, entry, out):
                 # the repair R(z_rep) are scored the same way as controls.
                 summary["decoded_counterfactual"] = _score_decoded_counterfactual(
                     model, region, counterfactual, report_output=args.report_output,
-                    target_probability=args.target_probability,
+                    target_class=args.target_class, target_probability=args.target_probability,
                 )
                 summary["decoded_reconstruction"] = _score_decoded_counterfactual(
                     model, region, baseline, report_output=args.report_output,
-                    target_probability=args.target_probability,
+                    target_class=args.target_class, target_probability=args.target_probability,
                     input_name="decoded_reconstruction_eeg_reencoded_by_frozen_classifier",
                 )
                 if repair is not None:
                     summary["decoded_repair"] = _score_decoded_counterfactual(
                         model, region, repair["reconstruction"], report_output=args.report_output,
-                        target_probability=args.target_probability,
+                        target_class=args.target_class, target_probability=args.target_probability,
                         input_name="decoded_repair_eeg_reencoded_by_frozen_classifier",
                     )
                 # A channel-by-band summary supports the report's scalp maps

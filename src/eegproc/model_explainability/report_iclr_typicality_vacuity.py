@@ -4,7 +4,8 @@
 Reads every ``trial_metrics.csv`` under one or more suites (a suite's own
 ``report/`` and each ``fold_NN/report/``) and answers three questions per task,
 all in the fold's own frozen classifier space and against the fold's
-source-calibrated threshold tau:
+source-calibrated threshold tau. New bidirectional archives are reported
+separately for each direction; legacy archives retain class-0-to-1 semantics:
 
   1. original_inside: fraction of completed source-class trials whose ORIGINAL
      embedding is already inside the direction's target-class typicality region
@@ -49,8 +50,17 @@ def _float(value):
     return out if np.isfinite(out) else None
 
 
+def _ratio_median(rows, value):
+    # A zero source cutoff is valid. Membership remains well-defined, while
+    # dividing a discrepancy by that cutoff does not produce a finite ratio.
+    rows = list(rows)
+    if any(row["threshold"] == 0 for row in rows):
+        return None
+    return float(np.median([row[value] / row["threshold"] for row in rows]))
+
+
 def load_rows(suites):
-    """Completed rows, one per (task, subject, trial, objective)."""
+    """Completed rows, one per (task, direction, subject, trial, objective)."""
     rows, seen, files = [], {}, []
     for suite in suites:
         suite = Path(suite)
@@ -64,10 +74,10 @@ def load_rows(suites):
                 for row in csv.DictReader(handle):
                     if row.get("status") != "completed":
                         continue
-                    direction = row.get("direction") or "0_to_1"
-                    if direction not in ("0_to_1", "1_to_0"):
-                        raise ValueError("Unknown counterfactual direction")
+                    direction = row.get("direction") or "legacy_0_to_1"
                     key = (row["task"], direction, row["subject_id"], row["trial_id"], row["objective"])
+                    if direction not in ("legacy_0_to_1", "0_to_1", "1_to_0"):
+                        raise ValueError("Unknown counterfactual direction")
                     threshold, original, discrepancy = (_float(row.get(k)) for k in
                                                         ("threshold", "original_discrepancy", "discrepancy"))
                     if threshold is None or threshold < 0 or original is None or discrepancy is None:
@@ -88,7 +98,7 @@ def load_rows(suites):
 def summarize(rows):
     by_task = defaultdict(list)
     for row in rows:
-        by_task[(row["task"], row.get("direction", "0_to_1"))].append(row)
+        by_task[(row["task"], row["direction"])].append(row)
     summary = {}
     for (task, direction), task_rows in sorted(by_task.items()):
         trials = {}
@@ -101,22 +111,23 @@ def summarize(rows):
         per_subject = defaultdict(list)
         for (subject, _), row in trials.items():
             per_subject[subject].append(row["original"] <= row["threshold"])
+        source, target = map(int, direction.removeprefix("legacy_").split("_to_"))
         result = {
             "task": task, "direction": direction,
-            "source_class": int(direction[0]), "target_class": int(direction[-1]),
+            "source_class": source, "target_class": target,
             "n_trials": len(trials),
             "n_subjects": len(per_subject),
             "original_inside": float(np.mean(original_inside)),
             "original_inside_count": int(np.sum(original_inside)),
             "subjects_with_all_originals_inside": int(sum(all(v) for v in per_subject.values())),
-            "original_margin_median": _median_ratio(trials.values(), "original"),
+            "original_margin_median": _ratio_median(trials.values(), "original"),
             "inside_per_arm": {}, "discrepancy_ratio_median_per_arm": {},
         }
         for arm, arm_rows in sorted(arms.items()):
             inside = [r["discrepancy"] <= r["threshold"] for r in arm_rows.values()]
             result["inside_per_arm"][arm] = {"fraction": float(np.mean(inside)), "count": int(np.sum(inside)),
                                              "n": len(inside)}
-            result["discrepancy_ratio_median_per_arm"][arm] = _median_ratio(arm_rows.values(), "discrepancy")
+            result["discrepancy_ratio_median_per_arm"][arm] = _ratio_median(arm_rows.values(), "discrepancy")
         if "base" in arms and "typicality" in arms:
             common = sorted(set(arms["base"]) & set(arms["typicality"]))
             outside_after_base = [t for t in common if arms["base"][t]["discrepancy"] > arms["base"][t]["threshold"]]
@@ -130,13 +141,8 @@ def summarize(rows):
                 "fraction_of_typicality_passes_owed_to_penalty": (
                     len(moved) / max(1, sum(arms["typicality"][t]["discrepancy"] <= arms["typicality"][t]["threshold"]
                                             for t in common)))}
-        summary[task if direction == "0_to_1" else f"{task}/{direction}"] = result
+        summary[task if direction == "legacy_0_to_1" else f"{task}/{direction}"] = result
     return summary
-
-
-def _median_ratio(rows, field):
-    values = [r[field] / r["threshold"] for r in rows if r["threshold"] > 0]
-    return float(np.median(values)) if values else None
 
 
 def write_outputs(out, summary, files):
@@ -148,17 +154,18 @@ def write_outputs(out, summary, files):
     with (out / "typicality_vacuity.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["task", "quantity", "arm", "value", "count", "n", "direction"])
-        for task, result in summary.items():
-            writer.writerow([result["task"], "original_inside", "", result["original_inside"],
-                             result["original_inside_count"], result["n_trials"], result["direction"]])
+        for result in summary.values():
+            task, direction = result["task"], result["direction"]
+            writer.writerow([task, "original_inside", "", result["original_inside"],
+                             result["original_inside_count"], result["n_trials"], direction])
             for arm, values in result["inside_per_arm"].items():
-                writer.writerow([result["task"], "inside_after_optimization", arm, values["fraction"], values["count"],
-                                 values["n"], result["direction"]])
+                writer.writerow([task, "inside_after_optimization", arm, values["fraction"], values["count"],
+                                 values["n"], direction])
             moved = result.get("moved_by_typicality")
             if moved:
                 writer.writerow([result["task"], "brought_inside_by_typicality", "typicality",
                                  moved["fraction_of_typicality_passes_owed_to_penalty"],
-                                 moved["brought_inside_by_typicality"], moved["n_paired"], result["direction"]])
+                                 moved["brought_inside_by_typicality"], moved["n_paired"], direction])
 
 
 def main(argv=None):
@@ -172,15 +179,17 @@ def main(argv=None):
         raise SystemExit("No completed rows with threshold/original_discrepancy/discrepancy found")
     summary = summarize(rows)
     write_outputs(args.out, summary, files)
+    def ratio_text(value):
+        return "N/A (zero cutoff)" if value is None else f"{value:.3f}"
     for task, result in summary.items():
         print(f"\n{task}: {result['n_trials']} completed class-{result['source_class']} trials "
               f"from {result['n_subjects']} held-out subjects ({result['direction']})")
         print(f"  original already inside region: {result['original_inside_count']}/{result['n_trials']}"
-              f" ({100 * result['original_inside']:.1f}%), median original/tau {result['original_margin_median']}")
+              f" ({100 * result['original_inside']:.1f}%), median original/tau {ratio_text(result['original_margin_median'])}")
         for arm, values in result["inside_per_arm"].items():
             print(f"  {arm:<26} inside after optimization: {values['count']}/{values['n']}"
                   f" ({100 * values['fraction']:.1f}%), median discrepancy/tau "
-                  f"{result['discrepancy_ratio_median_per_arm'][arm]}")
+                  f"{ratio_text(result['discrepancy_ratio_median_per_arm'][arm])}")
         moved = result.get("moved_by_typicality")
         if moved:
             print(f"  outside after base: {moved['outside_after_base']}/{moved['n_paired']};"

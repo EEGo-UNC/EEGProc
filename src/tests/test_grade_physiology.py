@@ -95,6 +95,12 @@ def test_table_groups_by_objective_and_rejects_changed_bounds(archived_suite, st
             if line.startswith(("base ", "typicality "))]
     assert [(row[0], row[1]) for row in rows] == [("base", "2"), ("typicality", "1")]
     assert "LaTeX cell" in result.stdout
+    baseline_rows = [line.split() for line in result.stdout.splitlines()
+                     if line.startswith(("real EEG (original)", "reconstruction R(Z)"))]
+    assert len(baseline_rows) == 2
+    assert baseline_rows[0][3] == "2"
+    assert baseline_rows[1][2] == "2"
+    assert "all pass" in result.stdout
     saved = attempts[0] / "physiology.json"
     payload = json.loads(saved.read_text())
     payload["counterfactual"]["checks"]["amplitude"]["fraction_in_range"] = .123456
@@ -188,7 +194,7 @@ def test_saved_graded_json_is_reported_without_raw_eeg(archived_suite, family_on
     for statistic in ('worst', 'mean'):
         table = run_grader('grade_physiology_table.py', ['--suite', suite, '--statistic', statistic])
         assert table.returncode == 0, table.stdout + table.stderr
-        assert 'saved_json=3' in table.stdout
+        assert 'saved_json=7' in table.stdout
         assert 'LaTeX cell' in table.stdout
         assert 'not independently revalidated' in table.stdout
 
@@ -205,7 +211,7 @@ def test_json_component_arrays_preserve_the_bounds_gate(archived_suite):
     args = ['--suite', suite, '--eeg', eeg, '--labels', labels]
     result = run_grader('grade_physiology_table.py', args)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'recomputed_components=3' in result.stdout
+    assert 'recomputed_components=7' in result.stdout
     path = attempts[0] / 'physiology.json'
     saved = json.loads(path.read_text())
     saved['counterfactual']['checks']['amplitude']['fraction_in_range'] = .123456

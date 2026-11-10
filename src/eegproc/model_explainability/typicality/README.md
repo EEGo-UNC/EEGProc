@@ -31,7 +31,10 @@ python src/eegproc/model_explainability/typicality/grade_physiology.py \
   --held-out 0 --task valence --which counterfactual --report binary
 ```
 
-`--which` accepts `counterfactual`, `original`, or `reconstruction`.
+`--which` accepts `counterfactual`, `original`, or `reconstruction`. The table
+also accepts `all` (its default): real EEG and reconstruction are counted once
+per trial, followed by each objective's counterfactual and its available-family
+pass rate. Explicit single-signal reports retain grouping by objective.
 
 ## Saving component values for new runs
 
@@ -132,7 +135,8 @@ nearly all of the decoded change R(z') - R(z) (99.9%) is the optimizer
 repairing that, not class-relevant change; counterfactuals end up more
 typical than 95-100% of real trials because of the fixed 1e-8 feasibility
 tolerance; and amplitude and spectral power, which VCSC cannot see, fail in
-every arm. All defaults reproduce the original suites exactly.
+every arm. These additions are opt-in. The CFX-update defaults remain both
+class directions and the source target-class 10th-percentile typicality cutoff.
 
 `--include-repair-baseline`. For each eligible
 trial, first optimize z with the physiological constraints and the

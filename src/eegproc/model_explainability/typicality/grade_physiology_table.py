@@ -45,8 +45,9 @@ def main(argv=None):
     parser.add_argument("--suite", required=True, type=Path,
                         help="suite root containing fold_NN directories")
     parser.add_argument("--task", default="arousal", choices=("arousal", "valence"))
-    parser.add_argument("--which", default="counterfactual",
-                        choices=("counterfactual", "original", "reconstruction"))
+    parser.add_argument("--which", default="all",
+                        choices=("all", "counterfactual", "original", "reconstruction"),
+                        help="all: real EEG and reconstruction once per trial, then every objective's counterfactual")
     parser.add_argument("--report", choices=("graded", "binary"), default="graded")
     parser.add_argument("--repo", default=Path("."), type=Path)
     parser.add_argument("--eeg", default=None, type=Path)
@@ -72,17 +73,22 @@ def main(argv=None):
     references = SourceReferences(args)
     subject_pattern = re.compile(r"subject_(\d+)")
     per_objective = defaultdict(list)
+    passes = defaultdict(list)
     binary = defaultdict(list)
     gate_failures = []
     unavailable = []
     origins = Counter()
-    attempts = attempt_directories(args.suite, args.which)
-    print(f"found {len(attempts)} archived {args.which} attempts under {args.suite}\n")
+    signals = (("original", "reconstruction", "counterfactual") if args.which == "all"
+               else (args.which,))
+    attempts = [(which, attempt) for which in signals
+                for attempt in attempt_directories(args.suite, which)]
+    seen_trials = set()
+    print(f"found {len(attempts)} archived {args.which} signal attempts under {args.suite}\n")
     if not attempts:
         print("UNAVAILABLE: no physiology JSON summaries or component archives found.", file=sys.stderr)
         return 2
 
-    for attempt in attempts:
+    for which, attempt in attempts:
         objective = attempt.parent.name
         match = next((subject_pattern.fullmatch(part) for part in reversed(attempt.parts)
                       if subject_pattern.fullmatch(part)), None)
@@ -90,16 +96,29 @@ def main(argv=None):
             unavailable.append((str(attempt), "No subject ID in attempt path"))
             continue
         held_out = int(match.group(1))
+        if args.which == "all" and which != "counterfactual":
+            # Include direction/fold paths in the identity; only objective copies
+            # of the same trial are duplicates.
+            trial_key = (which, attempt.parent.parent)
+            if trial_key in seen_trials:
+                continue
+            objective = {"original": "real EEG (original)",
+                         "reconstruction": "reconstruction R(Z)"}[which]
         try:
             if args.report == "binary":
-                binary[objective].append(read_summary(attempt, args.which))
+                binary[objective].append(read_summary(attempt, which))
                 origins["saved_binary_json"] += 1
+                if args.which == "all" and which != "counterfactual":
+                    seen_trials.add(trial_key)
                 continue
-            summary, origin = assess_attempt(attempt, args.which, held_out, references)
+            summary, origin = assess_attempt(attempt, which, held_out, references)
             value = graded_score(summary, args.statistic)
             origins[origin] += 1
             if value is not None:
                 per_objective[objective].append(value)
+                passes[objective].append(summary["available_checks_passed"])
+                if args.which == "all" and which != "counterfactual":
+                    seen_trials.add(trial_key)
         except BoundsMismatch:
             gate_failures.append(str(attempt))
         except (GradingUnavailable, OSError, ValueError) as error:
@@ -125,13 +144,18 @@ def main(argv=None):
     else:
         label = "worst-family" if args.statistic == "worst" else "mean-family"
         print(f"{args.task}: median [Q1, Q3] {label} exceedance, half-interval widths\n")
-        print(f"{'objective':<34}{'n':>5}{'median':>10}{'Q1':>10}{'Q3':>10}")
-        print("-" * 69)
-        for objective in sorted(per_objective):
+        print("'all pass' = every available check family met the required fraction\n")
+        print(f"{'signal / objective':<34}{'n':>5}{'median':>10}{'Q1':>10}{'Q3':>10}{'all pass':>10}")
+        print("-" * 79)
+        baseline_rows = [name for name in ("real EEG (original)", "reconstruction R(Z)")
+                         if name in per_objective]
+        for objective in baseline_rows + sorted(set(per_objective) - set(baseline_rows)):
             values = per_objective[objective]
             median, q1, q3 = quantiles(values)
-            print(f"{objective:<34}{len(values):>5}{median:>10.3f}{q1:>10.3f}{q3:>10.3f}")
-            print(f"{'':34}  -> LaTeX cell:  {median:.3f} [{q1:.2f}, {q3:.2f}]")
+            flags = [flag for flag in passes[objective] if flag is not None]
+            rate = f"{100 * sum(flags) / len(flags):.1f}%" if flags else "N/A"
+            print(f"{objective:<34}{len(values):>5}{median:>10.3f}{q1:>10.3f}{q3:>10.3f}{rate:>10}")
+            print(f"{'':34}  -> LaTeX cell:  {median:.3f} [{q1:.3f}, {q3:.3f}]")
     print("\nInput sources: " + ", ".join(f"{name}={count}" for name, count in sorted(origins.items())))
     if origins["saved_json"]:
         print("Saved graded JSON summaries were not independently revalidated against raw EEG.")
