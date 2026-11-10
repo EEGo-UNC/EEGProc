@@ -60,6 +60,15 @@ def parser():
             command.add_argument("--epochs", type=positive_int, default=30)
             command.add_argument("--learning-rate", type=positive_float,
                                  default=1e-3 if name == "pretrain-identifier" else 1e-4)
+        if name in ("idea1", "latent-coords"):
+            command.add_argument(
+                "--reconstruction-seam-weight", type=nonnegative_float,
+                help="Override the seam weight from the model config or checkpoint. Use 0 to ablate.",
+            )
+            command.add_argument(
+                "--reconstruction-derivative-weight", type=nonnegative_float,
+                help="Override the derivative weight from the model config or checkpoint. Use 0 to ablate.",
+            )
         if name == "idea1":
             command.add_argument("--model", type=Path, required=True)
             command.add_argument("--identifier", type=Path, required=True)
@@ -174,18 +183,24 @@ def main(argv=None):
     elif args.command in {"pretrain-identifier", "idea1", "latent-coords"}:
         train, validation = TrialData.load(args.train), TrialData.load(args.validation)
         common = dict(batch_size=args.batch_size, seed=args.seed)
+        temporal_weights = {
+            key: getattr(args, key)
+            for key in ("reconstruction_seam_weight", "reconstruction_derivative_weight")
+            if getattr(args, key, None) is not None
+        }
         tf.keras.utils.set_random_seed(args.seed)
         if args.command == "pretrain-identifier":
             train_identifier(train, validation, args.output, epochs=args.epochs,
                              learning_rate=args.learning_rate, **common)
         elif args.command == "idea1":
             identifier, classes = _identifier(args)
-            train_idea1(load_sic(args.model), identifier, classes, train, validation,
+            train_idea1(load_sic(args.model, **temporal_weights), identifier, classes, train, validation,
                 args.output, epochs=args.epochs, learning_rate=args.learning_rate,
                 identity_weight=args.identity_weight, reconstruction_weight=args.reconstruction_weight,
                 loss_mode=args.identity_loss, **common)
         else:
             config = json.loads(args.model_config.read_text())
+            config.update(temporal_weights)
             train_latent_coords(train, validation, config, args.output,
                 phase1_epochs=args.phase1_epochs, phase2_epochs=args.phase2_epochs,
                 isa_weight=args.isa_weight, **common)

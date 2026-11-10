@@ -13,13 +13,19 @@ from .identity import (DecoderIdentityTrainer, build_identifier,
 from .latent_coords import LatentCoordinatesDecoder
 
 
-def load_sic(path):
+def load_sic(path, *, reconstruction_seam_weight=None, reconstruction_derivative_weight=None):
     # Build via public config/weight APIs so paired SIC constructors (which
     # create Bidirectional layers) do not share the archive loader's temporary
     # object scope. Restore neither an optimizer nor its training state.
     with zipfile.ZipFile(path) as archive:
         configuration = json.loads(archive.read("config.json"))
     configuration.pop("compile_config", None)
+    for key, weight in (
+        ("reconstruction_seam_weight", reconstruction_seam_weight),
+        ("reconstruction_derivative_weight", reconstruction_derivative_weight),
+    ):
+        if weight is not None:
+            configuration["config"][key] = weight
     model = tf.keras.models.model_from_json(json.dumps(configuration))
     model.load_weights(path)
     return model
@@ -138,6 +144,8 @@ def train_idea1(model, identifier, classes, train, validation, output, *,
     write_json(output / "history.json", history)
     write_json(output / "report.json", {"method": "idea1", "identity_loss": loss_mode,
         "identity_weight": identity_weight, "reconstruction_weight": reconstruction_weight,
+        "reconstruction_seam_weight": model.reconstruction_seam_weight,
+        "reconstruction_derivative_weight": model.reconstruction_derivative_weight,
         "encoder_and_classifier_unchanged": True, "identifier_unchanged": True,
         "before": before, "after": after, "seed": seed,
         "train_fingerprint": train.fingerprint(), "validation_fingerprint": validation.fingerprint()})

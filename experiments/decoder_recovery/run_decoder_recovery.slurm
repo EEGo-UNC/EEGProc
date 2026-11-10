@@ -148,10 +148,17 @@ TEST="$FOLD_DIR/data/test.npz"
 
 # Phase 1: task + reconstruction, no ISA gradient. Phase 2 starts from exactly
 # those weights and enables ISA. Both frozen checkpoints are retained.
-run "${CLI[@]}" latent-coords --train "$TRAIN" --validation "$SOURCE_VALIDATION" \
+SOURCE_TRAIN=("${CLI[@]}" latent-coords --train "$TRAIN" --validation "$SOURCE_VALIDATION" \
     --model-config "$MODEL_CONFIG" --phase1-epochs "$PHASE1_EPOCHS" \
     --phase2-epochs "$PHASE2_EPOCHS" --isa-weight "$ISA_WEIGHT" \
-    --batch-size "$BATCH_SIZE" --seed "$SEED" --output "$FOLD_DIR/latent_coords"
+    --batch-size "$BATCH_SIZE" --seed "$SEED" --output "$FOLD_DIR/latent_coords")
+if [[ -n "${RECONSTRUCTION_SEAM_WEIGHT:-}" ]]; then
+    SOURCE_TRAIN+=(--reconstruction-seam-weight "$RECONSTRUCTION_SEAM_WEIGHT")
+fi
+if [[ -n "${RECONSTRUCTION_DERIVATIVE_WEIGHT:-}" ]]; then
+    SOURCE_TRAIN+=(--reconstruction-derivative-weight "$RECONSTRUCTION_DERIVATIVE_WEIGHT")
+fi
+run "${SOURCE_TRAIN[@]}"
 SOURCE_MODEL="$FOLD_DIR/latent_coords/post_isa.keras"
 REFERENCE_MODEL="$FOLD_DIR/latent_coords/pre_isa.keras"
 
@@ -166,13 +173,20 @@ run "${CLI[@]}" pretrain-identifier --train "$TRAIN" --validation "$ID_VALIDATIO
 for ARM in reconstruction_only idea1; do
     WEIGHT=0
     if [[ "$ARM" == idea1 ]]; then WEIGHT="$IDENTITY_WEIGHT"; fi
-    run "${CLI[@]}" idea1 --model "$SOURCE_MODEL" \
+    DECODER_TRAIN=("${CLI[@]}" idea1 --model "$SOURCE_MODEL" \
         --identifier "$FOLD_DIR/identifier/identifier.keras" \
         --identifier-metadata "$FOLD_DIR/identifier/identifier.json" \
         --train "$TRAIN" --validation "$ID_VALIDATION" \
         --identity-weight "$WEIGHT" --identity-loss "$IDENTITY_LOSS" \
         --epochs "$DECODER_EPOCHS" --batch-size "$BATCH_SIZE" --seed "$SEED" \
-        --output "$FOLD_DIR/$ARM"
+        --output "$FOLD_DIR/$ARM")
+    if [[ -n "${DECODER_RECONSTRUCTION_SEAM_WEIGHT:-}" ]]; then
+        DECODER_TRAIN+=(--reconstruction-seam-weight "$DECODER_RECONSTRUCTION_SEAM_WEIGHT")
+    fi
+    if [[ -n "${DECODER_RECONSTRUCTION_DERIVATIVE_WEIGHT:-}" ]]; then
+        DECODER_TRAIN+=(--reconstruction-derivative-weight "$DECODER_RECONSTRUCTION_DERIVATIVE_WEIGHT")
+    fi
+    run "${DECODER_TRAIN[@]}"
 done
 
 for ARM in baseline reconstruction_only idea1 latent_coords; do

@@ -53,20 +53,27 @@ is not implemented under this experiment's name.
 
 ## Temporal reconstruction losses
 
-Amit's `recon-temporal-loss` implementation is available in this branch. Add
-`reconstruction_seam_weight` and `reconstruction_derivative_weight` to a custom
-model config to enable boundary-step matching and within-window derivative
-matching. Both default to zero. Keep `reconstruction_loss_weight` positive for
-the two source-training phases. The Idea 1 and reconstruction-only adaptation
-arms reuse the same reconstruction objective, scaled by their own
-`reconstruction_weight`; saved checkpoints retain both temporal settings.
-Use the same settings for the matched control and identity-guided arms.
+Use `--reconstruction-seam-weight` for boundary-step matching and
+`--reconstruction-derivative-weight` for within-window derivative matching.
+`latent-coords` applies the weights to both source-training phases. Its flags
+override the corresponding model config values, which default to zero. Keep
+`reconstruction_loss_weight` positive for source training.
 
-Seam matching requires complete trials of chronological, contiguous,
-non-overlapping windows. The prepared-data path cannot infer those properties
-from array shape alone. These terms do not explicitly align phase angles; the
-existing counterfactual envelope distance and latent-edit smoothing remain
-separate options. See `docs/RECONSTRUCTION_TEMPORAL_INTEGRATION.md` for details.
+`idea1` uses the source checkpoint's weights for any omitted flags. An
+explicit `0` disables the corresponding term during decoder adaptation,
+so several ablations can start from the same checkpoint. Use
+`--identity-weight 0` for reconstruction-only adaptation. The report and
+adapted checkpoint save the effective temporal weights.
+
+| Reconstruction loss | Seam weight | Derivative weight |
+| --- | ---: | ---: |
+| MSE only | 0 | 0 |
+| MSE + seam | positive | 0 |
+| MSE + derivative | 0 | positive |
+| MSE + both | positive | positive |
+
+Use chronological, contiguous, non-overlapping trial windows for seam
+matching. See `docs/RECONSTRUCTION_TEMPORAL_INTEGRATION.md` for the objective.
 
 ## SLURM: run both ideas and matched controls
 
@@ -117,6 +124,12 @@ sbatch --array=0 experiments/decoder_recovery/run_decoder_recovery.slurm
 IDENTITY_LOSS=kl IDENTITY_WEIGHT=0.1 \
 sbatch --array=0 experiments/decoder_recovery/run_decoder_recovery.slurm
 ```
+
+`RECONSTRUCTION_SEAM_WEIGHT` and `RECONSTRUCTION_DERIVATIVE_WEIGHT` set
+the source-training weights. `DECODER_RECONSTRUCTION_SEAM_WEIGHT` and
+`DECODER_RECONSTRUCTION_DERIVATIVE_WEIGHT` override the checkpoint's
+weights for both matched decoder adaptation arms. Set either variable
+explicitly to `0` to ablate that term at its stage.
 
 Other overrides: `PROJECT_DIR`, `VENV_DIR`, `EEG_PATH`, `LABELS_PATH`,
 `MODEL_CONFIG`, `OUT_ROOT`, `RUN_ID`, `SEED`, `BATCH_SIZE`, `ISA_WEIGHT`,

@@ -172,35 +172,50 @@ def test_two_phase_pipeline_saves_paired_models_and_recovery_report(tmp_path):
     assert "round_trip_flip_rate" in report["latent_coords_decoder"]
 
 
-def test_temporal_losses_survive_both_recovery_methods_and_checkpoint_reload(tmp_path):
+def test_cli_temporal_weights_can_be_overridden_on_the_same_source_checkpoint(tmp_path):
+    from experiments.decoder_recovery.cli import main
+
     train, validation = data(), data((2, 2), trial_offset=20)
-    for split in (train, validation):
+    for name, split in (("train", train), ("validation", validation)):
         # Two chronological windows exercise actual seams, not the one-window
         # zero-seam fallback used by the existing recovery smoke tests.
         split.eeg = np.concatenate((split.eeg, -split.eeg + 0.15), axis=1)
-    temporal_config = {**config(both=True),
-                       "reconstruction_seam_weight": 0.7,
-                       "reconstruction_derivative_weight": 0.3}
-    reference, invariant = train_latent_coords(
-        train, validation, temporal_config, tmp_path / "coords",
-        phase1_epochs=1, phase2_epochs=1, batch_size=2)
+        np.savez(tmp_path / f"{name}.npz", **vars(split))
+    data_args = ["--train", str(tmp_path / "train.npz"),
+                 "--validation", str(tmp_path / "validation.npz"), "--batch-size", "2"]
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config(both=True)))
+    coords = tmp_path / "coords"
+    main(["latent-coords", *data_args, "--model-config", str(config_path),
+          "--phase1-epochs", "1", "--phase2-epochs", "1", "--output", str(coords),
+          "--reconstruction-seam-weight", "0.7", "--reconstruction-derivative-weight", "0.3"])
+    source_path = coords / "post_isa.keras"
+    reference = load_sic(coords / "pre_isa.keras")
+    invariant = load_sic(source_path)
+    for source in (reference, invariant):
+        assert source.reconstruction_seam_weight == 0.7
+        assert source.reconstruction_derivative_weight == 0.3
     logits = invariant(validation.eeg, training=False).numpy()
     identifier = build_identifier(train.eeg, 2, filters=3)
-    train_idea1(invariant, identifier, [0, 1], train, validation,
-                tmp_path / "identity", epochs=1, batch_size=2, loss_mode="kl")
-    restored = load_sic(tmp_path / "identity" / "decoder_identity.keras")
-    assert restored.reconstruction_seam_weight == 0.7
+    identifier_path = tmp_path / "identifier.keras"
+    identifier.save(identifier_path)
+    metadata = tmp_path / "identifier.json"
+    metadata.write_text(json.dumps({"outputs": "logits", "subject_ids": [0, 1]}))
+    identity = tmp_path / "identity"
+    main(["idea1", *data_args, "--model", str(source_path),
+          "--identifier", str(identifier_path), "--identifier-metadata", str(metadata),
+          "--epochs", "1", "--identity-loss", "kl", "--output", str(identity),
+          "--reconstruction-seam-weight", "0"])
+    restored = load_sic(identity / "decoder_identity.keras")
+    assert restored.reconstruction_seam_weight == 0.0
     assert restored.reconstruction_derivative_weight == 0.3
     np.testing.assert_array_equal(restored(validation.eeg, training=False), logits)
-    components = restored._reconstruction_components(
-        restored._encode(validation.eeg, training=False), training=False)
-    assert float(components["reconstruction_seam_loss"]) > 0.0
-    assert float(components["reconstruction_derivative_loss"]) > 0.0
-    paired_reference = load_sic(tmp_path / "coords" / "pre_isa.keras")
     np.testing.assert_allclose(
-        LatentCoordinatesDecoder(paired_reference, restored).reconstruct(validation.eeg),
+        LatentCoordinatesDecoder(reference, restored).reconstruct(validation.eeg),
         reference.reconstruct(validation.eeg, "joint"), atol=2e-6)
-    report = json.loads((tmp_path / "identity" / "report.json").read_text())
+    report = json.loads((identity / "report.json").read_text())
+    assert report["reconstruction_seam_weight"] == 0.0
+    assert report["reconstruction_derivative_weight"] == 0.3
     assert report["encoder_and_classifier_unchanged"]
     assert report["identifier_unchanged"]
 
@@ -249,6 +264,9 @@ def test_slurm_preview_has_both_methods_and_matched_control_without_writes(tmp_p
     env = {**os.environ, "DRY_RUN": "1", "PROJECT_DIR": str(root),
            "VENV_DIR": str(tmp_path / "missing_venv"), "OUT_ROOT": str(tmp_path / "results"),
            "SLURM_ARRAY_TASK_ID": "0"}
+    for variable in ("RECONSTRUCTION_SEAM_WEIGHT", "RECONSTRUCTION_DERIVATIVE_WEIGHT",
+                     "DECODER_RECONSTRUCTION_SEAM_WEIGHT", "DECODER_RECONSTRUCTION_DERIVATIVE_WEIGHT"):
+        env.pop(variable, None)
     completed = subprocess.run(["bash", str(script)], env=env, text=True,
                                capture_output=True, check=True)
     assert " latent-coords " in completed.stdout
@@ -256,4 +274,17 @@ def test_slurm_preview_has_both_methods_and_matched_control_without_writes(tmp_p
     assert "--identity-weight 0.1 " in completed.stdout
     assert "independent_probe" in completed.stdout
     assert "--reference-model" in completed.stdout
+    assert not (tmp_path / "results").exists()
+    assert "--reconstruction-seam-weight" not in completed.stdout
+
+    env.update(RECONSTRUCTION_SEAM_WEIGHT="0.7", RECONSTRUCTION_DERIVATIVE_WEIGHT="0",
+               DECODER_RECONSTRUCTION_SEAM_WEIGHT="0", DECODER_RECONSTRUCTION_DERIVATIVE_WEIGHT="0.3")
+    preview = subprocess.run(["bash", str(script)], env=env, text=True,
+                             capture_output=True, check=True).stdout.splitlines()
+    source = next(line for line in preview if " latent-coords " in line)
+    assert "--reconstruction-seam-weight 0.7 --reconstruction-derivative-weight 0" in source
+    adaptation = [line for line in preview if " idea1 " in line]
+    assert len(adaptation) == 2
+    assert all("--reconstruction-seam-weight 0 --reconstruction-derivative-weight 0.3" in line
+               for line in adaptation)
     assert not (tmp_path / "results").exists()
