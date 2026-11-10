@@ -16,5 +16,7 @@ exec python "$SIC16/run_experiments.py" run \
     --eeg "${EEG_PATH:-$PROJECT_DIR/datasets/dreamer_eeg.npy}" \
     --labels "${LABELS_PATH:-$PROJECT_DIR/datasets/dreamer_labels.npy}" \
     --source-epochs "$SOURCE_EPOCHS" --time-budget-seconds "$TIME_BUDGET_SECONDS" \
-    --batch-size "${BATCH_SIZE:-1}" --validation-subjects "${VALIDATION_SUBJECTS:-2}" \
+    --batch-size "${BATCH_SIZE:-64}" --validation-subjects "${VALIDATION_SUBJECTS:-0}" \
+    --protocol v15 --n-jobs "${N_JOBS:-2}" --gpus-per-fold "${GPUS_PER_FOLD:-2}" \
+    --calibration-epochs "${CALIBRATION_EPOCHS:-1}" --calibration-batch-size "${CALIBRATION_BATCH_SIZE:-64}" \
     --seed "${SEED:-42}" "${TARGET_ARGS[@]}"

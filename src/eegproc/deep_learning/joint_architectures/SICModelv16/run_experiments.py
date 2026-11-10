@@ -3,8 +3,9 @@
 
 Reuse v15's array preparation, manifest validation and common-epoch selector.
 The controller imports neither TensorFlow nor the model. Each fold is isolated
-in a new process. Source-validation subjects select ordinary checkpoints;
-test labels select only the explicitly separate common-epoch oracle result.
+in a new process. The CLI defaults to the restored v15 MLDG/common-epoch/calibration protocol.
+The validation-selected implementation below remains available explicitly as
+--protocol legacy_validation for historical runs.
 """
 from __future__ import annotations
 
@@ -383,15 +384,21 @@ def main(argv=None):
     launch.add_argument("--output-dir", type=Path, required=True)
     launch.add_argument("--eeg", type=Path, required=True)
     launch.add_argument("--labels", type=Path, required=True)
-    launch.add_argument("--source-epochs", type=int, default=50)
-    launch.add_argument("--batch-size", type=int, default=1)
-    launch.add_argument("--validation-subjects", type=int, default=2)
+    launch.add_argument("--source-epochs", type=int, default=12)
+    launch.add_argument("--batch-size", type=int, default=64)
+    launch.add_argument("--validation-subjects", type=int, default=0)
     launch.add_argument("--seed", type=int, default=42)
     launch.add_argument("--time-budget-seconds", type=int, default=85000)
     launch.add_argument("--target-subjects", nargs="+", type=int)
     launch.add_argument("--data-subjects", nargs="+", type=int,
                         help="Restrict the entire data pool, including training and validation.")
     launch.add_argument("--resume", action="store_true")
+    launch.add_argument("--protocol", choices=("v15", "legacy_validation"), default="v15")
+    launch.add_argument("--n-jobs", type=int, default=2)
+    launch.add_argument("--gpus-per-fold", type=int, default=2)
+    launch.add_argument("--calibration-epochs", type=int, default=1)
+    launch.add_argument("--calibration-batch-size", type=int, default=64)
+    launch.add_argument("--calibration-level", dest="calibration_levels", nargs=2, type=int, action="append")
     fold = commands.add_parser("worker")
     fold.add_argument("--spec", type=Path, required=True)
     fold.add_argument("--subject", type=int, required=True)
@@ -401,11 +408,19 @@ def main(argv=None):
     listing.add_argument("--configs", type=Path, default=DEFAULT_CONFIGS)
     args = parser.parse_args(argv)
     if args.command == "run":
+        if args.protocol == "v15":
+            from eegproc.deep_learning.joint_architectures.SICModelv16.v15_protocol import run as restored_run
+            return restored_run(args)
         return run(args)
     if args.command == "worker":
         return worker(args.spec, args.subject)
     if args.command == "summarize":
-        result = summarize(args.output)
+        task = json.loads((args.output / "task.json").read_text())
+        if task.get("protocol") == "v15_mldg_common_epoch_calibration":
+            from eegproc.deep_learning.joint_architectures.SICModelv16.v15_protocol import publish_final
+            result = publish_final(args.output)
+        else:
+            result = summarize(args.output)
         print(json.dumps(result, indent=2))
         return 0 if result["oracle"]["status"] == "completed" else 2
     print(json.dumps(configurations(args.configs), indent=2))

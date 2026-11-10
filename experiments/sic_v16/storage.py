@@ -85,9 +85,9 @@ def ensure_work_stores(repo, work_root, *, migrate=False, scope="all23"):
         raise ValueError("Work root must be outside the quota-limited home directory.")
     if not work_root.parent.is_dir():
         raise ValueError(f"Shared work parent does not exist: {work_root.parent}")
-    if scope not in {"all23", "first4"}:
+    if scope not in {"all23", "first4", "v15"}:
         raise ValueError("Unknown data scope.")
-    prefix = Path("first4") if scope == "first4" else Path()
+    prefix = Path({"v15": "v15_protocol", "first4": "first4", "all23": ""}[scope])
     for variant in VARIANTS:
         source = repo / "experiments/sic_v16" / prefix / variant / "runs"
         destination = work_root / prefix / variant / "runs"

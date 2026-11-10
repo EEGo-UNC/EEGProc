@@ -1,11 +1,83 @@
 # SICv15 on SEED-IV
 
-## Review contents
+## Current weighted-accuracy oracle protocol
+
+The current entry point enables class weighting for source training and target
+calibration. Weights are computed from each fitting partition's window labels.
+Predictions use the four-class probability argmax; accuracy is the unweighted
+fraction of correct windows. Class weights affect the training loss.
+
+Source training, epoch selection, and calibration now run in three phases:
+
+1. `train.py --phase source --data-dir ... --suite-dir NEW_SUITE --target 0`
+   trains one participant's LOSO model. Use targets 0 through 14. The existing
+   12 fitting participants/two source-validation participants split is retained.
+   All 12 source epochs are run, with no validation-loss early stopping or
+   restoration. Every completed epoch saves its actual `.keras` checkpoint,
+   held-out probabilities, labels, movie IDs, and ordinary window accuracy.
+2. `train.py --phase select --suite-dir NEW_SUITE` waits for complete epoch
+   records for all 15 participants. It selects **one common epoch** maximizing
+   the **unweighted mean participant window accuracy**, with the earliest epoch
+   winning an exact tie. It does not average each participant's independent
+   maximum. This follows DREAMER valence's common-epoch oracle rule, using
+   accuracy and SEED-IV windows in place of trial balanced accuracy. Missing
+   epochs, mismatched protocols, modified checkpoints, or inconsistent archived
+   scores prevent selection. `oracle_models.json` identifies the selected set.
+3. `train.py --phase calibrate --data-dir ... --suite-dir NEW_SUITE --target 0`
+   loads that participant's checkpoint from the shared selected epoch. It then
+   runs the existing independent 4/8/12-movie, three-split calibration protocol
+   with fresh optimizers and class weights from each calibration subset. The
+   selected source model is restored between splits. Calibration uses its
+   existing fixed five-epoch budget; oracle epoch selection applies to source
+   checkpoints. Results are saved under `calibration/subject_00/`.
+
+Held-out labels intentionally select the source epoch. Selected zero-shot and
+downstream calibration results are **oracle estimates**. Target EEG and labels
+remain excluded from source gradients, source class weights, and MI fitting.
+Balanced accuracy remains a secondary diagnostic; ordinary accuracy selects
+the checkpoint. This protocol does not establish that weighting improves scores.
+
+Use a fresh `RUN_ID`/suite. Existing fold directories are never overwritten.
+The current weighted oracle outputs are separate from the historical baseline
+below and from `results/2026-11-09_partial.json`. Plan storage for 15 times 12
+source checkpoints plus small prediction archives. Source and calibration
+SUCCESS records belong to their own new phase/fold directories.
+
+After deploying the reviewed source to the experiment snapshot on Longleaf:
+
+```bash
+source experiments/sic_v15_seed_iv/environment.sh
+export RUN_ID=weighted_accuracy_oracle_v1
+export SOURCE_EPOCHS=12
+source_job=$(sbatch --parsable --export=ALL,PHASE=source experiments/sic_v15_seed_iv/train.slurm)
+select_job=$(sbatch --parsable --dependency=afterok:"$source_job" --export=ALL experiments/sic_v15_seed_iv/select.slurm)
+sbatch --dependency=afterok:"$select_job" --export=ALL,PHASE=calibrate experiments/sic_v15_seed_iv/train.slurm
+```
+
+The source array's full success gates selection; completed cohort selection
+gates calibration. This does not submit anything automatically. `SMOKE=1`
+uses one source epoch, the original small smoke dataset and 256 MI observations.
+Selection expects all 15 smoke participants by default. For an explicit smaller
+wiring cohort, pass the matching `--targets` list to the selection CLI; it must
+not be reported as a full-cohort result. `--source-epochs N` must match across
+source and selection phases. The CPU selection phase does not require a GPU.
+
+Run `python -m pytest experiments/sic_v15_seed_iv/test_oracle.py` in addition
+to the existing signal and streaming checks.
+
+## Historical baseline snapshot
+
+The following sections record the initial protocol and jobs from commit
+`1d376cb`. Its source-training settings and job instructions are historical.
+The current model configuration and three-phase workflow above supersede them;
+the published partial results retain their original interpretation.
+
+### Review contents
 
 `download_raw.py` is the raw-only Kaggle CLI downloader used on Longleaf, with
 output-directory creation added so it can also start in a fresh directory.
 `preprocess.py`, `build_cache.py`, `streaming.py`, `train.py`, the configuration,
-and Slurm launchers reproduce the current experiment. Paths in these scripts
+and Slurm launchers at that archived commit reproduce the original experiment. Paths in these scripts
 are specific to Pranav's Longleaf account. The baseline source code was
 snapshotted from commit `df5c31ee1f2281a085e4be73d100e6b0682a8175`.
 The no-op ablation memory fix is now included directly in `sic_common/training.py`;
@@ -30,11 +102,11 @@ dependency on that first full fold. The cache builder must not run while an
 existing experiment is using or building its input cache. Existing jobs have
 already been submitted; these instructions are for a new experiment.
 
-This adapter uses EEGProc's existing `bandpass_filter` and the unchanged
+The original adapter used EEGProc's existing `bandpass_filter` and the unchanged
 `SICModelv15.sic_model_train.train_sic` LOSO/calibration implementation.
 It does not modify SICv16, its checkout, environment, jobs, or results.
 
-## Data and preprocessing
+### Data and preprocessing
 
 Raw input on Longleaf: `/work/users/p/m/pmucharl/data/SEED_IV/eeg_raw_data`.
 Work/output root: `/work/users/p/m/pmucharl/sic-v15-seed-iv`.
@@ -53,7 +125,7 @@ band-minor. Shard by participant and preserve session and original trial IDs.
 Dataset protocol: https://bcmi.sjtu.edu.cn/home/seed/seed-iv.html
 This uses raw band-filtered waveforms, not the distributed DE/PSD features.
 
-## Initial training protocol
+### Historical initial training protocol
 
 Four-class window classification using SICv15's GCN-GRU, BiLSTM, recurrent
 classifier, subject adversary, and convex joint reconstruction. Standard ERM
@@ -76,7 +148,7 @@ The GPU smoke uses three movie identities/class/subject and one window/movie,
 one source epoch and a single 4-shot calibration split. It verifies the full
 pipeline, checkpointing, and four-class reports; its scores are not results.
 
-## Longleaf jobs
+### Longleaf jobs
 
 Source is an isolated snapshot of the remote tracked EEGProc checkout plus
 this adapter. Existing `~/EEGProc/venv312` is read-only; no package installs.

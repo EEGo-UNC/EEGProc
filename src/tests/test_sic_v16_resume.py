@@ -27,7 +27,8 @@ class ResumeTests(unittest.TestCase):
                 model = build_sic_model((1, 8, 42), conv_filters=(2, 4), emb_dim=4,
                     classifier_units=4, attention_heads=2, feed_forward_dim=8,
                     dropout=0.0, classifier_dropout=0.0,
-                    use_transformer=attention, use_decoder=reconstruction)
+                    use_transformer=attention, use_decoder=reconstruction,
+                    use_subject_adversarial=False, classifier_rnn_units=(4,), classifier_rnn_dropout=0.0)
                 model.train_on_batch(x, y)
                 model.train_on_batch(x, y)
                 with tempfile.TemporaryDirectory() as folder:

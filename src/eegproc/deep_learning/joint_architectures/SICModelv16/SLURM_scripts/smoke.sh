@@ -5,9 +5,9 @@
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --array=0-3%1
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
 #SBATCH --time=02:00:00
 set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:?Submit from the repository root}}"
@@ -15,6 +15,6 @@ source "$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/SICModelv16/S
 export SOURCE_EPOCHS="${SOURCE_EPOCHS:-2}"
 export TARGET_SUBJECTS="${TARGET_SUBJECTS:-0 1}"
 export TIME_BUDGET_SECONDS="${TIME_BUDGET_SECONDS:-6600}"
-export OUTPUT_ROOT="${OUTPUT_ROOT:-$SIC_V16_WORK_ROOT/legacy/smoke}"
+export OUTPUT_ROOT="${OUTPUT_ROOT:-$SIC_V16_WORK_ROOT/v15_protocol/smoke}"
 python -m unittest discover -s src/tests -p test_sic_v16_data.py -v
 bash "$SIC16/SLURM_scripts/task.sh"

@@ -14,6 +14,8 @@ VENV_DIR="${VENV_DIR:-$PROJECT_DIR/venv312}"
 [[ -x "$VENV_DIR/bin/python" ]] || { echo "Prepare $VENV_DIR before submitting." >&2; exit 1; }
 source "$VENV_DIR/bin/activate"
 export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 TF_GPU_ALLOCATOR=cuda_malloc_async
+export TF_DETERMINISTIC_OPS=1 TF_CUDNN_DETERMINISTIC=1 CUBLAS_WORKSPACE_CONFIG=:4096:8
+export PYTHONHASHSEED="${SEED:-42}"
 export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 SIC16="$PROJECT_DIR/src/eegproc/deep_learning/joint_architectures/SICModelv16"
 MODULE_CUDA_ROOT="${EBROOTCUDA:-${CUDA_HOME:-}}"

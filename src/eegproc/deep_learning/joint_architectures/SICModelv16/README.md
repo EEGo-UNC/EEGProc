@@ -1,202 +1,105 @@
-# SIC v16 — Pranav's three-band CNN experiments
+# SIC v16 with the v15 training protocol
 
-Branch: `SICv16-Pranav`, based on `origin/valence-enhancement` at `c0adc65`.
-All eight synthetic cluster preflight tests passed on a Longleaf L40 in job
-6610071. All four tracked real-data smoke runs also completed; see
-`experiments/sic_v16/SMOKE_REVIEW.md` for results and baseline runtime estimates.
-No TensorFlow execution,
-training or GPU tests were run on the local machine.
+The only model replacement in the default experiment is the EEG encoder/decoder
+pair: independent theta/alpha/beta CNNs, optional within-window Transformers,
+and their matching band decoders. Band order, CNN topology, and the decoder's
+pre-Transformer reconstruction inputs are preserved. The old GCN-GRU/BiLSTM
+encoders and their convex decoder fusion are not reinstated alongside this pair.
 
-## Architecture
+All non-encoder model settings are copied from the fixed `baseline` in
+`../SICModelv15/sic_v15_valence_configs.json`. This is an explicit reproducible
+reference, rather than one arbitrary member of the separate v15 full-run grid:
 
-Input features remain channel-major, band-minor: `AF3_theta, AF3_alpha,
-AF3_beta, F7_theta, ...`. Reshape the last axis to `(14, 3)` and select each
-band; do not slice three contiguous groups of 14 features.
+- Full ordered-trial BiGRU classifier: widths [128, 64], dropout 0.4.
+- Original VC head/objective: focal gamma 0.3, alpha 2, beta 0.6, lambda 0.05,
+  logit scale 16; subject GRL strength 0.6 and subject loss weight 0.2.
+- Original first-order MLDG: 8 meta-train / 4 meta-test subjects, 3 distinct
+  trials per subject, 10 episodes per epoch, inner learning rate 0.0001.
+- AdamW learning rate 0.0001, weight decay 0.00005. No class weighting.
+- Reconstruction coefficient 0.6 for decoder variants. The replacement pair
+  uses equal-band MSE, preserving its encoder/decoder design.
 
-Each band has independent weights:
+The four comparisons remain CNN, CNN+decoder, CNN+Transformer, and
+CNN+Transformer+decoder. `configurations.json` and all new campaigns use the same
+non-encoder settings. Pooling/dense heads remain explicit legacy ablations for
+old checkpoint compatibility; neither is a restored default.
 
-```
-theta (T,14) -> theta Conv3D x2 -> [theta Transformer] --+
-alpha (T,14) -> alpha Conv3D x2 -> [alpha Transformer] --+-> concat (T',3D)
-beta  (T,14) -> beta  Conv3D x2 -> [beta  Transformer] --+
-                                                       -> temporal average
-                                                       -> Dense/ReLU/dropout
-                                                       -> Dense logits
-```
+## Source fitting, selection and calibration
 
-Each CNN places its 14 electrodes on the existing 9x9 scalp grid. No bands
-are summed. Every branch uses the same temporal pooling schedule, so matching
-tokens align at concatenation. The optional Transformer is within each window;
-it does not attend across windows or across bands. No joint Transformer is
-included in the initial four comparisons.
+Each of all 23 LOSO targets trains on all 22 other subjects. There is no
+source-validation holdout, no four-subject restriction, and no rebuilt/cropped
+alternative dataset in this default workflow. A target subset only limits the
+evaluated folds; it does not remove available source subjects.
 
-In trial mode, the ordered window/time axes are merged after concatenation,
-then averaged for one trial prediction. In window mode, only that window's
-time axis is averaged. The supplied experiment runner uses trial mode only.
+Preprocessing is the existing v15 pipeline: complete ordered trials,
+128-sample nonoverlapping windows, global RMS normalization per window,
+valence rating >=3 as class 1, prediction threshold 0.5. Raw 14-channel inputs
+are filtered by the established EEGProc filter before the same preparation;
+42-feature arrays pass directly to v15 preparation. Inputs are never modified.
 
-Each optional decoder takes its band's **pre-Transformer CNN latent sequence**
-and reconstructs its own normalized 14-channel input. All bands are equally
-weighted: `loss = classification_loss + reconstruction_loss_weight *
-mean(theta_MSE, alpha_MSE, beta_MSE)`. No grid zeros enter reconstruction MSE.
-The default coefficient is 0.1, an initial setting to investigate rather than
-a validated optimum. Per-band and combined reconstruction losses are logged.
-Decoders are omitted entirely when `use_decoder=false`.
+Two folds run in parallel, each on an isolated pair of GPUs. They reuse v15's
+shared-variable device sharding, global episode VC statistics, single inner
+adaptation and outer update, and deterministic device execution. Seeds and
+GPU deterministic settings follow v15. The new pair supplies only encoder and
+reconstruction adapters to these routines.
 
-## Reuse of SIC
+Each completed epoch saves its checkpoint and untouched target predictions.
+One common epoch maximizes mean target-subject trial balanced accuracy, with
+the earliest exact tie, using the original v15 `select_oracle`. This is explicitly
+test-selected oracle performance. Partial folds/epochs cannot enter selection.
+The full default is 12 source epochs; smoke uses 2 epochs and targets 0/1.
+These MLDG epochs are not equivalent to the old v16 full-dataset ERM epochs.
 
-`ThreeBandSICModel` subclasses v15 and reuses the shared SIC ERM/V-REx/MLDG
-optimizer steps, classification metrics, subject adversary and calibration.
-The inherited `graph_encoder` and `gcn_gru_decoder` attributes are adapter slots
-holding the three-band CNN container and its three decoders. There is no GCN,
-MI adjacency estimation, spectral GRU, BiLSTM, convex decoder fusion, or encoder
-VAE in v16. The shared code and v15 behavior are unchanged.
+After every requested source fold finishes, reload that common-epoch model set
+and run the original shared v15 subject-calibration evaluator: 3 shots, 6 folds,
+1 calibration epoch, batch size 64, AdamW at 0.0001. Every calibration fold restores
+the same source weights and starts a fresh optimizer; only the configured
+classifier suffix is unfrozen. Reloaded zero-shot scores must match selection.
+`final_metrics.json` is published only after all source and calibration work
+finishes. It contains selected epoch, zero-shot metrics and calibrated metrics.
 
-Initial configurations disable subject adversity, VC regularizers and MLDG.
-`focal_gamma=0` makes classification ordinary cross-entropy. Later comparisons
-can opt into `use_recurrent_classifier`, `use_variational_head`,
-`use_subject_adversarial`, or `training_method=vrex/mldg`. MLDG requires explicit
-episode settings, including `mldg_steps_per_epoch`. A separate VC discriminator
-optimizer and v15's graph-specific multi-GPU sharding are not supported in v16.
-Use one GPU per fold. Additional feature experiments should follow the initial
-four comparisons; the cluster preflight exercises these integration paths on
-small synthetic inputs.
+## Run on Longleaf
 
-`prepare_for_subject_calibration` retains SIC's freeze policy: level 1 adapts
-the logits head; level 2 also adapts the sequence summarizer (pooling/dense by
-default, recurrent when enabled). The CNN/Transformer backbone stays frozen.
-Decoders can optionally remain trainable. A calibration launcher and repeated
-seed experiment schedule should follow validated source models and smoke timing.
-
-## Controlled experiment protocol
-
-`configurations.json` defines four fixed configurations:
-
-| Array index | Model | Reconstruction |
-| --- | --- | --- |
-| 0 | Three CNNs | off |
-| 1 | Three CNNs | on |
-| 2 | Three CNN + Transformer branches | off |
-| 3 | Three CNN + Transformer branches | on |
-
-Use DREAMER EEG arrays `(23,trials,14,samples)` (raw) or
-`(23,trials,42,samples)` (already filtered), with ratings
-`(23,trials,dimensions)`. Raw arrays are filtered automatically into separate
-theta/alpha/beta waveforms using EEGProc's `_filter_dreamer_trial` before any
-windowing; the source files are never overwritten. Already filtered arrays
-bypass that step. Preprocessing then reuses v15's `prepare_data`: 128-sample nonoverlapping windows,
-global RMS per window, all complete windows retained in chronological order,
-and valence rating >= 3 as class 1. This differs from the earlier standalone
-per-feature z-score/window-prediction campaign, so old scores are not directly
-matched controls. All four new configurations use this same preprocessing.
-
-For each held-out target, two other subjects are reserved for validation using
-`seed + target_subject`; the remaining 20 subjects supply gradients. No test
-or validation subjects enter training. Target subsets limit test folds only;
-all 23 subjects remain available to the splitter. The source-validation pool,
-seeds, epochs and architecture dimensions are fixed across configurations.
-
-Every completed epoch saves a `.keras` checkpoint and its validation and target
-probabilities. No early stopping is used, so all completed configurations have
-the same epoch budget. Two separate reports are produced:
-
-* `validation_selected_summary.json`: each fold's checkpoint maximizes mean
-  validation-subject trial balanced accuracy, earliest tie. Its selected test
-  metrics are the ordinary validation-selected result.
-* `oracle_summary.json` and `oracle_models.json`: reuse v15's `select_oracle`.
-  Choose one common epoch maximizing unweighted mean target-subject trial
-  balanced accuracy, earliest tie. This is test-selected oracle performance,
-  not an unbiased test estimate. It is not the mean of each subject's best
-  epoch. A missing subject/epoch prevents oracle selection.
-
-Both use a fixed 0.5 threshold, with no threshold search. A screening subset
-must never be compared as though it were full LOSO. Reports include accuracy,
-balanced accuracy, macro F1, AUC and Brier score. `task.json` records configuration,
-seed, Git revision/dirty status, input sizes/timestamps and manifest digest.
-`subject_XX/split.json` makes subject separation reviewable.
-
-## Submit the first required check
-
-Run these on Longleaf, updating a clean checkout from the published branch:
+Prepare the existing `venv312` environment with the project deep-learning extra.
+From the repository root, submit the two-GPU synthetic preflight first:
 
 ```bash
-cd "$HOME/EEGProc"
-git fetch origin
-git switch SICv16-Pranav
-git pull --ff-only origin SICv16-Pranav
-```
-
-On first checkout, Git creates the local branch from `origin/SICv16-Pranav`.
-No ZIP transfer is needed. The branch contains no datasets or prior run artifacts.
-
-Prepare the environment once, outside array jobs:
-
-```bash
-cd "$HOME/EEGProc"
-module load python/3.12.4
-# Only if venv312 does not already exist:
-python -m venv venv312
-source venv312/bin/activate
-python -m pip install -e '.[deep-learning]'
-```
-
-Submit **preflight only first**:
-
-```bash
-cd "$HOME/EEGProc"
 SIC16=src/eegproc/deep_learning/joint_architectures/SICModelv16
 sbatch "$SIC16/SLURM_scripts/preflight.sh"
 ```
 
-The preflight requests one L40, 32 GB host memory and one hour. It tests band
-isolation/order, reconstruction gradients to all CNNs, absence of reconstruction
-gradients through Transformers, all four models' training/checkpoint reloads,
-calibration, temporal pooling, window mode, optional SIC heads, subject adversity,
-V-REx, MLDG and common-epoch oracle selection. It uses tiny synthetic arrays.
-Send back `sicv16_preflight_JOBID.out` and `.err`, including failures.
+It covers the replacement pair, restored heads/objectives, single/two-device
+loss and gradient parity, an MLDG update, optimizer checkpoint restoration,
+common-epoch selection, and the shared calibration path. Local tests use two
+logical CPUs; CUDA memory use and full-size runtime still need cluster checks.
 
-Only after preflight passes, submit real-data smoke:
-
-The preferred next step is now the [tracker workflow](../../../../../../experiments/sic_v16/README.md).
-It plans the same four smoke configurations and produces familiar run bundles.
-The array command below remains an alternative; do not submit both.
+Plan the four tracked smoke runs:
 
 ```bash
-sbatch "$SIC16/SLURM_scripts/smoke.sh"
+python experiments/sic_v16/tracker.py --variant all plan --target valence
 ```
 
-Smoke runs all four configurations, two epochs, targets 0 and 1, one GPU per
-task, one task at a time. It retains full trials and all training subjects.
-The two-hour task limit is a cap, not a measured runtime estimate. Send back
-the Slurm logs and the complete `runs/sic_v16/smoke/suite_ARRAYID` directory.
-If checkpoints are too large to transfer initially, send JSONs and subject
-logs first, retaining all `.keras` files on the cluster for follow-up inspection.
+Submit the four exact commands printed by the tracker. Each requests four GPUs
+(two folds x two GPUs), 8 CPUs and 128 GB RAM. The default scope is now `v15`;
+new campaigns/results live under `experiments/sic_v16/v15_protocol/VARIANT/` and
+matching work storage. After smoke, the tracker proposes the 12-epoch baselines.
+There is no automatic hyperparameter search in this fixed architecture control.
+The tracker ranks the common-epoch zero-shot oracle score and labels it as such;
+calibration results are retained alongside it.
 
-## Later full runs
+The alternative `smoke.sh` and `full.sh` array launchers use the same restored
+protocol and manifest. Do not submit both tracked and array copies of a run.
+One array task runs a fixed configuration. Source epochs, source batch size,
+calibration epochs, seed, and output paths can be overridden as documented in
+the scripts. Budgets are allocation caps, not measured completion estimates.
 
-`full.sh` prepares all four configurations, all 23 target subjects, 50 epochs,
-one GPU per task, and a 24-hour cap. Do not submit it until smoke results establish
-memory use and timing; a single task runs its folds sequentially and may need
-fold-level Slurm parallelization before a full campaign. The controller stops
-starting folds at its soft deadline, and partial runs remain incomplete.
-There is no resume support; each submission writes a new suite directory.
-All epochs' checkpoints are retained, so budget storage for 4 x 23 x 50 models
-for the full comparison. Use smoke checkpoint sizes to estimate actual space.
+`run_experiments.py run` defaults to `--protocol v15`. Saved v15-protocol runs
+can use `--resume`; settings and dataset metadata must match. Checkpoint weights
+and optimizer moments are restored, but post-resume random draws need not match
+an uninterrupted run. Preserve every source checkpoint needed for selection.
 
-```bash
-sbatch "$SIC16/SLURM_scripts/full.sh"
-```
-
-Override `PROJECT_DIR`, `VENV_DIR`, `EEG_PATH`, `LABELS_PATH`, `OUTPUT_ROOT`,
-`SOURCE_EPOCHS`, `TARGET_SUBJECTS`, `BATCH_SIZE`, `VALIDATION_SUBJECTS`, `SEED`,
-`TIME_BUDGET_SECONDS`, or `CONFIGS` as needed. The supplied array range is 0–3;
-adjust `sbatch --array` for a different manifest. Keep budgets/settings matched
-across the four comparisons. Batch size defaults to one complete trial to
-limit activation memory. To rebuild reports from saved epochs:
-
-```bash
-python "$SIC16/run_experiments.py" summarize \
-  runs/sic_v16/smoke/suite_ARRAYID/configuration_0
-```
-
-All launchers assume submission from the repository root and reuse the existing
-Longleaf Python/CUDA/cuDNN module versions. They never submit or train locally.
+Old ERM/validation-selected campaigns and independent diagnostic/rebuilt-data
+scripts are historical experiments, not the defaults. Their stored results are
+preserved. Access the old tracker campaigns explicitly with `--scope all23` or
+`--scope first4`; the old runner is explicit `--protocol legacy_validation`.
+Old checkpoints cannot be resumed into the restored protocol.

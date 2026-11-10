@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=sicv15-seed-train
+#SBATCH --job-name=sicv15-seed-oracle
 #SBATCH --partition=l40-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:1
@@ -28,7 +28,15 @@ if [[ "${SMOKE:-0}" == 1 ]]; then
   ARGS+=(--smoke)
   STAGE=smoke
 fi
+PHASE="${PHASE:-source}"
+if [[ "$PHASE" != source && "$PHASE" != calibrate ]]; then
+  echo "PHASE must be source or calibrate; use select.slurm for cohort selection" >&2
+  exit 2
+fi
+RUN_ID="${RUN_ID:-weighted_accuracy_oracle_v1}"
+SUITE_DIR="${SUITE_DIR:-$ROOT/runs/$RUN_ID/$STAGE}"
 "$PYTHON" experiments/sic_v15_seed_iv/train.py \
+  --phase "$PHASE" \
   --data-dir "$ROOT/processed" \
-  --out-dir "$ROOT/runs/$STAGE/subject_${SLURM_ARRAY_TASK_ID}" \
+  --suite-dir "$SUITE_DIR" --source-epochs "${SOURCE_EPOCHS:-12}" \
   --target "$SLURM_ARRAY_TASK_ID" "${ARGS[@]}"

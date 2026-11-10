@@ -1,3 +1,31 @@
+# Current default: v15 protocol with the v16 encoder/decoder pair
+
+New runs use the restored v15 BiGRU/VC/GRL/MLDG settings and all 22 source
+subjects per held-out target. There is no validation-subject reservation or
+four-subject data restriction. One common oracle epoch selects the model set,
+then the original v15 3-shot/6-fold calibration runs from those source models.
+
+```bash
+python experiments/sic_v16/tracker.py --variant all plan --target valence
+python experiments/sic_v16/tracker.py --variant all status
+```
+
+The default scope is `v15`. New campaigns live in `v15_protocol/VARIANT/`,
+separate from earlier results, and request two parallel folds on two GPUs each.
+The model configurations retain the four CNN/Transformer/decoder variants.
+The initial smoke uses 2 source epochs/targets 0 and 1; full baselines use 12
+epochs/all 23 targets. All 23 subjects remain available to every source splitter.
+
+See the [current model and protocol guide](../../src/eegproc/deep_learning/joint_architectures/SICModelv16/README.md)
+for exact v15 reference settings, calibration, preflight and resume behavior.
+Historical rebuilt-data/collapse/normalization diagnostic scripts keep their
+explicit experimental interventions; they are not the restored production path.
+
+The documentation below describes historical campaigns. Use explicit
+`--scope all23` or `--scope first4` when inspecting those results.
+
+---
+
 # SIC v16 tracker workflow
 
 ## Current default: subjects 0–3 are the entire dataset

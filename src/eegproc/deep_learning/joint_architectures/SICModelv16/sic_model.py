@@ -2,7 +2,8 @@
 
 The inherited graph_encoder/gcn_gru_decoder slots are compatibility adapters:
 they contain ThreeBandEncoder/ThreeBandDecoder, never a graph or spectral GRU.
-This keeps existing SIC source training, MLDG and calibration steps unchanged.
+The default heads, objectives, source training and calibration follow v15.
+The former pooling/dense ablations remain explicit options for old checkpoints.
 """
 from __future__ import annotations
 
@@ -53,6 +54,7 @@ class ThreeBandEncoder(tf.keras.Model):
         if int(transformer_layers) < 1:
             raise ValueError("transformer_layers must be positive.")
         self.timesteps = int(timesteps)
+        self.use_batch_norm = False  # v15 device validation; CNNs use LayerNormalization.
         self.emb_dim = int(emb_dim)
         self.t_down = int(np.prod(temporal_pool_sizes)) if temporal_pool_sizes else 1
         self.encoders = []
@@ -129,8 +131,10 @@ class ThreeBandDecoder(tf.keras.Model):
 @tf.keras.utils.register_keras_serializable(package="EEGProc")
 class ThreeBandSICModel(SICModel):
     def __init__(self, *, graph_encoder, gcn_gru_decoder=None,
-                 use_recurrent_classifier=False, use_variational_head=False,
-                 classifier_units=128, classifier_dropout=0.2, classifier_activation="relu", class_weight_batch_mean=False, **kwargs):
+                 use_recurrent_classifier=True, use_variational_head=True,
+                 classifier_units=128, classifier_dropout=0.2, classifier_activation="relu", class_weight_batch_mean=False,
+                 sequence_heads=None, **kwargs):
+        self._sequence_heads_config = sequence_heads
         self.use_recurrent_classifier = bool(use_recurrent_classifier)
         self.use_variational_head = bool(use_variational_head)
         self.classifier_units = int(classifier_units)
@@ -154,8 +158,8 @@ class ThreeBandSICModel(SICModel):
             raise ValueError("VC discriminator requires use_variational_head=true.")
         kwargs["gcn_gru_feature_dim"] = 3 * graph_encoder.emb_dim
         kwargs.setdefault("training_method", "erm")
-        kwargs.setdefault("use_subject_adversarial", False)
-        kwargs.setdefault("focal_gamma", 0.0)
+        kwargs.setdefault("use_subject_adversarial", True)
+        kwargs.setdefault("focal_gamma", 1.0)
         super().__init__(graph_encoder=graph_encoder, gcn_gru_decoder=gcn_gru_decoder, **kwargs)
         if not self.use_variational_head:
             self.vc_loss_tracker = tf.keras.metrics.Mean(name="classification_objective")
@@ -171,33 +175,41 @@ class ThreeBandSICModel(SICModel):
 
     def _build_sequence_heads(self, *, vc_logit_scale=1.0):
         self.temporal_bilstms, self.temporal_norms, self.temporal_dropouts = [], [], []
-        if self.use_recurrent_classifier:
-            common = dict(timesteps=None, n_features=self.combined_feature_dim,
-                          n_classes=self.n_classes, gru_units=self.classifier_rnn_units,
-                          dropout=self.classifier_rnn_dropout_rate)
-            if self.classifier_rnn_type == "bigru":
-                builder = BiGRUClassifier(**common, n_bigru_layers=self.n_classifier_rnn_layers)
-                self.classification_embedding_dim = 2 * self.classifier_rnn_units[-1]
+        if self._sequence_heads_config is not None:
+            self.trial_recurrent_classifier = tf.keras.utils.deserialize_keras_object(
+                self._sequence_heads_config["sequence_classifier"])
+            self.vc_target = tf.keras.utils.deserialize_keras_object(
+                self._sequence_heads_config["classification_head"])
+            self.classification_embedding_dim = int(self.trial_recurrent_classifier.output_shape[-1])
+        else:
+            if self.use_recurrent_classifier:
+                common = dict(timesteps=None, n_features=self.combined_feature_dim,
+                              n_classes=self.n_classes, gru_units=self.classifier_rnn_units,
+                              dropout=self.classifier_rnn_dropout_rate)
+                if self.classifier_rnn_type == "bigru":
+                    builder = BiGRUClassifier(**common, n_bigru_layers=self.n_classifier_rnn_layers)
+                    self.classification_embedding_dim = 2 * self.classifier_rnn_units[-1]
+                else:
+                    builder = GRUClassifier(**common, n_gru_layers=self.n_classifier_rnn_layers)
+                    self.classification_embedding_dim = self.classifier_rnn_units[-1]
+                self.trial_recurrent_classifier = builder.build_sequence_summarizer()
             else:
-                builder = GRUClassifier(**common, n_gru_layers=self.n_classifier_rnn_layers)
-                self.classification_embedding_dim = self.classifier_rnn_units[-1]
-            self.trial_recurrent_classifier = builder.build_sequence_summarizer()
-        else:
-            self.trial_recurrent_classifier = tf.keras.Sequential([
-                layers.GlobalAveragePooling1D(),
-                layers.Dense(self.classifier_units, activation=("relu" if self.classifier_activation == "relu" else layers.LeakyReLU(negative_slope=0.01))),
-                layers.Dropout(self.classifier_dropout),
-            ], name="temporal_pool_dense")
-            self.classification_embedding_dim = self.classifier_units
-        if self.use_variational_head:
-            self.vc_target = VariationalClassifier(
-                n_classes=self.n_classes, latent_dim=self.classification_embedding_dim,
-                label_smoothing=self.label_smoothing, focal_gamma=self.focal_gamma,
-                focal_alpha=None if self.focal_alpha is None else (1-self.focal_alpha, self.focal_alpha),
-                logit_scale=vc_logit_scale, name="sic_v16_vc_head")
-        else:
-            self.vc_target = layers.Dense(self.n_classes, name="sic_v16_dense_logits")
-        self.vc_target.build(tf.TensorShape([None, self.classification_embedding_dim]))
+                self.trial_recurrent_classifier = tf.keras.Sequential([
+                    layers.GlobalAveragePooling1D(),
+                    layers.Dense(self.classifier_units, activation=("relu" if self.classifier_activation == "relu" else layers.LeakyReLU(negative_slope=0.01))),
+                    layers.Dropout(self.classifier_dropout),
+                ], name="temporal_pool_dense")
+                self.classification_embedding_dim = self.classifier_units
+            if self.use_variational_head:
+                self.vc_target = VariationalClassifier(
+                    n_classes=self.n_classes, latent_dim=self.classification_embedding_dim,
+                    label_smoothing=self.label_smoothing, focal_gamma=self.focal_gamma,
+                    focal_alpha=None if self.focal_alpha is None else (1-self.focal_alpha, self.focal_alpha),
+                    logit_scale=vc_logit_scale, name="sic_v16_vc_head")
+            else:
+                self.vc_target = layers.Dense(self.n_classes, name="sic_v16_dense_logits")
+        if not self.vc_target.built:
+            self.vc_target.build(tf.TensorShape([None, self.classification_embedding_dim]))
         self.subject_gradient_reversal = self.subject_hidden = None
         self.subject_dropout_layer = self.subject_logits_layer = None
         if self.subject_adversarial_enabled and self.n_subject_classes is not None:
@@ -244,6 +256,9 @@ class ThreeBandSICModel(SICModel):
             class_prior_kl=zero, weighted_class_prior_kl=zero)
 
     def _reconstruction_components(self, outputs, training):
+        if "device_shards" in outputs:
+            from ..SICModelv15.multi_gpu import reconstruction_on_devices
+            return reconstruction_on_devices(self, outputs, training=training)
         # MSE over the reinterleaved 42 features is exactly mean(per-band MSE).
         components = SICModelCore._reconstruction_components(self, outputs, training)
         components["joint_reconstruction"] = None
@@ -289,16 +304,36 @@ class ThreeBandSICModel(SICModel):
         return self.gcn_gru_decoder.decoders[BANDS.index(branch)](feature_sequence, training=False)
 
     def reconstruct_branches(self, inputs):
-        full = super().reconstruct_branches(inputs)["gcn_gru"]
+        # The shared v15 evaluator compares every decoder path with the complete
+        # input EEG. The replacement pair has one reinterleaved 42-feature path.
+        return {"three_band": super().reconstruct_branches(inputs)["gcn_gru"]}
+
+    def reconstruct_bands(self, inputs):
+        full = self.reconstruct_branches(inputs)["three_band"]
         separated = split_bands(full)
         return {band: separated[..., index] for index, band in enumerate(BANDS)}
+
+    def reconstruct(self, inputs, branch=None):
+        # Preserve v16's per-band convenience API while satisfying the original
+        # full-input reconstruction contract for shared calibration diagnostics.
+        if branch == "three_band":
+            return self.reconstruct_branches(inputs)["three_band"]
+        bands = self.reconstruct_bands(inputs)
+        if branch is None:
+            return bands
+        if branch not in bands:
+            raise ValueError(f"Expected a band in {BANDS} or 'three_band'.")
+        return bands[branch]
 
     def get_config(self):
         return {**super().get_config(), "use_recurrent_classifier": self.use_recurrent_classifier,
                 "use_variational_head": self.use_variational_head,
                 "classifier_units": self.classifier_units, "classifier_dropout": self.classifier_dropout,
                 "classifier_activation": self.classifier_activation,
-                "class_weight_batch_mean": self.class_weight_batch_mean}
+                "class_weight_batch_mean": self.class_weight_batch_mean,
+                "sequence_heads": {
+                    "sequence_classifier": tf.keras.utils.serialize_keras_object(self.trial_recurrent_classifier),
+                    "classification_head": tf.keras.utils.serialize_keras_object(self.vc_target)}}
 
     @classmethod
     def from_config(cls, config):
@@ -308,6 +343,12 @@ class ThreeBandSICModel(SICModel):
             shape = (1, 1, model.graph_encoder.timesteps, 42)
         model(tf.zeros(shape), training=False)
         return model
+
+    def get_compile_config(self):
+        config = super().get_compile_config()
+        if self.vc_discriminator_optimizer is not None:
+            config["vc_discriminator_optimizer"] = tf.keras.optimizers.serialize(self.vc_discriminator_optimizer)
+        return config
 
     def compile_from_config(self, config):
         # Older checkpoints use Keras' standard `optimizer` key, even though
@@ -320,22 +361,27 @@ class ThreeBandSICModel(SICModel):
         if optimizer is None:
             raise ValueError("Checkpoint has no optimizer configuration; refusing a weights-only resume.")
         optimizer = tf.keras.optimizers.deserialize(optimizer)
-        config.pop("vc_discriminator_optimizer", None)
-        self.compile(main_optimizer=optimizer, vc_discriminator_optimizer=None, **config)
+        discriminator = config.pop("vc_discriminator_optimizer", None)
+        discriminator = None if discriminator is None else tf.keras.optimizers.deserialize(discriminator)
+        self.compile(main_optimizer=optimizer, vc_discriminator_optimizer=discriminator, **config)
         optimizer.build(self.trainable_variables)
+        if discriminator is not None:
+            discriminator.build(self._vc_discriminator_variables())
 
     def configure_fold_devices(self, devices, **kwargs):
-        if len(devices) != 1:
-            raise ValueError("v16 currently uses one GPU per fold; v15's graph sharding is incompatible.")
+        # v15 sharding calls the overridable encoder/reconstruction adapters,
+        # so the new pair retains global episode statistics and one outer update.
+        return super().configure_fold_devices(devices, **kwargs)
 
 
 def build_sic_model(input_shape, *, training_features=None, training_labels=None,
                     training_subject_ids=None, training_trial_ids=None,
-                    use_decoder=False, use_transformer=False,
+                    use_decoder=True, use_transformer=False,
                     conv_filters=(32, 64), spatial_pool_sizes=(2, 2), temporal_pool_sizes=(),
                     temporal_kernel_size=7, spatial_kernel_size=3, emb_dim=128, dropout=0.2,
                     transformer_layers=1, attention_heads=4, feed_forward_dim=256,
                     learning_rate=1e-4, weight_decay=5e-5, optimizer_name="adamw",
+                    decoder_dropout=0.1, vc_discriminator_learning_rate=None,
                     classification_level="trial", **kwargs):
     """SIC-compatible builder; training metadata never contains the held-out user."""
     input_shape = tuple(input_shape)
@@ -344,8 +390,11 @@ def build_sic_model(input_shape, *, training_features=None, training_labels=None
         raise ValueError("Expected (windows,time,42) for trials or (time,42) for windows.")
     if any(d is None or int(d) < 1 for d in input_shape):
         raise ValueError("Builder requires positive, fixed input dimensions.")
-    if kwargs.get("update_vc_discriminator", False):
-        raise ValueError("v16 does not yet support a separate VC discriminator optimizer.")
+    n_channels = kwargs.pop("n_channels", 14)
+    n_bands = kwargs.pop("n_bands", 3)
+    if (n_channels, n_bands) != (14, 3):
+        raise ValueError("The v16 encoder/decoder pair requires 14 channels and 3 bands.")
+    kwargs.setdefault("use_subject_adversarial", True)
     encoder = ThreeBandEncoder(timesteps=input_shape[-2], conv_filters=conv_filters,
         spatial_pool_sizes=spatial_pool_sizes, temporal_pool_sizes=temporal_pool_sizes,
         temporal_kernel_size=temporal_kernel_size, spatial_kernel_size=spatial_kernel_size,
@@ -353,7 +402,7 @@ def build_sic_model(input_shape, *, training_features=None, training_labels=None
         transformer_layers=transformer_layers, attention_heads=attention_heads,
         feed_forward_dim=feed_forward_dim, name="three_band_encoder")
     decoder = (ThreeBandDecoder(timesteps=input_shape[-2], emb_dim=emb_dim,
-        temporal_pool_sizes=temporal_pool_sizes, dropout=dropout, name="three_band_decoder")
+        temporal_pool_sizes=temporal_pool_sizes, dropout=decoder_dropout, name="three_band_decoder")
         if use_decoder else None)
     if kwargs.get("use_subject_adversarial", False) and training_subject_ids is not None:
         kwargs["n_subject_classes"] = len(np.unique(training_subject_ids))
@@ -362,12 +411,21 @@ def build_sic_model(input_shape, *, training_features=None, training_labels=None
     model = ThreeBandSICModel(graph_encoder=encoder, gcn_gru_decoder=decoder,
         use_decoder=use_decoder, classification_level=classification_level, **kwargs)
     model.set_source_training_metadata(training_subject_ids, training_trial_ids)
+    discriminator_optimizer = (_build_optimizer(optimizer_name=optimizer_name,
+        learning_rate=(learning_rate if vc_discriminator_learning_rate is None else vc_discriminator_learning_rate),
+        weight_decay=weight_decay) if model.update_vc_discriminator else None)
     model.compile(main_optimizer=_build_optimizer(optimizer_name=optimizer_name,
-        learning_rate=learning_rate, weight_decay=weight_decay), jit_compile=False)
+        learning_rate=learning_rate, weight_decay=weight_decay),
+        vc_discriminator_optimizer=discriminator_optimizer, jit_compile=False)
     # One window is sufficient to build trial heads; avoid allocating a full trial.
     dummy_shape = (1, 1, input_shape[-2], 42) if rank == 3 else (1, input_shape[-2], 42)
     model(tf.zeros(dummy_shape), training=False)
     if model.subject_logits_layer is not None:
         model._subject_logits(tf.zeros((1, model.classification_embedding_dim)),
                               training=False, use_grl=False)
+    # VC discriminator parameters can have no source gradient (gamma=0).
+    # Materialize all slots now so save/reload never changes optimizer layout.
+    model.main_optimizer.build(model.trainable_variables)
+    if model.vc_discriminator_optimizer is not None:
+        model.vc_discriminator_optimizer.build(model._vc_discriminator_variables())
     return model

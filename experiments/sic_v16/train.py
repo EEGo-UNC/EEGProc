@@ -14,10 +14,23 @@ sys.path.insert(0, str(ROOT / "src"))
 from training_tracker.core import fingerprint, load_json, utc_now, write_json
 from eegproc.deep_learning.joint_architectures.SICModelv16.run_experiments import run, summarize
 
-RUNTIME_KEYS = {"target", "epochs", "target_subjects", "data_subjects", "batch_size", "validation_subjects", "seed", "time_budget_seconds"}
+RUNTIME_KEYS = {"target", "epochs", "target_subjects", "data_subjects", "batch_size", "validation_subjects", "seed", "time_budget_seconds", "protocol", "n_jobs", "gpus_per_fold", "calibration_epochs", "calibration_batch_size", "calibration_levels"}
 
 
 def tracker_result(summary):
+    if summary["oracle"].get("protocol") == "v15_mldg_common_epoch_calibration":
+        oracle = summary["oracle"]
+        if oracle["status"] != "completed" or "final" not in summary:
+            raise ValueError("Source selection and calibration must both finish.")
+        subjects = [{"subject_id": row["target_subject"],
+                     **{f"trial_{key}": value for key, value in row["test_metrics"].items()}}
+                    for row in oracle["folds"]]
+        return {"metrics": {key: {"mean": statistics.mean(row[key] for row in subjects),
+                    "std": statistics.pstdev(row[key] for row in subjects)}
+                for key in subjects[0] if key != "subject_id"},
+            "subject_metrics": subjects, "evaluation_level": "trial", "oracle": True,
+            "selection": oracle["selection_rule"], "selected_epoch": oracle["best_epoch"],
+            "oracle_diagnostics": oracle, "calibration_levels": summary["final"]["calibration_levels"]}
     selected = summary["validation_selected"]
     if selected["status"] != "completed" or summary["oracle"]["status"] != "completed":
         raise ValueError("Incomplete folds cannot become a completed tracker result.")
@@ -85,15 +98,24 @@ def main(argv=None):
             subprocess.run([sys.executable, "-m", "unittest", "discover", "-s",
                             str(ROOT / "src/tests"), "-p", "test_sic_v16_resume.py", "-v"],
                            cwd=ROOT, check=True)
-        code = run(argparse.Namespace(configs=fixed, config_index=0,
+        restored = config.get("protocol") == "v15"
+        if restored:
+            from eegproc.deep_learning.joint_architectures.SICModelv16.v15_protocol import run as run_protocol, publish_final
+        else:
+            run_protocol, publish_final = run, summarize
+        code = run_protocol(argparse.Namespace(configs=fixed, config_index=0,
             output_dir=output / "artifacts", eeg=args.data_dir / "dreamer_eeg.npy",
             labels=args.data_dir / "dreamer_labels.npy", source_epochs=int(config["epochs"]),
             batch_size=int(config["batch_size"]), validation_subjects=int(config["validation_subjects"]),
             seed=int(config["seed"]), time_budget_seconds=int(config["time_budget_seconds"]),
-            target_subjects=config["target_subjects"], data_subjects=config.get("data_subjects"), resume=args.resume))
+            target_subjects=config["target_subjects"], data_subjects=config.get("data_subjects"), resume=args.resume,
+            n_jobs=int(config.get("n_jobs", 2)), gpus_per_fold=int(config.get("gpus_per_fold", 2)),
+            calibration_epochs=int(config.get("calibration_epochs", 1)),
+            calibration_batch_size=int(config.get("calibration_batch_size", 64)),
+            calibration_levels=config.get("calibration_levels")))
         if code:
             raise RuntimeError(f"SICv16 runner stopped incomplete (exit {code}); inspect artifacts/ and subject logs.")
-        result = tracker_result(summarize(output / "artifacts"))
+        result = tracker_result(publish_final(output / "artifacts"))
         result["data_scope"] = {"data_subjects": config.get("data_subjects"),
             "target_subjects": config["target_subjects"],
             "validation_subjects_per_fold": config["validation_subjects"]}

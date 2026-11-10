@@ -27,10 +27,14 @@ class ThreeBandTests(unittest.TestCase):
         self.y = np.array([0, 1, 0, 1], dtype="int32")
 
     def model(self, **kwargs):
+        # Historical ablations stay explicit; restored defaults have separate coverage.
+        options = dict(use_recurrent_classifier=False, use_variational_head=False,
+                       use_subject_adversarial=False, use_decoder=False)
+        options.update(kwargs)
         return build_sic_model((2, 8, 42), conv_filters=(2, 4),
             spatial_pool_sizes=(2, 2), emb_dim=4, attention_heads=2,
             feed_forward_dim=8, classifier_units=4, dropout=0.0,
-            classifier_dropout=0.0, **kwargs)
+            classifier_dropout=0.0, **options)
 
     def assert_no_gradient(self, tape, loss, variables):
         # Concat/split backpropagation can return a dense zero tensor for an
@@ -157,7 +161,8 @@ class ThreeBandTests(unittest.TestCase):
         self.assertEqual(tuple(model.graph_encoder(self.x[:, 0]).shape), (4, 2, 12))
         self.assertEqual(tuple(model.reconstruct(self.x)["theta"].shape), (4, 2, 8, 14))
         window_model = build_sic_model((8, 42), classification_level="window",
-            conv_filters=(2, 4), emb_dim=4, classifier_units=4)
+            conv_filters=(2, 4), emb_dim=4, classifier_units=4,
+            use_subject_adversarial=False, classifier_rnn_units=(4,), use_decoder=False)
         self.assertEqual(tuple(window_model(self.x[:, 0]).shape), (4, 2))
 
     def test_subject_split_and_oracle_rule(self):
