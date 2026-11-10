@@ -74,6 +74,15 @@ def _quantiles(values):
     return {"median": float(middle), "q25": float(low), "q75": float(high), "n": len(values)}
 
 
+def _rmse_from_mse(value):
+    """Preserve missing measurements and reject invalid archived distances."""
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)) or not np.isfinite(float(value)) or float(value) < 0:
+        raise ValueError("Archived MSE must be a finite nonnegative scalar")
+    return float(np.sqrt(float(value)))
+
+
 def population_summary(rows):
     """One task/objective group. Missing metrics are not zero-valued distances."""
     n = len(rows)
@@ -108,7 +117,7 @@ def population_summary(rows):
         for field in ("delta_dec_explanation", "delta_dec_repair"):
             for key, value in _quantiles([r.get(field) for r in rows]).items():
                 result[f"{field}_{key}"] = value
-    for field in ("d_z", "delta_dec", "e_rec"):
+    for field in ("d_z", "decoder_latent_rmse", "delta_dec", "e_rec", "e_cf"):
         for key, value in _quantiles([r.get(field) for r in rows]).items():
             result[f"{field}_{key}"] = value
     # Phase-invariant distances and latent-edit structure exist only in runs
@@ -228,8 +237,10 @@ def collect_study(root):
                             typicality_success=bool(typ["typical"] and latent_target_success),
                             original_discrepancy=typ["original_discrepancy"],
                             discrepancy=typ["counterfactual_discrepancy"],
-                            d_z=summary["d_z"], delta_dec=float(np.sqrt(decoded["decoded_change_mse"])),
-                            e_rec=float(np.sqrt(decoded["original_reconstruction_mse"])),
+                            d_z=summary["d_z"], delta_dec=_rmse_from_mse(decoded["decoded_change_mse"]),
+                            e_rec=_rmse_from_mse(decoded["original_reconstruction_mse"]),
+                            e_cf=_rmse_from_mse(decoded.get("counterfactual_to_original_mse")),
+                            decoder_latent_rmse=summary.get("decoder_latent_rmse"),
                             original_probability=summary["original"]["target_probability"],
                             latent_probability=summary["latent_counterfactual"]["target_probability"],
                             vcsc_original=summary["vcsc_original_input"],

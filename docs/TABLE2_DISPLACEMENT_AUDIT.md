@@ -1,84 +1,114 @@
-# Table 2 displacement audit: remaining work
+# Table 2 displacement audit
 
-Status checked on 2026-11-09, after integrating the completed counterfactual
-features into `CFX-update`. This is a work list, not a completed new analysis.
+The saved-result displacement audit is implemented and completed for the
+original DREAMER suites (2026-11-10). It rebuilds Table 2, separates two latent
+coordinate systems, separates reconstruction error from the decoded edit, and
+exports the paired comparisons, subject summaries, cohort counts and figures.
+No training, counterfactual regeneration, or decoded-validity evaluation is
+needed for this audit.
 
-## Already available
+## Reproduce the original Table 2 audit
 
-The saved original DREAMER suites contain 596 completed objective endpoints:
-228 arousal (57 trials x 4 objectives) and 368 valence (92 trials x 4
-objectives). Their per-attempt `result.json` files already contain:
+Run from the repository root with the existing analysis dependencies:
 
-- `d_z`: RMSE between original and optimized full-trial classification
-  embeddings, as defined in each saved study manifest.
-- `decoder_latent_rmse`: displacement in the latent coordinates optimized
-  by the decoder objective. This is distinct from `d_z`.
-- `decoded_trials.<report_output>.original_reconstruction_mse`.
-- `decoded_trials.<report_output>.decoded_change_mse`.
-- `decoded_trials.<report_output>.counterfactual_to_original_mse`.
+```bash
+PYTHONPATH=src python -m eegproc.model_explainability.typicality.displacement_audit \
+  runs/counterfactuals/arousal_suite_1599318_ablations_2355492 \
+  runs/counterfactuals/valence_suite_65452590_ablations_2356028 \
+  --expected-subjects 23 --require-complete \
+  --reference-population runs/counterfactuals/final-ICLR-report/population_ablations.csv \
+  --out-dir runs/table2_displacement_audit
+```
 
-The existing CSV report exposes `d_z`, `e_rec`, and `delta_dec` with sample
-counts, medians, and quartiles. The earlier calculation audit verified the
-Table 2 rounded summaries and the decoded MSE-to-RMSE conversions. Thus the
-basic historical distances are available without regenerating signals.
+The command accepts task/fold/direction study roots and recursively finds their
+`study.json` files. Run different historical or revised protocols in separate
+output directories. It rejects duplicate shards, mixed source/data/protocol
+fingerprints, inconsistent frozen checkpoint identities and changed committed
+endpoint artifacts. Current 10th-percentile settings are not applied to the
+historical 95th-percentile generation study.
 
-The merged code additionally supports an optional target-free physiological
-repair baseline. It exports `delta_dec_repair`, `delta_dec_explanation`, their
-envelope analogues, and repair feasibility/prediction preservation. These
-measurements require new runs: none of the 596 original endpoints has a
-`repair_baseline` result. New completed arms are also re-encoded for separate
-decoded prediction and typicality checks in both target directions.
+`--no-figures` skips PNG/PDF generation. `--require-complete` returns an error
+for missing folds, pending endpoints or missing latent/signal measurements,
+after saving the provisional audit. Invalid numeric inputs fail explicitly;
+triangle-bound and reference-summary mismatches are exported and cause a
+nonzero command exit status.
 
-## Remaining analysis using existing results
+## Distances and their references
 
-1. **Create one verified, paired displacement audit export.** Keep task,
-   direction, subject, trial, objective, selected attempt, normalization and
-   distance definitions attached. Include both latent distances and all
-   three signal RMSEs:
+- `d_z`: RMSE between the original and optimized full-trial classification
+  embeddings. Its coordinates are the frozen classifier's representation.
+- `decoder_latent_rmse`: RMSE in the latent coordinates optimized by the
+  decoder objective. It is not interchangeable with `d_z`.
+- `e_rec = sqrt(original_reconstruction_mse) = RMSE(R(z), x)`.
+- `delta_dec = sqrt(decoded_change_mse) = RMSE(R(z_cf), R(z))`.
+- `e_cf = sqrt(counterfactual_to_original_mse) = RMSE(R(z_cf), x)`.
 
-   - `e_rec = sqrt(original_reconstruction_mse) = RMSE(R(z), x)`;
-   - `delta_dec = sqrt(decoded_change_mse) = RMSE(R(z_cf), R(z))`;
-   - `e_cf = sqrt(counterfactual_to_original_mse) = RMSE(R(z_cf), x)`.
+The normal study report now also exports `decoder_latent_rmse` and `e_cf`,
+including finite sample counts, medians and quartiles. Missing historical
+measurements remain unavailable rather than zero.
 
-   The reporting module still needs to expose `decoder_latent_rmse` and
-   `e_cf`; both scalars are already available in the original result files.
-   Verify hashes and unique trial/arm identities before combining outputs.
+Signal distances use the archived model-input normalization. The audit tests
+`abs(e_rec-delta_dec) <= e_cf <= e_rec+delta_dec` with numerical tolerance,
+and checks the same original reconstruction is used across paired arms.
+These distances are not additive and do not establish what caused an edit.
 
-2. **Complete the distribution comparison.** Compare latent displacement
-   against decoded displacement across paired trials and objectives, by
-   task and held-out subject. Show distributions or paired plots in addition
-   to medians/IQRs, including tails and small nonzero values rounded to 0.00.
-   Describe the different latent coordinate systems and units; their raw
-   magnitudes are not interchangeable. Retain all finite unsuccessful
-   endpoints in new studies and report how many endpoints are unavailable.
+## Outputs
 
-3. **Quantify reconstruction versus counterfactual change.** Analyze
-   `e_rec`, `delta_dec`, and `e_cf` together, showing the size of the edit
-   relative to the pre-existing reconstruction error and whether `e_cf`
-   increases or decreases. Check the RMSE triangle bounds on the same
-   arrays/normalization. These distances are not additive and are not a
-   causal decomposition. Reconcile the case-study MSE/RMSE labels separately
-   before reusing its numerical example.
+- `report.md`: completed findings, interpretation, scope and the case-study
+  MSE/RMSE correction; `paper_text.md` / `paper_text.tex`: reusable paragraphs.
+- `table2.csv` / `table2.tex` / `table2.png` / `table2.pdf`: the rebuilt main
+  table, preserving small nonzero distances instead of rounding them to zero.
+- `table2_signal_errors.csv` / `table2_signal_errors.tex`: the companion table
+  of decoder-latent displacement and the three signal errors.
+- `trial_displacements.csv`, `population_displacements.csv`, and
+  `subject_displacements.csv`: complete available distances and their
+  distributions, including tails and exact-zero versus rounded-zero counts.
+- `paired_displacements.csv` / `paired_summary.csv`: within-trial changes
+  relative to CFO; medians of paired changes are distinguished from changes
+  between marginal medians.
+- `latent_decoded_correlations.csv`: within-objective descriptive Spearman
+  associations; no significance claim across clustered trials.
+- Per-task distribution, latent/decoded scatter and signal-error figures in
+  PNG and vector PDF formats.
+- `cohort_summary.csv`, `cohort_folds.csv`, and `exclusions.csv`: the source
+  cohort and each held-out fold, retaining zero-eligible participants.
+- `reference_checks.csv` and `audit.json`: archived-summary comparisons,
+  verification results, input hashes, generator metadata and audit-source
+  fingerprints.
 
-## Remaining experiments and reporting
+The LaTeX tables use `graphicx`'s `resizebox` to fit the available text width.
 
-4. **Run the matched repair-only control and interpret it.** Freeze the
-   source-selected settings, checkpoint, initialization, optimization
-   budget, normalization, and physiology definition. Compare each arm's
-   change from the ordinary reconstruction with its change from the
-   repaired reconstruction. Report repair failures and prediction changes;
-   a completed repair need not be feasible or preserve the prediction.
-   A first feasible endpoint is not a proof of a globally minimal repair.
-   Existing historical scalars cannot supply these unmeasured outputs.
+All finite completed endpoints are included, even if their latent target
+attempt was unsuccessful. Errors and pending attempts retain their eligible
+cohort membership and have unavailable distances. Each metric has its own
+finite count; VCSC is the archived penalty-tolerance check among assessed
+endpoints, not a complete physiological acceptance claim.
 
-5. **Produce the final audit table/figures and manuscript corrections.**
-   State metric definitions, precision, cohort sizes, eligible/finite
-   denominators, exclusions, and the separate latent and decoded validity
-   outcomes. Keep historical results separate from new 10th-percentile,
-   bidirectional or differently regularized studies. Distinguish evidence
-   that distances were calculated correctly from evidence that decoded
-   changes explain the classifier's decision.
+## Scope of the completed original-data audit
 
-See [the integrated run protocol](CFX_COVERAGE.md). The optional repair
-control and the audit exporter/comparisons are separate steps; merging the
-code does not complete the experimental audit.
+The original suites contain 596 objective endpoints: 57 arousal and 92 valence
+trial identities, each evaluated under four objectives, over 23 folds per task.
+All 596 signal-distance triplets satisfy the triangle bounds. Their archived
+MSE-to-RMSE conversions, paired starting reconstructions and original Table 2
+summaries can be verified from the saved files without loading EEG arrays.
+
+The classification-embedding and signal metrics rank some objectives
+oppositely: removing physiology produces larger classification-embedding
+changes but much smaller decoded edits. Report both latent metrics with their
+coordinate definitions. For the archived arousal subject-0/trial-16 typicality
+case, the correct RMSE values are approximately 0.726503, 0.470274 and 0.872273;
+the previously printed 0.528, 0.221 and 0.761 match the stored MSEs.
+
+This verifies saved scalars and archive consistency, not independent
+recomputation of distances from the original signal arrays. Keep these
+historical results separate from experiments using revised reconstruction.
+
+## Separately deferred or optional work
+
+Decoded-validity evaluation is deferred until reconstruction incorporates
+subject information, as requested. This audit does not re-encode signals,
+evaluate decoded target predictions, or change reconstruction/training code.
+
+A target-free physiological control is optional follow-up for interpreting
+why the decoded signal moved. It is not a missing prerequisite for Table 2's
+displacement audit, and no new control was generated here.
