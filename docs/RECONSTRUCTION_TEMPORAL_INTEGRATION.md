@@ -42,9 +42,11 @@ Counterfactual latent-edit smoothing and phase-tolerant envelope distance are
 separate controls and keep their existing behavior.
 
 For the arousal launcher, set `RECONSTRUCTION_SEAM_WEIGHT` and
-`RECONSTRUCTION_DERIVATIVE_WEIGHT`. Other v15 entry points accept the same
-values through their model configuration. No loss weights have been selected
-from held-out test results.
+`RECONSTRUCTION_DERIVATIVE_WEIGHT`. The v15 training command accepts
+`--reconstruction-seam-weight` and `--reconstruction-derivative-weight`.
+Either flag overrides its value in `--hyperparameters-json`, including a
+grid entry. Pass `0` to ablate the corresponding term. Omit the flags to use
+the model configuration, which can specify a grid for either weight.
 
 ## Checks
 

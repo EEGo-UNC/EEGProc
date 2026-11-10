@@ -288,6 +288,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--reconstruction-seam-weight",
+        type=float,
+        help="Weight for matching EEG steps across window boundaries. Use 0 to ablate.",
+    )
+    parser.add_argument(
+        "--reconstruction-derivative-weight",
+        type=float,
+        help="Weight for matching EEG steps within windows. Use 0 to ablate.",
+    )
+    parser.add_argument(
         "--hyperparameters-json",
         default=None,
         help=(
@@ -489,6 +499,10 @@ def parse_cli(argv=None):
     """Parse and validate CLI input, returning ``(args, model_config)``."""
     args = build_parser().parse_args(argv)
     model_config = model_config_from_args(args)
+    for key in ("reconstruction_seam_weight", "reconstruction_derivative_weight"):
+        weight = getattr(args, key)
+        if weight is not None:
+            model_config[key] = weight
     validate_args(args, model_config)
     return args, model_config
 
