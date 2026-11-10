@@ -978,6 +978,10 @@ def build_sic_model(
     calibration_focal_gamma: float | None = None,
     calibration_focal_alpha: float | None = None,
     decoder_dropout: float = 0.10,
+    gcn_gru_decoder_gcn_units: Sequence[int] | None = None,
+    gcn_gru_decoder_projection_units: int | None = None,
+    bilstm_decoder_gcn_units: Sequence[int] | None = None,
+    bilstm_decoder_projection_units: int | None = None,
     optimizer_name: str = "adamw",
     learning_rate: float = 1e-4,
     vc_discriminator_learning_rate: float | None = None,
@@ -1082,7 +1086,8 @@ def build_sic_model(
             name="v6_mtl_gcn_gru_encoder",
         )
 
-    def build_branch_decoder(*, emb_dim: int, name: str) -> GCNMTLDecoder:
+    def build_branch_decoder(*, emb_dim: int, name: str,
+                            decoder_gcn_units=None, projection_units=None) -> GCNMTLDecoder:
         # Each call creates a fully independent decoder and therefore an
         # independent reconstruction gradient for one encoder branch.
         return GCNMTLDecoder(
@@ -1090,7 +1095,9 @@ def build_sic_model(
             n_channels=int(n_channels),
             n_bands=int(n_bands),
             t_down=1,
-            gcn_units=gcn_units,
+            gcn_units=(gcn_units if decoder_gcn_units is None
+                       else _as_positive_tuple("decoder_gcn_units", decoder_gcn_units)),
+            input_projection_units=projection_units,
             temporal_pool_sizes=(),
             adjacency=adjacency,
             emb_dim=int(emb_dim),
@@ -1107,6 +1114,8 @@ def build_sic_model(
         build_branch_decoder(
             emb_dim=int(spectral_gru_units),
             name="sic_gcn_gru_decoder",
+            decoder_gcn_units=gcn_gru_decoder_gcn_units,
+            projection_units=gcn_gru_decoder_projection_units,
         )
         if use_decoder and use_gcn_gru_branch
         else None
@@ -1115,6 +1124,8 @@ def build_sic_model(
         build_branch_decoder(
             emb_dim=2 * int(bilstm_units),
             name="sic_bilstm_decoder",
+            decoder_gcn_units=bilstm_decoder_gcn_units,
+            projection_units=bilstm_decoder_projection_units,
         )
         if use_decoder and use_bilstm_branch
         else None

@@ -1,5 +1,64 @@
 # SICv15 on SEED-IV
 
+## Baseline versus twice the hidden-layer parameters
+
+Two matched configurations are prepared:
+
+| Configuration | GCN widths | Spectral GRU | BiLSTM per direction | Classifier BiGRU widths | Subject hidden | Total parameters |
+| --- | --- | --- | --- | --- | --- | --- |
+| `model_config.json` | 128, 64 | 384 | 63 | 128, 64 | 64 | 6,430,477 |
+| `model_config_hidden_params_x2.json` | 256, 64 | 714 | 112 | 150, 102 | 81 | 12,836,084 |
+
+The target is **2x trainable weights and biases in each hidden layer**. Widths
+are solved using each layer's new input size. All 16 hidden GCN, recurrent,
+Dense, and Conv projection layers fall between 1.992x and 2.012x the baseline
+parameter count (within 1% of the 2x target after integer rounding). In
+particular, the second encoder GCN stays at 64 units because its input width
+has already doubled. Both decoders have independent projection/node-seed/GCN
+widths so their hidden layers meet the same target.
+
+Layer counts, dropout, learning rates, losses, class weighting, participants,
+seeds, batch size, epoch budgets, and the accuracy oracle procedure are matched.
+The input stays at 62 channels, five bands, 800 samples, and four emotion
+outputs. Normalization affine parameters, output heads, Gaussian class
+parameters, the scalar fusion coefficient, and the fixed graph follow their
+structural dimensions; they are listed separately in `capacity_report.json`.
+They are not padded with redundant weights to inflate parameter counts.
+
+`capacity.py` derives the comparison configuration and checks counts against
+actual Keras layers. `capacity_report.json` records every hidden layer's
+measured ratio and the complete trainable-parameter inventory. The audit uses
+four timesteps for inexpensive CPU inspection; these layer parameter shapes
+do not depend on the sequence length. Full-size GPU memory/runtime require
+the new run's first-participant check.
+
+Preview both pipelines without submitting jobs:
+
+```bash
+bash experiments/sic_v15_seed_iv/submit_comparison.sh --dry-run --id hidden_params_x2_v1
+```
+
+After deploying the complete reviewed snapshot to Longleaf, submit both:
+
+```bash
+bash experiments/sic_v15_seed_iv/submit_comparison.sh --id hidden_params_x2_v1
+```
+
+The wrapper gives each configuration a separate suite under
+`runs/hidden_params_x2_v1/{baseline,hidden_params_x2}/full/` and records job IDs
+in `submission.tsv`. Each configuration first trains participant 0 for the full
+epoch budget. Participants 1–14 are released only after that succeeds; cohort
+selection follows the remaining source array, and calibration follows selection.
+This is eight Slurm submissions across the two configurations. Each profile
+selects its own single common epoch across all 15 participants. Existing output
+roots are rejected. `--smoke` uses separate smoke suites and the existing reduced
+smoke protocol. No jobs are submitted by `--dry-run`.
+
+For individual submissions, set `MODEL_CONFIG` to the chosen JSON and use a
+distinct `SUITE_DIR`. The CLI accepts `--model-config PATH` for all three phases.
+Selection and calibration reject mismatches between the requested configuration
+and the source checkpoints. Use the same source snapshot across all phases.
+
 ## Current weighted-accuracy oracle protocol
 
 The current entry point enables class weighting for source training and target

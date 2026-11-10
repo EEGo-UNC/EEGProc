@@ -34,6 +34,7 @@ def code_identity():
     model_path = Path(v15.__file__)
     deep_learning = model_path.parents[2]
     paths = [Path(__file__), Path(__file__).with_name('train.py'), Path(__file__).with_name('streaming.py'),
+             Path(__file__).with_name('capacity.py'),
              model_path, model_path.parents[1] / 'sic_common/model.py',
              deep_learning / 'unsupervised/GNN/GCNMTL.py',
              deep_learning / 'unsupervised/GNN/GraphConvMTL.py',
@@ -112,7 +113,7 @@ def choose_epoch(rows, targets, epochs):
     return result
 
 
-def summarize(suite, targets=tuple(range(15)), epochs=12):
+def summarize(suite, targets=tuple(range(15)), epochs=12, *, expected_model_config=None):
     suite = Path(suite).resolve()
     suite.mkdir(parents=True, exist_ok=True)
     targets = tuple(targets)
@@ -126,6 +127,8 @@ def summarize(suite, targets=tuple(range(15)), epochs=12):
             continue
         meta = json.loads((folder / 'protocol.json').read_text())
         protocol = meta['protocol']
+        if expected_model_config is not None and protocol.get('model_config') != expected_model_config:
+            raise ValueError('Source fold does not match the requested model configuration')
         if (meta['target_subject'] != int(target) or protocol['source_epochs'] != epochs
                 or fingerprint(protocol) != meta['protocol_id']):
             raise ValueError(f'Unexpected source protocol: {folder}')
@@ -273,6 +276,7 @@ def calibrate_selected(x, y, subjects, trials, config, suite, *, dataset_id):
     from eegproc.deep_learning.cross_validation import subject_calibration_cv
     from eegproc.deep_learning.joint_architectures.sic_common.config import SIC_CLASSIFICATION_METRICS
     from eegproc.deep_learning.joint_architectures.sic_common.training import _save_calibration_artifacts
+    from capacity import resolved_model_config
     suite = Path(suite)
     selection = json.loads((suite / 'oracle_models.json').read_text())
     target, = config.target_subjects
@@ -281,6 +285,8 @@ def calibrate_selected(x, y, subjects, trials, config, suite, *, dataset_id):
         raise ValueError('A completed, matching common-epoch accuracy selection is required')
     if selection['protocol']['code_id'] != code_identity():
         raise ValueError('Source code changed after source training; use the same reviewed snapshot')
+    if selection['protocol']['model_config'] != resolved_model_config(config.model_config):
+        raise ValueError('Selected checkpoint does not match the requested model configuration')
     checkpoint = suite / selection['selected_models'][str(target)]
     if file_hash(checkpoint) != selection['selected_checkpoint_hashes'][str(target)]:
         raise ValueError('Selected checkpoint changed after oracle selection')

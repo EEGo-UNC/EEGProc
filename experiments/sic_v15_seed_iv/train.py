@@ -71,6 +71,7 @@ def training_config(out_dir, target, model, *, smoke=False, source_epochs=12):
 
 def main(argv=None):
     from oracle import data_identity, train_source, calibrate_selected, summarize
+    from capacity import load_model_config, resolved_model_config
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--phase', choices=('source','select','calibrate'), default='source')
     p.add_argument('--data-dir', type=Path)
@@ -80,12 +81,19 @@ def main(argv=None):
     p.add_argument('--targets', type=int, nargs='+', choices=range(15), default=list(range(15)),
                    help='complete cohort expected by the selection phase')
     p.add_argument('--source-epochs', type=int, default=12)
+    p.add_argument('--model-config', type=Path,
+                   default=Path(__file__).with_name('model_config.json'),
+                   help='fixed baseline or hidden_params_x2 configuration')
     p.add_argument('--smoke', action='store_true')
     a = p.parse_args(argv)
     if a.source_epochs < 1:
         p.error('--source-epochs must be positive')
+    model = load_model_config(a.model_config)
+    if a.smoke:
+        model['mi_max_observations'] = 256
     if a.phase == 'select':
-        result = summarize(a.suite_dir, a.targets, 1 if a.smoke else a.source_epochs)
+        result = summarize(a.suite_dir, a.targets, 1 if a.smoke else a.source_epochs,
+                           expected_model_config=resolved_model_config(model))
         print(json.dumps({key: result.get(key) for key in
               ('status','best_epoch','selection_score','selection_rule')}, indent=2))
         return 0 if result['status'] == 'completed' else 2
@@ -122,9 +130,6 @@ def main(argv=None):
     x, y, subjects, trials = load_data(a.data_dir, a.smoke)
     if set(np.unique(y)) != set(range(4)):
         raise ValueError('SEED-IV requires all four emotion classes')
-    model = json.loads(Path(__file__).with_name('model_config.json').read_text())
-    if a.smoke:
-        model['mi_max_observations'] = 256
     config = training_config(a.suite_dir, a.target, model, smoke=a.smoke, source_epochs=a.source_epochs)
     print('SICv15 source:', v15.__file__, 'phase:', a.phase, 'data:', x.shape, flush=True)
     try:

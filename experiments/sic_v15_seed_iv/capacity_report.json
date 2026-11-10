@@ -1,0 +1,170 @@
+{
+  "target": "2x trainable weights and biases per hidden GCN/recurrent/Dense/Conv layer",
+  "integer_rounding_tolerance_relative_to_target": 0.01,
+  "hidden_layers": [
+    {
+      "layer": "encoder/gcn_0",
+      "baseline_parameters": 256,
+      "comparison_parameters": 512,
+      "ratio": 2.0
+    },
+    {
+      "layer": "encoder/gcn_1",
+      "baseline_parameters": 8256,
+      "comparison_parameters": 16448,
+      "ratio": 1.9922480620155039
+    },
+    {
+      "layer": "encoder/spectral_gru",
+      "baseline_parameters": 5015808,
+      "comparison_parameters": 10033128,
+      "ratio": 2.0003014469453375
+    },
+    {
+      "layer": "temporal/lstm_0/forward",
+      "baseline_parameters": 94248,
+      "comparison_parameters": 189504,
+      "ratio": 2.0106951871657754
+    },
+    {
+      "layer": "temporal/lstm_0/backward",
+      "baseline_parameters": 94248,
+      "comparison_parameters": 189504,
+      "ratio": 2.0106951871657754
+    },
+    {
+      "layer": "classifier/gru_0/forward",
+      "baseline_parameters": 245760,
+      "comparison_parameters": 490500,
+      "ratio": 1.995849609375
+    },
+    {
+      "layer": "classifier/gru_0/backward",
+      "baseline_parameters": 245760,
+      "comparison_parameters": 490500,
+      "ratio": 1.995849609375
+    },
+    {
+      "layer": "classifier/gru_1/forward",
+      "baseline_parameters": 61824,
+      "comparison_parameters": 123624,
+      "ratio": 1.999611801242236
+    },
+    {
+      "layer": "classifier/gru_1/backward",
+      "baseline_parameters": 61824,
+      "comparison_parameters": 123624,
+      "ratio": 1.999611801242236
+    },
+    {
+      "layer": "adversary/hidden",
+      "baseline_parameters": 8256,
+      "comparison_parameters": 16605,
+      "ratio": 2.011264534883721
+    },
+    {
+      "layer": "decoder_graph/input_projection",
+      "baseline_parameters": 24640,
+      "comparison_parameters": 49335,
+      "ratio": 2.002232142857143
+    },
+    {
+      "layer": "decoder_graph/node_seed_projection",
+      "baseline_parameters": 257920,
+      "comparison_parameters": 516460,
+      "ratio": 2.0024038461538463
+    },
+    {
+      "layer": "decoder_graph/gcn_0",
+      "baseline_parameters": 8320,
+      "comparison_parameters": 16680,
+      "ratio": 2.0048076923076925
+    },
+    {
+      "layer": "decoder_temporal/input_projection",
+      "baseline_parameters": 8128,
+      "comparison_parameters": 16200,
+      "ratio": 1.9931102362204725
+    },
+    {
+      "layer": "decoder_temporal/node_seed_projection",
+      "baseline_parameters": 257920,
+      "comparison_parameters": 515964,
+      "ratio": 2.0004807692307693
+    },
+    {
+      "layer": "decoder_temporal/gcn_0",
+      "baseline_parameters": 8320,
+      "comparison_parameters": 16675,
+      "ratio": 2.004206730769231
+    }
+  ],
+  "structural_layers": [
+    {
+      "layer": "temporal/normalization_0",
+      "baseline_parameters": 252,
+      "comparison_parameters": 448,
+      "ratio": 1.7777777777777777
+    },
+    {
+      "layer": "classifier/normalization_0",
+      "baseline_parameters": 512,
+      "comparison_parameters": 600,
+      "ratio": 1.171875
+    },
+    {
+      "layer": "classifier/normalization_1",
+      "baseline_parameters": 256,
+      "comparison_parameters": 408,
+      "ratio": 1.59375
+    },
+    {
+      "layer": "adversary/subject_outputs",
+      "baseline_parameters": 780,
+      "comparison_parameters": 984,
+      "ratio": 1.2615384615384615
+    },
+    {
+      "layer": "classifier/variational_class_head",
+      "baseline_parameters": 1544,
+      "comparison_parameters": 2456,
+      "ratio": 1.5906735751295338
+    },
+    {
+      "layer": "reconstruction/fusion_scalar",
+      "baseline_parameters": 1,
+      "comparison_parameters": 1,
+      "ratio": 1.0
+    },
+    {
+      "layer": "decoder_graph/graph_outputs",
+      "baseline_parameters": 645,
+      "comparison_parameters": 700,
+      "ratio": 1.0852713178294573
+    },
+    {
+      "layer": "decoder_graph/local_outputs",
+      "baseline_parameters": 645,
+      "comparison_parameters": 700,
+      "ratio": 1.0852713178294573
+    },
+    {
+      "layer": "decoder_temporal/graph_outputs",
+      "baseline_parameters": 645,
+      "comparison_parameters": 730,
+      "ratio": 1.1317829457364341
+    },
+    {
+      "layer": "decoder_temporal/local_outputs",
+      "baseline_parameters": 645,
+      "comparison_parameters": 730,
+      "ratio": 1.1317829457364341
+    }
+  ],
+  "baseline_total_trainable": 6407413,
+  "comparison_total_trainable": 12813020,
+  "baseline_total_parameters": 6430477,
+  "comparison_total_parameters": 12836084,
+  "inspected_timesteps": 4,
+  "structural_note": "Normalization, fixed-shape output heads, Gaussian class parameters, fusion scalar, and fixed graph are not independent hidden widths."
+}

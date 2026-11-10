@@ -64,7 +64,9 @@ def test_predictions_use_plain_argmax_and_unweighted_accuracy():
 def archive_fold(suite, target, *, protocol=None):
     folder = suite / f'subject_{target:02}'
     folder.mkdir(parents=True)
-    protocol = protocol or dict(source_epochs=1, dataset_id='dataset', metric='accuracy')
+    from capacity import load_model_config, resolved_model_config
+    protocol = protocol or dict(source_epochs=1, dataset_id='dataset', metric='accuracy',
+        model_config=resolved_model_config(load_model_config(Path(__file__).with_name('model_config.json'))))
     write_json(folder / 'protocol.json', dict(target_subject=target, protocol=protocol, protocol_id=fingerprint(protocol)))
     checkpoint = folder / 'epoch_001.keras'
     checkpoint.write_bytes(b'checkpoint fixture')

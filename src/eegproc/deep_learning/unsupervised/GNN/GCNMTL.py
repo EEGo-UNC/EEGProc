@@ -598,6 +598,7 @@ class GCNMTLDecoder(tf.keras.Model):
         graph_symmetrize: bool = True,
         graph_epsilon: float = 1e-8,
         name: str = "decoder_gcn_mtl",
+        input_projection_units: int | None = None,
         **kwargs,
     ):
         super().__init__(name=name, **kwargs)
@@ -627,9 +628,16 @@ class GCNMTLDecoder(tf.keras.Model):
         self._adjacency_init = adjacency_array.tolist()
 
         graph_seed_units = self.gcn_units[-1]
+        # Keep the historical coupling by default. SIC capacity comparisons
+        # can size this hidden projection independently from the node seeds.
+        self.input_projection_units = (
+            graph_seed_units if input_projection_units is None else int(input_projection_units)
+        )
+        if self.input_projection_units < 1:
+            raise ValueError("input_projection_units must be positive.")
 
         self.input_projection = layers.Conv1D(
-            graph_seed_units,
+            self.input_projection_units,
             kernel_size=1,
             padding="same",
             activation=self.activation,
@@ -645,7 +653,7 @@ class GCNMTLDecoder(tf.keras.Model):
             )
             self.temporal_conv_layers.append(
                 layers.Conv1D(
-                    graph_seed_units,
+                    self.input_projection_units,
                     kernel_size=3,
                     padding="same",
                     activation=self.activation,
@@ -777,6 +785,7 @@ class GCNMTLDecoder(tf.keras.Model):
                 "temporal_pool_sizes": self.temporal_pool_sizes,
                 "adjacency": self._adjacency_init,
                 "emb_dim": self.emb_dim,
+                "input_projection_units": self.input_projection_units,
                 "dropout": self.dropout_rate,
                 "activation": self.activation,
                 "use_batch_norm": self.use_batch_norm,

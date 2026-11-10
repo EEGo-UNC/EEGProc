@@ -35,8 +35,10 @@ if [[ "$PHASE" != source && "$PHASE" != calibrate ]]; then
 fi
 RUN_ID="${RUN_ID:-weighted_accuracy_oracle_v1}"
 SUITE_DIR="${SUITE_DIR:-$ROOT/runs/$RUN_ID/$STAGE}"
+MODEL_CONFIG="${MODEL_CONFIG:-$PROJECT_DIR/experiments/sic_v15_seed_iv/model_config.json}"
 "$PYTHON" experiments/sic_v15_seed_iv/train.py \
   --phase "$PHASE" \
   --data-dir "$ROOT/processed" \
   --suite-dir "$SUITE_DIR" --source-epochs "${SOURCE_EPOCHS:-12}" \
+  --model-config "$MODEL_CONFIG" \
   --target "$SLURM_ARRAY_TASK_ID" "${ARGS[@]}"
