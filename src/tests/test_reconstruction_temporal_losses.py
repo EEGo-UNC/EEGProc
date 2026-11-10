@@ -159,6 +159,27 @@ def test_seam_weight_requires_trial_level():
     _build(classification_level="window", reconstruction_derivative_weight=0.5)
 
 
+def test_cli_can_ablate_configured_seam_and_set_derivative_independently():
+    from eegproc.deep_learning.joint_architectures.SICModelv15.sic_model_args import (
+        parse_cli,
+    )
+
+    args = [
+        "--window-overlap", "0.5",
+        "--hyperparameters-json",
+        '{"reconstruction_seam_weight": 0.7, "reconstruction_derivative_weight": 0.1}',
+    ]
+    with pytest.raises(ValueError, match="requires --window-overlap 0"):
+        parse_cli(args)
+
+    _, config = parse_cli(args + [
+        "--reconstruction-seam-weight", "0",
+        "--reconstruction-derivative-weight", "0.3",
+    ])
+    assert config["reconstruction_seam_weight"] == 0.0
+    assert config["reconstruction_derivative_weight"] == 0.3
+
+
 def test_gradient_flows_only_through_window_edges(signals):
     target, reconstruction = signals
     r = tf.Variable(_flat(reconstruction))
