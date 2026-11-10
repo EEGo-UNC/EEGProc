@@ -1,0 +1,277 @@
+{
+  "snapshot_utc": "2026-11-10T04:00:16.698752+00:00",
+  "dataset": "SEED-IV",
+  "classes": {
+    "0": "neutral",
+    "1": "sad",
+    "2": "fear",
+    "3": "happy"
+  },
+  "evaluation": "window-level LOSO; three sessions grouped by participant",
+  "completed_subjects": 5,
+  "planned_subjects": 15,
+  "partial_results": true,
+  "aggregation": "equal weight per completed subject; calibration mean over three splits per subject",
+  "source_commit": "df5c31ee1f2281a085e4be73d100e6b0682a8175",
+  "submission": {
+    "preprocess": "8427400",
+    "smoke": "8563581",
+    "full": "8563583",
+    "source_commit": "df5c31ee1f2281a085e4be73d100e6b0682a8175",
+    "smoke_resources": {
+      "memory_mb": 16384,
+      "time_limit_minutes": 120,
+      "gpus": 1
+    },
+    "attempts": [
+      {
+        "smoke": "8427401",
+        "full": "8427402",
+        "result": "smoke timeout during model construction; dependent full array cancelled"
+      },
+      {
+        "smoke": "8476521",
+        "full": "8476522",
+        "result": "smoke completed; full folds hit host RAM limit; remaining SICv15 tasks stopped for streaming fix"
+      },
+      {
+        "smoke": "8483426",
+        "full": "8483427",
+        "result": "epoch 1 completed for target 0; SIGSEGV failures correlated with periodic faulthandler dumps; high host RAM"
+      }
+    ],
+    "smoke_mi_observations": 256,
+    "streaming_fit": true,
+    "noop_ablation_copy": false,
+    "cache": "8563580",
+    "canary": "8563582",
+    "mmap_input": true,
+    "periodic_stack_dumps": false,
+    "gate_remaining_on_first_full_fold": true
+  },
+  "subjects": [
+    {
+      "subject": 1,
+      "result_directory": "/work/users/p/m/pmucharl/sic-v15-seed-iv/runs/full/subject_0/sic_v15_seed_iv_subject_01_20261108_124919",
+      "zero_shot": {
+        "accuracy": 0.29181636726546906,
+        "balanced_accuracy": 0.27413573126758584,
+        "macro_f1": 0.23618006014756093
+      },
+      "calibration": {
+        "4": {
+          "calibrated": {
+            "accuracy": 0.2738071359019109,
+            "balanced_accuracy": 0.26590085333873176,
+            "macro_f1": 0.20656253160374471
+          },
+          "paired_delta_balanced_accuracy": -0.007834980900283691
+        },
+        "8": {
+          "calibrated": {
+            "accuracy": 0.2565013399858481,
+            "balanced_accuracy": 0.26404441135669415,
+            "macro_f1": 0.2112654388501037
+          },
+          "paired_delta_balanced_accuracy": -0.009403232707718534
+        },
+        "12": {
+          "calibrated": {
+            "accuracy": 0.279418946637402,
+            "balanced_accuracy": 0.2826250400731145,
+            "macro_f1": 0.25080526227771877
+          },
+          "paired_delta_balanced_accuracy": 0.008648035940717539
+        }
+      }
+    },
+    {
+      "subject": 2,
+      "result_directory": "/work/users/p/m/pmucharl/sic-v15-seed-iv/runs/full/subject_1/sic_v15_seed_iv_subject_02_20261108_224225",
+      "zero_shot": {
+        "accuracy": 0.3153692614770459,
+        "balanced_accuracy": 0.32420785703279953,
+        "macro_f1": 0.30828443761768654
+      },
+      "calibration": {
+        "4": {
+          "calibrated": {
+            "accuracy": 0.2719230212359276,
+            "balanced_accuracy": 0.273392336727912,
+            "macro_f1": 0.239475083800924
+          },
+          "paired_delta_balanced_accuracy": -0.05441150138394816
+        },
+        "8": {
+          "calibrated": {
+            "accuracy": 0.26252901548999635,
+            "balanced_accuracy": 0.26386013818545945,
+            "macro_f1": 0.23553058908175847
+          },
+          "paired_delta_balanced_accuracy": -0.0667890664651533
+        },
+        "12": {
+          "calibrated": {
+            "accuracy": 0.2733536729511457,
+            "balanced_accuracy": 0.2806493331676352,
+            "macro_f1": 0.24992684534332277
+          },
+          "paired_delta_balanced_accuracy": -0.044844702295383176
+        }
+      }
+    },
+    {
+      "subject": 3,
+      "result_directory": "/work/users/p/m/pmucharl/sic-v15-seed-iv/runs/full/subject_2/sic_v15_seed_iv_subject_03_20261108_224337",
+      "zero_shot": {
+        "accuracy": 0.29900199600798405,
+        "balanced_accuracy": 0.29020484449846007,
+        "macro_f1": 0.2864753387938082
+      },
+      "calibration": {
+        "4": {
+          "calibrated": {
+            "accuracy": 0.2896488827290151,
+            "balanced_accuracy": 0.28724855877820876,
+            "macro_f1": 0.24818792255691227
+          },
+          "paired_delta_balanced_accuracy": -0.004317269989202362
+        },
+        "8": {
+          "calibrated": {
+            "accuracy": 0.2683296657651186,
+            "balanced_accuracy": 0.2728584869139952,
+            "macro_f1": 0.23799871802137282
+          },
+          "paired_delta_balanced_accuracy": -0.02231232230519531
+        },
+        "12": {
+          "calibrated": {
+            "accuracy": 0.2836890353778496,
+            "balanced_accuracy": 0.2820015284203239,
+            "macro_f1": 0.24959526097589138
+          },
+          "paired_delta_balanced_accuracy": -0.010279707438078803
+        }
+      }
+    },
+    {
+      "subject": 4,
+      "result_directory": "/work/users/p/m/pmucharl/sic-v15-seed-iv/runs/full/subject_3/sic_v15_seed_iv_subject_04_20261109_093144",
+      "zero_shot": {
+        "accuracy": 0.32295409181636725,
+        "balanced_accuracy": 0.3102468949610416,
+        "macro_f1": 0.2917882084697766
+      },
+      "calibration": {
+        "4": {
+          "calibrated": {
+            "accuracy": 0.3089939867228213,
+            "balanced_accuracy": 0.3006685751562056,
+            "macro_f1": 0.2751313656802529
+          },
+          "paired_delta_balanced_accuracy": -0.007588194364538984
+        },
+        "8": {
+          "calibrated": {
+            "accuracy": 0.3110566357371678,
+            "balanced_accuracy": 0.31554047771251303,
+            "macro_f1": 0.27597845380008484
+          },
+          "paired_delta_balanced_accuracy": 0.0061640953928494184
+        },
+        "12": {
+          "calibrated": {
+            "accuracy": 0.3281066498996487,
+            "balanced_accuracy": 0.32876313313635686,
+            "macro_f1": 0.3124478779290101
+          },
+          "paired_delta_balanced_accuracy": 0.01725874703382892
+        }
+      }
+    },
+    {
+      "subject": 5,
+      "result_directory": "/work/users/p/m/pmucharl/sic-v15-seed-iv/runs/full/subject_4/sic_v15_seed_iv_subject_05_20261109_093144",
+      "zero_shot": {
+        "accuracy": 0.2898203592814371,
+        "balanced_accuracy": 0.2808324612033653,
+        "macro_f1": 0.266718559042032
+      },
+      "calibration": {
+        "4": {
+          "calibrated": {
+            "accuracy": 0.278513465250079,
+            "balanced_accuracy": 0.2744377841708375,
+            "macro_f1": 0.21598307792050864
+          },
+          "paired_delta_balanced_accuracy": -0.006375394352318857
+        },
+        "8": {
+          "calibrated": {
+            "accuracy": 0.2642202717855926,
+            "balanced_accuracy": 0.2688435473571386,
+            "macro_f1": 0.22116115776031364
+          },
+          "paired_delta_balanced_accuracy": -0.015835845121679053
+        },
+        "12": {
+          "calibrated": {
+            "accuracy": 0.2790292884580709,
+            "balanced_accuracy": 0.2760899276244584,
+            "macro_f1": 0.25318603424301295
+          },
+          "paired_delta_balanced_accuracy": 0.0005148798826603018
+        }
+      }
+    }
+  ],
+  "mean_scores": {
+    "zero_shot": {
+      "accuracy": 0.30379241516966066,
+      "balanced_accuracy": 0.29592555779265045,
+      "macro_f1": 0.27788932081417284
+    },
+    "calibration": {
+      "4": {
+        "accuracy": 0.28457729836795076,
+        "balanced_accuracy": 0.28032962163437913,
+        "macro_f1": 0.2370679963124685
+      },
+      "8": {
+        "accuracy": 0.2725273857527447,
+        "balanced_accuracy": 0.2770294123051601,
+        "macro_f1": 0.2363868715027267
+      },
+      "12": {
+        "accuracy": 0.28871951866482337,
+        "balanced_accuracy": 0.29002579248437776,
+        "macro_f1": 0.26319225615379116
+      }
+    }
+  },
+  "slurm_status": [
+    "8563582_0|COMPLETED|0:0|09:53:02|",
+    "8563582_0.batch|COMPLETED|0:0|09:53:02|102199384K",
+    "8563582_0.extern|COMPLETED|0:0|09:53:03|",
+    "8563583_1|COMPLETED|0:0|09:59:25|",
+    "8563583_1.batch|COMPLETED|0:0|09:59:25|65639900K",
+    "8563583_1.extern|COMPLETED|0:0|09:59:26|",
+    "8563583_2|COMPLETED|0:0|10:09:28|",
+    "8563583_2.batch|COMPLETED|0:0|10:09:28|102001532K",
+    "8563583_2.extern|COMPLETED|0:0|10:09:28|",
+    "8563583_3|COMPLETED|0:0|09:52:21|",
+    "8563583_3.batch|COMPLETED|0:0|09:52:21|102846108K",
+    "8563583_3.extern|COMPLETED|0:0|09:52:23|",
+    "8563583_4|COMPLETED|0:0|10:48:39|",
+    "8563583_4.batch|COMPLETED|0:0|10:48:39|102698752K",
+    "8563583_4.extern|COMPLETED|0:0|10:48:42|",
+    "8563583_5|RUNNING|0:0|03:36:30|",
+    "8563583_5.batch|RUNNING|0:0|03:36:30|",
+    "8563583_5.extern|RUNNING|0:0|03:36:30|",
+    "8563583_6|RUNNING|0:0|02:25:51|",
+    "8563583_6.batch|RUNNING|0:0|02:25:51|",
+    "8563583_6.extern|RUNNING|0:0|02:25:51|",
+    "8563583_[7-14%2]|PENDING|0:0|00:00:00|"
+  ]
+}
