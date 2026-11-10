@@ -450,6 +450,44 @@ def _repair_baseline(args, dataset, index, subject, trial, entry, optimizer, los
     }, 0
 
 
+def calibrate_cfo_loss(args, dataset, source, vcsc, physiology, temporal_scale, calibration_dir, subject):
+    """Build the shared CFO objective and its source-calibrated feasibility tolerance."""
+    amplitude_spectral = (
+        AmplitudeSpectralReference.from_physiological_reference(physiology, margin=args.amplitude_spectral_margin)
+        if args.amplitude_spectral_weight > 0 else None)
+    loss = make_vcsc_loss(vcsc, amplitude_spectral=amplitude_spectral, temporal_scale=temporal_scale,
+                          target_weight=args.target_weight, latent_weight=args.latent_weight,
+                          decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
+                          amplitude_spectral_weight=args.amplitude_spectral_weight,
+                          temporal_sparsity_weight=args.temporal_sparsity_weight,
+                          temporal_tv_weight=args.temporal_tv_weight,
+                          decoded_metric=args.decoded_distance,
+                          target_probability=args.target_probability)
+    physiological_tolerance = args.physiological_tolerance
+    if args.physiological_tolerance_quantile is not None:
+        # The same calibrated VCSC the optimizer uses, on the same real
+        # source trials it is calibrated from. In-sample, so slightly
+        # optimistic; held-out real-trial VCSC is archived per trial as
+        # vcsc_original_input for comparison.
+        score = tf.function(loss.physiological_validity)
+        source_vcsc = np.asarray([float(score(tf.convert_to_tensor(dataset.features[i][None], tf.float32)).numpy())
+                                  for i in source])
+        physiological_tolerance = float(np.quantile(source_vcsc, args.physiological_tolerance_quantile))
+        write_json(calibration_dir / "vcsc_tolerance.json", {
+            "rule": "quantile of VCSC on source-subject real trials",
+            "quantile": args.physiological_tolerance_quantile, "tolerance": physiological_tolerance,
+            "n_source_trials": len(source_vcsc),
+            "source_vcsc_quantiles": {str(q): float(np.quantile(source_vcsc, q))
+                                      for q in (0.05, 0.25, 0.5, 0.75, 0.95)},
+            "source_vcsc_fraction_zero": float(np.mean(source_vcsc == 0)),
+            "subject_ids": dataset.subject_ids[source], "trial_ids": dataset.trial_ids[source]})
+        print(f"Subject {subject}: VCSC feasibility tolerance {physiological_tolerance:.6g} "
+              f"(source real-trial quantile {args.physiological_tolerance_quantile})", flush=True)
+    if amplitude_spectral is not None:
+        write_json(calibration_dir / "amplitude_spectral.json", amplitude_spectral.metadata())
+    return loss, physiological_tolerance
+
+
 def run_fold(args, dataset, entry, out):
     subject = entry["subject_id"]
     directory = out / f"subject_{subject}"
@@ -543,39 +581,9 @@ def run_fold(args, dataset, entry, out):
         "physiology_required_fraction": args.physiology_required_fraction,
         "source_component_arrays_saved": False,
     })
-    amplitude_spectral = (
-        AmplitudeSpectralReference.from_physiological_reference(physiological, margin=args.amplitude_spectral_margin)
-        if args.amplitude_spectral_weight > 0 else None)
-    loss = make_vcsc_loss(vcsc, amplitude_spectral=amplitude_spectral, temporal_scale=temporal_scale,
-                          target_weight=args.target_weight, latent_weight=args.latent_weight,
-                          decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
-                          amplitude_spectral_weight=args.amplitude_spectral_weight,
-                          temporal_sparsity_weight=args.temporal_sparsity_weight,
-                          temporal_tv_weight=args.temporal_tv_weight,
-                          decoded_metric=args.decoded_distance,
-                          target_probability=args.target_probability)
-    physiological_tolerance = args.physiological_tolerance
-    if args.physiological_tolerance_quantile is not None:
-        # The same calibrated VCSC the optimizer uses, on the same real
-        # source trials it is calibrated from. In-sample, so slightly
-        # optimistic; held-out real-trial VCSC is archived per trial as
-        # vcsc_original_input for comparison.
-        score = tf.function(loss.physiological_validity)
-        source_vcsc = np.asarray([float(score(tf.convert_to_tensor(dataset.features[i][None], tf.float32)).numpy())
-                                  for i in source])
-        physiological_tolerance = float(np.quantile(source_vcsc, args.physiological_tolerance_quantile))
-        write_json(directory / "calibration" / "vcsc_tolerance.json", {
-            "rule": "quantile of VCSC on source-subject real trials",
-            "quantile": args.physiological_tolerance_quantile, "tolerance": physiological_tolerance,
-            "n_source_trials": len(source_vcsc),
-            "source_vcsc_quantiles": {str(q): float(np.quantile(source_vcsc, q))
-                                      for q in (0.05, 0.25, 0.5, 0.75, 0.95)},
-            "source_vcsc_fraction_zero": float(np.mean(source_vcsc == 0)),
-            "subject_ids": dataset.subject_ids[source], "trial_ids": dataset.trial_ids[source]})
-        print(f"Subject {subject}: VCSC feasibility tolerance {physiological_tolerance:.6g} "
-              f"(source real-trial quantile {args.physiological_tolerance_quantile})", flush=True)
-    if amplitude_spectral is not None:
-        write_json(directory / "calibration" / "amplitude_spectral.json", amplitude_spectral.metadata())
+    loss, physiological_tolerance = calibrate_cfo_loss(
+        args, dataset, source, vcsc, physiological, temporal_scale, directory / "calibration", subject,
+    )
     common = dict(loss=loss, learning_rate=args.learning_rate, learning_rate_decay=args.learning_rate_decay,
                   target_loss_component=args.target_loss_component, max_steps=args.max_steps,
                   gradient_clip_norm=args.gradient_clip_norm,

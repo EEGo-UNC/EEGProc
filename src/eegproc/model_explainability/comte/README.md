@@ -75,7 +75,11 @@ PYTHONPATH=src python -m eegproc.model_explainability.comte.runner \
 Use the arousal manifest/data and `--task arousal` for arousal. Copy **all**
 loss weights, optimizer settings, decoder mixing, sampling rate, normalization,
 and stopping settings from the CFO protocol being compared; the example uses
-this branch's defaults. The current CFO branch uses the **10th percentile** VC
+this branch's defaults. The comparator shares the CFO source calibration for
+VCSC tolerance, amplitude and spectral power, and latent temporal scaling.
+It supports the same temporal penalties and decoded-distance option.
+Run the physiology-only repair baseline with the standalone CFO suite.
+The current CFO branch uses the **10th percentile** VC
 cutoff, recorded separately from independent typicality's 95th percentile.
 Do not substitute a different historical cutoff without recalibrating the
 entire paired study. Joint fusion can use the saved mixer or the same

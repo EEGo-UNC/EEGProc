@@ -16,7 +16,7 @@ set -euo pipefail
 # One held-out DREAMER subject per job; both ideas and matched controls.
 # Start with --array=0. Expand to --array=0-22%2 after checking the first fold.
 # TASK=valence (default) or arousal. DRY_RUN=1 only prints commands.
-# Run from a checkout of codex/decoder-identity-latent-coords.
+# Run from a checkout containing experiments/decoder_recovery.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}}"

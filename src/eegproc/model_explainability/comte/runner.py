@@ -22,9 +22,10 @@ from ..typicality.artifacts import (array_sha256, completed_attempt, file_sha256
                                    next_attempt, TrialRecorder, write_json)
 from ..typicality.core import TypicalityRegion
 from ..typicality.coverage import eligibility_records
-from ..typicality.physiology import PhysiologicalReference, make_vcsc_loss, vcsc_calibration
+from ..typicality.physiology import PhysiologicalReference, vcsc_calibration
 from ..typicality.sic_embedding import SICTrialEmbedding
 from ..counterfactuals.optimizer import CounterfactualOptimizer
+from ..counterfactuals.temporal_phase import latent_scale
 from ..model_agnostic.adapter import load_trial_dataset
 from ..model_agnostic.sic_adapter import create_sic_adapter
 from .evaluation import IndependentTypicality, evaluate_signal, spectral_descriptor, signal_displacement
@@ -49,6 +50,8 @@ def parse_args(argv=None):
     args = common.parse_args(argv, parser=parser)
     if args.include_target_latent or args.include_typicality_no_physiology:
         parser.error("This paired comparator uses --cfo-objective; run other ablations separately")
+    if args.include_repair_baseline:
+        parser.error("Run --include-repair-baseline with the standalone CFO suite")
     try:
         search_config(args)
     except ValueError as error:
@@ -98,12 +101,15 @@ def _protocol(args, dataset, folds):
             "target_probability": args.target_probability, "vc_quantile": args.typicality_quantile,
             "independent_quantile": args.independent_quantile, "independent_neighbors": args.independent_neighbors,
             "physiology_quantile": args.physiology_quantile, "physiology_required_fraction": args.physiology_required_fraction,
-            "vcsc_tolerance": args.physiological_tolerance, "fs": args.fs,
+            "vcsc_tolerance": args.physiological_tolerance,
+            "vcsc_tolerance_quantile": args.physiological_tolerance_quantile, "fs": args.fs,
             "channel_atol": args.channel_atol, "channel_rtol": args.channel_rtol,
             "cfo_objective": args.cfo_objective, "search": asdict(search_config(args)),
             "cfo": {key: getattr(args, key) for key in (
                 "max_steps", "learning_rate", "learning_rate_decay", "target_loss_component",
                 "target_weight", "latent_weight", "decoded_weight", "physiological_weight",
+                "amplitude_spectral_weight", "amplitude_spectral_margin", "temporal_sparsity_weight",
+                "temporal_tv_weight", "decoded_distance",
                 "typicality_weight", "variance_floor", "decoder_mode", "fixed_joint_alpha", "report_output",
                 "gradient_clip_norm", "stop_on_success", "min_gradient_norm", "low_gradient_patience",
                 "typicality_improvement_patience", "typicality_min_delta")},
@@ -173,10 +179,23 @@ def run_fold(args, dataset, entry, out):
     model = CountingModel(adapter.model)
     initial_weights = [value.numpy().copy() for value in model.weights]
     embeddings, probabilities = [], []
-    for i in source:
-        features = model.get_encoder_features(dataset.features[i:i+1])
-        embeddings.append(np.asarray(features["classification_embedding"])[0])
-        probabilities.append(np.asarray(features["probabilities"])[0])
+
+    def encode_source():
+        for i in source:
+            features = model.get_encoder_features(dataset.features[i:i+1])
+            embeddings.append(np.asarray(features["classification_embedding"])[0])
+            probabilities.append(np.asarray(features["probabilities"])[0])
+            yield features
+
+    temporal_scale = None
+    if args.temporal_sparsity_weight > 0 or args.temporal_tv_weight > 0:
+        temporal_scale = latent_scale(features["window_features"] for features in encode_source())
+        write_json(directory / "calibration" / "latent_scale.json", {
+            "latent_std": temporal_scale, "n_source_trials": len(source),
+        })
+    else:
+        for _ in encode_source():
+            pass
     embeddings, probabilities = np.stack(embeddings), np.stack(probabilities)
     prior_mean, prior_variance = SICTrialEmbedding(adapter.model).learned_prior(args.target_class)
     region = TypicalityRegion.calibrate(embeddings, prior_mean=prior_mean, prior_variance=prior_variance,
@@ -192,15 +211,15 @@ def run_fold(args, dataset, entry, out):
         held_out_subject=subject, target_class=args.target_class, quantile=args.independent_quantile,
         neighbors=args.independent_neighbors, seed=args.seed)
     vcsc = vcsc_calibration(source_signals)
-    loss = make_vcsc_loss(vcsc, target_weight=args.target_weight, latent_weight=args.latent_weight,
-        decoded_weight=args.decoded_weight, physiological_weight=args.physiological_weight,
-        target_probability=args.target_probability)
+    loss, physiological_tolerance = common.calibrate_cfo_loss(
+        args, dataset, source, vcsc, physiological, temporal_scale, directory / "calibration", subject,
+    )
     optimizer = CountedCFO(model, loss=loss, learning_rate=args.learning_rate,
         learning_rate_decay=args.learning_rate_decay, target_loss_component=args.target_loss_component,
         max_steps=args.max_steps, gradient_clip_norm=args.gradient_clip_norm,
         stop_on_success=args.stop_on_success if args.cfo_objective == "base" else False,
         min_gradient_norm=args.min_gradient_norm, low_gradient_patience=args.low_gradient_patience,
-        physiological_tolerance=args.physiological_tolerance, decoder_mode=args.decoder_mode,
+        physiological_tolerance=physiological_tolerance, decoder_mode=args.decoder_mode,
         fixed_joint_alpha=args.fixed_joint_alpha, typicality=region,
         typicality_weight=args.typicality_weight if args.cfo_objective == "typicality" else 0.,
         typicality_improvement_patience=args.typicality_improvement_patience,
@@ -225,7 +244,7 @@ def run_fold(args, dataset, entry, out):
         eligible_trial_ids=dataset.trial_ids[eligible], calibration_sha256=calibration_hashes,
         setup_seconds=time.perf_counter()-started, setup_signal_queries=model.signal_queries,
         source_reference_keys=keys, thresholds=dict(target_probability=args.target_probability,
-        vc=region.tau, independent=independent.threshold, vcsc=args.physiological_tolerance))
+        vc=region.tau, independent=independent.threshold, vcsc=physiological_tolerance))
     write_json(directory / "fold.json", fold)
     print(f"Subject {subject}, {args.direction}: {len(eligible)} paired trials; source-only references={len(source)}", flush=True)
     study_hash = file_sha256(out / "study.json")
@@ -251,8 +270,9 @@ def run_fold(args, dataset, entry, out):
             try:
                 original = dataset.features[index]
                 if method == "cfo":
+                    scale, offset = common._normalization(dataset, index)
                     result = optimizer.optimize(original[None], target_class=args.target_class,
-                        progress=recorder.record, record_state_arrays=False)
+                        progress=recorder.record, record_state_arrays=False, signal_scale=scale, signal_offset=offset)
                     endpoint = result["arrays"][f"x_prime_{args.report_output}"][0]
                     method_summary = result["summary"]
                     baseline = result["arrays"][f"x_reconstructed_{args.report_output}"][0]
@@ -275,7 +295,7 @@ def run_fold(args, dataset, entry, out):
                 evaluated = evaluate_signal(model, endpoint, original, target_class=args.target_class,
                     target_probability=args.target_probability, vc_region=region, independent_region=independent,
                     diagnostics=endpoint_diagnostics, physiology=physiological,
-                    vcsc_penalty=penalty, vcsc_tolerance=args.physiological_tolerance,
+                    vcsc_penalty=penalty, vcsc_tolerance=physiological_tolerance,
                     atol=args.channel_atol, rtol=args.channel_rtol)
                 evaluation_seconds = time.perf_counter() - evaluation_started
                 if len(initial_weights) != len(model.weights) or any(

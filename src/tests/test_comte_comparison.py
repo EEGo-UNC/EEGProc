@@ -214,7 +214,9 @@ def test_paired_runner_both_directions_failures_resume_and_rebuild(tmp_path, mon
     args = runner.parse_args(['--models-json', str(manifest), '--trials-npz', str(trials),
         '--task', 'valence', '--subjects', '0', '--out-dir', str(tmp_path / 'out'), '--max-steps', '0',
         '--fixed-joint-alpha', '.5', '--comte-max-queries', '15', '--comte-max-attempts', '2',
-        '--comte-max-iterations', '3', '--comte-restarts', '0'])
+        '--comte-max-iterations', '3', '--comte-restarts', '0',
+        '--physiological-tolerance-quantile', '.5', '--amplitude-spectral-weight', '.3',
+        '--temporal-sparsity-weight', '.01', '--temporal-tv-weight', '.02', '--decoded-distance', 'envelope'])
     actual_search = runner.optimized_search
     failed_once = [False]
     def fail_once(*a, **kw):
@@ -235,6 +237,16 @@ def test_paired_runner_both_directions_failures_resume_and_rebuild(tmp_path, mon
             assert endpoint['evaluation_signal_queries'] == 1
             assert endpoint['total_classifier_queries'] == endpoint['generation_classifier_queries'] + 1
             assert endpoint['physiological_acceptance'] in (False, None)
+            fold_dir = result_path.parents[3]
+            tolerance = json.loads((fold_dir / 'calibration/vcsc_tolerance.json').read_text())
+            assert endpoint['vcsc_passed'] == (endpoint['vcsc_penalty'] <= tolerance['tolerance'])
+            assert (fold_dir / 'calibration/amplitude_spectral.json').is_file()
+            assert (fold_dir / 'calibration/latent_scale.json').is_file()
+            if endpoint['method'] == 'cfo':
+                assert endpoint['method_summary']['decoded_metric'] == 'envelope'
+                assert endpoint['method_summary']['temporal_weights'] == {'sparsity': .01, 'tv': .02}
+                assert endpoint['method_summary']['amplitude_spectral_constraint_enforced']
+                assert endpoint['method_summary']['physiological_tolerance'] == tolerance['tolerance']
     roots = [args.out_dir / d for d in args.directions]
     assert build_report(roots, tmp_path / 'rebuilt') == result
     args.resume = True

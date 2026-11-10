@@ -77,7 +77,7 @@ matching. See `docs/RECONSTRUCTION_TEMPORAL_INTEGRATION.md` for the objective.
 
 ## SLURM: run both ideas and matched controls
 
-From this branch on Longleaf, using the existing `venv312` environment and
+From the `reviewed-experiments` checkout on Longleaf, using the existing `venv312` environment and
 `datasets/dreamer_{eeg,labels}.npy`:
 
 ```bash
