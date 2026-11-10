@@ -50,7 +50,7 @@ class V15MultiGPUChecks(unittest.TestCase):
                        "mldg_role": tf.constant([0]*8 + [1]*4)}
         self.weights = tf.constant(np.linspace(0.5, 1.5, 12), tf.float32)
 
-    def build_model(self, parallel=False, dropout=0.0, deterministic=False):
+    def build_model(self, parallel=False, dropout=0.0, deterministic=False, **extra):
         with tf.device(self.devices[0]):
             model = self.builder(
                 (2, 4, 6), adjacency=np.eye(2), n_channels=2, n_bands=3,
@@ -68,6 +68,7 @@ class V15MultiGPUChecks(unittest.TestCase):
                 # samples fresh random priors and is disabled in this run.
                 update_vc_discriminator=False, weight_decay=5e-5,
                 use_class_weight=True,
+                **extra,
             )
         if parallel:
             model.configure_fold_devices(
@@ -122,6 +123,28 @@ class V15MultiGPUChecks(unittest.TestCase):
         for device, shard in out["device_shards"]:
             self.assertTrue(shard["graph_sequence"].device.endswith(device.removeprefix("/device:")))
             self.assertTrue(shard["bilstm_sequence"].device.endswith(device.removeprefix("/device:")))
+
+    def test_temporal_reconstruction_terms_match_across_devices(self):
+        temporal = dict(
+            reconstruction_seam_weight=0.7,
+            reconstruction_derivative_weight=0.3,
+        )
+        baseline = self.build_model(**temporal)
+        parallel = self.build_model(True, **temporal)
+        parallel.set_weights(baseline.get_weights())
+        for stop in (8, 7):  # Unequal shards must still give the global means.
+            a_out = baseline._encode_mldg(self.eeg[:stop], training=True)
+            b_out = parallel._encode_mldg(self.eeg[:stop], training=True)
+            a_rec = baseline._reconstruction_components(a_out, training=True)
+            b_rec = parallel._reconstruction_components(b_out, training=True)
+            for key in ("reconstruction_seam_loss", "reconstruction_derivative_loss",
+                        "reconstruction_loss"):
+                self.assertGreater(float(a_rec[key]), 0.0, key)
+                self.assert_tensors_close([a_rec[key]], [b_rec[key]], key)
+            a_loss, a_grad = self.objective(baseline, 0, stop, True)
+            b_loss, b_grad = self.objective(parallel, 0, stop, True)
+            self.assert_tensors_close([a_loss], [b_loss], "temporal loss")
+            self.assert_tensors_close(a_grad, b_grad, "temporal gradient")
 
     def test_complete_mldg_updates_eager_and_graph(self):
         for graph in (False, True):
@@ -271,7 +294,7 @@ def test_v15_multi_gpu_in_subprocess():
         result = subprocess.run(
             [sys.executable, "-m", "src.tests.test_sic_v15_multi_gpu"],
             cwd=Path(__file__).resolve().parents[2], env=env,
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=900,
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
