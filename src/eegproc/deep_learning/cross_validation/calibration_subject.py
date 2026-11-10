@@ -330,10 +330,12 @@ def _run_subject_calibration_subject(
                 flush=True,
             )
 
-        X_source_for_fit = _prepare_fit_inputs_with_subject_ids(
-            model,
-            X_source,
-            source_subject_ids,
+        # A loaded checkpoint already owns its source-subject head. Preparing
+        # unused source inputs can try to resize it to a different population
+        # (e.g. including subjects excluded for source validation).
+        X_source_for_fit = (
+            _prepare_fit_inputs_with_subject_ids(model, X_source, source_subject_ids)
+            if pretrained_model is None else None
         )
         source_kwargs = dict(source_fit_kwargs)
         source_callbacks = list(source_kwargs.pop("callbacks", []))

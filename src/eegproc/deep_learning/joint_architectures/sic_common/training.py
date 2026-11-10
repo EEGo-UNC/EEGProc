@@ -521,7 +521,7 @@ def _apply_median_label_ablation(
         raise ValueError(
             f"Removing original rating {median_label:g} would empty the dataset."
         )
-    filtered = tuple(array[keep_mask] for array in arrays)
+    filtered = arrays if np.all(keep_mask) else tuple(array[keep_mask] for array in arrays)
     filtered_ratings = None if ratings is None else ratings[keep_mask]
     after_summary = _trial_distribution_summary(
         filtered[1],

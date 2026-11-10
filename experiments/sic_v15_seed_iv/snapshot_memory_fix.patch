@@ -1,0 +1,5 @@
+--- a/src/eegproc/deep_learning/joint_architectures/sic_common/training.py
++++ b/src/eegproc/deep_learning/joint_architectures/sic_common/training.py
+@@ -521,1 +521,1 @@
+-    filtered = tuple(array[keep_mask] for array in arrays)
++    filtered = arrays if np.all(keep_mask) else tuple(array[keep_mask] for array in arrays)

@@ -1,0 +1,174 @@
+# Current default: v15 protocol with the v16 encoder/decoder pair
+
+New runs use the restored v15 BiGRU/VC/GRL/MLDG settings and all 22 source
+subjects per held-out target. There is no validation-subject reservation or
+four-subject data restriction. One common oracle epoch selects the model set,
+then the original v15 3-shot/6-fold calibration runs from those source models.
+
+```bash
+python experiments/sic_v16/tracker.py --variant all plan --target valence
+python experiments/sic_v16/tracker.py --variant all status
+```
+
+The default scope is `v15`. New campaigns live in `v15_protocol/VARIANT/`,
+separate from earlier results, and request two parallel folds on two GPUs each.
+The model configurations retain the four CNN/Transformer/decoder variants.
+The initial smoke uses 2 source epochs/targets 0 and 1; full baselines use 12
+epochs/all 23 targets. All 23 subjects remain available to every source splitter.
+
+See the [current model and protocol guide](../../src/eegproc/deep_learning/joint_architectures/SICModelv16/README.md)
+for exact v15 reference settings, calibration, preflight and resume behavior.
+Historical rebuilt-data/collapse/normalization diagnostic scripts keep their
+explicit experimental interventions; they are not the restored production path.
+
+The documentation below describes historical campaigns. Use explicit
+`--scope all23` or `--scope first4` when inspecting those results.
+
+---
+
+# SIC v16 tracker workflow
+
+## Current default: subjects 0–3 are the entire dataset
+
+The wrapper now defaults to `--scope first4`. This restricts EEG/ratings before
+filtering or windowing, so subjects 4–22 cannot enter training, validation or
+testing. It is different from evaluating only four folds while still training
+on the other subjects. A four-subject LOSO fold uses **two training subjects,
+one validation subject, and one held-out test subject**. The input files stay
+unchanged. Source-trained weights from the old all-23 runs are not reused.
+
+The four new campaigns live under `experiments/sic_v16/first4/VARIANT/`, with
+separate campaign names, configurations and work-backed run stores. The old
+all-23 results stay intact and are not ranked against this new data protocol.
+
+```bash
+# Plan short smoke runs for the new data restriction:
+python experiments/sic_v16/tracker.py --scope first4 --variant all plan --target valence
+# Submit the four printed sbatch commands, then:
+python experiments/sic_v16/tracker.py --scope first4 --variant all status
+```
+
+The new smoke keeps the entire data pool restricted to subjects 0–3, but runs
+only test folds 0 and 1 for two epochs. After successful smoke, the same plan
+command proposes 50-epoch baselines for all four held-out subjects. Both smoke
+and baseline scripts request at most two hours with a 6,600-second soft cap.
+The next plan after baseline completion proposes one-factor experiments as
+before; no new hand-written Slurm script is required for each experiment.
+
+To inspect the **completed original** 23-subject runs:
+
+```bash
+python experiments/sic_v16/tracker.py --scope all23 --variant all status
+```
+
+Recovery for new first4 runs uses `recover.py --scope first4`; the recovery
+tool's default stays `all23` for compatibility with the earlier instructions.
+`diagnostics.py` packages both scopes. See [the resumed-run review](RESUME_REVIEW.md)
+for checkpoint evidence and the completed baseline metrics.
+
+## Original all-23 protocol and general tracker usage
+
+The older examples below describe the original campaigns; add `--scope all23`
+to select those stores. Use the current-default instructions above for new work.
+
+For quota failures or interrupted baselines, use [recovery instructions](RECOVERY.md).
+They preserve checkpoints and resume existing runs on shared work storage.
+
+The four real-data smoke runs have passed. See [the review](SMOKE_REVIEW.md)
+for learning results, measured resources and the next full baseline step.
+
+Use the existing tracker for planning, status, syncing and plotting. The model
+and oracle selection are the same as the SICv16 Slurm array runner; this bridge
+adds portable run manifests and `result.json` output. Each architecture has its
+own campaign/store, with valence as its label target. Initial variants are
+`cnn`, `cnn_reconstruction`, `cnn_transformer`, `cnn_transformer_reconstruction`.
+
+## Next run: tracked real-data smoke
+
+On Longleaf, from the repository root after pulling `SICv16-Pranav`:
+
+```bash
+module load python/3.12.4
+source venv312/bin/activate
+python -m pip install -e '.[deep-learning]'
+python experiments/sic_v16/tracker.py --variant all plan --target valence
+```
+
+Planning uses only the standard library and executes no training. It creates
+four separate bundles under `experiments/sic_v16/VARIANT/runs/RUN_ID/`, with
+`config.json`, `manifest.json`, and `submit.slurm`, and prints their exact paths.
+Submit each printed command, which has this form:
+
+```bash
+sbatch experiments/sic_v16/VARIANT/runs/RUN_ID/submit.slurm
+```
+
+Generated smoke scripts request two hours; later full scripts request 24 hours.
+A smoke run's controller budget is 6,600 seconds. Each smoke uses two epochs,
+two target subjects (0 and 1), all available source subjects except the held-out
+target and validation pool, batch size one trial and one GPU. Raw 14-channel
+DREAMER or band-stacked 42-feature arrays are accepted. The source files are
+never modified. `DATA_DIR` defaults to `$HOME/EEGProc/datasets` when submitted
+from that checkout. `PROJECT_DIR` defaults to the submission directory.
+
+Each job first executes the new CPU-only data/bridge checks, then its fixed
+training configuration. The eight model/GPU preflight tests have already
+passed in Longleaf job 6610071 and are not rerun by these jobs.
+
+## Inspect and continue
+
+```bash
+python experiments/sic_v16/tracker.py --variant all status
+python experiments/sic_v16/tracker.py --variant cnn suggest --target valence
+python experiments/sic_v16/tracker.py --variant cnn plot
+```
+
+If planning/running on Longleaf, `status` reads local results directly: no sync
+is necessary. If planning on a laptop, copy the planned bundle to the same
+repo-relative cluster directory before submission, and download each completed
+bundle's top-level files afterward. Import one variant at a time:
+
+```bash
+python experiments/sic_v16/tracker.py --variant cnn sync /path/to/downloaded/cnn/run
+```
+
+Tracker sync copies top-level files only; these contain everything needed for
+status, selection and plots. Keep `artifacts/` on Longleaf: it contains prepared
+data, per-fold logs/checkpoints, epoch predictions and split diagnostics. A
+failed job updates `manifest.json` and writes `failure.txt`; preprocessing
+failures also have `artifacts/execution.json` and data/preprocessing.json when
+the input could be opened.
+
+Send back the first smoke bundles' `slurm-*.out`, `slurm-*.err`, `manifest.json`,
+`result.json` or `failure.txt`, plus `artifacts/subject_*.log` and per-epoch JSONs.
+No checkpoints need downloading initially. Do not also submit the legacy
+`smoke.sh` array: it runs the same four experiments without tracker bundles.
+
+## When routine runs replace this validation loop
+
+You can use the tracker now to plan and submit this smoke run. Once a real-data
+smoke completes with finite metrics, valid checkpoints and acceptable memory/
+timing, routine runs use `plan -> sbatch -> status` (or `sync` for laptop stores).
+No new hand-written Slurm script is needed per configuration. The tracker does
+not submit jobs automatically; it prints the ready-to-submit command.
+
+After smoke, the next suggestion is the baseline (50 epochs, all 23 subjects),
+then one-factor learning-rate/dropout experiments. Do not submit that baseline
+until smoke timing establishes whether its sequential folds fit the 24-hour
+cap. We may need fold-level jobs or a revised matched budget first. This is a
+runtime-validation gate, not a tracker limitation. Model or data errors still
+need investigation when they occur.
+
+Tracker ranking uses **validation-selected test balanced accuracy**, with a
+subject-variability penalty. Test-selected common-epoch oracle performance is
+retained separately in `result.json` under `oracle_diagnostics` and is never
+the tracker optimization objective. Keep target sets, budgets and preprocessing
+matched across the four variant campaigns.
+
+The shared tracker's [general guide](../../docs/training-tracker.md) describes
+configuration and reporting. Its older standalone example campaigns are not
+part of this branch; use the SIC v16 wrapper above.
+
+## Architecture figures for the manuscript
+
+See [four-model architecture diagrams and dimension calculations](../../docs/model_architectures/README.md).
