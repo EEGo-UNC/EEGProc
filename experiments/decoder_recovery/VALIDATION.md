@@ -1,5 +1,38 @@
 # Validation
 
+## Temporal reconstruction integration, November 10, 2026
+
+Amit Chalmeti's `recon-temporal-loss` branch at `2fc2395c` is merged into the
+local `CFX-update` and `codex/decoder-identity-latent-coords` branches. This
+includes the training implementation at `bb153d59`, the arousal launcher
+updates, and the reconstruction-comparison tool. Both temporal loss weights
+retain their zero defaults. No remote branch was pushed and no cluster job
+was submitted.
+
+Targeted validation: **40 unique tests passed** with Python 3.12 / TensorFlow
+on CPU, covering reconstruction temporal losses, the comparison tool,
+decoder recovery, existing counterfactual temporal/envelope controls, v15
+imports/calibration, and two-device objective/gradient parity. The two-device
+check uses logical CPUs. The obsolete shared-runtime `SICModelv11` calibration
+case was deselected because that model version is absent from this branch.
+
+The new recovery integration test enables both seam and derivative terms on
+two-window trials with both encoder branches. It runs both pre/post-ISA source
+training phases, identity-guided decoder-only adaptation, and checkpoint
+reload. It verifies that the temporal weights and losses survive reload, that
+the emotion predictions remain unchanged during decoder adaptation, that the
+encoder/classifier/identifier remain fixed, and that zero-edit paired-coordinate
+decoding still reproduces the pre-ISA reconstruction.
+
+The first test attempt encountered filesystem `ENOSPC`; after removing the
+incomplete temporary Git packs from the update, all interrupted relevant
+checks passed on retry. The 40-test count combines 33 initial passes, six
+successful retries, and the added recovery integration test. Both launchers
+pass Bash syntax validation and both branch diffs pass whitespace checks.
+Scientific effectiveness and actual GPU execution remain unmeasured.
+
+## Original decoder recovery validation
+
 Validated locally with Python 3.12 / TensorFlow on CPU. No Longleaf job was
 submitted and no real EEG effectiveness result is claimed.
 

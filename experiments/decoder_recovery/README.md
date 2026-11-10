@@ -51,6 +51,23 @@ not recover missing information from `Z1` alone. If even `E0` discarded the
 information, the residual cannot restore it. A separate style-code architecture
 is not implemented under this experiment's name.
 
+## Temporal reconstruction losses
+
+Amit's `recon-temporal-loss` implementation is available in this branch. Add
+`reconstruction_seam_weight` and `reconstruction_derivative_weight` to a custom
+model config to enable boundary-step matching and within-window derivative
+matching. Both default to zero. Keep `reconstruction_loss_weight` positive for
+the two source-training phases. The Idea 1 and reconstruction-only adaptation
+arms reuse the same reconstruction objective, scaled by their own
+`reconstruction_weight`; saved checkpoints retain both temporal settings.
+Use the same settings for the matched control and identity-guided arms.
+
+Seam matching requires complete trials of chronological, contiguous,
+non-overlapping windows. The prepared-data path cannot infer those properties
+from array shape alone. These terms do not explicitly align phase angles; the
+existing counterfactual envelope distance and latent-edit smoothing remain
+separate options. See `docs/RECONSTRUCTION_TEMPORAL_INTEGRATION.md` for details.
+
 ## SLURM: run both ideas and matched controls
 
 From this branch on Longleaf, using the existing `venv312` environment and

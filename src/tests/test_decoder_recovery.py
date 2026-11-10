@@ -172,6 +172,39 @@ def test_two_phase_pipeline_saves_paired_models_and_recovery_report(tmp_path):
     assert "round_trip_flip_rate" in report["latent_coords_decoder"]
 
 
+def test_temporal_losses_survive_both_recovery_methods_and_checkpoint_reload(tmp_path):
+    train, validation = data(), data((2, 2), trial_offset=20)
+    for split in (train, validation):
+        # Two chronological windows exercise actual seams, not the one-window
+        # zero-seam fallback used by the existing recovery smoke tests.
+        split.eeg = np.concatenate((split.eeg, -split.eeg + 0.15), axis=1)
+    temporal_config = {**config(both=True),
+                       "reconstruction_seam_weight": 0.7,
+                       "reconstruction_derivative_weight": 0.3}
+    reference, invariant = train_latent_coords(
+        train, validation, temporal_config, tmp_path / "coords",
+        phase1_epochs=1, phase2_epochs=1, batch_size=2)
+    logits = invariant(validation.eeg, training=False).numpy()
+    identifier = build_identifier(train.eeg, 2, filters=3)
+    train_idea1(invariant, identifier, [0, 1], train, validation,
+                tmp_path / "identity", epochs=1, batch_size=2, loss_mode="kl")
+    restored = load_sic(tmp_path / "identity" / "decoder_identity.keras")
+    assert restored.reconstruction_seam_weight == 0.7
+    assert restored.reconstruction_derivative_weight == 0.3
+    np.testing.assert_array_equal(restored(validation.eeg, training=False), logits)
+    components = restored._reconstruction_components(
+        restored._encode(validation.eeg, training=False), training=False)
+    assert float(components["reconstruction_seam_loss"]) > 0.0
+    assert float(components["reconstruction_derivative_loss"]) > 0.0
+    paired_reference = load_sic(tmp_path / "coords" / "pre_isa.keras")
+    np.testing.assert_allclose(
+        LatentCoordinatesDecoder(paired_reference, restored).reconstruct(validation.eeg),
+        reference.reconstruct(validation.eeg, "joint"), atol=2e-6)
+    report = json.loads((tmp_path / "identity" / "report.json").read_text())
+    assert report["encoder_and_classifier_unchanged"]
+    assert report["identifier_unchanged"]
+
+
 def test_fold_export_reserves_subjects_and_complete_trials(tmp_path):
     sample = data(tuple(np.repeat(np.arange(4), 3)))
     prepare_fold(sample, tmp_path / "fold", test_subjects=[3], validation_subjects=[2])
