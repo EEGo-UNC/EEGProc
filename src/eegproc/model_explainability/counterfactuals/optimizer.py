@@ -343,6 +343,7 @@ class CounterfactualOptimizer:
         are in physical units.
         """
         started = time.perf_counter()
+        gradient_evaluations = 0
         x = tf.cast(tf.convert_to_tensor(inputs), tf.float32)
         if x.shape.rank == 3:
             x = x[None, ...]
@@ -434,6 +435,7 @@ class CounterfactualOptimizer:
                     signal_offset=signal_offset,
                 )
             gradient = tape.gradient(terms["total"], variable)
+            gradient_evaluations += 1
             if gradient is None:
                 raise RuntimeError(
                     "No gradient reached z_prime from the counterfactual objective."
@@ -705,6 +707,7 @@ class CounterfactualOptimizer:
                     "typicality_min_delta": self.typicality_min_delta,
                 },
                 "elapsed_seconds": time.perf_counter() - started,
+                "gradient_evaluations": gradient_evaluations,
                 "physiological_validity": float(
                     final_terms["physiological"].numpy()
                 ),
