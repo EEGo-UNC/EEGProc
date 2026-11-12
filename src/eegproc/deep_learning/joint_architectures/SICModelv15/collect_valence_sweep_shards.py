@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combine source-fit shards before selecting one oracle epoch over 23 users."""
+"""Combine source-fit shards and validate complete coverage over 23 users."""
 
 import argparse
 import json
@@ -11,7 +11,7 @@ from sic_v15_valence_sweep import select_oracle, summarize, validate_checkpoints
 SHARD_TARGETS = (tuple(range(0, 8)), tuple(range(8, 16)), tuple(range(16, 23)))
 MATCH_FIELDS = ("configuration", "source_epochs", "source_batch_size", "seed",
                 "gpus_per_fold", "deterministic_training", "eeg", "labels",
-                "preprocessing", "metrics_only")
+                "preprocessing", "metrics_only", "label_dimension", "fixed_final_epoch", "source_revision")
 
 
 def collect(output_dir):
@@ -37,13 +37,16 @@ def collect(output_dir):
             raise ValueError(f"Unexpected held-out users in {shard}")
         # Older checkpoint-backed suites predate this flag.
         spec.setdefault("metrics_only", False)
+        spec.setdefault("label_dimension", "valence")
+        spec.setdefault("fixed_final_epoch", False)
         if baseline is None:
             baseline = spec
         elif any(spec.get(key) != baseline.get(key) for key in MATCH_FIELDS):
             raise ValueError(f"Source shard configuration/budget mismatch: {shard}")
         rows = [json.loads(path.read_text()) for path in sorted(shard.glob("subject_*/epoch_*.json"))]
         result = select_oracle(rows, list(expected_targets), int(spec["source_epochs"]),
-                               metrics_only=spec["metrics_only"])
+                               metrics_only=spec["metrics_only"],
+                               fixed_final_epoch=spec.get("fixed_final_epoch", False))
         if result["status"] != "completed":
             raise ValueError(f"Missing subject/epoch results in {shard}")
         checkpoints = validate_checkpoints(shard, rows, metrics_only=spec["metrics_only"])
@@ -57,7 +60,8 @@ def collect(output_dir):
     # Validate the complete global set before publishing any aggregate files.
     targets = list(range(23))
     selected = select_oracle(merged_rows, targets, int(baseline["source_epochs"]),
-                             metrics_only=baseline["metrics_only"])
+                             metrics_only=baseline["metrics_only"],
+                             fixed_final_epoch=baseline.get("fixed_final_epoch", False))
     if selected["status"] != "completed":
         raise ValueError("The source shards do not cover every user and epoch.")
     spec = {key: value for key, value in baseline.items() if key not in ("deadline", "started")}
@@ -70,7 +74,8 @@ def collect(output_dir):
         "unstarted_subjects": [], "source_shards": source_shards,
     })
     result = summarize(output)
-    print(f"Selected common oracle epoch {result['best_epoch']} across all 23 users; "
+    epoch_type = "common oracle" if result["oracle"] else "fixed final"
+    print(f"Reporting {epoch_type} epoch {result['best_epoch']} across all 23 users; "
           f"mean balanced_accuracy={result['selection_score']:.12f}; "
           f"metrics_only={baseline['metrics_only']}", flush=True)
     return result
@@ -83,7 +88,7 @@ def main(argv=None):
     try:
         collect(args.output_dir)
     except (ValueError, KeyError, OSError) as error:
-        parser.exit(2, f"Cannot select a global oracle epoch: {error}\n")
+        parser.exit(2, f"Cannot collect the DREAMER shards: {error}\n")
     return 0
 
 

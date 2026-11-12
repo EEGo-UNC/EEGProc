@@ -262,6 +262,29 @@ def test_global_selection_uses_all_23_users_not_local_shard_winners(tmp_path):
     assert not list(output.glob('subject_*/*.keras'))
 
 
+def test_fixed_epoch_collection_publishes_only_final_checkpoints(tmp_path):
+    output = make_shards(tmp_path)
+    for shard in output.glob("shard_*"):
+        path = shard / "task.json"
+        spec = json.loads(path.read_text())
+        write_json(path, dict(spec, fixed_final_epoch=True, label_dimension="arousal"))
+        for pattern in ("subject_*/epoch_001.*", "subject_*/epoch_002.*"):
+            for artifact in shard.glob(pattern):
+                artifact.unlink()
+    result = collect(output)
+    assert not result["oracle"]
+    assert result["selected_epoch"] == 3
+    assert result["label_dimension"] == "arousal"
+    assert result["mean_accuracy"] == pytest.approx(.99)
+    assert result["mean_balanced_accuracy"] == pytest.approx((8 * .8 + 15 * .5) / 23)
+    manifest = json.loads((output / "loso_zero_shot_models.json").read_text())
+    assert [entry["target_subject"] for entry in manifest["models"]] == list(range(23))
+    assert all(entry["stage"] == "zero_shot_source_model" and
+               Path(entry["path"]).name == "epoch_003.keras" and Path(entry["path"]).is_file()
+               for entry in manifest["models"])
+    assert not (output / "oracle_summary.json").exists()
+
+
 def test_metrics_only_collection_uses_balanced_accuracy_at_one_common_epoch(tmp_path):
     from audit_valence_sweep import audit_suite
     output = make_shards(tmp_path / 'configuration_1', metrics_only=True)

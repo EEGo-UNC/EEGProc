@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed-configuration DREAMER SICv15 jobs with common-epoch oracle selection.
+"""Fixed-configuration DREAMER SICv15 jobs with sharded LOSO training.
 
 The controller never imports TensorFlow. Each fold starts in a fresh process
 with its GPU mask installed before importing the model. Oracle labels are used
@@ -60,7 +60,7 @@ def configurations(path=DEFAULT_CONFIGS, *, seed=None):
     return records
 
 
-def prepare_data(eeg_path, labels_path, cache, expected_subjects=23):
+def prepare_data(eeg_path, labels_path, cache, expected_subjects=23, *, label_dimension="valence"):
     """Match the full run: 1s windows, no overlap, per-window global RMS.
 
     Inputs are the already converted, band-stacked arrays used by SICv15:
@@ -69,21 +69,23 @@ def prepare_data(eeg_path, labels_path, cache, expected_subjects=23):
     """
     import numpy as np
 
+    dimension = {"valence": 0, "arousal": 1}[label_dimension]
     eeg = np.load(eeg_path, mmap_mode="r", allow_pickle=False)
     ratings = np.load(labels_path, mmap_mode="r", allow_pickle=False)
     if eeg.ndim != 4 or eeg.shape[2] != 42 or eeg.shape[3] < 128:
         raise ValueError(f"Expected band-stacked EEG (subjects, trials, 42, samples>=128), got {eeg.shape}.")
-    if ratings.ndim != 3 or ratings.shape[:2] != eeg.shape[:2] or ratings.shape[2] < 1:
-        raise ValueError("Ratings must align with the EEG subject/trial axes.")
+    if ratings.ndim != 3 or ratings.shape[:2] != eeg.shape[:2] or ratings.shape[2] <= dimension:
+        raise ValueError(f"Ratings must contain {label_dimension} and align with the EEG subject/trial axes.")
     n_subjects, n_trials, _, n_samples = eeg.shape
     if n_subjects != expected_subjects:
         raise ValueError(f"Expected {expected_subjects} source subjects, found {n_subjects}.")
-    if not np.isfinite(ratings[..., 0]).all() or not ((ratings[..., 0] >= 1) & (ratings[..., 0] <= 5)).all():
-        raise ValueError("Valence ratings must be finite and within DREAMER's 1–5 scale.")
-    y = (ratings[..., 0] >= 3).astype(np.int64).reshape(-1)
+    target_ratings = ratings[..., dimension]
+    if not np.isfinite(target_ratings).all() or not ((target_ratings >= 1) & (target_ratings <= 5)).all():
+        raise ValueError(f"{label_dimension.capitalize()} ratings must be finite and within DREAMER's 1–5 scale.")
+    y = (target_ratings >= 3).astype(np.int64).reshape(-1)
     for subject in range(n_subjects):
         if len(np.unique(y[subject * n_trials:(subject + 1) * n_trials])) != 2:
-            raise ValueError(f"Subject {subject} does not have both valence classes.")
+            raise ValueError(f"Subject {subject} does not have both {label_dimension} classes.")
     cache = Path(cache)
     cache.mkdir(parents=True, exist_ok=True)
     n_windows = n_samples // 128
@@ -106,32 +108,36 @@ def prepare_data(eeg_path, labels_path, cache, expected_subjects=23):
     return list(range(n_subjects))
 
 
-def select_oracle(rows, subjects, epochs, *, metrics_only=False):
-    """Maximize the unweighted subject mean at one shared epoch; ties go early."""
+def select_oracle(rows, subjects, epochs, *, metrics_only=False, fixed_final_epoch=False):
+    """Use the predeclared final epoch or maximize the unweighted subject mean."""
     subjects = list(subjects)
     if not subjects or len(subjects) != len(set(subjects)) or epochs < 1:
         raise ValueError("Expected distinct subjects and at least one epoch.")
+    evaluated_epochs = (epochs,) if fixed_final_epoch else range(1, epochs + 1)
     indexed = {}
     for row in rows:
         key = (int(row["target_subject"]), int(row["epoch"]))
         score = float(row["balanced_accuracy"])
-        if key[0] not in subjects or not 1 <= key[1] <= epochs:
+        if key[0] not in subjects or key[1] not in evaluated_epochs:
             raise ValueError(f"Unexpected subject/epoch: {key}")
         if key in indexed:
             raise ValueError(f"Duplicate subject/epoch: {key}")
         if not math.isfinite(score) or not 0 <= score <= 1 or row["decision_threshold"] != 0.5:
-            raise ValueError(f"Invalid oracle metric: {row}")
+            raise ValueError(f"Invalid held-out metric: {row}")
         indexed[key] = row
-    missing = [[subject, epoch] for subject in subjects for epoch in range(1, epochs + 1)
+    missing = [[subject, epoch] for subject in subjects for epoch in evaluated_epochs
                if (subject, epoch) not in indexed]
     means = []
-    for epoch in range(1, epochs + 1):
+    for epoch in evaluated_epochs:
         if all((subject, epoch) in indexed for subject in subjects):
             means.append({"epoch": epoch, "mean_balanced_accuracy":
                           math.fsum(indexed[subject, epoch]["balanced_accuracy"] for subject in subjects) / len(subjects)})
     result = {"status": "incomplete" if missing else "completed", "missing_subject_epochs": missing,
               "epoch_means": means, "selection_rule": "max_epoch(mean_subject(trial_balanced_accuracy_at_0.5))",
               "oracle": True, "evaluation_note": "Held-out labels select the epoch; this is an oracle estimate, not unbiased test performance."}
+    if fixed_final_epoch:
+        result.update(oracle=False, selection_rule="fixed_final_epoch",
+                      evaluation_note="The training budget fixes the epoch before evaluating held-out labels.")
     # Do not rank a configuration that ran a smaller epoch or subject budget.
     if not missing:
         best = max(means, key=lambda row: row["mean_balanced_accuracy"])
@@ -166,14 +172,30 @@ def validate_checkpoints(output, rows, *, metrics_only=False):
 
 
 def summarize(output):
-    output = Path(output)
+    output = Path(output).resolve()
     spec = json.loads((output / "task.json").read_text())
     rows = [json.loads(p.read_text()) for p in sorted(output.glob("subject_*/epoch_*.json"))]
     metrics_only = spec.get("metrics_only", False)
+    fixed_final_epoch = spec.get("fixed_final_epoch", False)
     validate_checkpoints(output, rows, metrics_only=metrics_only)
-    result = select_oracle(rows, spec["target_subjects"], spec["source_epochs"], metrics_only=metrics_only)
+    result = select_oracle(rows, spec["target_subjects"], spec["source_epochs"],
+                           metrics_only=metrics_only, fixed_final_epoch=fixed_final_epoch)
     result.update(configuration=spec["configuration"], source_epochs=spec["source_epochs"],
                   target_subjects=spec["target_subjects"], decision_threshold=0.5, metrics_only=metrics_only)
+    if fixed_final_epoch:
+        result["label_dimension"] = spec["label_dimension"]
+        if result["status"] == "completed":
+            result.update(selected_epoch=result["best_epoch"],
+                          mean_balanced_accuracy=result["selection_score"],
+                          mean_accuracy=result["selected_mean_accuracy"])
+            if not metrics_only:
+                write_json(output / "loso_zero_shot_models.json", {"models": [
+                    {"target_subject": int(subject), "stage": "zero_shot_source_model",
+                     "path": str(output / checkpoint)}
+                    for subject, checkpoint in result["selected_models"].items()
+                ]})
+        write_json(output / "final_metrics.json", result)
+        return result
     write_json(output / "oracle_summary.json", result)
     with (output / "oracle_epoch_means.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["epoch", "mean_balanced_accuracy"])
@@ -200,6 +222,8 @@ def calibrate_selected(args):
     """Evaluate and calibrate the models from the selected common epoch."""
     output = Path(args.output_dir).resolve()
     spec = json.loads((output / "task.json").read_text())
+    if spec.get("fixed_final_epoch", False):
+        raise ValueError("The fixed final-epoch experiment evaluates zero-shot models only.")
     if spec.get("metrics_only", False):
         raise ValueError("Calibration requires saved models. Rerun training with METRICS_ONLY=0.")
     summary = summarize(output)
@@ -221,7 +245,7 @@ def calibrate_selected(args):
         "--dataset", "dreamer",
         "--raw-eeg-npy", spec["eeg"],
         "--raw-labels-npy", spec["labels"],
-        "--label-dimension", "valence",
+        "--label-dimension", spec.get("label_dimension", "valence"),
         "--classification-level", "trial",
         "--n-channels", "14", "--n-bands", "3",
         "--source-batch-size", str(spec.get("source_batch_size", 64)),
@@ -290,6 +314,7 @@ def worker(spec_path, subject):
     spec_path = Path(spec_path).resolve()
     output = spec_path.parent
     spec = json.loads(spec_path.read_text())
+    fixed_final_epoch = spec.get("fixed_final_epoch", False)
     physical = tf.config.list_physical_devices("GPU")
     if len(physical) != spec["gpus_per_fold"]:
         raise RuntimeError(f"Expected {spec['gpus_per_fold']} GPUs, found {len(physical)}.")
@@ -319,7 +344,7 @@ def worker(spec_path, subject):
     folder = output / f"subject_{subject:02d}"
     folder.mkdir()
 
-    class SaveOracleEpoch(tf.keras.callbacks.Callback):
+    class EvaluateEpoch(tf.keras.callbacks.Callback):
         def on_epoch_begin(self, epoch, logs=None):
             self.batches = 0
             self.started = time.monotonic()
@@ -335,11 +360,13 @@ def worker(spec_path, subject):
                 return
             if not math.isfinite(float((logs or {}).get("loss", float("nan")))):
                 raise ValueError("Training produced a nonfinite loss.")
+            number = epoch + 1
+            if fixed_final_epoch and number != spec["source_epochs"]:
+                return
             probabilities = _predict_probabilities(self.model, arrays["features"][mask], batch_size=1,
                                                     n_prediction_latent_samples=0, latent_sampling_seed=None)
             predictions = _predict_labels(probabilities, decision_threshold=0.5)
             score = float(balanced_accuracy_score(arrays["labels"][mask], predictions))
-            number = epoch + 1
             row = {"target_subject": subject, "epoch": number, "balanced_accuracy": score,
                    "accuracy": float(accuracy_score(arrays["labels"][mask], predictions)),
                    "decision_threshold": 0.5,
@@ -353,15 +380,17 @@ def worker(spec_path, subject):
                 temporary.replace(checkpoint)
                 row["checkpoint"] = str(checkpoint.relative_to(output))
             write_json(folder / f"epoch_{number:03d}.json", row)
-            print(f"ORACLE subject={subject} epoch={number} balanced_accuracy={score:.6f}", flush=True)
+            mode = "FINAL" if fixed_final_epoch else "ORACLE"
+            print(f"{mode} subject={subject} epoch={number} balanced_accuracy={score:.6f}", flush=True)
             if time.time() >= spec["deadline"]:
                 self.model.stop_training = True
 
     model.fit(model.prepare_fit_inputs(arrays["features"][source], arrays["subjects"][source]),
               arrays["labels"][source], epochs=spec["source_epochs"],
               batch_size=spec.get("source_batch_size", 64), verbose=2,
-              callbacks=[tf.keras.callbacks.TerminateOnNaN(), SaveOracleEpoch()])
-    completed = len(list(folder.glob("epoch_*.json"))) == spec["source_epochs"]
+              callbacks=[tf.keras.callbacks.TerminateOnNaN(), EvaluateEpoch()])
+    expected = 1 if fixed_final_epoch else spec["source_epochs"]
+    completed = len(list(folder.glob("epoch_*.json"))) == expected
     return 0 if completed else 2
 
 
@@ -374,17 +403,21 @@ def run(args):
         raise ValueError("Epoch count and time budget must be positive.")
     configuration = records[args.config_index]
     masks = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3").split(",")
-    if len(masks) != 4 or len(set(masks)) != 4 or any(not mask.strip() for mask in masks):
-        raise ValueError("Exactly four distinct allocated GPUs are required.")
+    fixed_final_epoch = getattr(args, "fixed_final_epoch", False)
+    pilot = fixed_final_epoch and len(args.target_subjects or ()) == 1
+    allowed_counts = (2, 4) if pilot else (4,)
+    if (len(masks) not in allowed_counts or len(set(masks)) != len(masks)
+            or any(not mask.strip() for mask in masks)):
+        raise ValueError(f"Expected distinct allocated GPUs, allowed counts: {allowed_counts}.")
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=False)
     metrics_only = getattr(args, "metrics_only", False)
-    if metrics_only:
+    if metrics_only or fixed_final_epoch:
         temporary_root = Path(os.environ.get("SLURM_TMPDIR") or tempfile.gettempdir()).resolve()
         if temporary_root.is_relative_to(Path.home().resolve()):
             raise ValueError("Temporary training data must be outside home. Set TMPDIR to node scratch.")
         with tempfile.TemporaryDirectory(prefix="sic-v15-data-", dir=temporary_root) as data_dir:
-            return _run_source(args, configuration, masks, output, Path(data_dir), metrics_only=True)
+            return _run_source(args, configuration, masks, output, Path(data_dir), metrics_only=metrics_only)
     return _run_source(args, configuration, masks, output, output / "data", metrics_only=False)
 
 
@@ -392,18 +425,21 @@ def _run_source(args, configuration, masks, output, data_dir, *, metrics_only):
     seed = getattr(args, "seed", 42)
     started = time.time()
     deadline = started + args.time_budget_seconds
-    available = prepare_data(args.eeg, args.labels, data_dir)
+    label_dimension = getattr(args, "label_dimension", "valence")
+    available = prepare_data(args.eeg, args.labels, data_dir, label_dimension=label_dimension)
     targets = available if args.target_subjects is None else args.target_subjects
     if not targets or len(targets) != len(set(targets)) or not set(targets) <= set(available):
         raise ValueError("Target subjects must be unique IDs from the DREAMER data.")
     spec = {"configuration": configuration, "source_epochs": args.source_epochs,
-            "metrics_only": metrics_only, "data_dir": str(data_dir), "data_retained": not metrics_only,
+            "metrics_only": metrics_only, "data_dir": str(data_dir), "data_retained": data_dir == output / "data",
             "source_batch_size": getattr(args, "source_batch_size", 64),
             "deterministic_training": getattr(args, "deterministic_training", False),
             "target_subjects": targets, "seed": seed, "gpus_per_fold": 2, "deadline": deadline,
             "eeg": str(Path(args.eeg).resolve()), "labels": str(Path(args.labels).resolve()),
             "time_budget_seconds": args.time_budget_seconds, "started": started,
-            "preprocessing": "128 Hz; 1s nonoverlapping windows; global RMS per window; valence >= 3"}
+            "label_dimension": label_dimension, "fixed_final_epoch": getattr(args, "fixed_final_epoch", False),
+            "source_revision": os.environ.get("SIC_V15_SOURCE_REVISION"),
+            "preprocessing": f"128 Hz; 1s nonoverlapping windows; global RMS per window; {label_dimension} >= 3"}
     write_json(output / "task.json", spec)
     pending = list(targets)
     active = {}
@@ -417,7 +453,7 @@ def _run_source(args, configuration, masks, output, data_dir, *, metrics_only):
     old_handlers = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         while pending or active:
-            for slot in range(2):
+            for slot in range(len(masks) // 2):
                 if slot not in active and pending and time.time() < deadline and not interrupted and not failures:
                     subject = pending.pop(0)
                     env = dict(os.environ, CUDA_VISIBLE_DEVICES=",".join(masks[2*slot:2*slot+2]), PYTHONUNBUFFERED="1")
@@ -494,6 +530,9 @@ def main(argv=None):
     launch.add_argument("--output-dir", type=Path, required=True)
     launch.add_argument("--eeg", type=Path, required=True)
     launch.add_argument("--labels", type=Path, required=True)
+    launch.add_argument("--label-dimension", choices=("valence", "arousal"), default="valence")
+    launch.add_argument("--fixed-final-epoch", action="store_true",
+                        help="Evaluate and save only the predeclared final source epoch.")
     launch.add_argument("--source-epochs", type=int, default=6)
     launch.add_argument("--source-batch-size", type=int, default=64)
     launch.add_argument("--seed", type=int, default=42)

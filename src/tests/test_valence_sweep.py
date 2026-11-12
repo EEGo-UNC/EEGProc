@@ -97,6 +97,10 @@ def test_preprocessing_matches_full_run_windows(tmp_path):
     np.testing.assert_array_equal(np.load(tmp_path / "cache/labels.npy"), [0, 1, 1, 0])
     np.testing.assert_array_equal(np.load(tmp_path / "cache/subjects.npy"), [0, 0, 1, 1])
     np.testing.assert_array_equal(np.load(tmp_path / "cache/trials.npy"), [0, 1, 0, 1])
+    sweep.prepare_data(tmp_path / "eeg.npy", tmp_path / "ratings.npy",
+                       tmp_path / "arousal", 2, label_dimension="arousal")
+    np.testing.assert_array_equal(np.load(tmp_path / "arousal/features.npy"), x)
+    np.testing.assert_array_equal(np.load(tmp_path / "arousal/labels.npy"), [1, 0, 0, 1])
 
 
 def test_dry_run_submits_nothing(tmp_path):
@@ -125,7 +129,7 @@ def test_rank_separates_budgets_and_excludes_incomplete(tmp_path):
 def test_expired_budget_never_starts_a_fold(tmp_path, monkeypatch):
     from argparse import Namespace
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a,GPU-b,GPU-c,GPU-d")
-    monkeypatch.setattr(sweep, "prepare_data", lambda *args: [0, 1])
+    monkeypatch.setattr(sweep, "prepare_data", lambda *args, **kwargs: [0, 1])
     monkeypatch.setattr(sweep.subprocess, "Popen", lambda *a, **kw: pytest.fail("Expired task started training"))
     ticks = iter([0, 100, 100, 100, 100, 100, 100, 100])
     monkeypatch.setattr(sweep.time, "time", lambda: next(ticks))
@@ -141,7 +145,7 @@ def test_worker_pairs_preserve_slurm_uuid_masks(tmp_path, monkeypatch):
     from argparse import Namespace
     masks = []
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a,GPU-b,GPU-c,GPU-d")
-    monkeypatch.setattr(sweep, "prepare_data", lambda *args: [0, 1])
+    monkeypatch.setattr(sweep, "prepare_data", lambda *args, **kwargs: [0, 1])
     class FakeProcess:
         def __init__(self, command, *, env, stdout, stderr):
             masks.append(env["CUDA_VISIBLE_DEVICES"])
@@ -168,7 +172,8 @@ def test_metrics_only_controller_removes_temporary_data_after_workers_exit(tmp_p
     paths = []
     monkeypatch.setenv('CUDA_VISIBLE_DEVICES', 'GPU-a,GPU-b,GPU-c,GPU-d')
     monkeypatch.setenv('SLURM_TMPDIR', str(tmp_path))
-    def prepare(eeg, labels, data):
+    def prepare(eeg, labels, data, *, label_dimension):
+        assert label_dimension == "valence"
         paths.append(data)
         (data / 'features.npy').touch()
         return [0, 1]
