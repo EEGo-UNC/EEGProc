@@ -154,6 +154,23 @@ and actual decoded/re-encoded prediction. Existing CFO candidate selection
 remains latent-based: decoded validity is measured after selection, not
 guaranteed by optimization.
 
+## Decoder SI and counterfactuals from completed DREAMER valence shards
+
+On Longleaf, pass the completed configuration directory containing `shard_0`,
+`shard_1`, and `shard_2`:
+
+```bash
+VENV_DIR=/path/to/EEGProc/venv312 \
+    bash experiments/decoder_recovery/submit_valence_si_cfx_a100.sh "$CONFIGURATION_DIR"
+```
+
+The launcher checks for all 23 saved `epoch_048.keras` checkpoints before
+submitting. It reads each checkpoint and its training metadata directly from
+its shard. Each task trains the subject identifier, adapts the decoder with
+Idea 1, and runs the valence counterfactuals in both directions. The array
+runs up to two folds at a time on `a100-gpu`. Outputs go under
+`$CONFIGURATION_DIR/decoder_si/`.
+
 ## Individual commands
 
 Prepared archives contain `eeg`, `labels`, `subject_ids`, `trial_ids`, with
