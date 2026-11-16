@@ -166,6 +166,27 @@ def test_worker_pairs_preserve_slurm_uuid_masks(tmp_path, monkeypatch):
     assert masks == ["GPU-a,GPU-b", "GPU-c,GPU-d"]
 
 
+def test_single_fold_oracle_keeps_models_with_temporary_data(tmp_path, monkeypatch):
+    from argparse import Namespace
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a,GPU-b")
+    monkeypatch.setenv("SLURM_TMPDIR", str(tmp_path))
+    scratch = []
+
+    def run_source(args, configuration, masks, output, data_dir, *, metrics_only):
+        assert masks == ["GPU-a", "GPU-b"]
+        assert not metrics_only and data_dir.is_dir() and data_dir.parent == tmp_path
+        scratch.append(data_dir)
+        return 0
+
+    monkeypatch.setattr(sweep, "_run_source", run_source)
+    args = Namespace(configs=sweep.DEFAULT_CONFIGS, config_index=0, source_epochs=2,
+                     time_budget_seconds=100, output_dir=tmp_path / "pilot", target_subjects=[0],
+                     temporary_data=True)
+    assert sweep.run(args) == 0
+    assert len(scratch) == 1 and not scratch[0].exists()
+
+
 @pytest.mark.parametrize('worker_code', [0, 3])
 def test_metrics_only_controller_removes_temporary_data_after_workers_exit(tmp_path, monkeypatch, worker_code):
     from argparse import Namespace

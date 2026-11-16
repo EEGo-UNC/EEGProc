@@ -182,18 +182,18 @@ def summarize(output):
                            metrics_only=metrics_only, fixed_final_epoch=fixed_final_epoch)
     result.update(configuration=spec["configuration"], source_epochs=spec["source_epochs"],
                   target_subjects=spec["target_subjects"], decision_threshold=0.5, metrics_only=metrics_only)
+    if result["status"] == "completed" and not metrics_only:
+        write_json(output / "loso_zero_shot_models.json", {"models": [
+            {"target_subject": int(subject), "stage": "zero_shot_source_model",
+             "path": str(output / checkpoint)}
+            for subject, checkpoint in result["selected_models"].items()
+        ]})
     if fixed_final_epoch:
         result["label_dimension"] = spec["label_dimension"]
         if result["status"] == "completed":
             result.update(selected_epoch=result["best_epoch"],
                           mean_balanced_accuracy=result["selection_score"],
                           mean_accuracy=result["selected_mean_accuracy"])
-            if not metrics_only:
-                write_json(output / "loso_zero_shot_models.json", {"models": [
-                    {"target_subject": int(subject), "stage": "zero_shot_source_model",
-                     "path": str(output / checkpoint)}
-                    for subject, checkpoint in result["selected_models"].items()
-                ]})
         write_json(output / "final_metrics.json", result)
         return result
     write_json(output / "oracle_summary.json", result)
@@ -403,16 +403,16 @@ def run(args):
         raise ValueError("Epoch count and time budget must be positive.")
     configuration = records[args.config_index]
     masks = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3").split(",")
-    fixed_final_epoch = getattr(args, "fixed_final_epoch", False)
-    pilot = fixed_final_epoch and len(args.target_subjects or ()) == 1
-    allowed_counts = (2, 4) if pilot else (4,)
+    single_fold = len(args.target_subjects or ()) == 1
+    allowed_counts = (2, 4) if single_fold else (4,)
     if (len(masks) not in allowed_counts or len(set(masks)) != len(masks)
             or any(not mask.strip() for mask in masks)):
         raise ValueError(f"Expected distinct allocated GPUs, allowed counts: {allowed_counts}.")
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=False)
     metrics_only = getattr(args, "metrics_only", False)
-    if metrics_only or fixed_final_epoch:
+    temporary_data = getattr(args, "temporary_data", False) or getattr(args, "fixed_final_epoch", False)
+    if metrics_only or temporary_data:
         temporary_root = Path(os.environ.get("SLURM_TMPDIR") or tempfile.gettempdir()).resolve()
         if temporary_root.is_relative_to(Path.home().resolve()):
             raise ValueError("Temporary training data must be outside home. Set TMPDIR to node scratch.")
@@ -539,6 +539,8 @@ def main(argv=None):
     launch.add_argument("--deterministic-training", action="store_true")
     launch.add_argument("--time-budget-seconds", type=int, default=21000)
     launch.add_argument("--target-subjects", nargs="+", type=int)
+    launch.add_argument("--temporary-data", action="store_true",
+                        help="Keep processed source data in temporary storage and remove it after training.")
     launch.add_argument("--metrics-only", action="store_true",
                         help="Save scores without model files; remove temporary processed data when workers exit.")
     fold = commands.add_parser("worker", help=argparse.SUPPRESS)

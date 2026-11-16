@@ -152,6 +152,37 @@ else:
             'OUTPUT_ROOT': str(project / 'outputs'), 'TIME_BUDGET_SECONDS': '70000'}
 
 
+@pytest.mark.parametrize(
+    "mode,index,metrics_only,subjects,epoch_count,output",
+    [("pilot", 3, "0", [0], "2", "configuration_3"),
+     ("full", 10, "1", list(range(8, 16)), "48", "configuration_3/shard_1")],
+)
+def test_dreamer_reconstruction_launches_a_best_epoch_sweep(
+    tmp_path, mode, index, metrics_only, subjects, epoch_count, output
+):
+    env = cluster_environment(tmp_path)
+    git = Path(env["VENV_DIR"]) / "bin/git"
+    git.write_text('#!/bin/bash\nif [[ "$3" == "rev-parse" ]]; then echo test-revision; fi\n')
+    libdevice = tmp_path / "cuda/nvvm/libdevice/libdevice.10.bc"
+    libdevice.parent.mkdir(parents=True)
+    libdevice.touch()
+    capture = tmp_path / "reconstruction.jsonl"
+    env.update(PROJECT_DIR=str(ROOT), SUBMIT_PYTHON=sys.executable,
+               SIC_V15_SOURCE_REVISION="test-revision", EBROOTCUDA=str(tmp_path / "cuda"),
+               SLURM_ARRAY_TASK_ID=str(index), TRAINING_CAPTURE=str(capture),
+               PILOT_SUBJECT="0", METRICS_ONLY=metrics_only)
+    script = SIC / "SLURM_scripts/run_v15_dreamer_reconstruction_ablation.sh"
+    subprocess.run(["bash", str(script), "--train", mode], env=env, check=True)
+    args = json.loads(capture.read_text())
+    assert args[1] == "run"
+    assert "--fixed-final-epoch" not in args
+    assert "--temporary-data" in args
+    assert ("--metrics-only" in args) == (metrics_only == "1")
+    assert args[args.index("--source-epochs") + 1] == epoch_count
+    assert args[args.index("--output-dir") + 1].endswith(f"/suite_7000/valence/{output}")
+    assert list(map(int, args[args.index("--target-subjects") + 1:])) == subjects
+
+
 @pytest.mark.parametrize('index', [0, 1, 2, 3, 8])
 def test_source_tasks_route_to_exact_configuration_and_user_shard(tmp_path, index):
     capture = tmp_path / 'training.jsonl'
@@ -260,6 +291,11 @@ def test_global_selection_uses_all_23_users_not_local_shard_winners(tmp_path):
         assert (output / checkpoint).is_file()
     assert len(list(output.glob('subject_*/epoch_*.json'))) == 23 * 3
     assert not list(output.glob('subject_*/*.keras'))
+    manifest = json.loads((output / "loso_zero_shot_models.json").read_text())
+    assert {entry["target_subject"]: Path(entry["path"]).relative_to(output).as_posix()
+            for entry in manifest["models"]} == {
+                int(subject): path for subject, path in result["selected_models"].items()
+            }
 
 
 def test_fixed_epoch_collection_publishes_only_final_checkpoints(tmp_path):

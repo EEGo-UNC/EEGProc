@@ -19,6 +19,7 @@ MAX_CONCURRENT="${MAX_CONCURRENT:-2}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-20}"
 MIN_FREE_INODES="${MIN_FREE_INODES:-1000}"
 PILOT_SUBJECT="${PILOT_SUBJECT:-0}"
+METRICS_ONLY="${METRICS_ONLY:-0}"
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -46,6 +47,7 @@ esac
 for name in SOURCE_EPOCHS SOURCE_BATCH_SIZE TIME_BUDGET_SECONDS MAX_CONCURRENT; do
     [[ "${!name}" =~ ^[1-9][0-9]*$ ]] || die "$name must be a positive integer."
 done
+[[ "$METRICS_ONLY" =~ ^[01]$ ]] || die "METRICS_ONLY must be 0 or 1."
 
 if [[ -z "${SUBMIT_PYTHON:-}" ]]; then
     SUBMIT_PYTHON="$VENV_DIR/bin/python"
@@ -85,7 +87,7 @@ if [[ "$phase" == pilot || "$phase" == full ]]; then
             --min-free-gib "$MIN_FREE_GIB" --min-free-inodes "$MIN_FREE_INODES" --show-quota
         export PROJECT_DIR OUTPUT_ROOT LOG_DIR VENV_DIR EEG_PATH LABELS_PATH
         export SOURCE_EPOCHS SOURCE_BATCH_SIZE TRAINING_SEED TIME_BUDGET_SECONDS PILOT_SUBJECT
-        export SIC_V15_SOURCE_REVISION
+        export SIC_V15_SOURCE_REVISION METRICS_ONLY
         submission="$("${train[@]}")"
         SOURCE_JOB_ID="${submission%%;*}"
         [[ "$SOURCE_JOB_ID" =~ ^[0-9]+$ ]] || die "Could not read the source job ID: $submission"
@@ -111,7 +113,8 @@ if [[ "$phase" == pilot || "$phase" == full ]]; then
     else
         echo "184 model fits in $TASK_COUNT training tasks (shards 0–7, 8–15, 16–22)."
     fi
-    echo "Fixed final epoch: $SOURCE_EPOCHS; results: $OUTPUT_ROOT/suite_$SOURCE_JOB_ID"
+    echo "Select the best epoch by held-out balanced accuracy across epochs 1–$SOURCE_EPOCHS; metrics only: $METRICS_ONLY"
+    echo "Results: $OUTPUT_ROOT/suite_$SOURCE_JOB_ID"
     exit 0
 fi
 
@@ -167,8 +170,12 @@ else
     output="$output/shard_$shard"
 fi
 echo "$target configuration $arm, held-out subjects: ${subject_args[*]}"
+run_options=(--temporary-data)
+if [[ "$METRICS_ONLY" == 1 ]]; then
+    run_options+=(--metrics-only)
+fi
 exec "$python" "$RUNNER" run --configs "$CONFIGS" --config-index "$arm" \
-    --label-dimension "$target" --fixed-final-epoch --output-dir "$output" \
+    --label-dimension "$target" "${run_options[@]}" --output-dir "$output" \
     --eeg "$EEG_PATH" --labels "$LABELS_PATH" --source-epochs "$SOURCE_EPOCHS" \
     --source-batch-size "$SOURCE_BATCH_SIZE" --seed "$TRAINING_SEED" --deterministic-training \
     --time-budget-seconds "$TIME_BUDGET_SECONDS" --target-subjects "${subject_args[@]}"

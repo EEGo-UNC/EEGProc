@@ -39,24 +39,34 @@ bash "$launcher" full
 The pilot uses two GPUs per fit. The full run uses the existing three shards
 (0–7, 8–15, 16–22) for every target and arm. Its 24 training tasks use two
 concurrent folds on four GPUs per task. Eight CPU collectors validate the
-three shards for each target and arm before aggregating results. The full
-run evaluates the fixed final epoch (48 by default). Held-out metrics do not
-select an epoch. Evaluation is zero-shot at a 0.5 classifier threshold.
+three shards for each target and arm before aggregating results. Both modes
+evaluate every epoch through the training budget (48 epochs by default for the
+full run). Each shard selects the epoch with the highest subject-mean held-out
+trial balanced accuracy, with ties going to the earlier epoch. The collector
+also selects one common epoch across all 23 subjects using the same rule.
+Evaluation is zero-shot at a 0.5 classifier threshold. Epoch selection uses
+held-out labels, so the selected scores are oracle estimates.
 
 Set `PILOT_SUBJECT`, `SOURCE_EPOCHS`, `MAX_CONCURRENT`, `EEG_PATH`, `LABELS_PATH`,
 `VENV_DIR`, or `OUTPUT_ROOT` as needed. By default results are written under
 `$SWEEP_STORAGE_ROOT/runs/sweeps/sic_v15_dreamer_reconstruction`, where
 `SWEEP_STORAGE_ROOT` defaults to the account's `/work` EEGProc directory.
-Processed EEG is temporary and each fit saves one final checkpoint.
+Processed EEG is temporary. By default each fit saves a checkpoint at every
+epoch, for 8,832 checkpoints in a full 48-epoch suite. Set `METRICS_ONLY=1`
+to retain the epoch scores and trial predictions without model files.
 
 ## Check the results
 
-In `suite_JOB_ID/{valence,arousal}/configuration_{0,1,2,3}/`, look for
-`final_metrics.json`, `loso_zero_shot_models.json`, and per-subject predictions.
-Check `execution.json` for unfinished or failed folds. The full run also
-preserves each shard's results under that configuration.
+In `suite_JOB_ID/{valence,arousal}/configuration_{0,1,2,3}/`, check each
+`shard_*/oracle_summary.json` for that shard's selected epoch, balanced
+accuracy, and accuracy. The configuration-level `oracle_summary.json` and
+`oracle_epoch_means.csv` report the selection across all 23 subjects.
+Per-subject epoch JSON files contain trial predictions for each epoch.
+Check `execution.json` for unfinished or failed folds.
 
-Use the existing held-out reconstruction comparison to score all four arms.
+With checkpoints enabled, `loso_zero_shot_models.json` lists the models at
+the selected epoch. Use the held-out reconstruction comparison to score
+the checkpoint-backed runs for all four arms.
 Set `suite` to the output path printed by the launcher and choose the target.
 
 ```bash
