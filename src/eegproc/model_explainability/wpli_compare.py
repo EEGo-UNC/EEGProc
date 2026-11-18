@@ -21,13 +21,19 @@ the qualitative question ("does it still look like EEG") is answered by the raw
 values against the literature reference (real DREAMER ~0.061 wPLI^2, ~0.278
 coherence).
 
-Usage:
+Usage (single trial):
   python -m eegproc.model_explainability.wpli_compare \
       --cf-npz PATH/counterfactual.npz \
       --dreamer-eeg PATH/dreamer_eeg.npy \
       --dreamer-labels PATH/dreamer_labels.npy \
       --task arousal \
       --output-dir PATH/out
+
+Batch (every counterfactual.npz under a run root; one waveform + connectivity
+figure pair per trial, named by the trial folder):
+  python -m eegproc.model_explainability.wpli_compare \
+      --batch RUN_ROOT [--batch-glob "**/counterfactual.npz"] \
+      --dreamer-eeg ... --dreamer-labels ... --task arousal --output-dir PATH/out
 """
 from __future__ import annotations
 import argparse
@@ -123,6 +129,15 @@ def match_subject_trial(x, dreamer_eeg):
     return best[1], best[2], best[0]
 
 
+def _unit_norm(sig):
+    """Put every signal on one scale: per-feature z-score over the whole trial."""
+    s = np.asarray(sig).astype(np.float64)
+    flat = s.reshape(-1, s.shape[-1])                # (W*T, 42)
+    m = flat.mean(axis=0, keepdims=True)
+    sd = flat.std(axis=0, keepdims=True) + 1e-9
+    return ((flat - m) / sd).reshape(s.shape)
+
+
 def zscore_per_channel(trial_42_by_n):
     """Per-feature z-score, matching the model's per-channel scaling."""
     m = trial_42_by_n.mean(axis=1, keepdims=True)
@@ -175,13 +190,12 @@ def plot_connectivity(metrics, out_path):
     names = list(metrics.keys())
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
     xpos = np.arange(len(_BANDS)); wbar = 0.8 / len(names)
-    for m_i, (metric, ax, ref) in enumerate(
-        [("coherence", axes[0], _REAL_COH_REF), ("wpli", axes[1], _REAL_WPLI_REF)]
+    for m_i, (metric, ax) in enumerate(
+        [("coherence", axes[0]), ("wpli", axes[1])]
     ):
         for k, name in enumerate(names):
             vals = metrics[name][metric].mean(axis=0)     # mean over pairs -> (n_bands,)
             ax.bar(xpos + k * wbar, vals, wbar, label=name)
-        ax.axhline(ref, color="k", linestyle=":", label=f"real DREAMER ref ({ref})")
         ax.set_xticks(xpos + wbar * (len(names) - 1) / 2)
         ax.set_xticklabels(_BANDS)
         ax.set_title(f"mean {metric} per band (over 91 pairs)")
@@ -189,58 +203,41 @@ def plot_connectivity(metrics, out_path):
     fig.tight_layout(); fig.savefig(out_path, dpi=130); plt.close(fig)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--cf-npz", required=True)
-    ap.add_argument("--dreamer-eeg", required=True)
-    ap.add_argument("--dreamer-labels", required=True)
-    ap.add_argument("--task", choices=["arousal", "valence"], default="arousal")
-    ap.add_argument("--output-dir", required=True)
-    ap.add_argument("--class1-trial", type=int, default=None,
-                    help="override auto-picked opposite-class trial index")
-    ap.add_argument("--zoom-windows", type=int, default=3)
-    ap.add_argument("--zoom-channel", type=int, default=0)
-    ap.add_argument("--zoom-band", type=int, default=0)
-    args = ap.parse_args()
-
-    out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
-    cf, keys = load_cf(args.cf_npz)
+def process_trial(cf_npz, eeg, labels, task, out, tag=None, class1_trial=None,
+                  zoom_windows=3, zoom_channel=0, zoom_band=0):
+    """Run the four-signal comparison for one counterfactual.npz.
+    Writes waveform_zoom / connectivity_compare PNGs (prefixed with `tag` if given)."""
+    cf, keys = load_cf(cf_npz)
     x = cf["x"]
     W, T = x.shape[1], x.shape[2]
     print(f"loaded cf: keys={keys}  x shape={x.shape}  (W={W}, T={T})")
 
-    eeg = np.load(args.dreamer_eeg)
-    labels = np.load(args.dreamer_labels)
     s_idx, t_idx, corr = match_subject_trial(x, eeg)
     print(f"index match: subject_idx={s_idx} trial_idx={t_idx} corr={corr:.4f}")
     if corr < 0.5:
         print("  WARNING: weak match (<0.5). x may be featurized differently; "
               "real class-1 selection may be unreliable.")
 
-    if args.class1_trial is not None:
-        c1_idx = args.class1_trial
-        col = _LABEL_COL[args.task]
+    col = _LABEL_COL[task]
+    if class1_trial is not None:
+        c1_idx = class1_trial
         target_class = int(labels[s_idx][c1_idx, col] >= _MEDIAN_LABEL)
         cf_class = int(labels[s_idx][t_idx, col] >= _MEDIAN_LABEL)
     else:
-        c1_idx, target_class, cf_class = pick_class1_trial(
-            labels, s_idx, args.task, t_idx)
-    col = _LABEL_COL[args.task]
-    print(f"cf trial {args.task}={labels[s_idx][t_idx,col]:.0f} -> class {cf_class}")
+        c1_idx, target_class, cf_class = pick_class1_trial(labels, s_idx, task, t_idx)
+    print(f"cf trial {task}={labels[s_idx][t_idx,col]:.0f} -> class {cf_class}")
     print(f"real opposite-class trial idx={c1_idx} "
-          f"{args.task}={labels[s_idx][c1_idx,col]:.0f} -> class {target_class}")
+          f"{task}={labels[s_idx][c1_idx,col]:.0f} -> class {target_class}")
 
-    real_opp = eeg[s_idx][c1_idx]                          # (42, samples)
-    real_opp = zscore_per_channel(real_opp)
-    real_opp_w = to_windowed(real_opp, W, T)
+    real_opp_w = to_windowed(zscore_per_channel(eeg[s_idx][c1_idx]), W, T)
 
     signals = {
-        f"real class{cf_class} (orig x)": x,
-        f"counterfactual {cf_class}->{target_class}": cf["cf"],
-        f"real class{target_class} (t{c1_idx})": real_opp_w,
+        f"real class{cf_class} (orig x)": _unit_norm(x),
+        f"counterfactual {cf_class}->{target_class}": _unit_norm(cf["cf"]),
+        f"real class{target_class} (t{c1_idx})": _unit_norm(real_opp_w),
     }
     if "recon" in cf:
-        signals["reconstruction (baseline)"] = cf["recon"]
+        signals["reconstruction (baseline)"] = _unit_norm(cf["recon"])
 
     metrics = {}
     print("\n--- coherence / debiased wPLI^2 (mean over 91 pairs) ---")
@@ -248,14 +245,62 @@ def main():
         c, w = band_coherence_wpli(sig)
         metrics[name] = {"coherence": c, "wpli": w}
         print(f"{name:38s}  coh={c.mean():.4f}  wpli={w.mean():.4f}")
-    print(f"{'(real DREAMER reference)':38s}  coh={_REAL_COH_REF:.4f}  "
-          f"wpli={_REAL_WPLI_REF:.4f}")
 
-    wf = out / "waveform_zoom.png"
-    cn = out / "connectivity_compare.png"
-    plot_waveforms(signals, wf, args.zoom_windows, args.zoom_channel, args.zoom_band)
+    prefix = f"{tag}_" if tag else ""
+    wf = out / f"{prefix}waveform_zoom.png"
+    cn = out / f"{prefix}connectivity_compare.png"
+    plot_waveforms(signals, wf, zoom_windows, zoom_channel, zoom_band)
     plot_connectivity(metrics, cn)
     print(f"\nsaved:\n  {wf}\n  {cn}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--cf-npz", default=None, help="single-trial mode")
+    ap.add_argument("--batch", default=None, metavar="RUN_ROOT",
+                    help="batch mode: process every npz under this root")
+    ap.add_argument("--batch-glob", default="**/counterfactual.npz",
+                    help="glob (relative to --batch) selecting trial npz files")
+    ap.add_argument("--dreamer-eeg", required=True)
+    ap.add_argument("--dreamer-labels", required=True)
+    ap.add_argument("--task", choices=["arousal", "valence"], default="arousal")
+    ap.add_argument("--output-dir", required=True)
+    ap.add_argument("--class1-trial", type=int, default=None,
+                    help="override auto-picked opposite-class trial index (single mode)")
+    ap.add_argument("--zoom-windows", type=int, default=3)
+    ap.add_argument("--zoom-channel", type=int, default=0)
+    ap.add_argument("--zoom-band", type=int, default=0)
+    args = ap.parse_args()
+    if bool(args.cf_npz) == bool(args.batch):
+        ap.error("provide exactly one of --cf-npz or --batch")
+
+    out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
+    eeg = np.load(args.dreamer_eeg)
+    labels = np.load(args.dreamer_labels)
+    kw = dict(zoom_windows=args.zoom_windows, zoom_channel=args.zoom_channel,
+              zoom_band=args.zoom_band)
+
+    if args.cf_npz:
+        process_trial(args.cf_npz, eeg, labels, args.task, out,
+                      class1_trial=args.class1_trial, **kw)
+        return 0
+
+    root = Path(args.batch)
+    npzs = sorted(root.glob(args.batch_glob))
+    if not npzs:
+        raise SystemExit(f"no files matching {args.batch_glob!r} under {root}")
+    failed = []
+    for p in npzs:
+        tag = p.parent.name if p.parent != root else p.stem
+        print(f"\n===== {tag}  ({p}) =====")
+        try:
+            process_trial(p, eeg, labels, args.task, out, tag=tag, **kw)
+        except Exception as e:  # keep going; report at end
+            print(f"  FAILED {tag}: {e}")
+            failed.append(tag)
+    print(f"\nbatch done: {len(npzs)-len(failed)}/{len(npzs)} ok"
+          + (f"; failed: {failed}" if failed else ""))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
